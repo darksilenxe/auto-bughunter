@@ -20,10 +20,28 @@ type Service struct {
 }
 
 type Config struct {
-	EnableNuclei       bool
-	EnableZAPBaseline  bool
-	NucleiBinary       string
-	ZAPBaselineBinary  string
+	EnableNuclei      bool
+	EnableZAPBaseline bool
+	EnableSubfinder   bool
+	EnableHttpx       bool
+	EnableNaabu       bool
+	EnableDnsx        bool
+	EnableKatana      bool
+	EnableTlsx        bool
+	EnableCdncheck    bool
+	EnableAsnmap      bool
+
+	NucleiBinary      string
+	ZAPBaselineBinary string
+	SubfinderBinary   string
+	HttpxBinary       string
+	NaabuBinary       string
+	DnsxBinary        string
+	KatanaBinary      string
+	TlsxBinary        string
+	CdncheckBinary    string
+	AsnmapBinary      string
+
 	IntegrationTimeout time.Duration
 }
 
@@ -42,6 +60,30 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.ZAPBaselineBinary) == "" {
 		cfg.ZAPBaselineBinary = "zap-baseline.py"
+	}
+	if strings.TrimSpace(cfg.SubfinderBinary) == "" {
+		cfg.SubfinderBinary = "subfinder"
+	}
+	if strings.TrimSpace(cfg.HttpxBinary) == "" {
+		cfg.HttpxBinary = "httpx"
+	}
+	if strings.TrimSpace(cfg.NaabuBinary) == "" {
+		cfg.NaabuBinary = "naabu"
+	}
+	if strings.TrimSpace(cfg.DnsxBinary) == "" {
+		cfg.DnsxBinary = "dnsx"
+	}
+	if strings.TrimSpace(cfg.KatanaBinary) == "" {
+		cfg.KatanaBinary = "katana"
+	}
+	if strings.TrimSpace(cfg.TlsxBinary) == "" {
+		cfg.TlsxBinary = "tlsx"
+	}
+	if strings.TrimSpace(cfg.CdncheckBinary) == "" {
+		cfg.CdncheckBinary = "cdncheck"
+	}
+	if strings.TrimSpace(cfg.AsnmapBinary) == "" {
+		cfg.AsnmapBinary = "asnmap"
 	}
 
 	return &Service{

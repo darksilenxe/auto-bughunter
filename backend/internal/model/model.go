@@ -45,6 +45,14 @@ type ScanAuthProfileSummary struct {
 type ScanOptions struct {
 	UseNucleiIntegration      bool `json:"useNucleiIntegration,omitempty"`
 	UseZAPBaselineIntegration bool `json:"useZapBaselineIntegration,omitempty"`
+	UseSubfinderIntegration   bool `json:"useSubfinderIntegration,omitempty"`
+	UseHttpxIntegration       bool `json:"useHttpxIntegration,omitempty"`
+	UseNaabuIntegration       bool `json:"useNaabuIntegration,omitempty"`
+	UseDnsxIntegration        bool `json:"useDnsxIntegration,omitempty"`
+	UseKatanaIntegration      bool `json:"useKatanaIntegration,omitempty"`
+	UseTlsxIntegration        bool `json:"useTlsxIntegration,omitempty"`
+	UseCdncheckIntegration    bool `json:"useCdncheckIntegration,omitempty"`
+	UseAsnmapIntegration      bool `json:"useAsnmapIntegration,omitempty"`
 }
 
 type ScanJob struct {

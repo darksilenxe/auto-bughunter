@@ -11,6 +11,14 @@ export default function App() {
   const [basicAuthPassword, setBasicAuthPassword] = useState("");
   const [useNucleiIntegration, setUseNucleiIntegration] = useState(false);
   const [useZapBaselineIntegration, setUseZapBaselineIntegration] = useState(false);
+  const [useSubfinderIntegration, setUseSubfinderIntegration] = useState(false);
+  const [useHttpxIntegration, setUseHttpxIntegration] = useState(false);
+  const [useNaabuIntegration, setUseNaabuIntegration] = useState(false);
+  const [useDnsxIntegration, setUseDnsxIntegration] = useState(false);
+  const [useKatanaIntegration, setUseKatanaIntegration] = useState(false);
+  const [useTlsxIntegration, setUseTlsxIntegration] = useState(false);
+  const [useCdncheckIntegration, setUseCdncheckIntegration] = useState(false);
+  const [useAsnmapIntegration, setUseAsnmapIntegration] = useState(false);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -51,6 +59,14 @@ export default function App() {
           options: {
             useNucleiIntegration,
             useZapBaselineIntegration,
+            useSubfinderIntegration,
+            useHttpxIntegration,
+            useNaabuIntegration,
+            useDnsxIntegration,
+            useKatanaIntegration,
+            useTlsxIntegration,
+            useCdncheckIntegration,
+            useAsnmapIntegration,
           },
         }),
       });
@@ -181,6 +197,78 @@ export default function App() {
             Run optional ZAP Baseline integration
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useSubfinderIntegration}
+              onChange={(e) => setUseSubfinderIntegration(e.target.checked)}
+            />
+            Run optional Subfinder integration (subdomain discovery)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useHttpxIntegration}
+              onChange={(e) => setUseHttpxIntegration(e.target.checked)}
+            />
+            Run optional httpx integration (HTTP probing &amp; tech detection)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useNaabuIntegration}
+              onChange={(e) => setUseNaabuIntegration(e.target.checked)}
+            />
+            Run optional Naabu integration (port scanning)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useDnsxIntegration}
+              onChange={(e) => setUseDnsxIntegration(e.target.checked)}
+            />
+            Run optional dnsx integration (DNS enumeration)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useKatanaIntegration}
+              onChange={(e) => setUseKatanaIntegration(e.target.checked)}
+            />
+            Run optional Katana integration (web crawling)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useTlsxIntegration}
+              onChange={(e) => setUseTlsxIntegration(e.target.checked)}
+            />
+            Run optional tlsx integration (TLS certificate analysis)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useCdncheckIntegration}
+              onChange={(e) => setUseCdncheckIntegration(e.target.checked)}
+            />
+            Run optional cdncheck integration (CDN/WAF detection)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useAsnmapIntegration}
+              onChange={(e) => setUseAsnmapIntegration(e.target.checked)}
+            />
+            Run optional asnmap integration (ASN/CIDR mapping)
+          </label>
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -196,7 +284,7 @@ export default function App() {
             </p>
           )}
           <p className="meta">
-            Integrations requested: nuclei={job.options?.useNucleiIntegration ? "yes" : "no"}, zapBaseline={job.options?.useZapBaselineIntegration ? "yes" : "no"}
+            Integrations requested: nuclei={job.options?.useNucleiIntegration ? "yes" : "no"}, zapBaseline={job.options?.useZapBaselineIntegration ? "yes" : "no"}, subfinder={job.options?.useSubfinderIntegration ? "yes" : "no"}, httpx={job.options?.useHttpxIntegration ? "yes" : "no"}, naabu={job.options?.useNaabuIntegration ? "yes" : "no"}, dnsx={job.options?.useDnsxIntegration ? "yes" : "no"}, katana={job.options?.useKatanaIntegration ? "yes" : "no"}, tlsx={job.options?.useTlsxIntegration ? "yes" : "no"}, cdncheck={job.options?.useCdncheckIntegration ? "yes" : "no"}, asnmap={job.options?.useAsnmapIntegration ? "yes" : "no"}
           </p>
           <div className="stats">
             <span className="pill high">High: {severityCounts.high}</span>
