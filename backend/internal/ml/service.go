@@ -45,28 +45,28 @@ type EngagementDataset struct {
 }
 
 type EngagementRecord struct {
-	ScanID          string            `json:"scanId"`
-	TargetHash      string            `json:"targetHash"`
-	ToolOptions     map[string]bool   `json:"toolOptions"`
-	Findings        []SanitizedFinding `json:"findings"`
-	Assets          []SanitizedAsset   `json:"assets"`
-	AuditTrail      []SanitizedEvent   `json:"auditTrail"`
-	ProxySignals    []ProxySignal      `json:"proxySignals"`
+	ScanID          string                   `json:"scanId"`
+	TargetHash      string                   `json:"targetHash"`
+	ToolOptions     map[string]bool          `json:"toolOptions"`
+	Findings        []SanitizedFinding       `json:"findings"`
+	Assets          []SanitizedAsset         `json:"assets"`
+	AuditTrail      []SanitizedEvent         `json:"auditTrail"`
+	ProxySignals    []ProxySignal            `json:"proxySignals"`
 	Dashboard       *model.DecisionDashboard `json:"dashboard,omitempty"`
-	NextActions     []string          `json:"nextActions,omitempty"`
-	AutomatedReport string            `json:"automatedReport,omitempty"`
-	Labels          EngagementLabels  `json:"labels"`
+	NextActions     []string                 `json:"nextActions,omitempty"`
+	AutomatedReport string                   `json:"automatedReport,omitempty"`
+	Labels          EngagementLabels         `json:"labels"`
 }
 
 type SanitizedFinding struct {
-	ID             string        `json:"id"`
-	Category       string        `json:"category"`
-	Severity       model.Severity `json:"severity"`
-	Title          string        `json:"title"`
-	Evidence       string        `json:"evidence"`
-	Confidence     float64       `json:"confidence"`
-	DriftStatus    string        `json:"driftStatus"`
-	BusinessTags   []string      `json:"businessTags,omitempty"`
+	ID           string         `json:"id"`
+	Category     string         `json:"category"`
+	Severity     model.Severity `json:"severity"`
+	Title        string         `json:"title"`
+	Evidence     string         `json:"evidence"`
+	Confidence   float64        `json:"confidence"`
+	DriftStatus  string         `json:"driftStatus"`
+	BusinessTags []string       `json:"businessTags,omitempty"`
 }
 
 type SanitizedAsset struct {

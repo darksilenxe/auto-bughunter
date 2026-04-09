@@ -86,32 +86,32 @@ type ScanScope struct {
 }
 
 type ScanJob struct {
-	ID                 string                  `json:"id"`
-	Target             string                  `json:"target"`
-	Status             string                  `json:"status"`
-	StartedAt          time.Time               `json:"startedAt"`
-	CompletedAt        *time.Time              `json:"completedAt,omitempty"`
-	Findings           []Finding               `json:"findings,omitempty"`
-	AISummary          string                  `json:"aiSummary,omitempty"`
-	ModelRecommendations *ModelRecommendations `json:"modelRecommendations,omitempty"`
-	Error              string                  `json:"error,omitempty"`
-	AuthProfileSummary *ScanAuthProfileSummary `json:"authProfileSummary,omitempty"`
-	Options            ScanOptions             `json:"options,omitempty"`
-	Scope              ScanScope               `json:"scope,omitempty"`
-	Assets             []ScanAsset             `json:"assets,omitempty"`
-	AssetLinks         []ScanAssetLink         `json:"assetLinks,omitempty"`
-	AuditTrail         []ScanAuditEvent        `json:"auditTrail,omitempty"`
-	AgentRuns          []AgentRunTelemetry     `json:"agentRuns,omitempty"`
-	Dashboard          *DecisionDashboard      `json:"dashboard,omitempty"`
-	NextActions        []string                `json:"nextActions,omitempty"`
-	AutomatedReport    string                  `json:"automatedReport,omitempty"`
+	ID                   string                  `json:"id"`
+	Target               string                  `json:"target"`
+	Status               string                  `json:"status"`
+	StartedAt            time.Time               `json:"startedAt"`
+	CompletedAt          *time.Time              `json:"completedAt,omitempty"`
+	Findings             []Finding               `json:"findings,omitempty"`
+	AISummary            string                  `json:"aiSummary,omitempty"`
+	ModelRecommendations *ModelRecommendations   `json:"modelRecommendations,omitempty"`
+	Error                string                  `json:"error,omitempty"`
+	AuthProfileSummary   *ScanAuthProfileSummary `json:"authProfileSummary,omitempty"`
+	Options              ScanOptions             `json:"options,omitempty"`
+	Scope                ScanScope               `json:"scope,omitempty"`
+	Assets               []ScanAsset             `json:"assets,omitempty"`
+	AssetLinks           []ScanAssetLink         `json:"assetLinks,omitempty"`
+	AuditTrail           []ScanAuditEvent        `json:"auditTrail,omitempty"`
+	AgentRuns            []AgentRunTelemetry     `json:"agentRuns,omitempty"`
+	Dashboard            *DecisionDashboard      `json:"dashboard,omitempty"`
+	NextActions          []string                `json:"nextActions,omitempty"`
+	AutomatedReport      string                  `json:"automatedReport,omitempty"`
 }
 
 type ModelRecommendations struct {
-	ToolSelection       []ToolRecommendation       `json:"toolSelection,omitempty"`
-	PrioritizedFindings []PrioritizedFinding       `json:"prioritizedFindings,omitempty"`
+	ToolSelection       []ToolRecommendation        `json:"toolSelection,omitempty"`
+	PrioritizedFindings []PrioritizedFinding        `json:"prioritizedFindings,omitempty"`
 	Copilot             EngagementCopilotSuggestion `json:"copilot"`
-	ModelMode           string                     `json:"modelMode,omitempty"`
+	ModelMode           string                      `json:"modelMode,omitempty"`
 }
 
 type ToolRecommendation struct {
@@ -122,11 +122,11 @@ type ToolRecommendation struct {
 }
 
 type PrioritizedFinding struct {
-	FindingID string  `json:"findingId"`
-	Title     string  `json:"title"`
+	FindingID string   `json:"findingId"`
+	Title     string   `json:"title"`
 	Severity  Severity `json:"severity"`
-	Score     float64 `json:"score"`
-	Reason    string  `json:"reason"`
+	Score     float64  `json:"score"`
+	Reason    string   `json:"reason"`
 }
 
 type EngagementCopilotSuggestion struct {
