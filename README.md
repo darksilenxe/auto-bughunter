@@ -133,7 +133,8 @@ Body:
     "backoffMillis": 500,
     "requestDelayMillis": 100,
     "maxPerTargetConcurrency": 1,
-    "deepScanOnHighSignal": true
+    "deepScanOnHighSignal": true,
+    "crawlMaxPages": 8
   },
   "scope": {
     "includeHosts": ["example.com", "*.example.com"],
@@ -189,6 +190,10 @@ Stores bug bounty outcome labels so prioritization can learn from accepted/rejec
 - Disallowed test types can be enforced at request time with `disallowedTestTypes`.
 - Role-based authenticated coverage can be expanded with `authProfiles` (multiple role sessions).
 - Scanner request pacing/retry controls are available via `options.maxRetries`, `options.backoffMillis`, and `options.requestDelayMillis`.
+- Runtime surface expansion now mines in-scope endpoint hints from response/DOM artifacts (including JS/OpenAPI/GraphQL-style markers) to increase attack-surface coverage.
+- Scanner includes safe context-aware parameter probing to surface high-signal reflection/error paths for targeted follow-up testing.
+- Multi-role scan runs now include role-diff findings that highlight role-specific behavior for authorization/IDOR validation.
+- Stateful headless crawling can traverse multiple in-scope pages using `options.crawlMaxPages` (bounded) to improve authenticated coverage stability checks.
 - Per-target concurrency can be constrained via `MAX_CONCURRENT_SCANS_PER_TARGET` (global default) or `options.maxPerTargetConcurrency`.
 - Feedback outcomes submitted to `POST /api/feedback` are used by ML prioritization to favor historically accepted issue patterns.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.

@@ -102,6 +102,7 @@ type ScanOptions struct {
 	RequestDelayMillis        int  `json:"requestDelayMillis,omitempty"`
 	MaxPerTargetConcurrency   int  `json:"maxPerTargetConcurrency,omitempty"`
 	DeepScanOnHighSignal      bool `json:"deepScanOnHighSignal,omitempty"`
+	CrawlMaxPages             int  `json:"crawlMaxPages,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

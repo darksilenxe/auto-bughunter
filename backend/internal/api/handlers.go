@@ -637,6 +637,8 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	if err != nil {
 		return outputs, findings, err
 	}
+	baselineFindings := append([]model.Finding(nil), findings...)
+	roleFindingMap := map[string][]model.Finding{}
 	for _, rp := range roleProfiles {
 		if strings.TrimSpace(rp.RoleName) == "" || !hasAuthorizationProfile(rp.AuthProfile) {
 			continue
@@ -655,9 +657,80 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 			roleFindings[i].Exploitability.RequiredRole = rp.RoleName
 			roleFindings[i].BusinessTags = append(roleFindings[i].BusinessTags, "role:"+rp.RoleName)
 		}
+		roleFindingMap[strings.TrimSpace(rp.RoleName)] = append([]model.Finding(nil), roleFindings...)
 		findings = append(findings, roleFindings...)
 	}
+	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
 	return outputs, findings, nil
+}
+
+func buildRoleDiffFindings(baseline []model.Finding, perRole map[string][]model.Finding) []model.Finding {
+	if len(perRole) == 0 {
+		return nil
+	}
+	baselineKeys := map[string]struct{}{}
+	for _, f := range baseline {
+		baselineKeys[fingerprintFindingBase(f)] = struct{}{}
+	}
+	roleNames := make([]string, 0, len(perRole))
+	for role := range perRole {
+		role = strings.TrimSpace(role)
+		if role != "" {
+			roleNames = append(roleNames, role)
+		}
+	}
+	sort.Strings(roleNames)
+
+	findings := make([]model.Finding, 0, len(roleNames)+1)
+	summary := make([]string, 0, len(roleNames))
+	for _, role := range roleNames {
+		roleFindings := perRole[role]
+		unique := make([]string, 0)
+		for _, f := range roleFindings {
+			key := fingerprintFindingBase(f)
+			if _, ok := baselineKeys[key]; ok {
+				continue
+			}
+			unique = append(unique, f.Title)
+		}
+		sort.Strings(unique)
+		unique = limitStrings(unique, 6)
+		summary = append(summary, fmt.Sprintf("%s:%d", role, len(unique)))
+		if len(unique) == 0 {
+			continue
+		}
+		findings = append(findings, model.Finding{
+			ID:             "role-diff-" + strings.ToLower(strings.ReplaceAll(role, " ", "-")),
+			Category:       "access-control",
+			Severity:       model.SeverityMedium,
+			Title:          fmt.Sprintf("Role-specific findings detected for %s", role),
+			Description:    "This role produced findings not observed in baseline authenticated coverage, indicating role-dependent behavior that may hide authorization weaknesses.",
+			Evidence:       strings.Join(unique, "; "),
+			Recommendation: "Run targeted authorization/IDOR checks comparing this role against lower-privilege roles and anonymous access.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Compare role-specific findings against baseline run",
+				"role":           role,
+			},
+			BusinessTags: []string{"auth-required", "role:" + role},
+		})
+	}
+	if len(summary) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "role-diff-summary",
+			Category:       "coverage",
+			Severity:       model.SeverityInfo,
+			Title:          "Role-diff coverage summary generated",
+			Description:    "Cross-role comparison completed to identify role-dependent attack surface and potential access-control testing priorities.",
+			Evidence:       strings.Join(summary, ", "),
+			Recommendation: "Prioritize manual verification for roles with non-zero unique findings and validate privilege boundaries.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Review per-role unique finding counts",
+			},
+		})
+	}
+	return findings
 }
 
 func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) func() {

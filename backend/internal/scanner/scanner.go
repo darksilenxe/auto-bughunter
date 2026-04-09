@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -160,7 +161,13 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, checkTLS(u.Host)...)
 	}
 
-	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile)
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	bodyText := string(bodyBytes)
+
+	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
+	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
+
+	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",
@@ -179,6 +186,237 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, integrationFindings...)
 
 	return findings, nil
+}
+
+func discoverRuntimeSurface(target, body string, scanScope model.ScanScope) []model.Finding {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+	endpoints := extractRuntimeEndpoints(target, body, scanScope, 18)
+	if len(endpoints) == 0 {
+		return nil
+	}
+
+	findings := []model.Finding{
+		{
+			ID:             "runtime-surface-endpoints",
+			Category:       "discovery",
+			Severity:       model.SeverityInfo,
+			Title:          fmt.Sprintf("Runtime endpoint expansion discovered %d candidate endpoints", len(endpoints)),
+			Description:    "Response content analysis discovered additional API/documentation endpoints from runtime hints (JS/OpenAPI/GraphQL-style markers).",
+			Evidence:       strings.Join(endpoints, ", "),
+			Recommendation: "Prioritize these discovered endpoints for authenticated authorization and input-validation testing.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Parse response body for endpoint markers and validate in-scope URLs",
+			},
+		},
+	}
+
+	lower := strings.ToLower(strings.Join(endpoints, ","))
+	if strings.Contains(lower, "graphql") {
+		findings = append(findings, model.Finding{
+			ID:             "runtime-graphql-surface",
+			Category:       "api",
+			Severity:       model.SeverityInfo,
+			Title:          "GraphQL surface hint detected",
+			Description:    "Runtime analysis indicates GraphQL-related routes that may require schema-level auth and introspection hardening checks.",
+			Evidence:       strings.Join(filterContains(endpoints, "graphql", 6), ", "),
+			Recommendation: "Verify introspection policy, field-level authorization, and resolver input validation.",
+		})
+	}
+	if strings.Contains(lower, "openapi") || strings.Contains(lower, "swagger") || strings.Contains(lower, "api-docs") {
+		findings = append(findings, model.Finding{
+			ID:             "runtime-openapi-surface",
+			Category:       "api",
+			Severity:       model.SeverityInfo,
+			Title:          "API documentation endpoint hint detected",
+			Description:    "Runtime analysis indicates OpenAPI/Swagger documentation endpoints that can expand attack-surface coverage.",
+			Evidence:       strings.Join(filterAnyContains(endpoints, []string{"openapi", "swagger", "api-docs"}, 6), ", "),
+			Recommendation: "Enumerate documented routes and test authorization consistency across endpoints.",
+		})
+	}
+	return findings
+}
+
+func runContextualParamProbes(ctx context.Context, target, body string, auth model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, service *Service) []model.Finding {
+	candidates := extractRuntimeEndpoints(target, body, scanScope, 10)
+	if len(candidates) == 0 {
+		candidates = []string{target}
+	}
+
+	params := []string{"id", "user", "account", "q", "search", "next", "redirect", "url", "file", "path"}
+	marker := "ABH_REFLECT_PROBE_7f9e2"
+	reflections := make([]string, 0)
+	serverErrors := make([]string, 0)
+
+	attempts := 0
+	for _, raw := range candidates {
+		if attempts >= 12 {
+			break
+		}
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		for _, p := range params {
+			if attempts >= 12 {
+				break
+			}
+			probe := *u
+			q := probe.Query()
+			q.Set(p, marker)
+			probe.RawQuery = q.Encode()
+			if !scope.IsURLInScope(probe.String(), scanScope) {
+				continue
+			}
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, probe.String(), nil)
+			ApplyAuthProfile(req, auth)
+			resp, err := service.doRequestWithRetry(ctx, req, options)
+			if err != nil {
+				continue
+			}
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			_ = resp.Body.Close()
+			attempts++
+			bodyLower := strings.ToLower(string(respBody))
+			if strings.Contains(bodyLower, strings.ToLower(marker)) {
+				reflections = append(reflections, probe.String())
+			}
+			if resp.StatusCode >= 500 {
+				serverErrors = append(serverErrors, fmt.Sprintf("%s status=%d", probe.String(), resp.StatusCode))
+			}
+		}
+	}
+
+	findings := make([]model.Finding, 0, 2)
+	if len(reflections) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "contextual-param-reflection",
+			Category:       "input-validation",
+			Severity:       model.SeverityMedium,
+			Title:          "Context-aware probe found reflected parameter input",
+			Description:    "Safe parameter probing observed direct reflection of probe values in responses, which can indicate weak output encoding or input handling paths.",
+			Evidence:       strings.Join(limitStrings(reflections, 6), ", "),
+			Recommendation: "Validate context-aware output encoding and add targeted injection testing for these reflected parameters.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Replay listed URL with marker payload and inspect reflected output",
+			},
+		})
+	}
+	if len(serverErrors) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "contextual-param-error-signal",
+			Category:       "input-validation",
+			Severity:       model.SeverityLow,
+			Title:          "Context-aware probe triggered server error paths",
+			Description:    "Safe parameter probing produced server-side errors that may indicate fragile parser/query handling in specific parameters.",
+			Evidence:       strings.Join(limitStrings(serverErrors, 6), "; "),
+			Recommendation: "Inspect these endpoints for robust validation and add targeted non-destructive input tests.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Replay listed URLs and inspect server logs/trace IDs for parsing exceptions",
+			},
+		})
+	}
+	return findings
+}
+
+func extractRuntimeEndpoints(target, body string, scanScope model.ScanScope, max int) []string {
+	if max <= 0 {
+		max = 12
+	}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		resolved := resolveEndpoint(target, value)
+		if resolved == "" || !scope.IsURLInScope(resolved, scanScope) {
+			return
+		}
+		seen[resolved] = struct{}{}
+	}
+
+	scriptSrc := regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
+	for _, m := range scriptSrc.FindAllStringSubmatch(body, -1) {
+		if len(m) > 1 {
+			add(m[1])
+		}
+	}
+
+	quotedPath := regexp.MustCompile(`["'](\/(?:api|graphql|openapi|swagger|api-docs)[^"'\s]*)["']`)
+	for _, m := range quotedPath.FindAllStringSubmatch(body, -1) {
+		if len(m) > 1 {
+			add(m[1])
+		}
+	}
+
+	for _, staticPath := range []string{"/openapi.json", "/swagger.json", "/api-docs", "/graphql"} {
+		add(staticPath)
+	}
+
+	out := make([]string, 0, len(seen))
+	for endpoint := range seen {
+		out = append(out, endpoint)
+	}
+	sort.Strings(out)
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
+}
+
+func resolveEndpoint(baseTarget, endpoint string) string {
+	base, err := url.Parse(baseTarget)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return ""
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	if parsed.Scheme != "" && parsed.Host != "" {
+		return parsed.String()
+	}
+	return base.ResolveReference(parsed).String()
+}
+
+func filterContains(items []string, keyword string, max int) []string {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item), keyword) {
+			out = append(out, item)
+		}
+	}
+	if len(out) > max {
+		return out[:max]
+	}
+	return out
+}
+
+func filterAnyContains(items []string, keywords []string, max int) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		lower := strings.ToLower(item)
+		for _, keyword := range keywords {
+			if strings.Contains(lower, strings.ToLower(strings.TrimSpace(keyword))) {
+				out = append(out, item)
+				break
+			}
+		}
+	}
+	if len(out) > max {
+		return out[:max]
+	}
+	return out
 }
 
 func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, options model.ScanOptions) (*http.Response, error) {
