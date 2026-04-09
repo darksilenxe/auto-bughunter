@@ -436,7 +436,7 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 	}
 	defer rows.Close()
 
-	out := make([]*model.ScanJob, 0, limit)
+	out := make([]*model.ScanJob, 0)
 	for rows.Next() {
 		var job model.ScanJob
 		var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw []byte
