@@ -102,6 +102,24 @@ Body:
     "basicAuthUsername": "scanner",
     "basicAuthPassword": "secret"
   },
+  "authProfiles": [
+    {
+      "roleName": "admin",
+      "priority": 1,
+      "authProfile": {
+        "cookies": {"sessionid": "..."}
+      }
+    }
+  ],
+  "programName": "Example Program",
+  "programPolicyVersion": "2026-04-01",
+  "disallowedTestTypes": ["sqlmap", "ffuf"],
+  "programScopeProfile": {
+    "includeHosts": ["example.com", "*.example.com"],
+    "excludeHosts": ["admin.example.com"],
+    "excludePaths": ["/logout", "/billing"],
+    "programRules": ["No destructive testing"]
+  },
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false,
@@ -110,7 +128,12 @@ Body:
     "useAmassIntegration": false,
     "useFfufIntegration": false,
     "useGobusterIntegration": false,
-    "rescanIntervalMinutes": 0
+    "rescanIntervalMinutes": 0,
+    "maxRetries": 2,
+    "backoffMillis": 500,
+    "requestDelayMillis": 100,
+    "maxPerTargetConcurrency": 1,
+    "deepScanOnHighSignal": true
   },
   "scope": {
     "includeHosts": ["example.com", "*.example.com"],
@@ -129,6 +152,23 @@ Returns job state and findings, including per-agent telemetry (`agentRuns`), str
 
 Returns a sanitized, pseudonymized engagement dataset built from completed scans and related telemetry for offline/shadow ML training and evaluation.
 
+### `POST /api/feedback`
+
+Stores bug bounty outcome labels so prioritization can learn from accepted/rejected results.
+
+```json
+{
+  "scanId": "scan-uuid",
+  "findingId": "finding-id",
+  "category": "headers",
+  "title": "Missing security header",
+  "programName": "Example Program",
+  "outcome": "accepted",
+  "payoutUsd": 150.0,
+  "notes": "Accepted by triager"
+}
+```
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
@@ -145,6 +185,12 @@ Returns a sanitized, pseudonymized engagement dataset built from completed scans
 - Proxy replay supports optional per-request scope validation via `scope` on `POST /api/proxy/replay`.
 - When a previous completed scan exists for the same target, the job includes a monitoring finding summarizing newly observed issues.
 - Optional automatic rescans can be scheduled per target with `options.rescanIntervalMinutes`.
+- Program scope profiles can be merged into per-scan scope automatically with `programScopeProfile`.
+- Disallowed test types can be enforced at request time with `disallowedTestTypes`.
+- Role-based authenticated coverage can be expanded with `authProfiles` (multiple role sessions).
+- Scanner request pacing/retry controls are available via `options.maxRetries`, `options.backoffMillis`, and `options.requestDelayMillis`.
+- Per-target concurrency can be constrained via `MAX_CONCURRENT_SCANS_PER_TARGET` (global default) or `options.maxPerTargetConcurrency`.
+- Feedback outcomes submitted to `POST /api/feedback` are used by ML prioritization to favor historically accepted issue patterns.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.

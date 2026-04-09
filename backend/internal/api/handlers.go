@@ -672,6 +672,9 @@ func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) fun
 	if limit <= 0 {
 		limit = 1
 	}
+	if limit > 20 {
+		limit = 20
+	}
 	s.semMu.Lock()
 	sem, ok := s.targetSem[host]
 	if !ok || cap(sem) != limit {
