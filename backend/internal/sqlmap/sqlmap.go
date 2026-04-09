@@ -66,10 +66,10 @@ type dbError struct {
 
 // dbErrors is the master list of database error patterns.
 var dbErrors = []dbError{
-	{re: regexp.MustCompile(`(?i)(you have an error in your sql syntax|mysql_fetch|warning: mysql|unclosed quotation mark after the character string)`), dbName: "MySQL"},
+	{re: regexp.MustCompile(`(?i)(you have an error in your sql syntax|mysql_fetch|warning: mysql)`), dbName: "MySQL"},
 	{re: regexp.MustCompile(`(?i)(invalid input syntax for type|pg_query\(\)|unterminated quoted string at or near|psql.*error)`), dbName: "PostgreSQL"},
 	{re: regexp.MustCompile(`(?i)(ora-\d{5}|oracle error)`), dbName: "Oracle"},
-	{re: regexp.MustCompile(`(?i)(microsoft sql server|odbc sql server driver|mssql_query\(\)|incorrect syntax near|supplied argument is not a valid.*mssql)`), dbName: "MSSQL"},
+	{re: regexp.MustCompile(`(?i)(microsoft sql server|odbc sql server driver|mssql_query\(\)|incorrect syntax near|unclosed quotation mark after the character string|supplied argument is not a valid.*mssql)`), dbName: "MSSQL"},
 	{re: regexp.MustCompile(`(?i)(sqlite_master|sqlite error|sqliteexception)`), dbName: "SQLite"},
 }
 
@@ -507,10 +507,10 @@ func testTimeBased(ctx context.Context, pt injectionPoint) *model.Finding {
 		start := time.Now()
 		resp, doErr := timeClient.Do(req)
 		elapsed := time.Since(start)
-		cancel()
 		if doErr == nil {
 			resp.Body.Close()
 		}
+		cancel()
 
 		if elapsed >= timeBasedThreshold {
 			return &model.Finding{
