@@ -855,11 +855,11 @@ func (s *Service) runAmassNative(ctx context.Context, target string, state *inte
 		discovered[h] = struct{}{}
 	}
 
-	commonSubdomainLabels := []string{
+	amassSubdomainLabels := []string{
 		"www", "api", "dev", "staging", "admin", "app", "auth", "portal", "cdn", "static",
 		"internal", "test", "uat", "beta", "mail", "vpn", "sso",
 	}
-	for _, label := range commonSubdomainLabels {
+	for _, label := range amassSubdomainLabels {
 		if ctx.Err() != nil {
 			break
 		}
