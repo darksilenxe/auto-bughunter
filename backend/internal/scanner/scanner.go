@@ -37,6 +37,8 @@ type Config struct {
 	EnableWPScan      bool
 	EnableNikto       bool
 	EnableSQLMap      bool
+	EnableFFUF        bool
+	EnableGobuster    bool
 	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
@@ -49,6 +51,8 @@ type Config struct {
 	TlsxBinary        string
 	CdncheckBinary    string
 	AsnmapBinary      string
+	FFUFBinary        string
+	GobusterBinary    string
 
 	IntegrationTimeout time.Duration
 }
@@ -96,6 +100,12 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.AsnmapBinary) == "" {
 		cfg.AsnmapBinary = "asnmap"
+	}
+	if strings.TrimSpace(cfg.FFUFBinary) == "" {
+		cfg.FFUFBinary = "ffuf"
+	}
+	if strings.TrimSpace(cfg.GobusterBinary) == "" {
+		cfg.GobusterBinary = "gobuster"
 	}
 
 	return &Service{

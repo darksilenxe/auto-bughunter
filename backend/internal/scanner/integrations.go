@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"auto-bughunter/backend/internal/nikto"
 	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/sqlmap"
+	"auto-bughunter/backend/internal/wordlist"
 	"auto-bughunter/backend/internal/wpscan"
 )
 
@@ -36,7 +38,7 @@ type integrationState struct {
 //	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana
+//	Phase 4 — Crawling:    katana, ffuf, gobuster
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
@@ -96,6 +98,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			katanaDepth = 3
 		}
 		findings = append(findings, s.runKatana(ctx, input.Target, katanaDepth)...)
+	}
+	if input.Options.UseFFUFIntegration {
+		findings = append(findings, s.runFFUF(ctx, input.Target, input.Scope)...)
+	}
+	if input.Options.UseGobusterIntegration {
+		findings = append(findings, s.runGobuster(ctx, input.Target, input.Scope)...)
 	}
 
 	// Phase 5 — TLS and infrastructure analysis.
@@ -1421,4 +1429,231 @@ func (s *Service) runSQLMap(ctx context.Context, target string, authProfile mode
 
 	result := sqlmap.Scan(ctx, target, authProfile)
 	return result.Findings
+}
+
+func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableFFUF {
+		return []model.Finding{{
+			ID:             "ffuf-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "FFUF integration requested but disabled",
+			Description:    "The job requested FFUF but ENABLE_FFUF_INTEGRATION is false.",
+			Evidence:       "ENABLE_FFUF_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.FFUFBinary); err != nil {
+		return []model.Finding{{
+			ID:             "ffuf-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "FFUF binary not found",
+			Description:    "FFUF integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install FFUF or set FFUF_BINARY to the binary path.",
+		}}
+	}
+	wordlistPath, err := writeTemporaryWordlist(wordlist.GetCommonDirectoriesWithExternal(ctx))
+	if err != nil {
+		return []model.Finding{{
+			ID:             "ffuf-wordlist-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "FFUF wordlist preparation failed",
+			Description:    "Could not prepare a temporary wordlist for FFUF.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+		}}
+	}
+	defer os.Remove(wordlistPath)
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.FFUFBinary, "-u", strings.TrimRight(target, "/")+"/FUZZ", "-w", wordlistPath, "-mc", "200,204,301,302,307,401,403", "-s")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "ffuf-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "FFUF timed out",
+			Description:    "FFUF did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	paths := parsePathHits(outb.String(), target, scanScope)
+	if len(paths) == 0 {
+		return []model.Finding{{
+			ID:             "ffuf-no-paths",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "FFUF found no candidate paths",
+			Description:    "FFUF completed but did not report in-scope matches from the configured wordlist.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try broader wordlists, different match filters, or authenticated profiles.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "ffuf-path-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "FFUF discovered candidate paths",
+		Description:    "FFUF discovered in-scope endpoint candidates using directory fuzzing.",
+		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+		Recommendation: "Review discovered paths for authentication, authorization, and input-validation flaws.",
+		Sources:        []string{"ffuf"},
+		Confidence:     0.8,
+	}}
+}
+
+func (s *Service) runGobuster(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableGobuster {
+		return []model.Finding{{
+			ID:             "gobuster-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Gobuster integration requested but disabled",
+			Description:    "The job requested Gobuster but ENABLE_GOBUSTER_INTEGRATION is false.",
+			Evidence:       "ENABLE_GOBUSTER_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.GobusterBinary); err != nil {
+		return []model.Finding{{
+			ID:             "gobuster-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Gobuster binary not found",
+			Description:    "Gobuster integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install Gobuster or set GOBUSTER_BINARY to the binary path.",
+		}}
+	}
+	wordlistPath, err := writeTemporaryWordlist(wordlist.GetCommonDirectoriesWithExternal(ctx))
+	if err != nil {
+		return []model.Finding{{
+			ID:             "gobuster-wordlist-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Gobuster wordlist preparation failed",
+			Description:    "Could not prepare a temporary wordlist for Gobuster.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+		}}
+	}
+	defer os.Remove(wordlistPath)
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.GobusterBinary, "dir", "-u", target, "-w", wordlistPath, "-q", "--no-error")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "gobuster-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Gobuster timed out",
+			Description:    "Gobuster did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	paths := parsePathHits(outb.String(), target, scanScope)
+	if len(paths) == 0 {
+		return []model.Finding{{
+			ID:             "gobuster-no-paths",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Gobuster found no candidate paths",
+			Description:    "Gobuster completed but did not report in-scope matches from the configured wordlist.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try broader wordlists, file-extension checks, or authenticated profiles.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "gobuster-path-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "Gobuster discovered candidate paths",
+		Description:    "Gobuster discovered in-scope endpoint candidates using directory brute-force.",
+		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+		Recommendation: "Review discovered paths for sensitive content, auth bypass, and exposed administrative surfaces.",
+		Sources:        []string{"gobuster"},
+		Confidence:     0.8,
+	}}
+}
+
+func writeTemporaryWordlist(entries []string) (string, error) {
+	f, err := os.CreateTemp("", "auto-bughunter-wordlist-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		clean := strings.TrimSpace(strings.TrimPrefix(entry, "/"))
+		if clean == "" {
+			continue
+		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		if _, err := f.WriteString(clean + "\n"); err != nil {
+			return "", err
+		}
+	}
+	return f.Name(), nil
+}
+
+func parsePathHits(rawOutput, target string, scanScope model.ScanScope) []string {
+	lines := strings.Split(rawOutput, "\n")
+	paths := make([]string, 0)
+	seen := map[string]struct{}{}
+	base := strings.TrimRight(target, "/")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		field := strings.Fields(line)[0]
+		path := ""
+		switch {
+		case strings.HasPrefix(field, "http://") || strings.HasPrefix(field, "https://"):
+			path = strings.TrimPrefix(field, base)
+		case strings.HasPrefix(field, "/"):
+			path = field
+		default:
+			path = "/" + strings.TrimPrefix(field, "/")
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		fullURL := base + path
+		if !scope.IsURLInScope(fullURL, scanScope) {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func limitStrings(items []string, max int) []string {
+	if max <= 0 || len(items) <= max {
+		return items
+	}
+	return items[:max]
 }

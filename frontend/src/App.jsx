@@ -29,6 +29,8 @@ export default function App() {
   const [useWpScanIntegration, setUseWpScanIntegration] = useState(false);
   const [useNiktoIntegration, setUseNiktoIntegration] = useState(false);
   const [useSqlMapIntegration, setUseSqlMapIntegration] = useState(false);
+  const [useFfufIntegration, setUseFfufIntegration] = useState(false);
+  const [useGobusterIntegration, setUseGobusterIntegration] = useState(false);
   const [rescanIntervalMinutes, setRescanIntervalMinutes] = useState(0);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
@@ -154,6 +156,8 @@ export default function App() {
             useWpScanIntegration,
             useNiktoIntegration,
             useSqlMapIntegration,
+            useFfufIntegration,
+            useGobusterIntegration,
             rescanIntervalMinutes: Number(rescanIntervalMinutes) || 0,
           },
           scope: {
@@ -461,6 +465,24 @@ export default function App() {
             Run SQLMap (native Go SQL injection — error-based, boolean-blind &amp; time-based blind; GET/POST/cookies/headers)
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useFfufIntegration}
+              onChange={(e) => setUseFfufIntegration(e.target.checked)}
+            />
+            Run FFUF (directory/content fuzzing with wordlist)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useGobusterIntegration}
+              onChange={(e) => setUseGobusterIntegration(e.target.checked)}
+            />
+            Run Gobuster (directory brute-force discovery)
+          </label>
+
           <label htmlFor="rescan-interval">Rescan interval (minutes, 0=off)</label>
           <input
             id="rescan-interval"
@@ -507,6 +529,8 @@ export default function App() {
               ["wpscan", job.options?.useWpScanIntegration],
               ["nikto", job.options?.useNiktoIntegration],
               ["sqlmap", job.options?.useSqlMapIntegration],
+              ["ffuf", job.options?.useFfufIntegration],
+              ["gobuster", job.options?.useGobusterIntegration],
             ]
               .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
               .join(", ")}

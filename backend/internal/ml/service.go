@@ -294,6 +294,8 @@ func optionsMap(o model.ScanOptions) map[string]bool {
 		"wpscan":       o.UseWPScanIntegration,
 		"nikto":        o.UseNiktoIntegration,
 		"sqlmap":       o.UseSQLMapIntegration,
+		"ffuf":         o.UseFFUFIntegration,
+		"gobuster":     o.UseGobusterIntegration,
 	}
 }
 
@@ -447,6 +449,10 @@ func inferToolFromFindingID(id string) string {
 		return "nikto"
 	case strings.Contains(l, "sqlmap"):
 		return "sqlmap"
+	case strings.Contains(l, "ffuf"):
+		return "ffuf"
+	case strings.Contains(l, "gobuster"):
+		return "gobuster"
 	default:
 		return "native"
 	}

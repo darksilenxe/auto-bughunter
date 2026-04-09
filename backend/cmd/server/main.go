@@ -53,6 +53,8 @@ func main() {
 		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
 		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
 		EnableSQLMap:       getbool("ENABLE_SQLMAP_INTEGRATION", false),
+		EnableFFUF:         getbool("ENABLE_FFUF_INTEGRATION", false),
+		EnableGobuster:     getbool("ENABLE_GOBUSTER_INTEGRATION", false),
 		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
@@ -65,6 +67,8 @@ func main() {
 		TlsxBinary:         getenv("TLSX_BINARY", "tlsx"),
 		CdncheckBinary:     getenv("CDNCHECK_BINARY", "cdncheck"),
 		AsnmapBinary:       getenv("ASNMAP_BINARY", "asnmap"),
+		FFUFBinary:         getenv("FFUF_BINARY", "ffuf"),
+		GobusterBinary:     getenv("GOBUSTER_BINARY", "gobuster"),
 		IntegrationTimeout: time.Duration(getint("INTEGRATION_TIMEOUT_SECONDS", 90)) * time.Second,
 	})
 	aiClient := ai.NewClient(

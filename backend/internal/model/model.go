@@ -73,6 +73,8 @@ type ScanOptions struct {
 	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
 	UseNiktoIntegration       bool `json:"useNiktoIntegration,omitempty"`
 	UseSQLMapIntegration      bool `json:"useSqlMapIntegration,omitempty"`
+	UseFFUFIntegration        bool `json:"useFfufIntegration,omitempty"`
+	UseGobusterIntegration    bool `json:"useGobusterIntegration,omitempty"`
 	RescanIntervalMinutes     int  `json:"rescanIntervalMinutes,omitempty"`
 }
 

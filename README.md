@@ -93,6 +93,8 @@ Body:
     "useShuffleDnsIntegration": false,
     "useCertificateTransparencyIntegration": false,
     "useAmassIntegration": false,
+    "useFfufIntegration": false,
+    "useGobusterIntegration": false,
     "rescanIntervalMinutes": 0
   },
   "scope": {
@@ -129,6 +131,7 @@ Returns a sanitized, pseudonymized engagement dataset built from completed scans
 - Optional automatic rescans can be scheduled per target with `options.rescanIntervalMinutes`.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
+- FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → wordlist → analysis → reporting. Each agent enriches the findings pipeline.
