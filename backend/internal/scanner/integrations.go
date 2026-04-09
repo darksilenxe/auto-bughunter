@@ -3,6 +3,8 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/url"
 	"os/exec"
 	"strconv"
@@ -24,7 +26,7 @@ type integrationState struct {
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 1 — Discovery:   subfinder, dnsx
+//	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
 //	Phase 4 — Crawling:    katana
@@ -43,6 +45,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 	if input.Options.UseDnsxIntegration {
 		findings = append(findings, s.runDnsx(ctx, input.Target)...)
+	}
+	if input.Options.UseShuffleDNSIntegration {
+		findings = append(findings, s.runShuffleDNS(ctx, input.Target, state, input.Scope)...)
+	}
+	if input.Options.UseCertTransparency {
+		findings = append(findings, s.runCertificateTransparency(ctx, input.Target, state, input.Scope)...)
 	}
 
 	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
@@ -629,6 +637,186 @@ func (s *Service) runDnsx(ctx context.Context, target string) []model.Finding {
 	}}
 }
 
+func (s *Service) runShuffleDNS(ctx context.Context, target string, state *integrationState, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableShuffleDNS {
+		return []model.Finding{{
+			ID:             "shuffledns-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "ShuffleDNS integration requested but disabled",
+			Description:    "The job requested ShuffleDNS but ENABLE_SHUFFLEDNS_INTEGRATION is false.",
+			Evidence:       "ENABLE_SHUFFLEDNS_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	if _, err := exec.LookPath(s.cfg.ShuffleDNSBinary); err != nil {
+		return []model.Finding{{
+			ID:             "shuffledns-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ShuffleDNS binary not found",
+			Description:    "ShuffleDNS integration is enabled but binary is missing in the runtime image.",
+			Evidence:       err.Error(),
+			Recommendation: "Install shuffledns in the backend image or set SHUFFLEDNS_BINARY to a valid path.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ictx, s.cfg.ShuffleDNSBinary, "-d", host, "-silent")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return []model.Finding{{
+			ID:             "shuffledns-execution-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ShuffleDNS integration failed",
+			Description:    "ShuffleDNS did not complete successfully.",
+			Evidence:       strings.TrimSpace(stderr.String()),
+			Recommendation: "Validate shuffledns options, resolvers, and network access, then rerun.",
+		}}
+	}
+
+	discovered := make([]string, 0)
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		host := normalizeDiscoveredHost(line)
+		if host == "" || !scope.IsHostInScope(host, scanScope) {
+			continue
+		}
+		discovered = append(discovered, host)
+	}
+	addDiscoveredHosts(state, discovered)
+
+	severity := model.SeverityInfo
+	title := "ShuffleDNS found no subdomains"
+	if len(discovered) > 0 {
+		severity = model.SeverityMedium
+		title = "ShuffleDNS discovered subdomains"
+	}
+	return []model.Finding{{
+		ID:             "shuffledns-summary",
+		Category:       "integration",
+		Severity:       severity,
+		Title:          title,
+		Description:    "Project Discovery ShuffleDNS subdomain discovery executed.",
+		Evidence:       "subdomains=" + strconv.Itoa(len(discovered)),
+		Recommendation: "Review discovered subdomains and confirm they are in authorized scope.",
+	}}
+}
+
+func (s *Service) runCertificateTransparency(ctx context.Context, target string, state *integrationState, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableCertTrans {
+		return []model.Finding{{
+			ID:             "cert-transparency-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Certificate Transparency integration requested but disabled",
+			Description:    "The job requested Certificate Transparency discovery but ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION is false.",
+			Evidence:       "ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	if strings.TrimSpace(host) == "" {
+		return nil
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ictx, http.MethodGet, "https://crt.sh/?q=%25."+url.QueryEscape(host)+"&output=json", nil)
+	if err != nil {
+		return []model.Finding{{
+			ID:             "cert-transparency-request-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Certificate Transparency query failed",
+			Description:    "The scanner could not prepare a certificate transparency query.",
+			Evidence:       err.Error(),
+			Recommendation: "Validate target host parsing and retry.",
+		}}
+	}
+	client := &http.Client{Timeout: s.cfg.IntegrationTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return []model.Finding{{
+			ID:             "cert-transparency-network-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Certificate Transparency query failed",
+			Description:    "The scanner could not query certificate transparency logs from crt.sh.",
+			Evidence:       err.Error(),
+			Recommendation: "Validate network egress to crt.sh and retry.",
+		}}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return []model.Finding{{
+			ID:             "cert-transparency-http-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Certificate Transparency query returned unexpected status",
+			Description:    "crt.sh did not return a successful response.",
+			Evidence:       "status=" + strconv.Itoa(resp.StatusCode),
+			Recommendation: "Retry later or use an alternative certificate transparency source.",
+		}}
+	}
+
+	var records []struct {
+		NameValue string `json:"name_value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		return []model.Finding{{
+			ID:             "cert-transparency-parse-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Certificate Transparency response parse error",
+			Description:    "The scanner could not parse the crt.sh response.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry later and verify crt.sh output format.",
+		}}
+	}
+
+	discoveredSet := map[string]struct{}{}
+	for _, rec := range records {
+		for _, raw := range strings.Split(rec.NameValue, "\n") {
+			h := normalizeDiscoveredHost(raw)
+			if h == "" || !scope.IsHostInScope(h, scanScope) {
+				continue
+			}
+			discoveredSet[h] = struct{}{}
+		}
+	}
+	discovered := make([]string, 0, len(discoveredSet))
+	for h := range discoveredSet {
+		discovered = append(discovered, h)
+	}
+	addDiscoveredHosts(state, discovered)
+
+	severity := model.SeverityInfo
+	title := "Certificate Transparency found no hosts"
+	if len(discovered) > 0 {
+		severity = model.SeverityMedium
+		title = "Certificate Transparency discovered hosts"
+	}
+	return []model.Finding{{
+		ID:             "cert-transparency-summary",
+		Category:       "integration",
+		Severity:       severity,
+		Title:          title,
+		Description:    "Certificate Transparency discovery via crt.sh executed.",
+		Evidence:       "hosts=" + strconv.Itoa(len(discovered)),
+		Recommendation: "Review discovered hosts for additional in-scope attack surface.",
+	}}
+}
+
 func (s *Service) runKatana(ctx context.Context, target string) []model.Finding {
 	if !s.cfg.EnableKatana {
 		return []model.Finding{{
@@ -897,6 +1085,45 @@ func hostFromTarget(target string) string {
 		return target
 	}
 	return u.Hostname()
+}
+
+func normalizeDiscoveredHost(raw string) string {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	host = strings.TrimPrefix(host, "*.")
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return ""
+	}
+	for _, r := range host {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			continue
+		}
+		return ""
+	}
+	return host
+}
+
+func addDiscoveredHosts(state *integrationState, hosts []string) {
+	if state == nil || len(hosts) == 0 {
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, h := range state.DiscoveredHosts {
+		if h != "" {
+			seen[strings.ToLower(h)] = struct{}{}
+		}
+	}
+	for _, h := range hosts {
+		nh := strings.ToLower(strings.TrimSpace(h))
+		if nh == "" {
+			continue
+		}
+		if _, ok := seen[nh]; ok {
+			continue
+		}
+		seen[nh] = struct{}{}
+		state.DiscoveredHosts = append(state.DiscoveredHosts, nh)
+	}
 }
 
 // runWPScan executes the native Go WPScan assessment against target.

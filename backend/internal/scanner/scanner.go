@@ -27,6 +27,8 @@ type Config struct {
 	EnableHttpx       bool
 	EnableNaabu       bool
 	EnableDnsx        bool
+	EnableShuffleDNS  bool
+	EnableCertTrans   bool
 	EnableKatana      bool
 	EnableTlsx        bool
 	EnableCdncheck    bool
@@ -41,6 +43,7 @@ type Config struct {
 	HttpxBinary       string
 	NaabuBinary       string
 	DnsxBinary        string
+	ShuffleDNSBinary  string
 	KatanaBinary      string
 	TlsxBinary        string
 	CdncheckBinary    string
@@ -77,6 +80,9 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.DnsxBinary) == "" {
 		cfg.DnsxBinary = "dnsx"
+	}
+	if strings.TrimSpace(cfg.ShuffleDNSBinary) == "" {
+		cfg.ShuffleDNSBinary = "shuffledns"
 	}
 	if strings.TrimSpace(cfg.KatanaBinary) == "" {
 		cfg.KatanaBinary = "katana"

@@ -19,6 +19,8 @@ export default function App() {
   const [useHttpxIntegration, setUseHttpxIntegration] = useState(false);
   const [useNaabuIntegration, setUseNaabuIntegration] = useState(false);
   const [useDnsxIntegration, setUseDnsxIntegration] = useState(false);
+  const [useShuffleDnsIntegration, setUseShuffleDnsIntegration] = useState(false);
+  const [useCertificateTransparencyIntegration, setUseCertificateTransparencyIntegration] = useState(false);
   const [useKatanaIntegration, setUseKatanaIntegration] = useState(false);
   const [useTlsxIntegration, setUseTlsxIntegration] = useState(false);
   const [useCdncheckIntegration, setUseCdncheckIntegration] = useState(false);
@@ -141,6 +143,8 @@ export default function App() {
             useHttpxIntegration,
             useNaabuIntegration,
             useDnsxIntegration,
+            useShuffleDnsIntegration,
+            useCertificateTransparencyIntegration,
             useKatanaIntegration,
             useTlsxIntegration,
             useCdncheckIntegration,
@@ -368,6 +372,24 @@ export default function App() {
           <label className="check">
             <input
               type="checkbox"
+              checked={useShuffleDnsIntegration}
+              onChange={(e) => setUseShuffleDnsIntegration(e.target.checked)}
+            />
+            Run optional ShuffleDNS integration (subdomain discovery)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useCertificateTransparencyIntegration}
+              onChange={(e) => setUseCertificateTransparencyIntegration(e.target.checked)}
+            />
+            Run optional Certificate Transparency integration (crt.sh discovery)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
               checked={useKatanaIntegration}
               onChange={(e) => setUseKatanaIntegration(e.target.checked)}
             />
@@ -464,6 +486,8 @@ export default function App() {
               ["httpx", job.options?.useHttpxIntegration],
               ["naabu", job.options?.useNaabuIntegration],
               ["dnsx", job.options?.useDnsxIntegration],
+              ["shuffleDns", job.options?.useShuffleDnsIntegration],
+              ["certificateTransparency", job.options?.useCertificateTransparencyIntegration],
               ["katana", job.options?.useKatanaIntegration],
               ["tlsx", job.options?.useTlsxIntegration],
               ["cdncheck", job.options?.useCdncheckIntegration],

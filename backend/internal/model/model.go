@@ -50,6 +50,8 @@ type ScanOptions struct {
 	UseHttpxIntegration       bool `json:"useHttpxIntegration,omitempty"`
 	UseNaabuIntegration       bool `json:"useNaabuIntegration,omitempty"`
 	UseDnsxIntegration        bool `json:"useDnsxIntegration,omitempty"`
+	UseShuffleDNSIntegration  bool `json:"useShuffleDnsIntegration,omitempty"`
+	UseCertTransparency       bool `json:"useCertificateTransparencyIntegration,omitempty"`
 	UseKatanaIntegration      bool `json:"useKatanaIntegration,omitempty"`
 	UseTlsxIntegration        bool `json:"useTlsxIntegration,omitempty"`
 	UseCdncheckIntegration    bool `json:"useCdncheckIntegration,omitempty"`

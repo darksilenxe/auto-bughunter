@@ -39,6 +39,8 @@ Do not scan third-party systems without written permission.
 - Optional integrations behind feature flags:
   - Nuclei
   - OWASP ZAP Baseline
+  - ShuffleDNS
+  - Certificate Transparency (crt.sh)
 - Optional AI-generated executive summary for findings
 - Offline AI reasoner (local analysis when no API available)
 
@@ -82,6 +84,8 @@ Body:
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false,
+    "useShuffleDnsIntegration": false,
+    "useCertificateTransparencyIntegration": false,
     "rescanIntervalMinutes": 0
   },
   "scope": {
@@ -109,6 +113,7 @@ Returns job state and findings.
 - Proxy replay supports optional per-request scope validation via `scope` on `POST /api/proxy/replay`.
 - When a previous completed scan exists for the same target, the job includes a monitoring finding summarizing newly observed issues.
 - Optional automatic rescans can be scheduled per target with `options.rescanIntervalMinutes`.
+- ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → wordlist → analysis → reporting. Each agent enriches the findings pipeline.
