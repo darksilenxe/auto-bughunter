@@ -70,6 +70,8 @@ func main() {
 		FFUFBinary:         getenv("FFUF_BINARY", "ffuf"),
 		GobusterBinary:     getenv("GOBUSTER_BINARY", "gobuster"),
 		IntegrationTimeout: time.Duration(getint("INTEGRATION_TIMEOUT_SECONDS", 90)) * time.Second,
+		DefaultMaxRetries:  getint("DEFAULT_MAX_RETRIES", 1),
+		DefaultBackoff:     time.Duration(getint("DEFAULT_BACKOFF_MILLIS", 400)) * time.Millisecond,
 	})
 	aiClient := ai.NewClient(
 		os.Getenv("AI_API_BASE"),
@@ -80,7 +82,7 @@ func main() {
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
 	})
 
-	server := api.NewServer(scanService, aiClient, mlService, allowed, repo, repo)
+	server := api.NewServer(scanService, aiClient, mlService, allowed, repo, repo, getint("MAX_CONCURRENT_SCANS_PER_TARGET", 1))
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,

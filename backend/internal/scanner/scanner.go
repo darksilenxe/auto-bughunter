@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +57,8 @@ type Config struct {
 	GobusterBinary    string
 
 	IntegrationTimeout time.Duration
+	DefaultMaxRetries  int
+	DefaultBackoff     time.Duration
 }
 
 type RunInput struct {
@@ -67,6 +71,12 @@ type RunInput struct {
 func NewService(cfg Config) *Service {
 	if cfg.IntegrationTimeout <= 0 {
 		cfg.IntegrationTimeout = 90 * time.Second
+	}
+	if cfg.DefaultMaxRetries < 0 {
+		cfg.DefaultMaxRetries = 0
+	}
+	if cfg.DefaultBackoff <= 0 {
+		cfg.DefaultBackoff = 400 * time.Millisecond
 	}
 	if strings.TrimSpace(cfg.NucleiBinary) == "" {
 		cfg.NucleiBinary = "nuclei"
@@ -126,11 +136,19 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		return nil, fmt.Errorf("target is outside configured scan scope")
 	}
 
+	if input.Options.RequestDelayMillis > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(input.Options.RequestDelayMillis) * time.Millisecond):
+		}
+	}
+
 	var findings []model.Finding
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -161,6 +179,50 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, integrationFindings...)
 
 	return findings, nil
+}
+
+func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, options model.ScanOptions) (*http.Response, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+	maxRetries := s.cfg.DefaultMaxRetries
+	if options.MaxRetries > 0 {
+		maxRetries = options.MaxRetries
+	}
+	backoff := s.cfg.DefaultBackoff
+	if options.BackoffMillis > 0 {
+		backoff = time.Duration(options.BackoffMillis) * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		cloned := req.Clone(ctx)
+		resp, err := s.httpClient.Do(cloned)
+		if err == nil && !isRetriableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		if err == nil && resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("retriable response status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt == maxRetries {
+			break
+		}
+		wait := backoff * time.Duration(attempt+1)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, lastErr
+}
+
+func isRetriableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
 }
 
 func ApplyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
@@ -211,6 +273,10 @@ func checkSecurityHeaders(h http.Header) []model.Finding {
 				Description:    "The response is missing a commonly recommended security header.",
 				Evidence:       header + " not present",
 				Recommendation: rec,
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET / and inspect response headers",
+				},
 			})
 		}
 	}
@@ -229,6 +295,10 @@ func checkCookies(resp *http.Response) []model.Finding {
 				Description:    "A cookie was observed without HttpOnly.",
 				Evidence:       c.Name,
 				Recommendation: "Set HttpOnly for session/auth cookies.",
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET / and inspect Set-Cookie attributes",
+				},
 			})
 		}
 		if !c.Secure && resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Scheme == "https" {
@@ -240,6 +310,10 @@ func checkCookies(resp *http.Response) []model.Finding {
 				Description:    "A cookie was observed without Secure on an HTTPS target.",
 				Evidence:       c.Name,
 				Recommendation: "Set Secure for sensitive cookies.",
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET HTTPS endpoint and inspect Set-Cookie attributes",
+				},
 			})
 		}
 	}
@@ -264,6 +338,10 @@ func checkTLS(host string) []model.Finding {
 			Description:    "Could not complete TLS handshake with minimum TLS 1.2.",
 			Evidence:       err.Error(),
 			Recommendation: "Ensure valid certificates and modern TLS configuration.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "openssl s_client -connect " + addr + " -tls1_2",
+			},
 		})
 		return findings
 	}
@@ -279,6 +357,10 @@ func checkTLS(host string) []model.Finding {
 			Description:    "The endpoint negotiated an outdated TLS version.",
 			Evidence:       fmt.Sprintf("tlsVersion=%x", state.Version),
 			Recommendation: "Disable TLS 1.0/1.1 and enforce TLS 1.2+.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Check negotiated TLS version against policy",
+			},
 		})
 	}
 
@@ -293,6 +375,11 @@ func checkTLS(host string) []model.Finding {
 				Description:    "Leaf certificate is close to expiration.",
 				Evidence:       notAfter.UTC().Format(time.RFC3339),
 				Recommendation: "Rotate certificate before expiration to avoid outages.",
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "Inspect leaf certificate NotAfter",
+					"daysUntilExpiry": strconv.Itoa(int(time.Until(notAfter).Hours() / 24)),
+				},
 			})
 		}
 	}

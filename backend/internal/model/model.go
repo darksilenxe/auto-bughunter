@@ -35,10 +35,16 @@ type Exploitability struct {
 }
 
 type ScanRequest struct {
-	Target      string          `json:"target"`
-	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
-	Options     ScanOptions     `json:"options,omitempty"`
-	Scope       ScanScope       `json:"scope,omitempty"`
+	Target               string                `json:"target"`
+	AuthProfile          ScanAuthProfile       `json:"authProfile,omitempty"`
+	AuthProfiles         []RoleAuthProfile     `json:"authProfiles,omitempty"`
+	Options              ScanOptions           `json:"options,omitempty"`
+	Scope                ScanScope             `json:"scope,omitempty"`
+	ProgramScopeProfile  ProgramScopeProfile   `json:"programScopeProfile,omitempty"`
+	DisallowedTestTypes  []string              `json:"disallowedTestTypes,omitempty"`
+	EventDrivenRescanOn  []string              `json:"eventDrivenRescanOn,omitempty"`
+	ProgramName          string                `json:"programName,omitempty"`
+	ProgramPolicyVersion string                `json:"programPolicyVersion,omitempty"`
 }
 
 type ScanAuthProfile struct {
@@ -47,6 +53,20 @@ type ScanAuthProfile struct {
 	UserAgent         string            `json:"userAgent,omitempty"`
 	BasicAuthUsername string            `json:"basicAuthUsername,omitempty"`
 	BasicAuthPassword string            `json:"basicAuthPassword,omitempty"`
+}
+
+type RoleAuthProfile struct {
+	RoleName     string          `json:"roleName"`
+	AuthProfile  ScanAuthProfile `json:"authProfile,omitempty"`
+	Priority     int             `json:"priority,omitempty"`
+	RefreshAfter int             `json:"refreshAfterSeconds,omitempty"`
+}
+
+type ProgramScopeProfile struct {
+	IncludeHosts []string `json:"includeHosts,omitempty"`
+	ExcludeHosts []string `json:"excludeHosts,omitempty"`
+	ExcludePaths []string `json:"excludePaths,omitempty"`
+	ProgramRules []string `json:"programRules,omitempty"`
 }
 
 type ScanAuthProfileSummary struct {
@@ -76,6 +96,12 @@ type ScanOptions struct {
 	UseFFUFIntegration        bool `json:"useFfufIntegration,omitempty"`
 	UseGobusterIntegration    bool `json:"useGobusterIntegration,omitempty"`
 	RescanIntervalMinutes     int  `json:"rescanIntervalMinutes,omitempty"`
+	Priority                  int  `json:"priority,omitempty"`
+	MaxRetries                int  `json:"maxRetries,omitempty"`
+	BackoffMillis             int  `json:"backoffMillis,omitempty"`
+	RequestDelayMillis        int  `json:"requestDelayMillis,omitempty"`
+	MaxPerTargetConcurrency   int  `json:"maxPerTargetConcurrency,omitempty"`
+	DeepScanOnHighSignal      bool `json:"deepScanOnHighSignal,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -107,6 +133,22 @@ type ScanJob struct {
 	Dashboard            *DecisionDashboard      `json:"dashboard,omitempty"`
 	NextActions          []string                `json:"nextActions,omitempty"`
 	AutomatedReport      string                  `json:"automatedReport,omitempty"`
+	ProgramName          string                  `json:"programName,omitempty"`
+	ProgramPolicyVersion string                  `json:"programPolicyVersion,omitempty"`
+	DisallowedTestTypes  []string                `json:"disallowedTestTypes,omitempty"`
+}
+
+type ReportFeedback struct {
+	ID          string    `json:"id"`
+	ScanID      string    `json:"scanId"`
+	FindingID   string    `json:"findingId"`
+	Category    string    `json:"category,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	ProgramName string    `json:"programName,omitempty"`
+	Outcome     string    `json:"outcome"`
+	PayoutUSD   float64   `json:"payoutUsd,omitempty"`
+	Notes       string    `json:"notes,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type ModelRecommendations struct {

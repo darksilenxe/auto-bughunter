@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/agent"
@@ -33,6 +34,9 @@ type Server struct {
 	agentRegistry *agent.Registry
 	proxyServer   *proxy.Server
 	mlService     *ml.Service
+	maxPerTarget  int
+	semMu         sync.Mutex
+	targetSem     map[string]chan struct{}
 }
 
 type Repository interface {
@@ -45,9 +49,11 @@ type Repository interface {
 	AppendAuditEvent(ctx context.Context, scanID string, event model.ScanAuditEvent) error
 	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
 	ListCompletedJobs(ctx context.Context, limit int) ([]*model.ScanJob, error)
+	SaveFeedback(ctx context.Context, feedback model.ReportFeedback) error
+	ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget int) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -76,6 +82,8 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		agentRegistry: reg,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
+		maxPerTarget:  maxInt(1, maxPerTarget),
+		targetSem:     map[string]chan struct{}{},
 	}
 }
 
@@ -89,6 +97,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
+	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	return withCORS(mux)
 }
 
@@ -122,6 +131,8 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target host is not in ALLOWED_TARGETS"})
 		return
 	}
+	req.Scope = applyProgramScope(req.Scope, req.ProgramScopeProfile)
+	req.Options = enforceDisallowedTests(req.Options, req.DisallowedTestTypes, req.Scope.ProgramRules)
 	req.Scope = scope.Normalize(target, req.Scope)
 	if !scope.IsURLInScope(target, req.Scope) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
@@ -146,6 +157,9 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
 		Options:            req.Options,
 		Scope:              req.Scope,
+		ProgramName:        strings.TrimSpace(req.ProgramName),
+		ProgramPolicyVersion: strings.TrimSpace(req.ProgramPolicyVersion),
+		DisallowedTestTypes:  append([]string(nil), req.DisallowedTestTypes...),
 	}
 
 	if err := s.repo.CreateJob(r.Context(), job); err != nil {
@@ -154,7 +168,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	}
 	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
 
-	go s.runJob(jobID, target, req.AuthProfile, req.Options, req.Scope)
+	go s.runJob(jobID, target, req.AuthProfile, req.AuthProfiles, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
 }
 
@@ -188,7 +202,10 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
+func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
+	release := s.acquireTargetSlot(target, options)
+	defer release()
+
 	job, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || job == nil {
 		return
@@ -202,14 +219,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	input := agent.AgentInput{
-		Target:      target,
-		AuthProfile: authProfile,
-		Options:     options,
-		Scope:       scanScope,
-	}
-
-	outputs, findings, err := s.agentRegistry.RunAll(ctx, input)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
@@ -238,6 +248,32 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 	if err := s.repo.SaveAssets(context.Background(), id, assets); err == nil {
 		job.Assets = assets
 		s.appendAuditEvent(id, "inventory", fmt.Sprintf("Persisted %d inventory assets", len(assets)))
+		if previousJob != nil {
+			newAssets := diffAssets(previousJob.Assets, assets)
+			if len(newAssets) > 0 {
+				job.Findings = append(job.Findings, model.Finding{
+					ID:             "asset-change-detected",
+					Category:       "monitoring",
+					Severity:       model.SeverityInfo,
+					Title:          fmt.Sprintf("New assets observed since previous scan (%d)", len(newAssets)),
+					Description:    "Continuous asset discovery detected new hosts/paths/services in scope.",
+					Evidence:       strings.Join(limitStrings(newAssets, 8), "; "),
+					Recommendation: "Prioritize deeper verification on newly discovered assets.",
+					Confidence:     0.92,
+					DriftStatus:    "new",
+					Sources:        []string{"monitoring"},
+					EvidenceFields: map[string]string{
+						"validationType": "safe-observation",
+						"reproStep":      "compare current vs previous asset inventory",
+					},
+				})
+				s.appendAuditEvent(id, "asset-monitoring", fmt.Sprintf("Detected %d new assets", len(newAssets)))
+				if shouldTriggerEventDrivenRescan(options) {
+					s.appendAuditEvent(id, "scheduling", "Triggered event-driven deep rescan from asset change detection")
+					go s.scheduleRescan(target, authProfile, options, scanScope, 5*time.Minute)
+				}
+			}
+		}
 	}
 	job.AssetLinks = extractAssetLinks(target, job.Assets, job.Findings)
 	if len(job.AssetLinks) > 0 {
@@ -403,6 +439,36 @@ func (s *Server) handleListMLEngagements(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, dataset)
 }
 
+func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req model.ReportFeedback
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.ScanID = strings.TrimSpace(req.ScanID)
+	req.FindingID = strings.TrimSpace(req.FindingID)
+	req.Outcome = strings.ToLower(strings.TrimSpace(req.Outcome))
+	if req.ScanID == "" || req.FindingID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
+		return
+	}
+	if req.Outcome != "accepted" && req.Outcome != "rejected" && req.Outcome != "duplicate" && req.Outcome != "informative" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "outcome must be one of accepted, rejected, duplicate, informative"})
+		return
+	}
+	req.ID = uuid.NewString()
+	req.CreatedAt = time.Now().UTC()
+	if err := s.repo.SaveFeedback(r.Context(), req); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist feedback"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
 func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int, int, int, []model.Finding) {
 	prevByKey := map[string]model.Finding{}
 	for _, f := range previousFindings {
@@ -500,6 +566,152 @@ func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {
 		strings.TrimSpace(profile.BasicAuthPassword) != ""
 }
 
+func applyProgramScope(scanScope model.ScanScope, profile model.ProgramScopeProfile) model.ScanScope {
+	if len(profile.IncludeHosts) > 0 {
+		scanScope.IncludeHosts = append(scanScope.IncludeHosts, profile.IncludeHosts...)
+	}
+	if len(profile.ExcludeHosts) > 0 {
+		scanScope.ExcludeHosts = append(scanScope.ExcludeHosts, profile.ExcludeHosts...)
+	}
+	if len(profile.ExcludePaths) > 0 {
+		scanScope.ExcludePaths = append(scanScope.ExcludePaths, profile.ExcludePaths...)
+	}
+	if len(profile.ProgramRules) > 0 {
+		scanScope.ProgramRules = append(scanScope.ProgramRules, profile.ProgramRules...)
+	}
+	return scanScope
+}
+
+func enforceDisallowedTests(options model.ScanOptions, disallowed []string, programRules []string) model.ScanOptions {
+	set := map[string]struct{}{}
+	for _, item := range disallowed {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key != "" {
+			set[key] = struct{}{}
+		}
+	}
+	for _, rule := range programRules {
+		if strings.Contains(strings.ToLower(rule), "no destructive") {
+			set["sqlmap"] = struct{}{}
+			set["nikto"] = struct{}{}
+			set["ffuf"] = struct{}{}
+			set["gobuster"] = struct{}{}
+		}
+	}
+	disable := func(tool string) bool {
+		_, ok := set[tool]
+		return ok
+	}
+	if disable("nuclei") {
+		options.UseNucleiIntegration = false
+	}
+	if disable("zap") || disable("zap_baseline") {
+		options.UseZAPBaselineIntegration = false
+	}
+	if disable("sqlmap") {
+		options.UseSQLMapIntegration = false
+	}
+	if disable("nikto") {
+		options.UseNiktoIntegration = false
+	}
+	if disable("ffuf") {
+		options.UseFFUFIntegration = false
+	}
+	if disable("gobuster") {
+		options.UseGobusterIntegration = false
+	}
+	if disable("wpscan") {
+		options.UseWPScanIntegration = false
+	}
+	return options
+}
+
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) ([]agent.AgentOutput, []model.Finding, error) {
+	input := agent.AgentInput{
+		Target:      target,
+		AuthProfile: authProfile,
+		Options:     options,
+		Scope:       scanScope,
+	}
+	outputs, findings, err := s.agentRegistry.RunAll(ctx, input)
+	if err != nil {
+		return outputs, findings, err
+	}
+	for _, rp := range roleProfiles {
+		if strings.TrimSpace(rp.RoleName) == "" || !hasAuthorizationProfile(rp.AuthProfile) {
+			continue
+		}
+		roleInput := input
+		roleInput.AuthProfile = rp.AuthProfile
+		roleOutputs, roleFindings, roleErr := s.agentRegistry.RunAll(ctx, roleInput)
+		outputs = append(outputs, roleOutputs...)
+		if roleErr != nil {
+			continue
+		}
+		for i := range roleFindings {
+			if roleFindings[i].Exploitability == nil {
+				roleFindings[i].Exploitability = &model.Exploitability{}
+			}
+			roleFindings[i].Exploitability.RequiredRole = rp.RoleName
+			roleFindings[i].BusinessTags = append(roleFindings[i].BusinessTags, "role:"+rp.RoleName)
+		}
+		findings = append(findings, roleFindings...)
+	}
+	return outputs, findings, nil
+}
+
+func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) func() {
+	host := strings.ToLower(strings.TrimSpace(hostFromTarget(target)))
+	if host == "" {
+		return func() {}
+	}
+	limit := s.maxPerTarget
+	if options.MaxPerTargetConcurrency > 0 {
+		limit = options.MaxPerTargetConcurrency
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	s.semMu.Lock()
+	sem, ok := s.targetSem[host]
+	if !ok || cap(sem) != limit {
+		sem = make(chan struct{}, limit)
+		s.targetSem[host] = sem
+	}
+	s.semMu.Unlock()
+	sem <- struct{}{}
+	return func() { <-sem }
+}
+
+func hostFromTarget(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func diffAssets(previous, current []model.ScanAsset) []string {
+	prev := map[string]struct{}{}
+	for _, a := range previous {
+		prev[a.AssetType+"|"+a.AssetKey] = struct{}{}
+	}
+	newOnes := make([]string, 0)
+	for _, a := range current {
+		k := a.AssetType + "|" + a.AssetKey
+		if _, ok := prev[k]; ok {
+			continue
+		}
+		newOnes = append(newOnes, k)
+	}
+	sort.Strings(newOnes)
+	return newOnes
+}
+
+func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
+	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes == 0
+}
+
 func (s *Server) appendAuditEvent(scanID, stage, message string) {
 	if strings.TrimSpace(scanID) == "" {
 		return
@@ -536,7 +748,7 @@ func buildAgentTelemetry(outputs []agent.AgentOutput) []model.AgentRunTelemetry 
 }
 
 func enrichFindings(findings []model.Finding) []model.Finding {
-	out := make([]model.Finding, 0, len(findings))
+	dedup := map[string]model.Finding{}
 	for _, f := range findings {
 		if len(f.Sources) == 0 {
 			f.Sources = []string{defaultSourceForCategory(f.Category)}
@@ -561,9 +773,54 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 				AttackPathHints: deriveAttackPathHints(f),
 			}
 		}
+		if f.EvidenceFields == nil {
+			f.EvidenceFields = map[string]string{}
+		}
+		f.EvidenceFields["validationType"] = "safe-observation"
+		f.EvidenceFields["observedAt"] = time.Now().UTC().Format(time.RFC3339)
+		f.EvidenceFields["reproStep"] = "Replay request in scoped test window and verify evidence"
+		key := fingerprintFindingBase(f)
+		existing, ok := dedup[key]
+		if !ok {
+			dedup[key] = f
+			continue
+		}
+		if f.Confidence > existing.Confidence {
+			existing.Confidence = f.Confidence
+		}
+		if severityRank(f.Severity) > severityRank(existing.Severity) {
+			existing.Severity = f.Severity
+		}
+		existing.Sources = mergeActions(existing.Sources, f.Sources)
+		if strings.TrimSpace(existing.Evidence) == "" {
+			existing.Evidence = f.Evidence
+		}
+		dedup[key] = existing
+	}
+	out := make([]model.Finding, 0, len(dedup))
+	for _, f := range dedup {
 		out = append(out, f)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Severity != out[j].Severity {
+			return severityRank(out[i].Severity) > severityRank(out[j].Severity)
+		}
+		return out[i].Title < out[j].Title
+	})
 	return out
+}
+
+func severityRank(sev model.Severity) int {
+	switch sev {
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func defaultSourceForCategory(category string) string {
@@ -921,5 +1178,12 @@ func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile
 		return
 	}
 	s.appendAuditEvent(jobID, "queued", "Scheduled rescan created from previous completed scan")
-	s.runJob(jobID, target, authProfile, options, scanScope)
+	s.runJob(jobID, target, authProfile, nil, options, scanScope)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

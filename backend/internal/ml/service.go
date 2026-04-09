@@ -18,6 +18,7 @@ type Repository interface {
 	ListCompletedJobs(ctx context.Context, limit int) ([]*model.ScanJob, error)
 	GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error)
 	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
+	ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error)
 }
 
 type ProxyStore interface {
@@ -151,7 +152,7 @@ func (s *Service) RecommendFromHistory(ctx context.Context, repo Repository, pro
 	}
 	recs := &model.ModelRecommendations{
 		ToolSelection:       recommendTools(dataset.Records),
-		PrioritizedFindings: prioritizeFindings(job.Findings),
+		PrioritizedFindings: prioritizeFindings(job.Findings, s.feedbackSignals(ctx, repo)),
 		Copilot:             buildCopilotSuggestion(job, dataset.Records),
 		ModelMode:           "historical-deterministic",
 	}
@@ -166,7 +167,7 @@ func fallbackRecommendations(job *model.ScanJob) *model.ModelRecommendations {
 		ToolSelection: []model.ToolRecommendation{
 			{Tool: "native-http-tls-wordlist", Score: 0.8, Reason: "No historical training data available; defaulting to safe built-in checks.", Confidence: 0.6},
 		},
-		PrioritizedFindings: prioritizeFindings(job.Findings),
+		PrioritizedFindings: prioritizeFindings(job.Findings, nil),
 		Copilot:             buildCopilotSuggestion(job, nil),
 		ModelMode:           "fallback-deterministic",
 	}
@@ -213,10 +214,14 @@ func recommendTools(records []EngagementRecord) []model.ToolRecommendation {
 	return recs
 }
 
-func prioritizeFindings(findings []model.Finding) []model.PrioritizedFinding {
+func prioritizeFindings(findings []model.Finding, feedback map[string]float64) []model.PrioritizedFinding {
 	out := make([]model.PrioritizedFinding, 0, len(findings))
 	for _, f := range findings {
 		score := scoreFinding(f)
+		if len(feedback) > 0 {
+			score += feedbackBoost(feedback, f)
+		}
+		score = clamp(score, 0, 1)
 		out = append(out, model.PrioritizedFinding{
 			FindingID: f.ID,
 			Title:     f.Title,
@@ -237,8 +242,60 @@ func prioritizeFindings(findings []model.Finding) []model.PrioritizedFinding {
 	return out
 }
 
+func (s *Service) feedbackSignals(ctx context.Context, repo Repository) map[string]float64 {
+	entries, err := repo.ListFeedback(ctx, 1000)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	type agg struct {
+		total    int
+		accepted int
+		rejected int
+	}
+	m := map[string]agg{}
+	for _, f := range entries {
+		key := feedbackKey(f.Category, f.Title, f.FindingID)
+		cur := m[key]
+		cur.total++
+		switch strings.ToLower(strings.TrimSpace(f.Outcome)) {
+		case "accepted":
+			cur.accepted++
+		case "rejected", "duplicate", "informative":
+			cur.rejected++
+		}
+		m[key] = cur
+	}
+	out := map[string]float64{}
+	for k, v := range m {
+		if v.total == 0 {
+			continue
+		}
+		out[k] = (float64(v.accepted) - float64(v.rejected)*0.35) / float64(v.total)
+	}
+	return out
+}
+
+func feedbackBoost(signals map[string]float64, f model.Finding) float64 {
+	if len(signals) == 0 {
+		return 0
+	}
+	key := feedbackKey(f.Category, f.Title, f.ID)
+	if v, ok := signals[key]; ok {
+		return clamp(v*0.12, -0.06, 0.12)
+	}
+	return 0
+}
+
+func feedbackKey(category, title, id string) string {
+	base := strings.TrimSpace(strings.ToLower(category + "|" + title))
+	if base == "|" {
+		return strings.TrimSpace(strings.ToLower(id))
+	}
+	return base
+}
+
 func buildCopilotSuggestion(job *model.ScanJob, history []EngagementRecord) model.EngagementCopilotSuggestion {
-	topFindings := prioritizeFindings(job.Findings)
+	topFindings := prioritizeFindings(job.Findings, nil)
 	actions := []string{
 		"Triage top-ranked findings and confirm exploitability in a controlled environment.",
 		"Map prioritized findings to recent release changes and ownership boundaries.",

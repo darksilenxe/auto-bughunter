@@ -83,13 +83,17 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	disallowedTestsJSON, err := json.Marshal(job.DisallowedTestTypes)
+	if err != nil {
+		return err
+	}
 
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO scans (
-			id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+			id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON)
 	if err != nil {
 		return fmt.Errorf("insert scan: %w", err)
 	}
@@ -133,6 +137,10 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	disallowedTestsJSON, err := json.Marshal(job.DisallowedTestTypes)
+	if err != nil {
+		return err
+	}
 
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE scans
@@ -149,9 +157,12 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			asset_links = $12,
 			dashboard = $13,
 			next_actions = $14,
-			automated_report = $15
+			automated_report = $15,
+			program_name = $16,
+			program_policy_version = $17,
+			disallowed_test_types = $18
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
@@ -167,7 +178,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE id = $1
 	`, id)
@@ -182,6 +193,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	var dashboardRaw []byte
 	var nextActionsRaw []byte
 	var modelRecommendationsRaw []byte
+	var disallowedTestsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -200,6 +212,9 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 		&dashboardRaw,
 		&nextActionsRaw,
 		&job.AutomatedReport,
+		&job.ProgramName,
+		&job.ProgramPolicyVersion,
+		&disallowedTestsRaw,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -243,6 +258,9 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 			job.ModelRecommendations = &modelRecommendations
 		}
 	}
+	if len(disallowedTestsRaw) > 0 {
+		_ = json.Unmarshal(disallowedTestsRaw, &job.DisallowedTestTypes)
+	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
@@ -269,6 +287,9 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			,dashboard JSONB NULL
 			,next_actions JSONB NOT NULL DEFAULT '[]'::jsonb
 			,automated_report TEXT NOT NULL DEFAULT ''
+			,program_name TEXT NOT NULL DEFAULT ''
+			,program_policy_version TEXT NOT NULL DEFAULT ''
+			,disallowed_test_types JSONB NOT NULL DEFAULT '[]'::jsonb
 		)
 	`)
 	if err != nil {
@@ -294,6 +315,15 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS model_recommendations JSONB NULL`); err != nil {
 		return fmt.Errorf("migrate scans.model_recommendations column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate scans.program_name column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_policy_version TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate scans.program_policy_version column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS disallowed_test_types JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate scans.disallowed_test_types column: %w", err)
 	}
 	if _, err := p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_assets (
@@ -336,12 +366,29 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate proxy_requests table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS report_feedback (
+			id TEXT PRIMARY KEY,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			finding_id TEXT NOT NULL,
+			category TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			program_name TEXT NOT NULL DEFAULT '',
+			outcome TEXT NOT NULL,
+			payout_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+			notes TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate report_feedback table: %w", err)
+	}
 	return nil
 }
 
 func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE target = $1 AND status = 'completed' AND id <> $2
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -349,7 +396,7 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	`, target, excludeID)
 
 	var job model.ScanJob
-	var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw []byte
+	var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw, disallowedTestsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -368,6 +415,9 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 		&dashboardRaw,
 		&nextActionsRaw,
 		&job.AutomatedReport,
+		&job.ProgramName,
+		&job.ProgramPolicyVersion,
+		&disallowedTestsRaw,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -411,6 +461,9 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 			job.ModelRecommendations = &modelRecommendations
 		}
 	}
+	if len(disallowedTestsRaw) > 0 {
+		_ = json.Unmarshal(disallowedTestsRaw, &job.DisallowedTestTypes)
+	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
@@ -425,7 +478,7 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 		limit = 1000
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE status = 'completed'
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -439,7 +492,7 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 	out := make([]*model.ScanJob, 0)
 	for rows.Next() {
 		var job model.ScanJob
-		var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw []byte
+		var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw, disallowedTestsRaw []byte
 		if err := rows.Scan(
 			&job.ID,
 			&job.Target,
@@ -458,6 +511,9 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 			&dashboardRaw,
 			&nextActionsRaw,
 			&job.AutomatedReport,
+			&job.ProgramName,
+			&job.ProgramPolicyVersion,
+			&disallowedTestsRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan completed scan row: %w", err)
 		}
@@ -497,6 +553,9 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 			if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
 				job.ModelRecommendations = &modelRecommendations
 			}
+		}
+		if len(disallowedTestsRaw) > 0 {
+			_ = json.Unmarshal(disallowedTestsRaw, &job.DisallowedTestTypes)
 		}
 		out = append(out, &job)
 	}
@@ -691,4 +750,58 @@ func scanProxyRequest(s scanner) (*model.ProxyRequest, error) {
 		_ = json.Unmarshal(respHeadersRaw, &pr.ResponseHeaders)
 	}
 	return &pr, nil
+}
+
+func (p *Postgres) SaveFeedback(ctx context.Context, feedback model.ReportFeedback) error {
+	if strings.TrimSpace(feedback.ID) == "" {
+		return errors.New("feedback id is required")
+	}
+	if strings.TrimSpace(feedback.ScanID) == "" {
+		return errors.New("feedback scanID is required")
+	}
+	if strings.TrimSpace(feedback.FindingID) == "" {
+		return errors.New("feedback findingID is required")
+	}
+	if strings.TrimSpace(feedback.Outcome) == "" {
+		return errors.New("feedback outcome is required")
+	}
+	ts := feedback.CreatedAt
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO report_feedback (
+			id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, feedback.ID, feedback.ScanID, feedback.FindingID, feedback.Category, feedback.Title, feedback.ProgramName, feedback.Outcome, feedback.PayoutUSD, feedback.Notes, ts)
+	if err != nil {
+		return fmt.Errorf("insert report feedback: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
+		FROM report_feedback
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list report feedback: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.ReportFeedback, 0)
+	for rows.Next() {
+		var f model.ReportFeedback
+		if err := rows.Scan(&f.ID, &f.ScanID, &f.FindingID, &f.Category, &f.Title, &f.ProgramName, &f.Outcome, &f.PayoutUSD, &f.Notes, &f.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan report feedback row: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
