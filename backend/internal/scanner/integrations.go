@@ -9,31 +9,57 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/wpscan"
 )
 
+// integrationState carries context discovered in earlier pipeline phases to later ones.
+type integrationState struct {
+	// DiscoveredHosts holds hostnames found by subfinder. They are used as additional
+	// targets by httpx, naabu, and nuclei in subsequent phases.
+	DiscoveredHosts []string
+}
+
+// runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
+//
+//	Phase 1 — Discovery:   subfinder, dnsx
+//	Phase 2 — Port scan:   naabu  (target + discovered hosts)
+//	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
+//	Phase 4 — Crawling:    katana
+//	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
+//	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
+//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
-	if input.Options.UseNucleiIntegration {
-		findings = append(findings, s.runNuclei(ctx, input.Target)...)
-	}
-	if input.Options.UseZAPBaselineIntegration {
-		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
-	}
+	state := &integrationState{}
+
+	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseSubfinderIntegration {
-		findings = append(findings, s.runSubfinder(ctx, input.Target)...)
-	}
-	if input.Options.UseHttpxIntegration {
-		findings = append(findings, s.runHttpx(ctx, input.Target)...)
-	}
-	if input.Options.UseNaabuIntegration {
-		findings = append(findings, s.runNaabu(ctx, input.Target)...)
+		findings = append(findings, s.runSubfinder(ctx, input.Target, state)...)
 	}
 	if input.Options.UseDnsxIntegration {
 		findings = append(findings, s.runDnsx(ctx, input.Target)...)
 	}
+
+	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
+	if input.Options.UseNaabuIntegration {
+		for _, t := range expandTargets(input.Target, state) {
+			findings = append(findings, s.runNaabu(ctx, t)...)
+		}
+	}
+
+	// Phase 3 — HTTP probing (primary target + discovered hosts).
+	if input.Options.UseHttpxIntegration {
+		for _, t := range expandTargets(input.Target, state) {
+			findings = append(findings, s.runHttpx(ctx, t)...)
+		}
+	}
+
+	// Phase 4 — Content & endpoint discovery.
 	if input.Options.UseKatanaIntegration {
 		findings = append(findings, s.runKatana(ctx, input.Target)...)
 	}
+
+	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {
 		findings = append(findings, s.runTlsx(ctx, input.Target)...)
 	}
@@ -43,7 +69,57 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	if input.Options.UseAsnmapIntegration {
 		findings = append(findings, s.runAsnmap(ctx, input.Target)...)
 	}
+
+	// Phase 6 — CMS scanning.
+	// WPScan runs when the user opts in explicitly.
+	// It also auto-triggers (silently) when EnableWPScan is true in config and WordPress
+	// is detected on the target, even without an explicit opt-in.
+	if input.Options.UseWPScanIntegration {
+		findings = append(findings, s.runWPScan(ctx, input.Target, input.AuthProfile)...)
+	} else if s.cfg.EnableWPScan {
+		result := wpscan.Scan(ctx, input.Target, input.AuthProfile)
+		if result.IsWordPress {
+			findings = append(findings, model.Finding{
+				ID:             "wpscan-auto-triggered",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "WPScan auto-triggered: WordPress detected",
+				Description:    "WordPress was automatically detected on the target. WPScan ran without an explicit user request because ENABLE_WPSCAN_INTEGRATION is true.",
+				Evidence:       "target=" + input.Target,
+				Recommendation: "Review the WPScan findings below for WordPress-specific vulnerabilities.",
+			})
+			findings = append(findings, result.Findings...)
+		}
+	}
+
+	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
+	if input.Options.UseNucleiIntegration {
+		for _, t := range expandTargets(input.Target, state) {
+			findings = append(findings, s.runNuclei(ctx, t)...)
+		}
+	}
+	if input.Options.UseZAPBaselineIntegration {
+		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
+	}
+
 	return findings
+}
+
+// expandTargets returns the primary target URL plus a URL for each subdomain in state,
+// sharing the same URL scheme as the primary target.
+func expandTargets(target string, state *integrationState) []string {
+	targets := []string{target}
+	if len(state.DiscoveredHosts) == 0 {
+		return targets
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return targets
+	}
+	for _, host := range state.DiscoveredHosts {
+		targets = append(targets, u.Scheme+"://"+host)
+	}
+	return targets
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
@@ -188,7 +264,7 @@ func countNonEmptyLines(s string) int {
 	return count
 }
 
-func (s *Service) runSubfinder(ctx context.Context, target string) []model.Finding {
+func (s *Service) runSubfinder(ctx context.Context, target string, state *integrationState) []model.Finding {
 	if !s.cfg.EnableSubfinder {
 		return []model.Finding{{
 			ID:             "subfinder-disabled",
@@ -235,7 +311,17 @@ func (s *Service) runSubfinder(ctx context.Context, target string) []model.Findi
 		}}
 	}
 
-	subdomains := countNonEmptyLines(stdout.String())
+	// Populate shared state so subsequent phases (httpx, naabu, nuclei) can probe
+	// each discovered subdomain in addition to the primary target.
+	subdomains := 0
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			state.DiscoveredHosts = append(state.DiscoveredHosts, line)
+			subdomains++
+		}
+	}
+
 	severity := model.SeverityInfo
 	title := "Subfinder found no subdomains"
 	if subdomains > 0 {
@@ -717,4 +803,37 @@ func hostFromTarget(target string) string {
 		return target
 	}
 	return u.Hostname()
+}
+
+// runWPScan executes the native Go WPScan assessment against target.
+// It first probes whether the target runs WordPress and reports "not WordPress" if opted-in
+// but no WordPress fingerprint is found.
+func (s *Service) runWPScan(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+	if !s.cfg.EnableWPScan {
+		return []model.Finding{{
+			ID:             "wpscan-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "WPScan integration requested but disabled",
+			Description:    "The job requested WPScan but ENABLE_WPSCAN_INTEGRATION is false.",
+			Evidence:       "ENABLE_WPSCAN_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	result := wpscan.Scan(ctx, target, authProfile)
+
+	if !result.IsWordPress {
+		return []model.Finding{{
+			ID:             "wpscan-not-wordpress",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "WPScan: Target does not appear to be WordPress",
+			Description:    "No WordPress fingerprints (wp-login.php, wp-content/, REST API) were detected on the target.",
+			Evidence:       "target=" + target,
+			Recommendation: "If the target is WordPress, verify that wp-login.php and wp-content are reachable from the scanner network.",
+		}}
+	}
+
+	return result.Findings
 }

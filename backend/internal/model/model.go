@@ -53,6 +53,7 @@ type ScanOptions struct {
 	UseTlsxIntegration        bool `json:"useTlsxIntegration,omitempty"`
 	UseCdncheckIntegration    bool `json:"useCdncheckIntegration,omitempty"`
 	UseAsnmapIntegration      bool `json:"useAsnmapIntegration,omitempty"`
+	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
 }
 
 type ScanJob struct {

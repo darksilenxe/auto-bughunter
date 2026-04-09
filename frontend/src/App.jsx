@@ -19,6 +19,7 @@ export default function App() {
   const [useTlsxIntegration, setUseTlsxIntegration] = useState(false);
   const [useCdncheckIntegration, setUseCdncheckIntegration] = useState(false);
   const [useAsnmapIntegration, setUseAsnmapIntegration] = useState(false);
+  const [useWpScanIntegration, setUseWpScanIntegration] = useState(false);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -67,6 +68,7 @@ export default function App() {
             useTlsxIntegration,
             useCdncheckIntegration,
             useAsnmapIntegration,
+            useWpScanIntegration,
           },
         }),
       });
@@ -269,6 +271,15 @@ export default function App() {
             Run optional asnmap integration (ASN/CIDR mapping)
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useWpScanIntegration}
+              onChange={(e) => setUseWpScanIntegration(e.target.checked)}
+            />
+            Run WPScan (native WordPress security scan — auto-detects if target is WordPress)
+          </label>
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -296,6 +307,7 @@ export default function App() {
               ["tlsx", job.options?.useTlsxIntegration],
               ["cdncheck", job.options?.useCdncheckIntegration],
               ["asnmap", job.options?.useAsnmapIntegration],
+              ["wpscan", job.options?.useWpScanIntegration],
             ]
               .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
               .join(", ")}

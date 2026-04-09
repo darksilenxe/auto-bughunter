@@ -30,6 +30,7 @@ type Config struct {
 	EnableTlsx        bool
 	EnableCdncheck    bool
 	EnableAsnmap      bool
+	EnableWPScan      bool
 
 	NucleiBinary      string
 	ZAPBaselineBinary string
