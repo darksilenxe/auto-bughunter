@@ -44,6 +44,7 @@ func main() {
 		EnableTlsx:         getbool("ENABLE_TLSX_INTEGRATION", false),
 		EnableCdncheck:     getbool("ENABLE_CDNCHECK_INTEGRATION", false),
 		EnableAsnmap:       getbool("ENABLE_ASNMAP_INTEGRATION", false),
+		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
 		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),

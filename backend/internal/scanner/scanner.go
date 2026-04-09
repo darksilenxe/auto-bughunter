@@ -31,7 +31,7 @@ type Config struct {
 	EnableCdncheck    bool
 	EnableAsnmap      bool
 	EnableWPScan      bool
-
+	EnableNikto       bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
 	SubfinderBinary   string

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/nikto"
 	"auto-bughunter/backend/internal/wpscan"
 )
 
@@ -27,6 +28,7 @@ type integrationState struct {
 //	Phase 4 — Crawling:    katana
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
+//	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
 //	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
@@ -90,6 +92,14 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 			findings = append(findings, result.Findings...)
 		}
+	}
+
+	// Phase 6b — Web application scanning (Nikto).
+	if input.Options.UseNiktoIntegration {
+		findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
+	} else if s.cfg.EnableNikto {
+		result := nikto.Scan(ctx, input.Target, input.AuthProfile)
+		findings = append(findings, result.Findings...)
 	}
 
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
@@ -840,5 +850,23 @@ func (s *Service) runWPScan(ctx context.Context, target string, authProfile mode
 		}}
 	}
 
+	return result.Findings
+}
+
+// runNikto executes the native Go Nikto web application security scan against target.
+func (s *Service) runNikto(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+	if !s.cfg.EnableNikto {
+		return []model.Finding{{
+			ID:             "nikto-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Nikto integration requested but disabled",
+			Description:    "The job requested Nikto but ENABLE_NIKTO_INTEGRATION is false.",
+			Evidence:       "ENABLE_NIKTO_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	result := nikto.Scan(ctx, target, authProfile)
 	return result.Findings
 }

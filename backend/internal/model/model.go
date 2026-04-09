@@ -54,6 +54,7 @@ type ScanOptions struct {
 	UseCdncheckIntegration    bool `json:"useCdncheckIntegration,omitempty"`
 	UseAsnmapIntegration      bool `json:"useAsnmapIntegration,omitempty"`
 	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
+	UseNiktoIntegration       bool `json:"useNiktoIntegration,omitempty"`
 }
 
 type ScanJob struct {

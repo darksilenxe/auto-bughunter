@@ -20,6 +20,7 @@ export default function App() {
   const [useCdncheckIntegration, setUseCdncheckIntegration] = useState(false);
   const [useAsnmapIntegration, setUseAsnmapIntegration] = useState(false);
   const [useWpScanIntegration, setUseWpScanIntegration] = useState(false);
+  const [useNiktoIntegration, setUseNiktoIntegration] = useState(false);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -69,6 +70,7 @@ export default function App() {
             useCdncheckIntegration,
             useAsnmapIntegration,
             useWpScanIntegration,
+            useNiktoIntegration,
           },
         }),
       });
@@ -280,6 +282,15 @@ export default function App() {
             Run WPScan (native WordPress security scan — auto-detects if target is WordPress)
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useNiktoIntegration}
+              onChange={(e) => setUseNiktoIntegration(e.target.checked)}
+            />
+            Run Nikto (native Go web app pen-test — server fingerprinting, dangerous files, HTTP methods, API docs)
+          </label>
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -308,6 +319,7 @@ export default function App() {
               ["cdncheck", job.options?.useCdncheckIntegration],
               ["asnmap", job.options?.useAsnmapIntegration],
               ["wpscan", job.options?.useWpScanIntegration],
+              ["nikto", job.options?.useNiktoIntegration],
             ]
               .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
               .join(", ")}
