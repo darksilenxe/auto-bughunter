@@ -34,6 +34,7 @@ type Config struct {
 	EnableWPScan      bool
 	EnableNikto       bool
 	EnableSQLMap      bool
+	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
 	SubfinderBinary   string

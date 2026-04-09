@@ -26,6 +26,7 @@ export default function App() {
   const [useWpScanIntegration, setUseWpScanIntegration] = useState(false);
   const [useNiktoIntegration, setUseNiktoIntegration] = useState(false);
   const [useSqlMapIntegration, setUseSqlMapIntegration] = useState(false);
+  const [rescanIntervalMinutes, setRescanIntervalMinutes] = useState(0);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -147,6 +148,7 @@ export default function App() {
             useWpScanIntegration,
             useNiktoIntegration,
             useSqlMapIntegration,
+            rescanIntervalMinutes: Number(rescanIntervalMinutes) || 0,
           },
           scope: {
             includeHosts: parsedIncludeHosts,
@@ -426,6 +428,16 @@ export default function App() {
             Run SQLMap (native Go SQL injection — error-based, boolean-blind &amp; time-based blind; GET/POST/cookies/headers)
           </label>
 
+          <label htmlFor="rescan-interval">Rescan interval (minutes, 0=off)</label>
+          <input
+            id="rescan-interval"
+            type="number"
+            min={0}
+            max={10080}
+            value={rescanIntervalMinutes}
+            onChange={(e) => setRescanIntervalMinutes(e.target.value)}
+          />
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -463,6 +475,7 @@ export default function App() {
               .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
               .join(", ")}
           </p>
+          <p className="meta">Rescan interval: {job.options?.rescanIntervalMinutes || 0} minute(s)</p>
           <div className="stats">
             <span className="pill high">High: {severityCounts.high}</span>
             <span className="pill medium">Medium: {severityCounts.medium}</span>
@@ -487,6 +500,35 @@ export default function App() {
                     <p>{f.description}</p>
                     <p><b>Evidence:</b> {f.evidence}</p>
                     <p><b>Fix:</b> {f.recommendation}</p>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {job.assets?.length > 0 && (
+            <>
+              <h3>Asset Inventory</h3>
+              <ul className="findings">
+                {job.assets.map((a, idx) => (
+                  <li key={`${a.assetType}-${a.assetKey}-${idx}`}>
+                    <strong>[{a.assetType}] {a.assetKey}</strong>
+                    {a.assetValue && <p><b>Details:</b> {a.assetValue}</p>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {job.auditTrail?.length > 0 && (
+            <>
+              <h3>Run Audit Trail</h3>
+              <ul className="findings">
+                {job.auditTrail.map((e, idx) => (
+                  <li key={`${e.timestamp}-${e.stage}-${idx}`}>
+                    <strong>{e.stage}</strong>
+                    <p>{e.message}</p>
+                    <p><b>Time:</b> {e.timestamp}</p>
                   </li>
                 ))}
               </ul>

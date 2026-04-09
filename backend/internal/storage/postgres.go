@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
@@ -164,6 +165,8 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	if len(scopeRaw) > 0 {
 		_ = json.Unmarshal(scopeRaw, &job.Scope)
 	}
+	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
+	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
 	return &job, nil
 }
@@ -189,6 +192,29 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.scope column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_assets (
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			asset_type TEXT NOT NULL,
+			asset_key TEXT NOT NULL,
+			asset_value TEXT NOT NULL DEFAULT '',
+			discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (scan_id, asset_type, asset_key)
+		)
+	`); err != nil {
+		return fmt.Errorf("migrate scan_assets table: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_events (
+			id BIGSERIAL PRIMARY KEY,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			stage TEXT NOT NULL,
+			message TEXT NOT NULL,
+			timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`); err != nil {
+		return fmt.Errorf("migrate scan_events table: %w", err)
 	}
 
 	_, err = p.db.ExecContext(ctx, `
@@ -256,8 +282,100 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	if len(scopeRaw) > 0 {
 		_ = json.Unmarshal(scopeRaw, &job.Scope)
 	}
+	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
+	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
 	return &job, nil
+}
+
+func (p *Postgres) SaveAssets(ctx context.Context, scanID string, assets []model.ScanAsset) error {
+	if strings.TrimSpace(scanID) == "" {
+		return errors.New("scanID is required")
+	}
+	if _, err := p.db.ExecContext(ctx, `DELETE FROM scan_assets WHERE scan_id = $1`, scanID); err != nil {
+		return fmt.Errorf("clear scan assets: %w", err)
+	}
+	if len(assets) == 0 {
+		return nil
+	}
+	for _, asset := range assets {
+		discoveredAt := asset.DiscoveredAt
+		if discoveredAt.IsZero() {
+			discoveredAt = time.Now().UTC()
+		}
+		_, err := p.db.ExecContext(ctx, `
+			INSERT INTO scan_assets (scan_id, asset_type, asset_key, asset_value, discovered_at)
+			VALUES ($1,$2,$3,$4,$5)
+			ON CONFLICT (scan_id, asset_type, asset_key)
+			DO UPDATE SET asset_value = EXCLUDED.asset_value, discovered_at = EXCLUDED.discovered_at
+		`, scanID, asset.AssetType, asset.AssetKey, asset.AssetValue, discoveredAt)
+		if err != nil {
+			return fmt.Errorf("insert scan asset: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *Postgres) GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT asset_type, asset_key, asset_value, discovered_at
+		FROM scan_assets
+		WHERE scan_id = $1
+		ORDER BY asset_type, asset_key
+	`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("list scan assets: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ScanAsset
+	for rows.Next() {
+		var asset model.ScanAsset
+		if err := rows.Scan(&asset.AssetType, &asset.AssetKey, &asset.AssetValue, &asset.DiscoveredAt); err != nil {
+			return nil, fmt.Errorf("scan scan asset row: %w", err)
+		}
+		out = append(out, asset)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) AppendAuditEvent(ctx context.Context, scanID string, event model.ScanAuditEvent) error {
+	if strings.TrimSpace(scanID) == "" {
+		return errors.New("scanID is required")
+	}
+	ts := event.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO scan_events (scan_id, stage, message, timestamp)
+		VALUES ($1,$2,$3,$4)
+	`, scanID, strings.TrimSpace(event.Stage), strings.TrimSpace(event.Message), ts)
+	if err != nil {
+		return fmt.Errorf("insert scan event: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT stage, message, timestamp
+		FROM scan_events
+		WHERE scan_id = $1
+		ORDER BY timestamp ASC, id ASC
+	`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("list scan events: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ScanAuditEvent
+	for rows.Next() {
+		var event model.ScanAuditEvent
+		if err := rows.Scan(&event.Stage, &event.Message, &event.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan scan event row: %w", err)
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
 }
 
 // SaveProxyRequest persists a new captured proxy request/response pair.

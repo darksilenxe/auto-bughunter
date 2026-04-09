@@ -36,6 +36,10 @@ type Repository interface {
 	UpdateJob(ctx context.Context, job *model.ScanJob) error
 	GetJob(ctx context.Context, id string) (*model.ScanJob, error)
 	GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error)
+	SaveAssets(ctx context.Context, scanID string, assets []model.ScanAsset) error
+	GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error)
+	AppendAuditEvent(ctx context.Context, scanID string, event model.ScanAuditEvent) error
+	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
@@ -116,6 +120,14 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
 		return
 	}
+	if !hasAuthorizationProfile(req.AuthProfile) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authProfile is required (headers, cookies, or basic auth)"})
+		return
+	}
+	if req.Options.RescanIntervalMinutes < 0 || req.Options.RescanIntervalMinutes > 10080 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
+		return
+	}
 
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
@@ -133,6 +145,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist scan job"})
 		return
 	}
+	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
 
 	go s.runJob(jobID, target, req.AuthProfile, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
@@ -177,6 +190,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
+	s.appendAuditEvent(id, "running", "Scan execution started")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -195,17 +209,33 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 	if err != nil {
 		job.Status = "failed"
 		job.Error = err.Error()
+		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
 		_ = s.repo.UpdateJob(context.Background(), job)
 		return
 	}
 
 	job.Status = "completed"
 	job.Findings = findings
+	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	if previousJob != nil {
 		job.Findings = append(job.Findings, buildDeltaFinding(previousJob.Findings, findings)...)
 	}
+	if len(job.Findings) > len(findings) {
+		s.appendAuditEvent(id, "monitoring", "Monitoring delta finding generated from previous completed scan")
+	}
+	assets := extractAssets(target, job.Findings)
+	if err := s.repo.SaveAssets(context.Background(), id, assets); err == nil {
+		job.Assets = assets
+		s.appendAuditEvent(id, "inventory", fmt.Sprintf("Persisted %d inventory assets", len(assets)))
+	}
 	job.AISummary = s.aiClient.Summarize(context.Background(), target, job.Findings)
+	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
+	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	if job.Options.RescanIntervalMinutes > 0 {
+		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
+		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+	}
 }
 
 func normalizeAndValidateTarget(raw string) (string, string, error) {
@@ -361,4 +391,45 @@ func fingerprintFinding(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Evidence))
+}
+
+func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {
+	return len(profile.Headers) > 0 ||
+		len(profile.Cookies) > 0 ||
+		strings.TrimSpace(profile.BasicAuthUsername) != "" ||
+		strings.TrimSpace(profile.BasicAuthPassword) != ""
+}
+
+func (s *Server) appendAuditEvent(scanID, stage, message string) {
+	if strings.TrimSpace(scanID) == "" {
+		return
+	}
+	_ = s.repo.AppendAuditEvent(context.Background(), scanID, model.ScanAuditEvent{
+		Stage:     stage,
+		Message:   message,
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	<-timer.C
+
+	jobID := uuid.NewString()
+	now := time.Now().UTC()
+	job := &model.ScanJob{
+		ID:                 jobID,
+		Target:             target,
+		Status:             "queued",
+		StartedAt:          now,
+		AuthProfileSummary: model.SummarizeAuthProfile(authProfile),
+		Options:            options,
+		Scope:              scanScope,
+	}
+	if err := s.repo.CreateJob(context.Background(), job); err != nil {
+		return
+	}
+	s.appendAuditEvent(jobID, "queued", "Scheduled rescan created from previous completed scan")
+	s.runJob(jobID, target, authProfile, options, scanScope)
 }

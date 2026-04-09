@@ -49,6 +49,7 @@ func main() {
 		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
 		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
 		EnableSQLMap:       getbool("ENABLE_SQLMAP_INTEGRATION", false),
+		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
 		SubfinderBinary:    getenv("SUBFINDER_BINARY", "subfinder"),

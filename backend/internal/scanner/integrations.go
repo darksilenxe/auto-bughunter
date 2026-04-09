@@ -101,36 +101,84 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// • explicit opt-in: UseNiktoIntegration=true → runNikto
 	// • auto-trigger:    EnableNikto=true in config → run silently and prepend an info finding
 	if input.Options.UseNiktoIntegration {
-		findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
+		if !s.cfg.AllowDestructive {
+			findings = append(findings, model.Finding{
+				ID:             "nikto-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "Nikto blocked by safety policy",
+				Description:    "Destructive or high-impact checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
+		}
 	} else if s.cfg.EnableNikto {
-		findings = append(findings, model.Finding{
-			ID:             "nikto-auto-triggered",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "Nikto auto-triggered",
-			Description:    "Nikto ran without an explicit per-scan request because ENABLE_NIKTO_INTEGRATION is true in the server configuration.",
-			Evidence:       "target=" + input.Target,
-			Recommendation: "Review the Nikto findings below for web application security issues.",
-		})
-		result := nikto.Scan(ctx, input.Target, input.AuthProfile)
-		findings = append(findings, result.Findings...)
+		if !s.cfg.AllowDestructive {
+			findings = append(findings, model.Finding{
+				ID:             "nikto-auto-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "Nikto auto-run blocked by safety policy",
+				Description:    "Nikto auto-run was skipped because destructive checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, model.Finding{
+				ID:             "nikto-auto-triggered",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "Nikto auto-triggered",
+				Description:    "Nikto ran without an explicit per-scan request because ENABLE_NIKTO_INTEGRATION is true in the server configuration.",
+				Evidence:       "target=" + input.Target,
+				Recommendation: "Review the Nikto findings below for web application security issues.",
+			})
+			result := nikto.Scan(ctx, input.Target, input.AuthProfile)
+			findings = append(findings, result.Findings...)
+		}
 	}
 
 	// Phase 6c — SQL injection scanning (SQLMap).
 	if input.Options.UseSQLMapIntegration {
-		findings = append(findings, s.runSQLMap(ctx, input.Target, input.AuthProfile)...)
+		if !s.cfg.AllowDestructive {
+			findings = append(findings, model.Finding{
+				ID:             "sqlmap-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "SQLMap blocked by safety policy",
+				Description:    "Destructive or high-impact checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, s.runSQLMap(ctx, input.Target, input.AuthProfile)...)
+		}
 	} else if s.cfg.EnableSQLMap {
-		findings = append(findings, model.Finding{
-			ID:             "sqlmap-auto-triggered",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "SQLMap auto-triggered",
-			Description:    "The native Go SQLMap scanner ran without an explicit per-scan request because ENABLE_SQLMAP_INTEGRATION is true in the server configuration.",
-			Evidence:       "target=" + input.Target,
-			Recommendation: "Review the SQLMap findings below for SQL injection vulnerabilities.",
-		})
-		result := sqlmap.Scan(ctx, input.Target, input.AuthProfile)
-		findings = append(findings, result.Findings...)
+		if !s.cfg.AllowDestructive {
+			findings = append(findings, model.Finding{
+				ID:             "sqlmap-auto-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "SQLMap auto-run blocked by safety policy",
+				Description:    "SQLMap auto-run was skipped because destructive checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, model.Finding{
+				ID:             "sqlmap-auto-triggered",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "SQLMap auto-triggered",
+				Description:    "The native Go SQLMap scanner ran without an explicit per-scan request because ENABLE_SQLMAP_INTEGRATION is true in the server configuration.",
+				Evidence:       "target=" + input.Target,
+				Recommendation: "Review the SQLMap findings below for SQL injection vulnerabilities.",
+			})
+			result := sqlmap.Scan(ctx, input.Target, input.AuthProfile)
+			findings = append(findings, result.Findings...)
+		}
 	}
 
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).

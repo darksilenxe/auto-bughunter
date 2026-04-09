@@ -57,6 +57,7 @@ type ScanOptions struct {
 	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
 	UseNiktoIntegration       bool `json:"useNiktoIntegration,omitempty"`
 	UseSQLMapIntegration      bool `json:"useSqlMapIntegration,omitempty"`
+	RescanIntervalMinutes     int  `json:"rescanIntervalMinutes,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -80,6 +81,21 @@ type ScanJob struct {
 	AuthProfileSummary *ScanAuthProfileSummary `json:"authProfileSummary,omitempty"`
 	Options            ScanOptions             `json:"options,omitempty"`
 	Scope              ScanScope               `json:"scope,omitempty"`
+	Assets             []ScanAsset             `json:"assets,omitempty"`
+	AuditTrail         []ScanAuditEvent        `json:"auditTrail,omitempty"`
+}
+
+type ScanAsset struct {
+	AssetType    string    `json:"assetType"`
+	AssetKey     string    `json:"assetKey"`
+	AssetValue   string    `json:"assetValue,omitempty"`
+	DiscoveredAt time.Time `json:"discoveredAt"`
+}
+
+type ScanAuditEvent struct {
+	Stage     string    `json:"stage"`
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
