@@ -180,6 +180,54 @@ type SuppressionRule struct {
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
+type PolicyGateResult struct {
+	Status          string    `json:"status"`
+	Reason          string    `json:"reason,omitempty"`
+	BlockedFindings []string  `json:"blockedFindings,omitempty"`
+	HighCount       int       `json:"highCount"`
+	MediumCount     int       `json:"mediumCount"`
+	GeneratedAt     time.Time `json:"generatedAt"`
+}
+
+type AutomationTicket struct {
+	ID          string     `json:"id"`
+	Target      string     `json:"target"`
+	Fingerprint string     `json:"fingerprint"`
+	Title       string     `json:"title"`
+	Severity    Severity   `json:"severity"`
+	Status      string     `json:"status"`
+	Owner       string     `json:"owner,omitempty"`
+	SLADueAt    *time.Time `json:"slaDueAt,omitempty"`
+	FirstSeenAt time.Time  `json:"firstSeenAt"`
+	LastSeenAt  time.Time  `json:"lastSeenAt"`
+	ResolvedAt  *time.Time `json:"resolvedAt,omitempty"`
+}
+
+type AutomationEventRequest struct {
+	Type        string          `json:"type"`
+	Target      string          `json:"target"`
+	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
+	Options     ScanOptions     `json:"options,omitempty"`
+	Scope       ScanScope       `json:"scope,omitempty"`
+	Assets      []string        `json:"assets,omitempty"`
+}
+
+type ExecutiveReport struct {
+	GeneratedAt                 time.Time `json:"generatedAt"`
+	TotalCompletedScans         int       `json:"totalCompletedScans"`
+	NewFindings                 int       `json:"newFindings"`
+	ChangedFindings             int       `json:"changedFindings"`
+	ResolvedFindings            int       `json:"resolvedFindings"`
+	HighOrMediumFindings        int       `json:"highOrMediumFindings"`
+	AcceptedFeedback            int       `json:"acceptedFeedback"`
+	RejectedFeedback            int       `json:"rejectedFeedback"`
+	DuplicateFeedback           int       `json:"duplicateFeedback"`
+	FalsePositiveRate           float64   `json:"falsePositiveRate"`
+	MeanTimeToResolveHours      float64   `json:"meanTimeToResolveHours"`
+	OpenAutomationTickets       int       `json:"openAutomationTickets"`
+	RecentlyResolvedTicketCount int       `json:"recentlyResolvedTicketCount"`
+}
+
 type PersistentScanState struct {
 	Target                string    `json:"target"`
 	LastUpdatedAt         time.Time `json:"lastUpdatedAt"`

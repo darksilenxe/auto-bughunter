@@ -452,6 +452,25 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scan_idempotency table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS automation_tickets (
+			id TEXT PRIMARY KEY,
+			target TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			title TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			status TEXT NOT NULL,
+			owner TEXT NOT NULL DEFAULT '',
+			sla_due_at TIMESTAMPTZ NULL,
+			first_seen_at TIMESTAMPTZ NOT NULL,
+			last_seen_at TIMESTAMPTZ NOT NULL,
+			resolved_at TIMESTAMPTZ NULL,
+			UNIQUE(target, fingerprint)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate automation_tickets table: %w", err)
+	}
 	return nil
 }
 
@@ -1023,6 +1042,99 @@ func (p *Postgres) GetRecentJobByIdempotencyKey(ctx context.Context, key, target
 		return nil, fmt.Errorf("get idempotency job: %w", err)
 	}
 	return p.GetJob(ctx, id)
+}
+
+func (p *Postgres) UpsertAutomationTicket(ctx context.Context, ticket model.AutomationTicket) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO automation_tickets (
+			id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (target, fingerprint) DO UPDATE
+		SET title = EXCLUDED.title,
+			severity = EXCLUDED.severity,
+			status = EXCLUDED.status,
+			owner = EXCLUDED.owner,
+			sla_due_at = EXCLUDED.sla_due_at,
+			last_seen_at = EXCLUDED.last_seen_at,
+			resolved_at = EXCLUDED.resolved_at
+	`, ticket.ID, ticket.Target, ticket.Fingerprint, ticket.Title, string(ticket.Severity), ticket.Status, ticket.Owner, ticket.SLADueAt, ticket.FirstSeenAt, ticket.LastSeenAt, ticket.ResolvedAt)
+	if err != nil {
+		return fmt.Errorf("upsert automation ticket: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ResolveAutomationTicketsMissingFingerprints(ctx context.Context, target string, fingerprints []string, resolvedAt time.Time) (int64, error) {
+	if len(fingerprints) == 0 {
+		res, err := p.db.ExecContext(ctx, `
+			UPDATE automation_tickets
+			SET status = 'resolved',
+				resolved_at = $2
+			WHERE target = $1
+				AND status <> 'resolved'
+		`, target, resolvedAt)
+		if err != nil {
+			return 0, fmt.Errorf("resolve automation tickets: %w", err)
+		}
+		rows, _ := res.RowsAffected()
+		return rows, nil
+	}
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE automation_tickets
+		SET status = 'resolved',
+			resolved_at = $3
+		WHERE target = $1
+			AND status <> 'resolved'
+			AND fingerprint <> ALL($2::text[])
+	`, target, fingerprints, resolvedAt)
+	if err != nil {
+		return 0, fmt.Errorf("resolve automation tickets: %w", err)
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
+}
+
+func (p *Postgres) ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if strings.TrimSpace(target) == "" {
+		rows, err = p.db.QueryContext(ctx, `
+			SELECT id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
+			FROM automation_tickets
+			WHERE status <> 'resolved'
+			ORDER BY last_seen_at DESC
+			LIMIT $1
+		`, limit)
+	} else {
+		rows, err = p.db.QueryContext(ctx, `
+			SELECT id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
+			FROM automation_tickets
+			WHERE status <> 'resolved' AND target = $1
+			ORDER BY last_seen_at DESC
+			LIMIT $2
+		`, target, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list open automation tickets: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.AutomationTicket, 0)
+	for rows.Next() {
+		var ticket model.AutomationTicket
+		var severity string
+		if err := rows.Scan(&ticket.ID, &ticket.Target, &ticket.Fingerprint, &ticket.Title, &severity, &ticket.Status, &ticket.Owner, &ticket.SLADueAt, &ticket.FirstSeenAt, &ticket.LastSeenAt, &ticket.ResolvedAt); err != nil {
+			return nil, fmt.Errorf("scan automation ticket row: %w", err)
+		}
+		ticket.Severity = model.Severity(strings.ToLower(strings.TrimSpace(severity)))
+		out = append(out, ticket)
+	}
+	return out, rows.Err()
 }
 
 func redactHeaders(headers map[string]string) map[string]string {

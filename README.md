@@ -181,6 +181,18 @@ Stores manual exploitability verification (`confirmed` / `rejected`) for a findi
 
 Creates suppression/baseline rules (optional target scope, optional expiry) to hide accepted noise.
 
+### `POST /api/automation/event`
+
+Queues event-driven scans from CI/CD or asset discovery pipelines (`deploy`, `dependency_change`, `config_change`, `new_asset`).
+
+### `GET /api/automation/report`
+
+Returns an executive automation report with scan trends, feedback quality metrics, and open automated ticket counts.
+
+### `GET /api/automation/tickets`
+
+Returns open auto-managed remediation tickets (optionally filtered by `?target=`).
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
@@ -213,8 +225,13 @@ Creates suppression/baseline rules (optional target scope, optional expiry) to h
 - Feedback outcomes submitted to `POST /api/feedback` are used by ML prioritization to favor historically accepted issue patterns.
 - Manual finding verification from `POST /api/finding-verification` is returned on findings as exploitability verification status.
 - Suppression rules from `POST /api/suppressions` support baseline/noise reduction with expiry.
+- Policy-as-code release gating is evaluated per scan and can auto-block progression based on severity thresholds.
+- Ticket lifecycle is fully automated: medium/high fingerprints are upserted as open tickets and auto-resolved when findings disappear.
+- CI/CD and discovery systems can trigger immediate event-driven scans through `POST /api/automation/event`.
+- Executive KPI summaries are available from `GET /api/automation/report`.
 - Proxy artifacts are redacted by default and retained according to `PROXY_RETENTION_HOURS`.
 - Optional notification hooks can be configured with `SCAN_WEBHOOK_URL` and `SLACK_WEBHOOK_URL` for high-confidence drift findings.
+- Policy gate thresholds are configurable via `POLICY_GATE_HIGH_BLOCK` and `POLICY_GATE_MEDIUM_BLOCK`.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.

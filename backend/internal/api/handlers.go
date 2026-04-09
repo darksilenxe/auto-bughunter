@@ -46,6 +46,8 @@ type Server struct {
 	webhookURL    string
 	slackWebhook  string
 	notifyMinConf float64
+	gateHighBlock int
+	gateMedBlock  int
 }
 
 type Repository interface {
@@ -68,6 +70,9 @@ type Repository interface {
 	UpsertScanState(ctx context.Context, state model.PersistentScanState) error
 	GetRecentJobByIdempotencyKey(ctx context.Context, key, target string, since time.Time) (*model.ScanJob, error)
 	SaveIdempotencyRecord(ctx context.Context, key, target, scanID string, createdAt time.Time) error
+	UpsertAutomationTicket(ctx context.Context, ticket model.AutomationTicket) error
+	ResolveAutomationTicketsMissingFingerprints(ctx context.Context, target string, fingerprints []string, resolvedAt time.Time) (int64, error)
+	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int) *Server {
@@ -109,6 +114,8 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		webhookURL:    strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
 		slackWebhook:  strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
 		notifyMinConf: maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
+		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
+		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 	}
 }
 
@@ -125,6 +132,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
+	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
+	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
+	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	return withCORS(mux)
 }
 
@@ -273,6 +283,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		options.SeedRuntimeEndpoints = mergeActions(options.SeedRuntimeEndpoints, persistedState.KnownRuntimeEndpoints)
 		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
 	}
+	options = s.tuneScanOptions(options, persistedState, previousJob)
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -353,6 +364,32 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
 			s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
 		}
+	}
+	policyGate := s.evaluatePolicyGate(job.Findings)
+	if strings.EqualFold(policyGate.Status, "blocked") {
+		job.Findings = append(job.Findings, model.Finding{
+			ID:          "policy-gate-blocked-release",
+			Category:    "governance",
+			Severity:    model.SeverityHigh,
+			Title:       "Policy gate blocked automated release progression",
+			Description: "Policy-as-code gate evaluated findings and marked this scan as blocked for automatic progression.",
+			Evidence:    policyGate.Reason,
+			Confidence:  1.0,
+			Sources:     []string{"policy"},
+		})
+	}
+	openTickets, resolvedTickets := s.syncAutomationTickets(target, job.Findings)
+	if openTickets > 0 || resolvedTickets > 0 {
+		job.Findings = append(job.Findings, model.Finding{
+			ID:          "automation-ticket-lifecycle",
+			Category:    "operations",
+			Severity:    model.SeverityInfo,
+			Title:       "Automated ticket lifecycle updated",
+			Description: "Ticketing loop automatically upserted current risk items and closed resolved fingerprints.",
+			Evidence:    fmt.Sprintf("open=%d resolved=%d gate=%s", openTickets, resolvedTickets, policyGate.Status),
+			Confidence:  0.96,
+			Sources:     []string{"ticketing"},
+		})
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
 	s.persistScanState(target, job.Findings)
@@ -591,6 +628,207 @@ func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req model.AutomationEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
+	if req.Type == "" {
+		req.Type = "deploy"
+	}
+	target, host, err := normalizeAndValidateTarget(req.Target)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := safety.ValidateOutboundURL(target); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target blocked by outbound safety policy"})
+		return
+	}
+	if len(s.allowed) == 0 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "server has no ALLOWED_TARGETS configured"})
+		return
+	}
+	if _, ok := s.allowed[host]; !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target host is not in ALLOWED_TARGETS"})
+		return
+	}
+	if !hasAuthorizationProfile(req.AuthProfile) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authProfile is required for automation event scans"})
+		return
+	}
+	req.Scope = scope.Normalize(target, req.Scope)
+	if !scope.IsURLInScope(target, req.Scope) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
+		return
+	}
+	req.Options.DeepScanOnHighSignal = true
+	req.Options.RescanIntervalMinutes = 0
+	jobID := uuid.NewString()
+	now := time.Now().UTC()
+	job := &model.ScanJob{
+		ID:                 jobID,
+		Target:             target,
+		Status:             "queued",
+		StartedAt:          now,
+		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
+		Options:            req.Options,
+		Scope:              req.Scope,
+	}
+	if err := s.repo.CreateJob(r.Context(), job); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist automation scan job"})
+		return
+	}
+	s.appendAuditEvent(jobID, "automation-event", "Event-driven scan queued: "+req.Type)
+	if len(req.Assets) > 0 {
+		s.appendAuditEvent(jobID, "asset-discovery", fmt.Sprintf("Auto-enrolled %d externally discovered assets", len(req.Assets)))
+	}
+	go s.runJob(jobID, target, req.AuthProfile, nil, req.Options, req.Scope)
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued", "eventType": req.Type})
+}
+
+func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	jobs, err := s.repo.ListCompletedJobs(r.Context(), 500)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load completed jobs"})
+		return
+	}
+	feedback, _ := s.repo.ListFeedback(r.Context(), 1000)
+	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), "", 1000)
+
+	report := model.ExecutiveReport{
+		GeneratedAt:           time.Now().UTC(),
+		TotalCompletedScans:   len(jobs),
+		OpenAutomationTickets: len(openTickets),
+	}
+	for _, job := range jobs {
+		for _, finding := range job.Findings {
+			switch strings.ToLower(strings.TrimSpace(finding.DriftStatus)) {
+			case "new":
+				report.NewFindings++
+			case "changed":
+				report.ChangedFindings++
+			case "resolved":
+				report.ResolvedFindings++
+			}
+			if finding.Severity == model.SeverityHigh || finding.Severity == model.SeverityMedium {
+				report.HighOrMediumFindings++
+			}
+		}
+	}
+	for _, item := range feedback {
+		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
+		case "accepted":
+			report.AcceptedFeedback++
+		case "rejected":
+			report.RejectedFeedback++
+		case "duplicate":
+			report.DuplicateFeedback++
+		}
+	}
+	totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback
+	if totalReviewed > 0 {
+		report.FalsePositiveRate = float64(report.RejectedFeedback+report.DuplicateFeedback) / float64(totalReviewed)
+	}
+	_ = openTickets
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	target := strings.TrimSpace(r.URL.Query().Get("target"))
+	tickets, err := s.repo.ListOpenAutomationTickets(r.Context(), target, 200)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation tickets"})
+		return
+	}
+	writeJSON(w, http.StatusOK, tickets)
+}
+
+func (s *Server) evaluatePolicyGate(findings []model.Finding) model.PolicyGateResult {
+	result := model.PolicyGateResult{
+		Status:      "pass",
+		GeneratedAt: time.Now().UTC(),
+	}
+	for _, f := range findings {
+		switch f.Severity {
+		case model.SeverityHigh:
+			result.HighCount++
+			result.BlockedFindings = append(result.BlockedFindings, f.Title)
+		case model.SeverityMedium:
+			result.MediumCount++
+		}
+	}
+	if result.HighCount >= s.gateHighBlock || result.MediumCount >= s.gateMedBlock {
+		result.Status = "blocked"
+		result.Reason = fmt.Sprintf("high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", result.HighCount, result.MediumCount, s.gateHighBlock, s.gateMedBlock)
+	} else {
+		result.Reason = "thresholds satisfied"
+	}
+	return result
+}
+
+func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {
+	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < 70 {
+		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 200)
+	}
+	if state != nil && state.SessionInstability > 2 {
+		options.UseNucleiIntegration = false
+		options.UseSQLMapIntegration = false
+		options.UseFFUFIntegration = false
+	}
+	return options
+}
+
+func (s *Server) syncAutomationTickets(target string, findings []model.Finding) (int, int) {
+	now := time.Now().UTC()
+	currentFingerprints := make([]string, 0)
+	open := 0
+	for _, f := range findings {
+		if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium {
+			continue
+		}
+		fp := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		if fp == "" {
+			continue
+		}
+		currentFingerprints = append(currentFingerprints, fp)
+		sla := now.Add(72 * time.Hour)
+		if f.Severity == model.SeverityHigh {
+			sla = now.Add(24 * time.Hour)
+		}
+		ticket := model.AutomationTicket{
+			ID:          uuid.NewString(),
+			Target:      target,
+			Fingerprint: fp,
+			Title:       f.Title,
+			Severity:    f.Severity,
+			Status:      "open",
+			FirstSeenAt: now,
+			LastSeenAt:  now,
+			SLADueAt:    &sla,
+		}
+		if err := s.repo.UpsertAutomationTicket(context.Background(), ticket); err == nil {
+			open++
+		}
+	}
+	resolved, _ := s.repo.ResolveAutomationTicketsMissingFingerprints(context.Background(), target, currentFingerprints, now)
+	return open, int(resolved)
 }
 
 func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int, int, int, []model.Finding) {
@@ -1654,6 +1892,18 @@ func floatFromEnv(key string, fallback float64) float64 {
 		return fallback
 	}
 	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func intFromEnv(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
 	if err != nil {
 		return fallback
 	}
