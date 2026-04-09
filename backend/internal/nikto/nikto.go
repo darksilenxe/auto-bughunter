@@ -607,7 +607,7 @@ func Scan(ctx context.Context, target string, authProfile model.ScanAuthProfile)
 func probeServer(ctx context.Context, client *http.Client, base string, auth model.ScanAuthProfile) (string, []model.Finding) {
 	findings := make([]model.Finding, 0)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, base+"/", nil)
+	req, err := newSafeRequest(ctx, http.MethodHead, base+"/")
 	if err != nil {
 		return "", findings
 	}
@@ -615,8 +615,8 @@ func probeServer(ctx context.Context, client *http.Client, base string, auth mod
 	resp, err := client.Do(req)
 	if err != nil {
 		// Fall back to GET if HEAD fails.
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/", nil)
-		if req2 == nil {
+		req2, reqErr := newSafeRequest(ctx, http.MethodGet, base+"/")
+		if reqErr != nil {
 			return "", findings
 		}
 		applyAuthProfile(req2, auth)
@@ -741,7 +741,7 @@ func checkPaths(ctx context.Context, client *http.Client, base string, auth mode
 func probePath(ctx context.Context, client *http.Client, base string, p interestingPath, auth model.ScanAuthProfile) *model.Finding {
 	fullURL := base + p.path
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	req, err := newSafeRequest(ctx, http.MethodGet, fullURL)
 	if err != nil {
 		return nil
 	}
@@ -800,7 +800,7 @@ func checkHTTPMethods(ctx context.Context, client *http.Client, target string, a
 	findings := make([]model.Finding, 0)
 
 	// Issue OPTIONS first to enumerate allowed methods.
-	optReq, err := http.NewRequestWithContext(ctx, http.MethodOptions, target+"/", nil)
+	optReq, err := newSafeRequest(ctx, http.MethodOptions, target+"/")
 	if err == nil {
 		applyAuthProfile(optReq, auth)
 		if optResp, optErr := client.Do(optReq); optErr == nil {
@@ -827,7 +827,7 @@ func checkHTTPMethods(ctx context.Context, client *http.Client, target string, a
 		default:
 		}
 
-		req, err := http.NewRequestWithContext(ctx, m.method, target+"/", nil)
+		req, err := newSafeRequest(ctx, m.method, target+"/")
 		if err != nil {
 			continue
 		}
@@ -906,7 +906,7 @@ func detectDirectoryListing(body string) bool {
 
 // getBody performs an authenticated GET and returns the response body, HTTP status, and any error.
 func getBody(ctx context.Context, client *http.Client, target string, auth model.ScanAuthProfile) (string, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := newSafeRequest(ctx, http.MethodGet, target)
 	if err != nil {
 		return "", 0, err
 	}
@@ -944,4 +944,18 @@ func applyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 		}
 		req.Header.Set("Cookie", strings.Join(parts, "; "))
 	}
+}
+
+// newSafeRequest creates an HTTP request after validating that rawURL uses only the
+// http or https scheme. This defence-in-depth check prevents SSRF from arbitrary
+// schemes even when the caller has already validated the base URL.
+func newSafeRequest(ctx context.Context, method, rawURL string) (*http.Request, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	return http.NewRequestWithContext(ctx, method, rawURL, nil)
 }
