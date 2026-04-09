@@ -78,7 +78,11 @@ export default function App() {
     setReplayResult(null);
     try {
       let overrideHeaders = {};
-      try { overrideHeaders = JSON.parse(replayHeaders); } catch (_) {}
+      try { overrideHeaders = JSON.parse(replayHeaders); } catch (_) {
+        setProxyError("Override Headers must be valid JSON (e.g. {\"X-Custom\": \"value\"})");
+        setReplayLoading(false);
+        return;
+      }
       const res = await fetch(`${API_BASE}/api/proxy/replay`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -66,9 +66,10 @@ type dbError struct {
 
 // dbErrors is the master list of database error patterns.
 var dbErrors = []dbError{
-	{re: regexp.MustCompile(`(?i)(you have an error in your sql syntax|mysql_fetch|warning: mysql|supplied argument is not a valid mysql|unclosed quotation mark|invalid input syntax for type integer|pg_query\(\)|unterminated quoted string)`), dbName: "MySQL/PostgreSQL"},
+	{re: regexp.MustCompile(`(?i)(you have an error in your sql syntax|mysql_fetch|warning: mysql|unclosed quotation mark after the character string)`), dbName: "MySQL"},
+	{re: regexp.MustCompile(`(?i)(invalid input syntax for type|pg_query\(\)|unterminated quoted string at or near|psql.*error)`), dbName: "PostgreSQL"},
 	{re: regexp.MustCompile(`(?i)(ora-\d{5}|oracle error)`), dbName: "Oracle"},
-	{re: regexp.MustCompile(`(?i)(microsoft sql server|odbc sql server driver|mssql_query\(\)|incorrect syntax near)`), dbName: "MSSQL"},
+	{re: regexp.MustCompile(`(?i)(microsoft sql server|odbc sql server driver|mssql_query\(\)|incorrect syntax near|supplied argument is not a valid.*mssql)`), dbName: "MSSQL"},
 	{re: regexp.MustCompile(`(?i)(sqlite_master|sqlite error|sqliteexception)`), dbName: "SQLite"},
 }
 
@@ -199,7 +200,7 @@ func discoverInjectionPoints(ctx context.Context, client *http.Client, target st
 				q.Set(name, payload)
 				uCopy := *u
 				uCopy.RawQuery = q.Encode()
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, uCopy.String(), nil)
+				req, err := newSafeRequest(ctx, http.MethodGet, uCopy.String())
 				if err != nil {
 					return nil, err
 				}
@@ -222,7 +223,7 @@ func discoverInjectionPoints(ctx context.Context, client *http.Client, target st
 					q.Set(param, payload)
 					uCopy := *u
 					uCopy.RawQuery = q.Encode()
-					req, err := http.NewRequestWithContext(ctx, http.MethodGet, uCopy.String(), nil)
+					req, err := newSafeRequest(ctx, http.MethodGet, uCopy.String())
 					if err != nil {
 						return nil, err
 					}
@@ -234,8 +235,8 @@ func discoverInjectionPoints(ctx context.Context, client *http.Client, target st
 	}
 
 	// Fetch the base page and check if it returns a form — probe POST params.
-	baseReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if baseReq != nil {
+	baseReq, baseReqErr := newSafeRequest(ctx, http.MethodGet, target)
+	if baseReqErr == nil {
 		applyAuthProfile(baseReq, auth)
 		if baseResp, err := client.Do(baseReq); err == nil {
 			defer baseResp.Body.Close()
@@ -253,7 +254,7 @@ func discoverInjectionPoints(ctx context.Context, client *http.Client, target st
 			name:    name,
 			origVal: orig,
 			buildReq: func(ctx context.Context, payload string) (*http.Request, error) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+				req, err := newSafeRequest(ctx, http.MethodGet, target)
 				if err != nil {
 					return nil, err
 				}
@@ -273,7 +274,7 @@ func discoverInjectionPoints(ctx context.Context, client *http.Client, target st
 			name:    hName,
 			origVal: "test",
 			buildReq: func(ctx context.Context, payload string) (*http.Request, error) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+				req, err := newSafeRequest(ctx, http.MethodGet, target)
 				if err != nil {
 					return nil, err
 				}
@@ -310,7 +311,9 @@ func discoverPOSTPoints(u *url.URL, body string, auth model.ScanAuthProfile) []i
 	formAction := u.String()
 	if len(actions) > 0 && len(actions[0]) > 1 && actions[0][1] != "" {
 		if ref, err := u.Parse(actions[0][1]); err == nil {
-			formAction = ref.String()
+			if ref.Scheme == "http" || ref.Scheme == "https" {
+				formAction = ref.String()
+			}
 		}
 	}
 	actionURL := formAction
@@ -491,19 +494,21 @@ func testTimeBased(ctx context.Context, pt injectionPoint) *model.Finding {
 	for _, payload := range timeSleepPayloads {
 		// Use a context with a longer timeout than timeSleepSeconds to allow the
 		// sleep to complete but not hang indefinitely.
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeSleepSeconds+10)*time.Second)
-		timeClient := &http.Client{Timeout: time.Duration(timeSleepSeconds+10) * time.Second}
+		timeoutDur := time.Duration(timeSleepSeconds+10) * time.Second
+		timeoutCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+		timeClient := &http.Client{Timeout: timeoutDur}
 
 		req, err := pt.buildReq(timeoutCtx, payload)
-		cancel()
 		if err != nil {
+			cancel()
 			continue
 		}
 
 		start := time.Now()
-		resp, err := timeClient.Do(req)
+		resp, doErr := timeClient.Do(req)
 		elapsed := time.Since(start)
-		if err == nil {
+		cancel()
+		if doErr == nil {
 			resp.Body.Close()
 		}
 
@@ -605,4 +610,17 @@ func applyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 		}
 		req.Header.Set("Cookie", strings.Join(parts, "; "))
 	}
+}
+
+// newSafeRequest creates an HTTP request after validating that rawURL only
+// uses the http or https scheme, preventing SSRF via alternative protocols.
+func newSafeRequest(ctx context.Context, method, rawURL string) (*http.Request, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	return http.NewRequestWithContext(ctx, method, rawURL, nil)
 }
