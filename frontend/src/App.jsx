@@ -86,7 +86,7 @@ export default function App() {
     setReplayResult(null);
     try {
       let overrideHeaders = {};
-      try { overrideHeaders = JSON.parse(replayHeaders); } catch (_) {
+      try { overrideHeaders = JSON.parse(replayHeaders); } catch (jsonErr) {
         setProxyError("Override Headers must be valid JSON (e.g. {\"X-Custom\": \"value\"})");
         setReplayLoading(false);
         return;

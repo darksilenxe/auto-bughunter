@@ -461,7 +461,7 @@ func (s *Service) runSubfinder(ctx context.Context, target string, state *integr
 		if host == "" {
 			continue
 		}
-		if !scope.IsHostInScope(host, model.ScanScope{IncludeHosts: []string{hostFromTarget(target), "*." + hostFromTarget(target)}}) {
+		if !scope.IsHostInScope(host, defaultSubdomainScope(target)) {
 			state.OutOfScopeHosts = append(state.OutOfScopeHosts, host)
 			state.SkippedReasons["discovered_out_of_scope"]++
 			continue
@@ -1341,6 +1341,16 @@ func buildIntegrationCoverageFinding(state *integrationState) model.Finding {
 			Prerequisites:   []string{"scope_configuration"},
 			AttackPathHints: []string{"scope-tuning", "retry-policy-adjustment"},
 		},
+	}
+}
+
+func defaultSubdomainScope(target string) model.ScanScope {
+	root := strings.TrimSpace(hostFromTarget(target))
+	if root == "" {
+		return model.ScanScope{}
+	}
+	return model.ScanScope{
+		IncludeHosts: []string{root, "*." + root},
 	}
 }
 
