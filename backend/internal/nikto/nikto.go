@@ -558,10 +558,12 @@ var dangerousMethods = []dangerousMethod{
 }
 
 // serverVersionRe matches common patterns of web server version strings.
-var serverVersionRe = regexp.MustCompile(`(?i)(Apache|nginx|IIS|lighttpd|Kestrel|Tomcat|Jetty|Caddy|Cowboy|WEBrick|OpenResty)[/\s]*([\d.]+)`)
+// Uses \d+(?:\.\d+)* to match only valid dotted-decimal version numbers.
+var serverVersionRe = regexp.MustCompile(`(?i)(Apache|nginx|IIS|lighttpd|Kestrel|Tomcat|Jetty|Caddy|Cowboy|WEBrick|OpenResty)[/\s]*(\d+(?:\.\d+)*)`)
 
 // sensitiveDisallowRe matches Disallow lines that reference security-relevant paths.
-var sensitiveDisallowRe = regexp.MustCompile(`(?i)Disallow:\s*(/(?:admin|backup|config|db|database|secret|private|internal|manage|cgi-bin)[^\s]*)`)
+// The path segment is capped at 200 characters to prevent ReDoS on malformed robots.txt.
+var sensitiveDisallowRe = regexp.MustCompile(`(?i)Disallow:\s*(/(?:admin|backup|config|db|database|secret|private|internal|manage|cgi-bin)[^\s]{0,200})`)
 
 // Scan performs a Nikto-equivalent automated web application security scan against target.
 // authProfile credentials are applied to every outgoing HTTP request.

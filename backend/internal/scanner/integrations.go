@@ -95,9 +95,20 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 
 	// Phase 6b — Web application scanning (Nikto).
+	// • explicit opt-in: UseNiktoIntegration=true → runNikto
+	// • auto-trigger:    EnableNikto=true in config → run silently and prepend an info finding
 	if input.Options.UseNiktoIntegration {
 		findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
 	} else if s.cfg.EnableNikto {
+		findings = append(findings, model.Finding{
+			ID:             "nikto-auto-triggered",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Nikto auto-triggered",
+			Description:    "Nikto ran without an explicit per-scan request because ENABLE_NIKTO_INTEGRATION is true in the server configuration.",
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Review the Nikto findings below for web application security issues.",
+		})
 		result := nikto.Scan(ctx, input.Target, input.AuthProfile)
 		findings = append(findings, result.Findings...)
 	}
