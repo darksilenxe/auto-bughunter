@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/nikto"
@@ -26,7 +28,7 @@ type integrationState struct {
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency
+//	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
 //	Phase 4 — Crawling:    katana
@@ -51,6 +53,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 	if input.Options.UseCertTransparency {
 		findings = append(findings, s.runCertificateTransparency(ctx, input.Target, state, input.Scope)...)
+	}
+	if input.Options.UseAmassIntegration {
+		findings = append(findings, s.runAmassNative(ctx, input.Target, state, input.Scope)...)
 	}
 
 	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
@@ -815,6 +820,130 @@ func (s *Service) runCertificateTransparency(ctx context.Context, target string,
 		Evidence:       "hosts=" + strconv.Itoa(len(discovered)),
 		Recommendation: "Review discovered hosts for additional in-scope attack surface.",
 	}}
+}
+
+func (s *Service) runAmassNative(ctx context.Context, target string, state *integrationState, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableAmass {
+		return []model.Finding{{
+			ID:             "amass-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Amass integration requested but disabled",
+			Description:    "The job requested native Go Amass discovery but ENABLE_AMASS_INTEGRATION is false.",
+			Evidence:       "ENABLE_AMASS_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	if strings.TrimSpace(host) == "" {
+		return []model.Finding{{
+			ID:             "amass-invalid-target",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Amass integration skipped",
+			Description:    "Target host could not be derived for native Go Amass discovery.",
+			Evidence:       "target=" + target,
+			Recommendation: "Provide a valid absolute target URL and retry.",
+		}}
+	}
+
+	discovered := map[string]struct{}{}
+
+	ctHosts, ctErr := s.fetchCertificateTransparencyHosts(ctx, host, scanScope)
+	for _, h := range ctHosts {
+		discovered[h] = struct{}{}
+	}
+
+	commonLabels := []string{
+		"www", "api", "dev", "staging", "admin", "app", "auth", "portal", "cdn", "static",
+		"internal", "test", "uat", "beta", "mail", "vpn", "sso",
+	}
+	for _, label := range commonLabels {
+		if ctx.Err() != nil {
+			break
+		}
+		candidate := label + "." + host
+		if !scope.IsHostInScope(candidate, scanScope) {
+			continue
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ips, err := net.DefaultResolver.LookupIPAddr(lookupCtx, candidate)
+		cancel()
+		if err == nil && len(ips) > 0 {
+			discovered[candidate] = struct{}{}
+		}
+	}
+
+	hosts := make([]string, 0, len(discovered))
+	for h := range discovered {
+		hosts = append(hosts, h)
+	}
+	addDiscoveredHosts(state, hosts)
+
+	severity := model.SeverityInfo
+	title := "Amass (native Go) found no subdomains"
+	if len(hosts) > 0 {
+		severity = model.SeverityMedium
+		title = "Amass (native Go) discovered subdomains"
+	}
+	evidence := "subdomains=" + strconv.Itoa(len(hosts)) + "; ctSourceError=" + strconv.FormatBool(ctErr != nil)
+	return []model.Finding{{
+		ID:             "amass-native-summary",
+		Category:       "integration",
+		Severity:       severity,
+		Title:          title,
+		Description:    "Native Go Amass-style passive discovery executed using certificate transparency plus DNS resolution of common labels.",
+		Evidence:       evidence,
+		Recommendation: "Review discovered hosts and expand authorized testing scope as appropriate.",
+	}}
+}
+
+func (s *Service) fetchCertificateTransparencyHosts(ctx context.Context, host string, scanScope model.ScanScope) ([]string, error) {
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ictx, http.MethodGet, "https://crt.sh/?q=%25."+url.QueryEscape(host)+"&output=json", nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: s.cfg.IntegrationTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &ctHTTPError{status: resp.StatusCode}
+	}
+	var records []struct {
+		NameValue string `json:"name_value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		return nil, err
+	}
+	discoveredSet := map[string]struct{}{}
+	for _, rec := range records {
+		for _, raw := range strings.Split(rec.NameValue, "\n") {
+			h := normalizeDiscoveredHost(raw)
+			if h == "" || !scope.IsHostInScope(h, scanScope) {
+				continue
+			}
+			discoveredSet[h] = struct{}{}
+		}
+	}
+	discovered := make([]string, 0, len(discoveredSet))
+	for h := range discoveredSet {
+		discovered = append(discovered, h)
+	}
+	return discovered, nil
+}
+
+type ctHTTPError struct {
+	status int
+}
+
+func (e *ctHTTPError) Error() string {
+	return "crt.sh unexpected status: " + strconv.Itoa(e.status)
 }
 
 func (s *Service) runKatana(ctx context.Context, target string) []model.Finding {

@@ -21,6 +21,7 @@ export default function App() {
   const [useDnsxIntegration, setUseDnsxIntegration] = useState(false);
   const [useShuffleDnsIntegration, setUseShuffleDnsIntegration] = useState(false);
   const [useCertificateTransparencyIntegration, setUseCertificateTransparencyIntegration] = useState(false);
+  const [useAmassIntegration, setUseAmassIntegration] = useState(false);
   const [useKatanaIntegration, setUseKatanaIntegration] = useState(false);
   const [useTlsxIntegration, setUseTlsxIntegration] = useState(false);
   const [useCdncheckIntegration, setUseCdncheckIntegration] = useState(false);
@@ -145,6 +146,7 @@ export default function App() {
             useDnsxIntegration,
             useShuffleDnsIntegration,
             useCertificateTransparencyIntegration,
+            useAmassIntegration,
             useKatanaIntegration,
             useTlsxIntegration,
             useCdncheckIntegration,
@@ -390,6 +392,15 @@ export default function App() {
           <label className="check">
             <input
               type="checkbox"
+              checked={useAmassIntegration}
+              onChange={(e) => setUseAmassIntegration(e.target.checked)}
+            />
+            Run optional Amass integration (native Go passive discovery)
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
               checked={useKatanaIntegration}
               onChange={(e) => setUseKatanaIntegration(e.target.checked)}
             />
@@ -488,6 +499,7 @@ export default function App() {
               ["dnsx", job.options?.useDnsxIntegration],
               ["shuffleDns", job.options?.useShuffleDnsIntegration],
               ["certificateTransparency", job.options?.useCertificateTransparencyIntegration],
+              ["amass", job.options?.useAmassIntegration],
               ["katana", job.options?.useKatanaIntegration],
               ["tlsx", job.options?.useTlsxIntegration],
               ["cdncheck", job.options?.useCdncheckIntegration],

@@ -44,6 +44,7 @@ func main() {
 		EnableDnsx:         getbool("ENABLE_DNSX_INTEGRATION", false),
 		EnableShuffleDNS:   getbool("ENABLE_SHUFFLEDNS_INTEGRATION", false),
 		EnableCertTrans:    getbool("ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION", false),
+		EnableAmass:        getbool("ENABLE_AMASS_INTEGRATION", false),
 		EnableKatana:       getbool("ENABLE_KATANA_INTEGRATION", false),
 		EnableTlsx:         getbool("ENABLE_TLSX_INTEGRATION", false),
 		EnableCdncheck:     getbool("ENABLE_CDNCHECK_INTEGRATION", false),

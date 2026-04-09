@@ -41,6 +41,7 @@ Do not scan third-party systems without written permission.
   - OWASP ZAP Baseline
   - ShuffleDNS
   - Certificate Transparency (crt.sh)
+  - Amass (native Go passive discovery)
 - Optional AI-generated executive summary for findings
 - Offline AI reasoner (local analysis when no API available)
 
@@ -86,6 +87,7 @@ Body:
     "useZapBaselineIntegration": false,
     "useShuffleDnsIntegration": false,
     "useCertificateTransparencyIntegration": false,
+    "useAmassIntegration": false,
     "rescanIntervalMinutes": 0
   },
   "scope": {
@@ -114,6 +116,7 @@ Returns job state and findings.
 - When a previous completed scan exists for the same target, the job includes a monitoring finding summarizing newly observed issues.
 - Optional automatic rescans can be scheduled per target with `options.rescanIntervalMinutes`.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
+- Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → wordlist → analysis → reporting. Each agent enriches the findings pipeline.

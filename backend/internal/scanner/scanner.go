@@ -29,6 +29,7 @@ type Config struct {
 	EnableDnsx        bool
 	EnableShuffleDNS  bool
 	EnableCertTrans   bool
+	EnableAmass       bool
 	EnableKatana      bool
 	EnableTlsx        bool
 	EnableCdncheck    bool
