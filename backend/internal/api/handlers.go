@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,6 +133,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
+	mux.HandleFunc("/api/tools/health", s.handleToolsHealth)
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
@@ -307,6 +309,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
 	job.Findings = redactSensitiveFindings(job.Findings)
+	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
 	job.Findings = s.applySuppressions(target, job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
@@ -628,6 +631,17 @@ func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleToolsHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"checkedAt": time.Now().UTC(),
+		"tools":     collectToolHealth(),
+	})
 }
 
 func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
@@ -1229,6 +1243,94 @@ func isSuppressed(f model.Finding, target string, rules []model.SuppressionRule)
 		}
 	}
 	return false
+}
+
+type toolHealth struct {
+	Name      string `json:"name"`
+	Binary    string `json:"binary"`
+	Installed bool   `json:"installed"`
+	Category  string `json:"category"`
+}
+
+func collectToolHealth() []toolHealth {
+	tools := []toolHealth{
+		{Name: "nuclei", Binary: envOrDefault("NUCLEI_BINARY", "nuclei"), Category: "vuln-scanning"},
+		{Name: "zap-baseline", Binary: envOrDefault("ZAP_BASELINE_BINARY", "zap-baseline.py"), Category: "vuln-scanning"},
+		{Name: "subfinder", Binary: envOrDefault("SUBFINDER_BINARY", "subfinder"), Category: "recon"},
+		{Name: "httpx", Binary: envOrDefault("HTTPX_BINARY", "httpx"), Category: "recon"},
+		{Name: "naabu", Binary: envOrDefault("NAABU_BINARY", "naabu"), Category: "recon"},
+		{Name: "dnsx", Binary: envOrDefault("DNSX_BINARY", "dnsx"), Category: "recon"},
+		{Name: "shuffledns", Binary: envOrDefault("SHUFFLEDNS_BINARY", "shuffledns"), Category: "recon"},
+		{Name: "katana", Binary: envOrDefault("KATANA_BINARY", "katana"), Category: "crawler"},
+		{Name: "tlsx", Binary: envOrDefault("TLSX_BINARY", "tlsx"), Category: "recon"},
+		{Name: "cdncheck", Binary: envOrDefault("CDNCHECK_BINARY", "cdncheck"), Category: "recon"},
+		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
+		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
+		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
+	}
+	for i := range tools {
+		_, err := exec.LookPath(tools[i].Binary)
+		tools[i].Installed = err == nil
+	}
+	return tools
+}
+
+func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
+	required := map[string]bool{
+		"nuclei":       options.UseNucleiIntegration,
+		"zap-baseline": options.UseZAPBaselineIntegration,
+		"subfinder":    options.UseSubfinderIntegration,
+		"httpx":        options.UseHttpxIntegration,
+		"naabu":        options.UseNaabuIntegration,
+		"dnsx":         options.UseDnsxIntegration,
+		"shuffledns":   options.UseShuffleDNSIntegration,
+		"katana":       options.UseKatanaIntegration,
+		"tlsx":         options.UseTlsxIntegration,
+		"cdncheck":     options.UseCdncheckIntegration,
+		"asnmap":       options.UseAsnmapIntegration,
+		"ffuf":         options.UseFFUFIntegration,
+		"gobuster":     options.UseGobusterIntegration,
+	}
+	health := collectToolHealth()
+	missing := make([]string, 0)
+	installedByCategory := map[string]int{}
+	for _, item := range health {
+		if item.Installed {
+			installedByCategory[item.Category]++
+		}
+		if required[item.Name] && !item.Installed {
+			missing = append(missing, item.Name)
+		}
+	}
+	findings := make([]model.Finding, 0, 2)
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		findings = append(findings, model.Finding{
+			ID:             "tool-readiness-missing-required",
+			Category:       "operations",
+			Severity:       model.SeverityMedium,
+			Title:          "Required bug bounty tools are not installed",
+			Description:    "One or more enabled integrations are missing binaries and may reduce scan coverage.",
+			Evidence:       strings.Join(missing, ", "),
+			Recommendation: "Install missing binaries or disable their integration flags to avoid incomplete runs.",
+			Confidence:     0.98,
+			Sources:        []string{"tool-health"},
+		})
+	}
+	if installedByCategory["recon"] == 0 || installedByCategory["vuln-scanning"] == 0 || installedByCategory["content-discovery"] == 0 {
+		findings = append(findings, model.Finding{
+			ID:             "tool-readiness-category-gap",
+			Category:       "operations",
+			Severity:       model.SeverityInfo,
+			Title:          "Toolchain has bug bounty coverage gaps",
+			Description:    "Successful bug bounty workflows typically need recon, vulnerability scanning, and content discovery coverage.",
+			Evidence:       fmt.Sprintf("recon=%d vuln=%d content=%d", installedByCategory["recon"], installedByCategory["vuln-scanning"], installedByCategory["content-discovery"]),
+			Recommendation: "Install at least one tool per category or run equivalent native checks before production engagements.",
+			Confidence:     0.9,
+			Sources:        []string{"tool-health"},
+		})
+	}
+	return findings
 }
 
 func buildIntegrationHealthFinding(outputs []agent.AgentOutput) []model.Finding {
@@ -1908,4 +2010,12 @@ func intFromEnv(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envOrDefault(key, fallback string) string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	return v
 }

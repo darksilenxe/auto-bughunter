@@ -193,6 +193,10 @@ Returns an executive automation report with scan trends, feedback quality metric
 
 Returns open auto-managed remediation tickets (optionally filtered by `?target=`).
 
+### `GET /api/tools/health`
+
+Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
@@ -227,6 +231,7 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 - Suppression rules from `POST /api/suppressions` support baseline/noise reduction with expiry.
 - Policy-as-code release gating is evaluated per scan and can auto-block progression based on severity thresholds.
 - Ticket lifecycle is fully automated: medium/high fingerprints are upserted as open tickets and auto-resolved when findings disappear.
+- Tool-readiness checks run automatically and flag missing required binaries or category coverage gaps for bug bounty success.
 - CI/CD and discovery systems can trigger immediate event-driven scans through `POST /api/automation/event`.
 - Executive KPI summaries are available from `GET /api/automation/report`.
 - Proxy artifacts are redacted by default and retained according to `PROXY_RETENTION_HOURS`.
