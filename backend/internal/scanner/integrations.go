@@ -10,6 +10,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/nikto"
+	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/sqlmap"
 	"auto-bughunter/backend/internal/wpscan"
 )
@@ -46,14 +47,14 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 
 	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
 	if input.Options.UseNaabuIntegration {
-		for _, t := range expandTargets(input.Target, state) {
+		for _, t := range expandTargets(input.Target, state, input.Scope) {
 			findings = append(findings, s.runNaabu(ctx, t)...)
 		}
 	}
 
 	// Phase 3 — HTTP probing (primary target + discovered hosts).
 	if input.Options.UseHttpxIntegration {
-		for _, t := range expandTargets(input.Target, state) {
+		for _, t := range expandTargets(input.Target, state, input.Scope) {
 			findings = append(findings, s.runHttpx(ctx, t)...)
 		}
 	}
@@ -134,7 +135,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
 	if input.Options.UseNucleiIntegration {
-		for _, t := range expandTargets(input.Target, state) {
+		for _, t := range expandTargets(input.Target, state, input.Scope) {
 			findings = append(findings, s.runNuclei(ctx, t)...)
 		}
 	}
@@ -148,10 +149,10 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 // expandTargets returns the primary target URL plus a URL for each subdomain in state,
 // sharing the same URL scheme as the primary target. Hosts that duplicate the primary
 // target's hostname are skipped to avoid scanning the same host twice.
-func expandTargets(target string, state *integrationState) []string {
+func expandTargets(target string, state *integrationState, scanScope model.ScanScope) []string {
 	targets := []string{target}
 	if len(state.DiscoveredHosts) == 0 {
-		return targets
+		return scope.FilterTargets(targets, scanScope)
 	}
 	u, err := url.Parse(target)
 	if err != nil {
@@ -164,7 +165,7 @@ func expandTargets(target string, state *integrationState) []string {
 		}
 		targets = append(targets, u.Scheme+"://"+host)
 	}
-	return targets
+	return scope.FilterTargets(targets, scanScope)
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {

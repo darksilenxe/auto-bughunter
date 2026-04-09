@@ -58,13 +58,17 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	scopeJSON, err := json.Marshal(job.Scope)
+	if err != nil {
+		return err
+	}
 
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO scans (
-			id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options
+			id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON)
 	if err != nil {
 		return fmt.Errorf("insert scan: %w", err)
 	}
@@ -84,6 +88,10 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	scopeJSON, err := json.Marshal(job.Scope)
+	if err != nil {
+		return err
+	}
 
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE scans
@@ -93,9 +101,10 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			ai_summary = $5,
 			error = $6,
 			auth_profile_summary = $7,
-			options = $8
+			options = $8,
+			scope = $9
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
@@ -111,7 +120,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
 		FROM scans
 		WHERE id = $1
 	`, id)
@@ -120,6 +129,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	var findingsRaw []byte
 	var summaryRaw []byte
 	var optionsRaw []byte
+	var scopeRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -131,6 +141,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 		&job.Error,
 		&summaryRaw,
 		&optionsRaw,
+		&scopeRaw,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -150,6 +161,9 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	if len(optionsRaw) > 0 {
 		_ = json.Unmarshal(optionsRaw, &job.Options)
 	}
+	if len(scopeRaw) > 0 {
+		_ = json.Unmarshal(scopeRaw, &job.Scope)
+	}
 
 	return &job, nil
 }
@@ -166,11 +180,15 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			ai_summary TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
 			auth_profile_summary JSONB NULL,
-			options JSONB NOT NULL DEFAULT '{}'::jsonb
+			options JSONB NOT NULL DEFAULT '{}'::jsonb,
+			scope JSONB NOT NULL DEFAULT '{}'::jsonb
 		)
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate scans table: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
+		return fmt.Errorf("migrate scans.scope column: %w", err)
 	}
 
 	_, err = p.db.ExecContext(ctx, `
@@ -191,6 +209,55 @@ func (p *Postgres) migrate(ctx context.Context) error {
 		return fmt.Errorf("migrate proxy_requests table: %w", err)
 	}
 	return nil
+}
+
+func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
+		FROM scans
+		WHERE target = $1 AND status = 'completed' AND id <> $2
+		ORDER BY completed_at DESC NULLS LAST, started_at DESC
+		LIMIT 1
+	`, target, excludeID)
+
+	var job model.ScanJob
+	var findingsRaw, summaryRaw, optionsRaw, scopeRaw []byte
+	if err := row.Scan(
+		&job.ID,
+		&job.Target,
+		&job.Status,
+		&job.StartedAt,
+		&job.CompletedAt,
+		&findingsRaw,
+		&job.AISummary,
+		&job.Error,
+		&summaryRaw,
+		&optionsRaw,
+		&scopeRaw,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("select latest completed scan: %w", err)
+	}
+
+	if len(findingsRaw) > 0 {
+		_ = json.Unmarshal(findingsRaw, &job.Findings)
+	}
+	if len(summaryRaw) > 0 && string(summaryRaw) != "null" {
+		var summary model.ScanAuthProfileSummary
+		if err := json.Unmarshal(summaryRaw, &summary); err == nil {
+			job.AuthProfileSummary = &summary
+		}
+	}
+	if len(optionsRaw) > 0 {
+		_ = json.Unmarshal(optionsRaw, &job.Options)
+	}
+	if len(scopeRaw) > 0 {
+		_ = json.Unmarshal(scopeRaw, &job.Scope)
+	}
+
+	return &job, nil
 }
 
 // SaveProxyRequest persists a new captured proxy request/response pair.

@@ -9,6 +9,10 @@ export default function App() {
   const [userAgent, setUserAgent] = useState("");
   const [basicAuthUsername, setBasicAuthUsername] = useState("");
   const [basicAuthPassword, setBasicAuthPassword] = useState("");
+  const [includeHosts, setIncludeHosts] = useState("");
+  const [excludeHosts, setExcludeHosts] = useState("");
+  const [excludePaths, setExcludePaths] = useState("");
+  const [programRules, setProgramRules] = useState("");
   const [useNucleiIntegration, setUseNucleiIntegration] = useState(false);
   const [useZapBaselineIntegration, setUseZapBaselineIntegration] = useState(false);
   const [useSubfinderIntegration, setUseSubfinderIntegration] = useState(false);
@@ -112,6 +116,10 @@ export default function App() {
     try {
       const parsedHeaders = safeParseMap(headersJson, "Headers");
       const parsedCookies = safeParseMap(cookiesJson, "Cookies");
+      const parsedIncludeHosts = safeParseList(includeHosts);
+      const parsedExcludeHosts = safeParseList(excludeHosts);
+      const parsedExcludePaths = safeParseList(excludePaths);
+      const parsedProgramRules = safeParseList(programRules);
 
       const res = await fetch(`${API_BASE}/api/scan`, {
         method: "POST",
@@ -139,6 +147,12 @@ export default function App() {
             useWpScanIntegration,
             useNiktoIntegration,
             useSqlMapIntegration,
+          },
+          scope: {
+            includeHosts: parsedIncludeHosts,
+            excludeHosts: parsedExcludeHosts,
+            excludePaths: parsedExcludePaths,
+            programRules: parsedProgramRules,
           },
         }),
       });
@@ -174,6 +188,14 @@ export default function App() {
       out[key] = value;
     }
     return out;
+  }
+
+  function safeParseList(raw) {
+    if (!raw.trim()) return [];
+    return raw
+      .split("\n")
+      .map((v) => v.trim())
+      .filter(Boolean);
   }
 
   async function pollScan(id) {
@@ -249,6 +271,42 @@ export default function App() {
             type="password"
             value={basicAuthPassword}
             onChange={(e) => setBasicAuthPassword(e.target.value)}
+          />
+
+          <label htmlFor="scope-include">Scope Include Hosts (one host/wildcard per line)</label>
+          <textarea
+            id="scope-include"
+            value={includeHosts}
+            onChange={(e) => setIncludeHosts(e.target.value)}
+            rows={3}
+            placeholder={"example.com\n*.example.com"}
+          />
+
+          <label htmlFor="scope-exclude">Scope Exclude Hosts (one host/wildcard per line)</label>
+          <textarea
+            id="scope-exclude"
+            value={excludeHosts}
+            onChange={(e) => setExcludeHosts(e.target.value)}
+            rows={3}
+            placeholder={"admin.example.com"}
+          />
+
+          <label htmlFor="scope-paths">Out-of-scope Paths (one prefix per line)</label>
+          <textarea
+            id="scope-paths"
+            value={excludePaths}
+            onChange={(e) => setExcludePaths(e.target.value)}
+            rows={3}
+            placeholder={"/logout\n/internal"}
+          />
+
+          <label htmlFor="scope-rules">Program Rules (notes; one line each)</label>
+          <textarea
+            id="scope-rules"
+            value={programRules}
+            onChange={(e) => setProgramRules(e.target.value)}
+            rows={2}
+            placeholder={"No destructive testing\nNo social engineering"}
           />
 
           <label className="check">
@@ -382,6 +440,9 @@ export default function App() {
               Auth profile used: headers={job.authProfileSummary.headerKeys?.length || 0}, cookies={job.authProfileSummary.cookieNames?.length || 0}, basicAuth={job.authProfileSummary.hasBasicAuth ? "yes" : "no"}
             </p>
           )}
+          <p className="meta">
+            Scope: includeHosts={job.scope?.includeHosts?.length || 0}, excludeHosts={job.scope?.excludeHosts?.length || 0}, excludePaths={job.scope?.excludePaths?.length || 0}
+          </p>
           <p className="meta">
             Integrations requested:{" "}
             {[

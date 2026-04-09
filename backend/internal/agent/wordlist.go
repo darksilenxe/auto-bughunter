@@ -36,13 +36,13 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
-	dirs := a.wordlistScanner.ScanDirectories(ctx, input.Target, input.AuthProfile)
+	dirs := a.wordlistScanner.ScanDirectories(ctx, input.Target, input.AuthProfile, input.Scope)
 	output.Findings = append(output.Findings, dirs...)
 
-	subs := a.wordlistScanner.ScanSubdomains(ctx, input.Target)
+	subs := a.wordlistScanner.ScanSubdomains(ctx, input.Target, input.Scope)
 	output.Findings = append(output.Findings, subs...)
 
-	apis := a.wordlistScanner.ScanAPIEndpoints(ctx, input.Target, input.AuthProfile)
+	apis := a.wordlistScanner.ScanAPIEndpoints(ctx, input.Target, input.AuthProfile, input.Scope)
 	output.Findings = append(output.Findings, apis...)
 
 	output.Metadata["directories_found"] = fmt.Sprintf("%d", len(dirs))

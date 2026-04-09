@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
+	"auto-bughunter/backend/internal/scope"
 
 	"github.com/google/uuid"
 )
@@ -32,6 +35,7 @@ type Repository interface {
 	CreateJob(ctx context.Context, job *model.ScanJob) error
 	UpdateJob(ctx context.Context, job *model.ScanJob) error
 	GetJob(ctx context.Context, id string) (*model.ScanJob, error)
+	GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
@@ -107,6 +111,11 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target host is not in ALLOWED_TARGETS"})
 		return
 	}
+	req.Scope = scope.Normalize(target, req.Scope)
+	if !scope.IsURLInScope(target, req.Scope) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
+		return
+	}
 
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
@@ -117,6 +126,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		StartedAt:          now,
 		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
 		Options:            req.Options,
+		Scope:              req.Scope,
 	}
 
 	if err := s.repo.CreateJob(r.Context(), job); err != nil {
@@ -124,7 +134,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.runJob(jobID, target, req.AuthProfile, req.Options)
+	go s.runJob(jobID, target, req.AuthProfile, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
 }
 
@@ -158,11 +168,12 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, options model.ScanOptions) {
+func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
 	job, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || job == nil {
 		return
 	}
+	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -174,6 +185,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 		Target:      target,
 		AuthProfile: authProfile,
 		Options:     options,
+		Scope:       scanScope,
 	}
 
 	_, findings, err := s.agentRegistry.RunAll(ctx, input)
@@ -189,7 +201,10 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 
 	job.Status = "completed"
 	job.Findings = findings
-	job.AISummary = s.aiClient.Summarize(context.Background(), target, findings)
+	if previousJob != nil {
+		job.Findings = append(job.Findings, buildDeltaFinding(previousJob.Findings, findings)...)
+	}
+	job.AISummary = s.aiClient.Summarize(context.Background(), target, job.Findings)
 	_ = s.repo.UpdateJob(context.Background(), job)
 }
 
@@ -289,6 +304,17 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requestId is required"})
 		return
 	}
+	if req.Scope != nil {
+		original, err := s.proxyServer.Store().GetProxyRequest(r.Context(), req.RequestID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "proxy request not found"})
+			return
+		}
+		if !scope.IsURLInScope(original.URL, scope.Normalize(original.URL, *req.Scope)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "request is out of configured scope profile"})
+			return
+		}
+	}
 
 	replayed, err := s.proxyServer.Replay(r.Context(), req.RequestID, req.OverrideHeaders, req.OverrideBody)
 	if err != nil {
@@ -296,4 +322,43 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, replayed)
+}
+
+func buildDeltaFinding(previousFindings, currentFindings []model.Finding) []model.Finding {
+	prev := map[string]struct{}{}
+	for _, f := range previousFindings {
+		prev[fingerprintFinding(f)] = struct{}{}
+	}
+
+	newItems := make([]string, 0)
+	for _, f := range currentFindings {
+		fp := fingerprintFinding(f)
+		if _, ok := prev[fp]; ok {
+			continue
+		}
+		newItems = append(newItems, fmt.Sprintf("[%s] %s", f.Severity, f.Title))
+	}
+	if len(newItems) == 0 {
+		return nil
+	}
+	sort.Strings(newItems)
+	if len(newItems) > 5 {
+		newItems = newItems[:5]
+	}
+
+	return []model.Finding{{
+		ID:             "monitoring-new-attack-surface",
+		Category:       "monitoring",
+		Severity:       model.SeverityInfo,
+		Title:          fmt.Sprintf("New attack surface detected since last completed scan (%d new findings)", len(newItems)),
+		Description:    "This scan surfaced findings not present in the previous completed scan for the same target.",
+		Evidence:       strings.Join(newItems, "; "),
+		Recommendation: "Prioritize triage of these newly introduced findings and consider enabling scheduled rescans for continuous monitoring.",
+	}}
+}
+
+func fingerprintFinding(f model.Finding) string {
+	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
+		strings.ToLower(strings.TrimSpace(f.Title)) + "|" +
+		strings.TrimSpace(f.Evidence)
 }

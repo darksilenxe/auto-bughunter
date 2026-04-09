@@ -25,6 +25,7 @@ type ScanRequest struct {
 	Target      string          `json:"target"`
 	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
 	Options     ScanOptions     `json:"options,omitempty"`
+	Scope       ScanScope       `json:"scope,omitempty"`
 }
 
 type ScanAuthProfile struct {
@@ -58,6 +59,15 @@ type ScanOptions struct {
 	UseSQLMapIntegration      bool `json:"useSqlMapIntegration,omitempty"`
 }
 
+// ScanScope contains per-scan program scope rules.
+// Host patterns support exact values (example.com) and wildcards (*.example.com).
+type ScanScope struct {
+	IncludeHosts []string `json:"includeHosts,omitempty"`
+	ExcludeHosts []string `json:"excludeHosts,omitempty"`
+	ExcludePaths []string `json:"excludePaths,omitempty"`
+	ProgramRules []string `json:"programRules,omitempty"`
+}
+
 type ScanJob struct {
 	ID                 string                  `json:"id"`
 	Target             string                  `json:"target"`
@@ -69,6 +79,7 @@ type ScanJob struct {
 	Error              string                  `json:"error,omitempty"`
 	AuthProfileSummary *ScanAuthProfileSummary `json:"authProfileSummary,omitempty"`
 	Options            ScanOptions             `json:"options,omitempty"`
+	Scope              ScanScope               `json:"scope,omitempty"`
 }
 
 func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
@@ -115,4 +126,5 @@ type ProxyReplayRequest struct {
 	RequestID       string            `json:"requestId"`
 	OverrideHeaders map[string]string `json:"overrideHeaders,omitempty"`
 	OverrideBody    string            `json:"overrideBody,omitempty"`
+	Scope           *ScanScope        `json:"scope,omitempty"`
 }

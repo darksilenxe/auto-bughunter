@@ -82,6 +82,12 @@ Body:
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false
+  },
+  "scope": {
+    "includeHosts": ["example.com", "*.example.com"],
+    "excludeHosts": ["admin.example.com"],
+    "excludePaths": ["/logout", "/internal"],
+    "programRules": ["No destructive testing"]
   }
 }
 ```
@@ -95,6 +101,10 @@ Returns job state and findings.
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - Job records are stored in PostgreSQL table `scans`.
+- Scan scope supports host wildcard patterns (`*.example.com`) and out-of-scope path prefixes.
+- Scan creation and scanner execution enforce per-scan scope (target, integration expansion, and wordlist probes).
+- Proxy replay supports optional per-request scope validation via `scope` on `POST /api/proxy/replay`.
+- When a previous completed scan exists for the same target, the job includes a monitoring finding summarizing newly observed issues.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → wordlist → analysis → reporting. Each agent enriches the findings pipeline.
 - All agents are enabled by default; disable via code configuration if desired.

@@ -40,6 +40,7 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Target:      input.Target,
 		AuthProfile: input.AuthProfile,
 		Options:     input.Options,
+		Scope:       input.Scope,
 	})
 	if err != nil {
 		return output, err

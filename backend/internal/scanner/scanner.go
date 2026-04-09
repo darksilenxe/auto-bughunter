@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
 )
 
 type Service struct {
@@ -51,6 +52,7 @@ type RunInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
+	Scope       model.ScanScope
 }
 
 func NewService(cfg Config) *Service {
@@ -101,6 +103,9 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme")
+	}
+	if !scope.IsURLInScope(input.Target, input.Scope) {
+		return nil, fmt.Errorf("target is outside configured scan scope")
 	}
 
 	var findings []model.Finding

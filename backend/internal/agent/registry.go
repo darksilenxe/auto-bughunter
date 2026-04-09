@@ -17,6 +17,7 @@ type AgentInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
+	Scope       model.ScanScope
 	Previous    AgentOutput
 }
 
@@ -55,6 +56,7 @@ func (r *Registry) Get(name string) Agent {
 func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput, []model.Finding, error) {
 	outputs := make([]AgentOutput, 0, len(r.order))
 	allFindings := make([]model.Finding, 0)
+	cumulativeFindings := make([]model.Finding, 0)
 
 	for _, name := range r.order {
 		agent := r.agents[name]
@@ -68,10 +70,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 		default:
 		}
 
-		input.Previous = AgentOutput{}
-		if len(outputs) > 0 {
-			input.Previous = outputs[len(outputs)-1]
-		}
+		input.Previous = AgentOutput{Findings: append([]model.Finding(nil), cumulativeFindings...)}
 
 		output, err := agent.Run(ctx, input)
 		if err != nil {
@@ -82,10 +81,11 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 			output.AgentName = agent.Name()
 		}
 		outputs = append(outputs, output)
+		cumulativeFindings = append(cumulativeFindings, output.Findings...)
 		allFindings = append(allFindings, output.Findings...)
 	}
 
-	return outputs, allFindings, nil
+	return outputs, combineFindingsWithDedup(allFindings), nil
 }
 
 func combineFindingsWithDedup(findings []model.Finding) []model.Finding {
