@@ -7,12 +7,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
+
+// httpClientTimeout is the per-request timeout applied to all HTTP calls in this package.
+const httpClientTimeout = 12 * time.Second
+
+// maxResponseBodySize caps the amount of response data read to prevent memory exhaustion.
+const maxResponseBodySize = 64 * 1024
+
+// maxRedirectBodySize caps the response body read during redirect-following calls.
+const maxRedirectBodySize = 32 * 1024
 
 // Result holds the outcome of a WPScan assessment.
 type Result struct {
@@ -77,9 +87,18 @@ var popularThemes = []string{
 
 // Scan performs a WPScan-equivalent assessment on target.
 // authProfile credentials are applied to every outgoing HTTP request.
+// Only http:// and https:// targets are accepted; all other schemes are rejected.
 func Scan(ctx context.Context, target string, authProfile model.ScanAuthProfile) Result {
+	// Validate that the target uses a safe scheme before making any outbound requests.
+	// This is a defence-in-depth check; the caller (scanner.Service) also validates the
+	// target URL at the API layer using an allowlist.
+	parsed, parseErr := url.Parse(target)
+	if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return Result{Findings: make([]model.Finding, 0)}
+	}
+
 	client := &http.Client{
-		Timeout: 12 * time.Second,
+		Timeout: httpClientTimeout,
 		// Capture redirects but limit to 5 hops to avoid loops.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
@@ -445,7 +464,7 @@ func getBody(ctx context.Context, client *http.Client, target string, auth model
 		return "", 0, doErr
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	return string(b), resp.StatusCode, nil
 }
 
@@ -453,7 +472,7 @@ func getBody(ctx context.Context, client *http.Client, target string, auth model
 // response body, HTTP status code, and final URL (useful for detecting author-redirect enumeration).
 func getBodyFollowRedirect(ctx context.Context, target string, auth model.ScanAuthProfile) (body string, status int, finalURL string) {
 	client := &http.Client{
-		Timeout: 12 * time.Second,
+		Timeout: httpClientTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return http.ErrUseLastResponse
@@ -471,7 +490,7 @@ func getBodyFollowRedirect(ctx context.Context, target string, auth model.ScanAu
 		return "", 0, ""
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxRedirectBodySize))
 	return string(b), resp.StatusCode, resp.Request.URL.String()
 }
 

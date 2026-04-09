@@ -71,9 +71,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 
 	// Phase 6 — CMS scanning.
-	// WPScan runs when the user opts in explicitly.
-	// It also auto-triggers (silently) when EnableWPScan is true in config and WordPress
-	// is detected on the target, even without an explicit opt-in.
+	// Exactly one of the two branches below executes (they are mutually exclusive):
+	// • explicit opt-in: UseWPScanIntegration=true → runWPScan (reports "not WordPress" if non-WP)
+	// • auto-trigger:    EnableWPScan=true in config → probe silently; only run if WP detected
 	if input.Options.UseWPScanIntegration {
 		findings = append(findings, s.runWPScan(ctx, input.Target, input.AuthProfile)...)
 	} else if s.cfg.EnableWPScan {
@@ -106,7 +106,8 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 }
 
 // expandTargets returns the primary target URL plus a URL for each subdomain in state,
-// sharing the same URL scheme as the primary target.
+// sharing the same URL scheme as the primary target. Hosts that duplicate the primary
+// target's hostname are skipped to avoid scanning the same host twice.
 func expandTargets(target string, state *integrationState) []string {
 	targets := []string{target}
 	if len(state.DiscoveredHosts) == 0 {
@@ -116,7 +117,11 @@ func expandTargets(target string, state *integrationState) []string {
 	if err != nil {
 		return targets
 	}
+	primaryHost := strings.ToLower(u.Hostname())
 	for _, host := range state.DiscoveredHosts {
+		if strings.ToLower(host) == primaryHost {
+			continue
+		}
 		targets = append(targets, u.Scheme+"://"+host)
 	}
 	return targets
