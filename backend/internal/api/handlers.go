@@ -16,6 +16,7 @@ import (
 
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
@@ -31,6 +32,7 @@ type Server struct {
 	repo          Repository
 	agentRegistry *agent.Registry
 	proxyServer   *proxy.Server
+	mlService     *ml.Service
 }
 
 type Repository interface {
@@ -42,9 +44,10 @@ type Repository interface {
 	GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error)
 	AppendAuditEvent(ctx context.Context, scanID string, event model.ScanAuditEvent) error
 	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
+	ListCompletedJobs(ctx context.Context, limit int) ([]*model.ScanJob, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -72,6 +75,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts [
 		repo:          repo,
 		agentRegistry: reg,
 		proxyServer:   proxy.NewServer(proxyStore),
+		mlService:     mlService,
 	}
 }
 
@@ -84,6 +88,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
+	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	return withCORS(mux)
 }
 
@@ -241,6 +246,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 	job.AISummary = s.aiClient.Summarize(context.Background(), target, job.Findings)
 	job.Dashboard = buildDecisionDashboard(job)
 	job.NextActions = buildNextActions(job)
+	if s.mlService != nil {
+		job.ModelRecommendations = s.mlService.RecommendFromHistory(context.Background(), s.repo, s.proxyServer.Store(), job)
+		if job.ModelRecommendations != nil {
+			job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
+			s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
+		}
+	}
 	job.AutomatedReport = generateAutomatedReport(job)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
@@ -366,6 +378,29 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, replayed)
+}
+
+func (s *Server) handleListMLEngagements(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.mlService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ml service is not enabled"})
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	dataset, err := s.mlService.BuildTrainingDataset(r.Context(), s.repo, s.proxyServer.Store(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build ml engagement dataset"})
+		return
+	}
+	writeJSON(w, http.StatusOK, dataset)
 }
 
 func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int, int, int, []model.Finding) {
@@ -843,6 +878,27 @@ func limitStrings(items []string, max int) []string {
 		return items
 	}
 	return items[:max]
+}
+
+func mergeActions(existing, extra []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(existing)+len(extra))
+	appendUnique := func(items []string) {
+		for _, item := range items {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	appendUnique(existing)
+	appendUnique(extra)
+	return out
 }
 
 func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {

@@ -79,13 +79,17 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	modelRecommendationsJSON, err := json.Marshal(job.ModelRecommendations)
+	if err != nil {
+		return err
+	}
 
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO scans (
-			id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+			id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
 	if err != nil {
 		return fmt.Errorf("insert scan: %w", err)
 	}
@@ -125,6 +129,10 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	modelRecommendationsJSON, err := json.Marshal(job.ModelRecommendations)
+	if err != nil {
+		return err
+	}
 
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE scans
@@ -132,17 +140,18 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			completed_at = $3,
 			findings = $4,
 			ai_summary = $5,
-			error = $6,
-			auth_profile_summary = $7,
-			options = $8,
-			scope = $9,
-			agent_runs = $10,
-			asset_links = $11,
-			dashboard = $12,
-			next_actions = $13,
-			automated_report = $14
+			model_recommendations = $6,
+			error = $7,
+			auth_profile_summary = $8,
+			options = $9,
+			scope = $10,
+			agent_runs = $11,
+			asset_links = $12,
+			dashboard = $13,
+			next_actions = $14,
+			automated_report = $15
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
@@ -158,7 +167,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		FROM scans
 		WHERE id = $1
 	`, id)
@@ -172,6 +181,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	var assetLinksRaw []byte
 	var dashboardRaw []byte
 	var nextActionsRaw []byte
+	var modelRecommendationsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -180,6 +190,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 		&job.CompletedAt,
 		&findingsRaw,
 		&job.AISummary,
+		&modelRecommendationsRaw,
 		&job.Error,
 		&summaryRaw,
 		&optionsRaw,
@@ -226,6 +237,12 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	if len(nextActionsRaw) > 0 {
 		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
 	}
+	if len(modelRecommendationsRaw) > 0 && string(modelRecommendationsRaw) != "null" {
+		var modelRecommendations model.ModelRecommendations
+		if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
+			job.ModelRecommendations = &modelRecommendations
+		}
+	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
@@ -243,6 +260,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			findings JSONB NOT NULL DEFAULT '[]'::jsonb,
 			ai_summary TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
+			model_recommendations JSONB NULL,
 			auth_profile_summary JSONB NULL,
 			options JSONB NOT NULL DEFAULT '{}'::jsonb,
 			scope JSONB NOT NULL DEFAULT '{}'::jsonb
@@ -273,6 +291,9 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS automated_report TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate scans.automated_report column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS model_recommendations JSONB NULL`); err != nil {
+		return fmt.Errorf("migrate scans.model_recommendations column: %w", err)
 	}
 	if _, err := p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_assets (
@@ -320,7 +341,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 
 func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		FROM scans
 		WHERE target = $1 AND status = 'completed' AND id <> $2
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -328,7 +349,7 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	`, target, excludeID)
 
 	var job model.ScanJob
-	var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw []byte
+	var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -337,6 +358,7 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 		&job.CompletedAt,
 		&findingsRaw,
 		&job.AISummary,
+		&modelRecommendationsRaw,
 		&job.Error,
 		&summaryRaw,
 		&optionsRaw,
@@ -383,10 +405,105 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	if len(nextActionsRaw) > 0 {
 		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
 	}
+	if len(modelRecommendationsRaw) > 0 && string(modelRecommendationsRaw) != "null" {
+		var modelRecommendations model.ModelRecommendations
+		if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
+			job.ModelRecommendations = &modelRecommendations
+		}
+	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
 	return &job, nil
+}
+
+func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.ScanJob, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
+		FROM scans
+		WHERE status = 'completed'
+		ORDER BY completed_at DESC NULLS LAST, started_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list completed scans: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*model.ScanJob, 0, limit)
+	for rows.Next() {
+		var job model.ScanJob
+		var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw, modelRecommendationsRaw []byte
+		if err := rows.Scan(
+			&job.ID,
+			&job.Target,
+			&job.Status,
+			&job.StartedAt,
+			&job.CompletedAt,
+			&findingsRaw,
+			&job.AISummary,
+			&modelRecommendationsRaw,
+			&job.Error,
+			&summaryRaw,
+			&optionsRaw,
+			&scopeRaw,
+			&agentRunsRaw,
+			&assetLinksRaw,
+			&dashboardRaw,
+			&nextActionsRaw,
+			&job.AutomatedReport,
+		); err != nil {
+			return nil, fmt.Errorf("scan completed scan row: %w", err)
+		}
+
+		if len(findingsRaw) > 0 {
+			_ = json.Unmarshal(findingsRaw, &job.Findings)
+		}
+		if len(summaryRaw) > 0 && string(summaryRaw) != "null" {
+			var summary model.ScanAuthProfileSummary
+			if err := json.Unmarshal(summaryRaw, &summary); err == nil {
+				job.AuthProfileSummary = &summary
+			}
+		}
+		if len(optionsRaw) > 0 {
+			_ = json.Unmarshal(optionsRaw, &job.Options)
+		}
+		if len(scopeRaw) > 0 {
+			_ = json.Unmarshal(scopeRaw, &job.Scope)
+		}
+		if len(agentRunsRaw) > 0 {
+			_ = json.Unmarshal(agentRunsRaw, &job.AgentRuns)
+		}
+		if len(assetLinksRaw) > 0 {
+			_ = json.Unmarshal(assetLinksRaw, &job.AssetLinks)
+		}
+		if len(dashboardRaw) > 0 && string(dashboardRaw) != "null" {
+			var dashboard model.DecisionDashboard
+			if err := json.Unmarshal(dashboardRaw, &dashboard); err == nil {
+				job.Dashboard = &dashboard
+			}
+		}
+		if len(nextActionsRaw) > 0 {
+			_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
+		}
+		if len(modelRecommendationsRaw) > 0 && string(modelRecommendationsRaw) != "null" {
+			var modelRecommendations model.ModelRecommendations
+			if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
+				job.ModelRecommendations = &modelRecommendations
+			}
+		}
+		out = append(out, &job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate completed scans: %w", err)
+	}
+	return out, nil
 }
 
 func (p *Postgres) SaveAssets(ctx context.Context, scanID string, assets []model.ScanAsset) error {

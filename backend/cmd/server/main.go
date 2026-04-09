@@ -11,6 +11,7 @@ import (
 
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
+	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/storage"
@@ -71,8 +72,11 @@ func main() {
 		os.Getenv("AI_API_KEY"),
 		os.Getenv("AI_MODEL"),
 	)
+	mlService := ml.NewService(ml.Config{
+		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
+	})
 
-	server := api.NewServer(scanService, aiClient, allowed, repo, repo)
+	server := api.NewServer(scanService, aiClient, mlService, allowed, repo, repo)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,

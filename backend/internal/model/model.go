@@ -93,6 +93,7 @@ type ScanJob struct {
 	CompletedAt        *time.Time              `json:"completedAt,omitempty"`
 	Findings           []Finding               `json:"findings,omitempty"`
 	AISummary          string                  `json:"aiSummary,omitempty"`
+	ModelRecommendations *ModelRecommendations `json:"modelRecommendations,omitempty"`
 	Error              string                  `json:"error,omitempty"`
 	AuthProfileSummary *ScanAuthProfileSummary `json:"authProfileSummary,omitempty"`
 	Options            ScanOptions             `json:"options,omitempty"`
@@ -104,6 +105,34 @@ type ScanJob struct {
 	Dashboard          *DecisionDashboard      `json:"dashboard,omitempty"`
 	NextActions        []string                `json:"nextActions,omitempty"`
 	AutomatedReport    string                  `json:"automatedReport,omitempty"`
+}
+
+type ModelRecommendations struct {
+	ToolSelection       []ToolRecommendation       `json:"toolSelection,omitempty"`
+	PrioritizedFindings []PrioritizedFinding       `json:"prioritizedFindings,omitempty"`
+	Copilot             EngagementCopilotSuggestion `json:"copilot"`
+	ModelMode           string                     `json:"modelMode,omitempty"`
+}
+
+type ToolRecommendation struct {
+	Tool       string  `json:"tool"`
+	Score      float64 `json:"score"`
+	Reason     string  `json:"reason"`
+	Confidence float64 `json:"confidence"`
+}
+
+type PrioritizedFinding struct {
+	FindingID string  `json:"findingId"`
+	Title     string  `json:"title"`
+	Severity  Severity `json:"severity"`
+	Score     float64 `json:"score"`
+	Reason    string  `json:"reason"`
+}
+
+type EngagementCopilotSuggestion struct {
+	Summary          string   `json:"summary"`
+	SuggestedActions []string `json:"suggestedActions,omitempty"`
+	Confidence       float64  `json:"confidence"`
 }
 
 type ScanAsset struct {

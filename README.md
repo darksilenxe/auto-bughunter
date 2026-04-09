@@ -44,6 +44,11 @@ Do not scan third-party systems without written permission.
   - Amass (native Go passive discovery)
 - Optional AI-generated executive summary for findings
 - Offline AI reasoner (local analysis when no API available)
+- Engagement-learning ML layer:
+  - Tool-selection recommendations based on historical usefulness
+  - Finding prioritization scores for triage ordering
+  - Copilot-style suggested next actions learned from prior engagements
+  - Sanitized ML training dataset export for offline/shadow model workflows
 
 ## Quick Start
 
@@ -101,15 +106,21 @@ Body:
 
 ### `GET /api/scan/{id}`
 
-Returns job state and findings, including per-agent telemetry (`agentRuns`), structured decision data (`dashboard`, `nextActions`), asset relationships (`assetLinks`), and an automated penetration test report (`automatedReport`) with findings/severities/how-found/commands-used.
+Returns job state and findings, including per-agent telemetry (`agentRuns`), structured decision data (`dashboard`, `nextActions`), ML recommendations (`modelRecommendations`), asset relationships (`assetLinks`), and an automated penetration test report (`automatedReport`) with findings/severities/how-found/commands-used.
+
+### `GET /api/ml/engagements?limit=100`
+
+Returns a sanitized, pseudonymized engagement dataset built from completed scans and related telemetry for offline/shadow ML training and evaluation.
 
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
+- ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
+- Model recommendation artifacts are persisted in `scans.model_recommendations`.
 - Finding records include confidence, source attribution, structured evidence fields, drift status, business tags, and exploitability metadata.
 - Scan scope supports host wildcard patterns (`*.example.com`) and out-of-scope path prefixes.
 - Scan creation and scanner execution enforce per-scan scope (target, integration expansion, and wordlist probes).
