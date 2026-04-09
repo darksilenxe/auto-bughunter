@@ -13,6 +13,7 @@ import (
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ type Server struct {
 	allowed       map[string]struct{}
 	repo          Repository
 	agentRegistry *agent.Registry
+	proxyServer   *proxy.Server
 }
 
 type Repository interface {
@@ -32,7 +34,7 @@ type Repository interface {
 	GetJob(ctx context.Context, id string) (*model.ScanJob, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -59,6 +61,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts [
 		allowed:       allowed,
 		repo:          repo,
 		agentRegistry: reg,
+		proxyServer:   proxy.NewServer(proxyStore),
 	}
 }
 
@@ -67,6 +70,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
 	mux.HandleFunc("/api/scan/", s.handleGetScan)
+	// Proxy management endpoints.
+	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
+	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
+	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	return withCORS(mux)
 }
 
@@ -216,4 +223,77 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleProxyRequests handles GET (list all) and DELETE (clear all) on /api/proxy/requests.
+func (s *Server) handleProxyRequests(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		reqs, err := s.proxyServer.Store().ListProxyRequests(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list proxy requests"})
+			return
+		}
+		if reqs == nil {
+			reqs = []*model.ProxyRequest{}
+		}
+		writeJSON(w, http.StatusOK, reqs)
+
+	case http.MethodDelete:
+		if err := s.proxyServer.Store().ClearProxyRequests(r.Context()); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to clear proxy requests"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// handleGetProxyRequest handles GET /api/proxy/requests/{id}.
+func (s *Server) handleGetProxyRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/proxy/requests/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing request id"})
+		return
+	}
+	pr, err := s.proxyServer.Store().GetProxyRequest(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "proxy request not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, pr)
+}
+
+// handleProxyReplay handles POST /api/proxy/replay.
+// Body: { "requestId": "...", "overrideHeaders": {"X-Custom":"val"}, "overrideBody": "..." }
+// Sends the original captured request to its destination, applying any overrides,
+// and returns the new captured request+response pair.
+func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req model.ProxyReplayRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.RequestID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requestId is required"})
+		return
+	}
+
+	replayed, err := s.proxyServer.Replay(r.Context(), req.RequestID, req.OverrideHeaders, req.OverrideBody)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, replayed)
 }

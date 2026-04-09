@@ -10,6 +10,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/nikto"
+	"auto-bughunter/backend/internal/sqlmap"
 	"auto-bughunter/backend/internal/wpscan"
 )
 
@@ -29,6 +30,7 @@ type integrationState struct {
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
+//	Phase 6c — SQL inject: SQLMap (native Go; error-based, boolean-blind, time-based blind)
 //	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
@@ -110,6 +112,23 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			Recommendation: "Review the Nikto findings below for web application security issues.",
 		})
 		result := nikto.Scan(ctx, input.Target, input.AuthProfile)
+		findings = append(findings, result.Findings...)
+	}
+
+	// Phase 6c — SQL injection scanning (SQLMap).
+	if input.Options.UseSQLMapIntegration {
+		findings = append(findings, s.runSQLMap(ctx, input.Target, input.AuthProfile)...)
+	} else if s.cfg.EnableSQLMap {
+		findings = append(findings, model.Finding{
+			ID:             "sqlmap-auto-triggered",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "SQLMap auto-triggered",
+			Description:    "The native Go SQLMap scanner ran without an explicit per-scan request because ENABLE_SQLMAP_INTEGRATION is true in the server configuration.",
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Review the SQLMap findings below for SQL injection vulnerabilities.",
+		})
+		result := sqlmap.Scan(ctx, input.Target, input.AuthProfile)
 		findings = append(findings, result.Findings...)
 	}
 
@@ -879,5 +898,23 @@ func (s *Service) runNikto(ctx context.Context, target string, authProfile model
 	}
 
 	result := nikto.Scan(ctx, target, authProfile)
+	return result.Findings
+}
+
+// runSQLMap executes the native Go SQLMap SQL injection scanner against target.
+func (s *Service) runSQLMap(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+	if !s.cfg.EnableSQLMap {
+		return []model.Finding{{
+			ID:             "sqlmap-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "SQLMap integration requested but disabled",
+			Description:    "The job requested SQLMap but ENABLE_SQLMAP_INTEGRATION is false.",
+			Evidence:       "ENABLE_SQLMAP_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+
+	result := sqlmap.Scan(ctx, target, authProfile)
 	return result.Findings
 }

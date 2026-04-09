@@ -55,6 +55,7 @@ type ScanOptions struct {
 	UseAsnmapIntegration      bool `json:"useAsnmapIntegration,omitempty"`
 	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
 	UseNiktoIntegration       bool `json:"useNiktoIntegration,omitempty"`
+	UseSQLMapIntegration      bool `json:"useSqlMapIntegration,omitempty"`
 }
 
 type ScanJob struct {
@@ -90,4 +91,28 @@ func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
 	}
 
 	return summary
+}
+
+// ProxyRequest represents a single HTTP request/response pair captured by the
+// intercepting proxy. Request and response headers are stored as flat maps.
+type ProxyRequest struct {
+	ID              string            `json:"id"`
+	CapturedAt      time.Time         `json:"capturedAt"`
+	Method          string            `json:"method"`
+	URL             string            `json:"url"`
+	RequestHeaders  map[string]string `json:"requestHeaders"`
+	RequestBody     string            `json:"requestBody"`
+	ResponseStatus  int               `json:"responseStatus"`
+	ResponseHeaders map[string]string `json:"responseHeaders"`
+	ResponseBody    string            `json:"responseBody"`
+	Notes           string            `json:"notes,omitempty"`
+}
+
+// ProxyReplayRequest is the payload for the POST /api/proxy/replay endpoint.
+// OverrideHeaders replaces/adds headers on top of the original request headers.
+// OverrideBody, when non-empty, replaces the original request body entirely.
+type ProxyReplayRequest struct {
+	RequestID       string            `json:"requestId"`
+	OverrideHeaders map[string]string `json:"overrideHeaders,omitempty"`
+	OverrideBody    string            `json:"overrideBody,omitempty"`
 }

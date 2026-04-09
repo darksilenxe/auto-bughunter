@@ -172,5 +172,120 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scans table: %w", err)
 	}
+
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS proxy_requests (
+			id TEXT PRIMARY KEY,
+			captured_at TIMESTAMPTZ NOT NULL,
+			method TEXT NOT NULL,
+			url TEXT NOT NULL,
+			request_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+			request_body TEXT NOT NULL DEFAULT '',
+			response_status INTEGER NOT NULL DEFAULT 0,
+			response_headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+			response_body TEXT NOT NULL DEFAULT '',
+			notes TEXT NOT NULL DEFAULT ''
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate proxy_requests table: %w", err)
+	}
 	return nil
+}
+
+// SaveProxyRequest persists a new captured proxy request/response pair.
+func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest) error {
+	reqHeadersJSON, err := json.Marshal(req.RequestHeaders)
+	if err != nil {
+		return err
+	}
+	respHeadersJSON, err := json.Marshal(req.ResponseHeaders)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.ExecContext(ctx, `
+		INSERT INTO proxy_requests
+			(id, captured_at, method, url, request_headers, request_body, response_status, response_headers, response_body, notes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+	`, req.ID, req.CapturedAt, req.Method, req.URL,
+		reqHeadersJSON, req.RequestBody,
+		req.ResponseStatus,
+		respHeadersJSON, req.ResponseBody, req.Notes)
+	if err != nil {
+		return fmt.Errorf("insert proxy_request: %w", err)
+	}
+	return nil
+}
+
+// ListProxyRequests returns all captured proxy requests ordered by capture time descending.
+func (p *Postgres) ListProxyRequests(ctx context.Context) ([]*model.ProxyRequest, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, captured_at, method, url, request_headers, request_body,
+		       response_status, response_headers, response_body, notes
+		FROM proxy_requests
+		ORDER BY captured_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list proxy_requests: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*model.ProxyRequest
+	for rows.Next() {
+		pr, err := scanProxyRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pr)
+	}
+	return out, rows.Err()
+}
+
+// GetProxyRequest returns a single proxy request by ID.
+func (p *Postgres) GetProxyRequest(ctx context.Context, id string) (*model.ProxyRequest, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, captured_at, method, url, request_headers, request_body,
+		       response_status, response_headers, response_body, notes
+		FROM proxy_requests
+		WHERE id = $1
+	`, id)
+	pr, err := scanProxyRequest(row)
+	if err != nil {
+		return nil, fmt.Errorf("get proxy_request %s: %w", id, err)
+	}
+	return pr, nil
+}
+
+// ClearProxyRequests deletes all captured proxy requests.
+func (p *Postgres) ClearProxyRequests(ctx context.Context) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM proxy_requests`)
+	if err != nil {
+		return fmt.Errorf("clear proxy_requests: %w", err)
+	}
+	return nil
+}
+
+// scanner is a minimal interface for sql.Row and sql.Rows scan.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProxyRequest(s scanner) (*model.ProxyRequest, error) {
+	var pr model.ProxyRequest
+	var reqHeadersRaw, respHeadersRaw []byte
+	if err := s.Scan(
+		&pr.ID, &pr.CapturedAt, &pr.Method, &pr.URL,
+		&reqHeadersRaw, &pr.RequestBody,
+		&pr.ResponseStatus,
+		&respHeadersRaw, &pr.ResponseBody, &pr.Notes,
+	); err != nil {
+		return nil, err
+	}
+	if len(reqHeadersRaw) > 0 {
+		_ = json.Unmarshal(reqHeadersRaw, &pr.RequestHeaders)
+	}
+	if len(respHeadersRaw) > 0 {
+		_ = json.Unmarshal(respHeadersRaw, &pr.ResponseHeaders)
+	}
+	return &pr, nil
 }

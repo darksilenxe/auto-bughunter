@@ -11,6 +11,7 @@ import (
 
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
+	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/storage"
 	"auto-bughunter/backend/internal/wordlist"
@@ -18,6 +19,7 @@ import (
 
 func main() {
 	port := getenv("PORT", "8080")
+	proxyPort := getenv("PROXY_PORT", "8081")
 	allowed := splitCSV(os.Getenv("ALLOWED_TARGETS"))
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
 
@@ -46,6 +48,7 @@ func main() {
 		EnableAsnmap:       getbool("ENABLE_ASNMAP_INTEGRATION", false),
 		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
 		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
+		EnableSQLMap:       getbool("ENABLE_SQLMAP_INTEGRATION", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
 		SubfinderBinary:    getenv("SUBFINDER_BINARY", "subfinder"),
@@ -64,12 +67,28 @@ func main() {
 		os.Getenv("AI_MODEL"),
 	)
 
-	server := api.NewServer(scanService, aiClient, allowed, repo)
+	server := api.NewServer(scanService, aiClient, allowed, repo, repo)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,
 		Handler:           server.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Start the intercepting proxy listener if enabled.
+	if getbool("ENABLE_PROXY", false) {
+		proxyHandler := proxy.NewServer(repo)
+		proxyHttpServer := &http.Server{
+			Addr:              ":" + proxyPort,
+			Handler:           proxyHandler,
+			ReadHeaderTimeout: 30 * time.Second,
+		}
+		go func() {
+			log.Printf("intercepting proxy listening on :%s — configure your browser/tool to use localhost:%s as HTTP proxy", proxyPort, proxyPort)
+			if err := proxyHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("proxy server error: %v", err)
+			}
+		}()
 	}
 
 	log.Printf("backend listening on :%s", port)

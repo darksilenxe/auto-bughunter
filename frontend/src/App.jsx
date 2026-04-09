@@ -21,10 +21,21 @@ export default function App() {
   const [useAsnmapIntegration, setUseAsnmapIntegration] = useState(false);
   const [useWpScanIntegration, setUseWpScanIntegration] = useState(false);
   const [useNiktoIntegration, setUseNiktoIntegration] = useState(false);
+  const [useSqlMapIntegration, setUseSqlMapIntegration] = useState(false);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Proxy panel state
+  const [proxyRequests, setProxyRequests] = useState([]);
+  const [proxyLoading, setProxyLoading] = useState(false);
+  const [proxyError, setProxyError] = useState("");
+  const [selectedProxyReq, setSelectedProxyReq] = useState(null);
+  const [replayHeaders, setReplayHeaders] = useState("{}");
+  const [replayBody, setReplayBody] = useState("");
+  const [replayResult, setReplayResult] = useState(null);
+  const [replayLoading, setReplayLoading] = useState(false);
 
   const severityCounts = useMemo(() => {
     const counts = { high: 0, medium: 0, low: 0, info: 0 };
@@ -34,6 +45,58 @@ export default function App() {
     }
     return counts;
   }, [job]);
+
+  async function fetchProxyRequests() {
+    setProxyLoading(true);
+    setProxyError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/proxy/requests`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to load proxy requests");
+      setProxyRequests(data || []);
+    } catch (err) {
+      setProxyError(err.message);
+    } finally {
+      setProxyLoading(false);
+    }
+  }
+
+  async function clearProxyRequests() {
+    try {
+      await fetch(`${API_BASE}/api/proxy/requests`, { method: "DELETE" });
+      setProxyRequests([]);
+      setSelectedProxyReq(null);
+      setReplayResult(null);
+    } catch (err) {
+      setProxyError(err.message);
+    }
+  }
+
+  async function replayRequest() {
+    if (!selectedProxyReq) return;
+    setReplayLoading(true);
+    setReplayResult(null);
+    try {
+      let overrideHeaders = {};
+      try { overrideHeaders = JSON.parse(replayHeaders); } catch (_) {}
+      const res = await fetch(`${API_BASE}/api/proxy/replay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: selectedProxyReq.id,
+          overrideHeaders,
+          overrideBody: replayBody,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Replay failed");
+      setReplayResult(data);
+    } catch (err) {
+      setProxyError(err.message);
+    } finally {
+      setReplayLoading(false);
+    }
+  }
 
   async function createScan(e) {
     e.preventDefault();
@@ -71,6 +134,7 @@ export default function App() {
             useAsnmapIntegration,
             useWpScanIntegration,
             useNiktoIntegration,
+            useSqlMapIntegration,
           },
         }),
       });
@@ -291,6 +355,15 @@ export default function App() {
             Run Nikto (native Go web app pen-test — server fingerprinting, dangerous files, HTTP methods, API docs)
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useSqlMapIntegration}
+              onChange={(e) => setUseSqlMapIntegration(e.target.checked)}
+            />
+            Run SQLMap (native Go SQL injection — error-based, boolean-blind &amp; time-based blind; GET/POST/cookies/headers)
+          </label>
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -320,6 +393,7 @@ export default function App() {
               ["asnmap", job.options?.useAsnmapIntegration],
               ["wpscan", job.options?.useWpScanIntegration],
               ["nikto", job.options?.useNiktoIntegration],
+              ["sqlmap", job.options?.useSqlMapIntegration],
             ]
               .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
               .join(", ")}
@@ -357,6 +431,105 @@ export default function App() {
           {job.error && <p className="error">{job.error}</p>}
         </section>
       )}
+
+      <section className="card">
+        <h2>🕵️ Intercepting Proxy</h2>
+        <p className="meta">
+          Configure your browser or tool to use the backend as an HTTP proxy (port 8081 by default).
+          Requests flow through, are captured here, and can be replayed with modified headers or body.
+        </p>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+          <button onClick={fetchProxyRequests} disabled={proxyLoading}>
+            {proxyLoading ? "Loading…" : "↻ Refresh Captured Requests"}
+          </button>
+          <button onClick={clearProxyRequests} style={{ background: "#c0392b" }}>
+            🗑 Clear All
+          </button>
+        </div>
+        {proxyError && <p className="error">{proxyError}</p>}
+        {proxyRequests.length === 0 && !proxyLoading && (
+          <p className="meta">No captured requests yet. Start the proxy and browse your target.</p>
+        )}
+        {proxyRequests.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #444" }}>
+                <th style={{ padding: "4px 8px" }}>Method</th>
+                <th style={{ padding: "4px 8px" }}>URL</th>
+                <th style={{ padding: "4px 8px" }}>Status</th>
+                <th style={{ padding: "4px 8px" }}>Captured</th>
+                <th style={{ padding: "4px 8px" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proxyRequests.map((pr) => (
+                <tr key={pr.id} style={{ borderBottom: "1px solid #2a2a2a", background: selectedProxyReq?.id === pr.id ? "#1e3a2f" : "transparent" }}>
+                  <td style={{ padding: "4px 8px" }}><code>{pr.method}</code></td>
+                  <td style={{ padding: "4px 8px", maxWidth: "360px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span title={pr.url}>{pr.url}</span>
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>{pr.responseStatus}</td>
+                  <td style={{ padding: "4px 8px" }}>{new Date(pr.capturedAt).toLocaleTimeString()}</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <button style={{ padding: "2px 8px", fontSize: "0.8rem" }} onClick={() => {
+                      setSelectedProxyReq(pr);
+                      setReplayHeaders("{}");
+                      setReplayBody(pr.requestBody || "");
+                      setReplayResult(null);
+                    }}>Select</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {selectedProxyReq && (
+          <div style={{ marginTop: "1rem", background: "#111", padding: "1rem", borderRadius: "6px" }}>
+            <h3>Repeater — {selectedProxyReq.method} {selectedProxyReq.url}</h3>
+            <p className="meta">Original response: HTTP {selectedProxyReq.responseStatus}</p>
+            <details style={{ marginBottom: "0.5rem" }}>
+              <summary style={{ cursor: "pointer", color: "#aaa" }}>Original Request Headers</summary>
+              <pre style={{ fontSize: "0.75rem", overflowX: "auto" }}>{JSON.stringify(selectedProxyReq.requestHeaders, null, 2)}</pre>
+            </details>
+            <details style={{ marginBottom: "0.5rem" }}>
+              <summary style={{ cursor: "pointer", color: "#aaa" }}>Original Response Headers</summary>
+              <pre style={{ fontSize: "0.75rem", overflowX: "auto" }}>{JSON.stringify(selectedProxyReq.responseHeaders, null, 2)}</pre>
+            </details>
+            <label>Override Headers (JSON):</label>
+            <textarea
+              rows={3}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: "0.8rem", marginBottom: "0.5rem", background: "#1a1a1a", color: "#eee", border: "1px solid #444", borderRadius: "4px", padding: "6px" }}
+              value={replayHeaders}
+              onChange={(e) => setReplayHeaders(e.target.value)}
+            />
+            <label>Override Body (leave blank to keep original):</label>
+            <textarea
+              rows={4}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: "0.8rem", marginBottom: "0.5rem", background: "#1a1a1a", color: "#eee", border: "1px solid #444", borderRadius: "4px", padding: "6px" }}
+              value={replayBody}
+              onChange={(e) => setReplayBody(e.target.value)}
+            />
+            <button onClick={replayRequest} disabled={replayLoading}>
+              {replayLoading ? "Sending…" : "▶ Send Replay"}
+            </button>
+
+            {replayResult && (
+              <div style={{ marginTop: "0.75rem" }}>
+                <p className="meta">Replay response: HTTP {replayResult.responseStatus}</p>
+                <details>
+                  <summary style={{ cursor: "pointer", color: "#aaa" }}>Response Headers</summary>
+                  <pre style={{ fontSize: "0.75rem", overflowX: "auto" }}>{JSON.stringify(replayResult.responseHeaders, null, 2)}</pre>
+                </details>
+                <details>
+                  <summary style={{ cursor: "pointer", color: "#aaa" }}>Response Body</summary>
+                  <pre style={{ fontSize: "0.75rem", overflowX: "auto", maxHeight: "300px" }}>{replayResult.responseBody}</pre>
+                </details>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

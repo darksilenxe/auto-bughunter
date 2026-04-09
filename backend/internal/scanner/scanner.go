@@ -32,6 +32,7 @@ type Config struct {
 	EnableAsnmap      bool
 	EnableWPScan      bool
 	EnableNikto       bool
+	EnableSQLMap      bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
 	SubfinderBinary   string
