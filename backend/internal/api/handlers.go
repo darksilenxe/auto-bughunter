@@ -360,5 +360,5 @@ func buildDeltaFinding(previousFindings, currentFindings []model.Finding) []mode
 func fingerprintFinding(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title)) + "|" +
-		strings.TrimSpace(f.Evidence)
+		strings.ToLower(strings.TrimSpace(f.Evidence))
 }
