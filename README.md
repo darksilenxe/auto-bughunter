@@ -14,6 +14,7 @@ Do not scan third-party systems without written permission.
 - Headless browser checks: `chromedp` + Chromium
 - Containerization: Docker + Docker Compose
 - AI summary: OpenAI-compatible Chat Completions API
+- Optional local AI containers: Ollama + Open WebUI (Compose profile)
 
 ## Features
 
@@ -64,6 +65,20 @@ cp .env.example .env
 
 ```bash
 docker compose up --build
+```
+
+Optional local AI runtime + UI:
+
+```bash
+docker compose --profile ai up --build
+```
+
+Then set in `.env`:
+
+```bash
+AI_API_BASE=http://ollama:11434/v1
+AI_MODEL=llama3.1:8b
+AI_API_KEY=
 ```
 
 4. Open:
@@ -119,6 +134,7 @@ Returns a sanitized, pseudonymized engagement dataset built from completed scans
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
+- For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
 - ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
