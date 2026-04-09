@@ -95,6 +95,7 @@ Body:
 ```json
 {
   "target": "https://example.com",
+  "idempotencyKey": "scan-example-2026-04-09T14:00",
   "authProfile": {
     "headers": {"Authorization": "Bearer ..."},
     "cookies": {"sessionid": "..."},
@@ -133,6 +134,8 @@ Body:
     "backoffMillis": 500,
     "requestDelayMillis": 100,
     "maxPerTargetConcurrency": 1,
+    "targetRateLimitPerMinute": 6,
+    "globalScanBudget": 10,
     "deepScanOnHighSignal": true,
     "crawlMaxPages": 8
   },
@@ -170,6 +173,14 @@ Stores bug bounty outcome labels so prioritization can learn from accepted/rejec
 }
 ```
 
+### `POST /api/finding-verification`
+
+Stores manual exploitability verification (`confirmed` / `rejected`) for a finding.
+
+### `POST /api/suppressions`
+
+Creates suppression/baseline rules (optional target scope, optional expiry) to hide accepted noise.
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
@@ -190,12 +201,20 @@ Stores bug bounty outcome labels so prioritization can learn from accepted/rejec
 - Disallowed test types can be enforced at request time with `disallowedTestTypes`.
 - Role-based authenticated coverage can be expanded with `authProfiles` (multiple role sessions).
 - Scanner request pacing/retry controls are available via `options.maxRetries`, `options.backoffMillis`, and `options.requestDelayMillis`.
+- Scan creation supports idempotent deduplication via `idempotencyKey` field or `Idempotency-Key` HTTP header.
+- Per-target rate limiting can be enforced with `options.targetRateLimitPerMinute`.
+- Global concurrent scan budgeting can be configured via `GLOBAL_SCAN_BUDGET`.
+- Outbound probe and proxy targets are protected by SSRF safety checks (localhost/private/link-local/metadata IP blocks).
 - Runtime surface expansion now mines in-scope endpoint hints from response/DOM artifacts (including JS/OpenAPI/GraphQL-style markers) to increase attack-surface coverage.
 - Scanner includes safe context-aware parameter probing to surface high-signal reflection/error paths for targeted follow-up testing.
 - Multi-role scan runs now include role-diff findings that highlight role-specific behavior for authorization/IDOR validation.
 - Stateful headless crawling can traverse multiple in-scope pages using `options.crawlMaxPages` (bounded) to improve authenticated coverage stability checks.
 - Per-target concurrency can be constrained via `MAX_CONCURRENT_SCANS_PER_TARGET` (global default) or `options.maxPerTargetConcurrency`.
 - Feedback outcomes submitted to `POST /api/feedback` are used by ML prioritization to favor historically accepted issue patterns.
+- Manual finding verification from `POST /api/finding-verification` is returned on findings as exploitability verification status.
+- Suppression rules from `POST /api/suppressions` support baseline/noise reduction with expiry.
+- Proxy artifacts are redacted by default and retained according to `PROXY_RETENTION_HOURS`.
+- Optional notification hooks can be configured with `SCAN_WEBHOOK_URL` and `SLACK_WEBHOOK_URL` for high-confidence drift findings.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.

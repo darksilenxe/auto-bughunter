@@ -16,6 +16,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/nikto"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/sqlmap"
 	"auto-bughunter/backend/internal/wordlist"
@@ -269,7 +270,16 @@ func expandTargetsWithScope(target string, state *integrationState, scanScope mo
 		targets = append(targets, u.Scheme+"://"+host)
 	}
 	filtered := scope.FilterTargets(targets, scanScope)
-	return filtered, len(targets) - len(filtered)
+	safeTargets := make([]string, 0, len(filtered))
+	rejected := 0
+	for _, t := range filtered {
+		if err := safety.ValidateOutboundURL(t); err != nil {
+			rejected++
+			continue
+		}
+		safeTargets = append(safeTargets, t)
+	}
+	return safeTargets, (len(targets) - len(filtered)) + rejected
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {

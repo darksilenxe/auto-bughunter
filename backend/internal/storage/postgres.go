@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +18,8 @@ import (
 )
 
 type Postgres struct {
-	db *sql.DB
+	db             *sql.DB
+	proxyRetention time.Duration
 }
 
 func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
@@ -31,7 +35,7 @@ func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	repo := &Postgres{db: db}
+	repo := &Postgres{db: db, proxyRetention: proxyRetentionFromEnv()}
 	if err := repo.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -44,6 +48,18 @@ func (p *Postgres) Close() error {
 		return nil
 	}
 	return p.db.Close()
+}
+
+func proxyRetentionFromEnv() time.Duration {
+	v := strings.TrimSpace(os.Getenv("PROXY_RETENTION_HOURS"))
+	if v == "" {
+		return 7 * 24 * time.Hour
+	}
+	hours, err := strconv.Atoi(v)
+	if err != nil || hours <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return time.Duration(hours) * time.Hour
 }
 
 func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
@@ -383,6 +399,59 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate report_feedback table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS finding_verifications (
+			id TEXT PRIMARY KEY,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			finding_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			notes TEXT NOT NULL DEFAULT '',
+			verified_by TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate finding_verifications table: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS suppression_rules (
+			id TEXT PRIMARY KEY,
+			target TEXT NOT NULL DEFAULT '',
+			finding_id TEXT NOT NULL DEFAULT '',
+			category TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at TIMESTAMPTZ NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate suppression_rules table: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_states (
+			target TEXT PRIMARY KEY,
+			last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			session_instability INTEGER NOT NULL DEFAULT 0,
+			known_runtime_endpoints JSONB NOT NULL DEFAULT '[]'::jsonb
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_states table: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_idempotency (
+			idempotency_key TEXT NOT NULL,
+			target TEXT NOT NULL,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (idempotency_key, target)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_idempotency table: %w", err)
+	}
 	return nil
 }
 
@@ -657,11 +726,25 @@ func (p *Postgres) ListAuditEvents(ctx context.Context, scanID string) ([]model.
 
 // SaveProxyRequest persists a new captured proxy request/response pair.
 func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest) error {
-	reqHeadersJSON, err := json.Marshal(req.RequestHeaders)
+	if req == nil {
+		return errors.New("proxy request is required")
+	}
+	sanitized := *req
+	sanitized.RequestHeaders = redactHeaders(req.RequestHeaders)
+	sanitized.ResponseHeaders = redactHeaders(req.ResponseHeaders)
+	sanitized.RequestBody = redactText(req.RequestBody)
+	sanitized.ResponseBody = redactText(req.ResponseBody)
+
+	if p.proxyRetention > 0 {
+		cutoff := time.Now().UTC().Add(-p.proxyRetention)
+		_, _ = p.db.ExecContext(ctx, `DELETE FROM proxy_requests WHERE captured_at < $1`, cutoff)
+	}
+
+	reqHeadersJSON, err := json.Marshal(sanitized.RequestHeaders)
 	if err != nil {
 		return err
 	}
-	respHeadersJSON, err := json.Marshal(req.ResponseHeaders)
+	respHeadersJSON, err := json.Marshal(sanitized.ResponseHeaders)
 	if err != nil {
 		return err
 	}
@@ -669,10 +752,10 @@ func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest
 		INSERT INTO proxy_requests
 			(id, captured_at, method, url, request_headers, request_body, response_status, response_headers, response_body, notes)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, req.ID, req.CapturedAt, req.Method, req.URL,
-		reqHeadersJSON, req.RequestBody,
-		req.ResponseStatus,
-		respHeadersJSON, req.ResponseBody, req.Notes)
+	`, sanitized.ID, sanitized.CapturedAt, sanitized.Method, sanitized.URL,
+		reqHeadersJSON, sanitized.RequestBody,
+		sanitized.ResponseStatus,
+		respHeadersJSON, sanitized.ResponseBody, sanitized.Notes)
 	if err != nil {
 		return fmt.Errorf("insert proxy_request: %w", err)
 	}
@@ -804,4 +887,163 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+func (p *Postgres) SaveFindingVerification(ctx context.Context, verification model.FindingVerification) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO finding_verifications (id, scan_id, finding_id, status, notes, verified_by, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+	`, verification.ID, verification.ScanID, verification.FindingID, verification.Status, verification.Notes, verification.VerifiedBy, verification.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert finding verification: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID string) (map[string]model.FindingVerification, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (finding_id) id, scan_id, finding_id, status, notes, verified_by, created_at
+		FROM finding_verifications
+		WHERE scan_id = $1
+		ORDER BY finding_id, created_at DESC
+	`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("list finding verifications: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]model.FindingVerification{}
+	for rows.Next() {
+		var v model.FindingVerification
+		if err := rows.Scan(&v.ID, &v.ScanID, &v.FindingID, &v.Status, &v.Notes, &v.VerifiedBy, &v.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan finding verification row: %w", err)
+		}
+		out[v.FindingID] = v
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) SaveSuppressionRule(ctx context.Context, rule model.SuppressionRule) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO suppression_rules (id, target, finding_id, category, title, reason, created_by, created_at, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	`, rule.ID, rule.Target, rule.FindingID, rule.Category, rule.Title, rule.Reason, rule.CreatedBy, rule.CreatedAt, rule.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("insert suppression rule: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListActiveSuppressionRules(ctx context.Context, target string, now time.Time) ([]model.SuppressionRule, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, target, finding_id, category, title, reason, created_by, created_at, expires_at
+		FROM suppression_rules
+		WHERE (target = '' OR target = $1) AND (expires_at IS NULL OR expires_at > $2)
+		ORDER BY created_at DESC
+	`, target, now)
+	if err != nil {
+		return nil, fmt.Errorf("list suppression rules: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.SuppressionRule, 0)
+	for rows.Next() {
+		var r model.SuppressionRule
+		if err := rows.Scan(&r.ID, &r.Target, &r.FindingID, &r.Category, &r.Title, &r.Reason, &r.CreatedBy, &r.CreatedAt, &r.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan suppression rule row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) GetScanState(ctx context.Context, target string) (*model.PersistentScanState, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT target, last_updated_at, session_instability, known_runtime_endpoints
+		FROM scan_states
+		WHERE target = $1
+	`, target)
+	var state model.PersistentScanState
+	var endpointsRaw []byte
+	if err := row.Scan(&state.Target, &state.LastUpdatedAt, &state.SessionInstability, &endpointsRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get scan state: %w", err)
+	}
+	if len(endpointsRaw) > 0 {
+		_ = json.Unmarshal(endpointsRaw, &state.KnownRuntimeEndpoints)
+	}
+	return &state, nil
+}
+
+func (p *Postgres) UpsertScanState(ctx context.Context, state model.PersistentScanState) error {
+	endpointsJSON, err := json.Marshal(state.KnownRuntimeEndpoints)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.ExecContext(ctx, `
+		INSERT INTO scan_states (target, last_updated_at, session_instability, known_runtime_endpoints)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (target) DO UPDATE
+		SET last_updated_at = EXCLUDED.last_updated_at,
+			session_instability = EXCLUDED.session_instability,
+			known_runtime_endpoints = EXCLUDED.known_runtime_endpoints
+	`, state.Target, state.LastUpdatedAt, state.SessionInstability, endpointsJSON)
+	if err != nil {
+		return fmt.Errorf("upsert scan state: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) SaveIdempotencyRecord(ctx context.Context, key, target, scanID string, createdAt time.Time) error {
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO scan_idempotency (idempotency_key, target, scan_id, created_at)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (idempotency_key, target)
+		DO UPDATE SET scan_id = EXCLUDED.scan_id, created_at = EXCLUDED.created_at
+	`, key, target, scanID, createdAt)
+	if err != nil {
+		return fmt.Errorf("insert idempotency: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) GetRecentJobByIdempotencyKey(ctx context.Context, key, target string, since time.Time) (*model.ScanJob, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT s.id
+		FROM scan_idempotency si
+		INNER JOIN scans s ON s.id = si.scan_id
+		WHERE si.idempotency_key = $1 AND si.target = $2 AND si.created_at >= $3
+		LIMIT 1
+	`, key, target, since)
+	var id string
+	if err := row.Scan(&id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get idempotency job: %w", err)
+	}
+	return p.GetJob(ctx, id)
+}
+
+func redactHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return headers
+	}
+	out := make(map[string]string, len(headers))
+	for k, v := range headers {
+		lower := strings.ToLower(strings.TrimSpace(k))
+		if lower == "authorization" || lower == "cookie" || lower == "set-cookie" || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+			out[k] = "[redacted]"
+			continue
+		}
+		out[k] = redactText(v)
+	}
+	return out
+}
+
+var sensitiveKV = regexp.MustCompile(`(?i)(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s&;]+)`)
+
+func redactText(value string) string {
+	value = sensitiveKV.ReplaceAllString(value, "$1=[redacted]")
+	return strings.ReplaceAll(value, "Bearer ", "Bearer [redacted]")
 }

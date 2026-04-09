@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 
 	"github.com/google/uuid"
 )
@@ -91,6 +92,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Scheme != "http" && r.URL.Scheme != "https" {
 		http.Error(w, "unsupported scheme", http.StatusBadRequest)
+		return
+	}
+	if err := safety.ValidateOutboundURL(r.URL.String()); err != nil {
+		http.Error(w, "blocked by outbound safety policy", http.StatusForbidden)
 		return
 	}
 
@@ -171,6 +176,10 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
+	if err := safety.ValidateHostname(u.Hostname()); err != nil {
+		http.Error(w, "blocked by outbound safety policy", http.StatusForbidden)
+		return
+	}
 
 	destConn, err := net.DialTimeout("tcp", host, 10*time.Second)
 	if err != nil {
@@ -201,11 +210,11 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		RequestHeaders: map[string]string{
 			"Host": host,
 		},
-		RequestBody:    "",
-		ResponseStatus: http.StatusOK,
+		RequestBody:     "",
+		ResponseStatus:  http.StatusOK,
 		ResponseHeaders: map[string]string{},
-		ResponseBody:   "(HTTPS tunnel — body not captured without MitM CA certificate)",
-		Notes:          "HTTPS CONNECT tunnel established. To inspect body, configure a CA certificate for TLS interception.",
+		ResponseBody:    "(HTTPS tunnel — body not captured without MitM CA certificate)",
+		Notes:           "HTTPS CONNECT tunnel established. To inspect body, configure a CA certificate for TLS interception.",
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -230,16 +239,16 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 // captureError stores a failed request with the error as the response body.
 func (s *Server) captureError(r *http.Request, body []byte, err error) {
 	captured := &model.ProxyRequest{
-		ID:             uuid.NewString(),
-		CapturedAt:     time.Now().UTC(),
-		Method:         r.Method,
-		URL:            r.URL.String(),
-		RequestHeaders: flattenHeaders(r.Header),
-		RequestBody:    string(body),
-		ResponseStatus: 0,
+		ID:              uuid.NewString(),
+		CapturedAt:      time.Now().UTC(),
+		Method:          r.Method,
+		URL:             r.URL.String(),
+		RequestHeaders:  flattenHeaders(r.Header),
+		RequestBody:     string(body),
+		ResponseStatus:  0,
 		ResponseHeaders: map[string]string{},
-		ResponseBody:   "proxy error: " + err.Error(),
-		Notes:          "upstream connection failed",
+		ResponseBody:    "proxy error: " + err.Error(),
+		Notes:           "upstream connection failed",
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -262,6 +271,9 @@ func (s *Server) Replay(ctx context.Context, id string, overrideHeaders map[stri
 	}
 	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme %q — only http/https can be replayed", targetURL.Scheme)
+	}
+	if err := safety.ValidateOutboundURL(orig.URL); err != nil {
+		return nil, fmt.Errorf("replay blocked by outbound safety policy")
 	}
 
 	body := orig.RequestBody

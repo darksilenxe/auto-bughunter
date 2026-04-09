@@ -32,19 +32,22 @@ type Exploitability struct {
 	RequiredRole    string   `json:"requiredRole,omitempty"`
 	Prerequisites   []string `json:"prerequisites,omitempty"`
 	AttackPathHints []string `json:"attackPathHints,omitempty"`
+	VerifiedStatus  string   `json:"verifiedStatus,omitempty"`
+	VerifiedNotes   string   `json:"verifiedNotes,omitempty"`
 }
 
 type ScanRequest struct {
-	Target               string                `json:"target"`
-	AuthProfile          ScanAuthProfile       `json:"authProfile,omitempty"`
-	AuthProfiles         []RoleAuthProfile     `json:"authProfiles,omitempty"`
-	Options              ScanOptions           `json:"options,omitempty"`
-	Scope                ScanScope             `json:"scope,omitempty"`
-	ProgramScopeProfile  ProgramScopeProfile   `json:"programScopeProfile,omitempty"`
-	DisallowedTestTypes  []string              `json:"disallowedTestTypes,omitempty"`
-	EventDrivenRescanOn  []string              `json:"eventDrivenRescanOn,omitempty"`
-	ProgramName          string                `json:"programName,omitempty"`
-	ProgramPolicyVersion string                `json:"programPolicyVersion,omitempty"`
+	Target               string              `json:"target"`
+	IdempotencyKey       string              `json:"idempotencyKey,omitempty"`
+	AuthProfile          ScanAuthProfile     `json:"authProfile,omitempty"`
+	AuthProfiles         []RoleAuthProfile   `json:"authProfiles,omitempty"`
+	Options              ScanOptions         `json:"options,omitempty"`
+	Scope                ScanScope           `json:"scope,omitempty"`
+	ProgramScopeProfile  ProgramScopeProfile `json:"programScopeProfile,omitempty"`
+	DisallowedTestTypes  []string            `json:"disallowedTestTypes,omitempty"`
+	EventDrivenRescanOn  []string            `json:"eventDrivenRescanOn,omitempty"`
+	ProgramName          string              `json:"programName,omitempty"`
+	ProgramPolicyVersion string              `json:"programPolicyVersion,omitempty"`
 }
 
 type ScanAuthProfile struct {
@@ -77,32 +80,35 @@ type ScanAuthProfileSummary struct {
 }
 
 type ScanOptions struct {
-	UseNucleiIntegration      bool `json:"useNucleiIntegration,omitempty"`
-	UseZAPBaselineIntegration bool `json:"useZapBaselineIntegration,omitempty"`
-	UseSubfinderIntegration   bool `json:"useSubfinderIntegration,omitempty"`
-	UseHttpxIntegration       bool `json:"useHttpxIntegration,omitempty"`
-	UseNaabuIntegration       bool `json:"useNaabuIntegration,omitempty"`
-	UseDnsxIntegration        bool `json:"useDnsxIntegration,omitempty"`
-	UseShuffleDNSIntegration  bool `json:"useShuffleDnsIntegration,omitempty"`
-	UseCertTransparency       bool `json:"useCertificateTransparencyIntegration,omitempty"`
-	UseAmassIntegration       bool `json:"useAmassIntegration,omitempty"`
-	UseKatanaIntegration      bool `json:"useKatanaIntegration,omitempty"`
-	UseTlsxIntegration        bool `json:"useTlsxIntegration,omitempty"`
-	UseCdncheckIntegration    bool `json:"useCdncheckIntegration,omitempty"`
-	UseAsnmapIntegration      bool `json:"useAsnmapIntegration,omitempty"`
-	UseWPScanIntegration      bool `json:"useWpScanIntegration,omitempty"`
-	UseNiktoIntegration       bool `json:"useNiktoIntegration,omitempty"`
-	UseSQLMapIntegration      bool `json:"useSqlMapIntegration,omitempty"`
-	UseFFUFIntegration        bool `json:"useFfufIntegration,omitempty"`
-	UseGobusterIntegration    bool `json:"useGobusterIntegration,omitempty"`
-	RescanIntervalMinutes     int  `json:"rescanIntervalMinutes,omitempty"`
-	Priority                  int  `json:"priority,omitempty"`
-	MaxRetries                int  `json:"maxRetries,omitempty"`
-	BackoffMillis             int  `json:"backoffMillis,omitempty"`
-	RequestDelayMillis        int  `json:"requestDelayMillis,omitempty"`
-	MaxPerTargetConcurrency   int  `json:"maxPerTargetConcurrency,omitempty"`
-	DeepScanOnHighSignal      bool `json:"deepScanOnHighSignal,omitempty"`
-	CrawlMaxPages             int  `json:"crawlMaxPages,omitempty"`
+	UseNucleiIntegration      bool     `json:"useNucleiIntegration,omitempty"`
+	UseZAPBaselineIntegration bool     `json:"useZapBaselineIntegration,omitempty"`
+	UseSubfinderIntegration   bool     `json:"useSubfinderIntegration,omitempty"`
+	UseHttpxIntegration       bool     `json:"useHttpxIntegration,omitempty"`
+	UseNaabuIntegration       bool     `json:"useNaabuIntegration,omitempty"`
+	UseDnsxIntegration        bool     `json:"useDnsxIntegration,omitempty"`
+	UseShuffleDNSIntegration  bool     `json:"useShuffleDnsIntegration,omitempty"`
+	UseCertTransparency       bool     `json:"useCertificateTransparencyIntegration,omitempty"`
+	UseAmassIntegration       bool     `json:"useAmassIntegration,omitempty"`
+	UseKatanaIntegration      bool     `json:"useKatanaIntegration,omitempty"`
+	UseTlsxIntegration        bool     `json:"useTlsxIntegration,omitempty"`
+	UseCdncheckIntegration    bool     `json:"useCdncheckIntegration,omitempty"`
+	UseAsnmapIntegration      bool     `json:"useAsnmapIntegration,omitempty"`
+	UseWPScanIntegration      bool     `json:"useWpScanIntegration,omitempty"`
+	UseNiktoIntegration       bool     `json:"useNiktoIntegration,omitempty"`
+	UseSQLMapIntegration      bool     `json:"useSqlMapIntegration,omitempty"`
+	UseFFUFIntegration        bool     `json:"useFfufIntegration,omitempty"`
+	UseGobusterIntegration    bool     `json:"useGobusterIntegration,omitempty"`
+	RescanIntervalMinutes     int      `json:"rescanIntervalMinutes,omitempty"`
+	Priority                  int      `json:"priority,omitempty"`
+	MaxRetries                int      `json:"maxRetries,omitempty"`
+	BackoffMillis             int      `json:"backoffMillis,omitempty"`
+	RequestDelayMillis        int      `json:"requestDelayMillis,omitempty"`
+	MaxPerTargetConcurrency   int      `json:"maxPerTargetConcurrency,omitempty"`
+	TargetRateLimitPerMinute  int      `json:"targetRateLimitPerMinute,omitempty"`
+	GlobalScanBudget          int      `json:"globalScanBudget,omitempty"`
+	DeepScanOnHighSignal      bool     `json:"deepScanOnHighSignal,omitempty"`
+	CrawlMaxPages             int      `json:"crawlMaxPages,omitempty"`
+	SeedRuntimeEndpoints      []string `json:"seedRuntimeEndpoints,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -150,6 +156,35 @@ type ReportFeedback struct {
 	PayoutUSD   float64   `json:"payoutUsd,omitempty"`
 	Notes       string    `json:"notes,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type FindingVerification struct {
+	ID         string    `json:"id"`
+	ScanID     string    `json:"scanId"`
+	FindingID  string    `json:"findingId"`
+	Status     string    `json:"status"`
+	Notes      string    `json:"notes,omitempty"`
+	VerifiedBy string    `json:"verifiedBy,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type SuppressionRule struct {
+	ID        string     `json:"id"`
+	Target    string     `json:"target,omitempty"`
+	FindingID string     `json:"findingId,omitempty"`
+	Category  string     `json:"category,omitempty"`
+	Title     string     `json:"title,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+	CreatedBy string     `json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+}
+
+type PersistentScanState struct {
+	Target                string    `json:"target"`
+	LastUpdatedAt         time.Time `json:"lastUpdatedAt"`
+	SessionInstability    int       `json:"sessionInstability"`
+	KnownRuntimeEndpoints []string  `json:"knownRuntimeEndpoints,omitempty"`
 }
 
 type ModelRecommendations struct {

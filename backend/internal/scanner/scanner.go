@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
 
@@ -133,6 +134,9 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme")
 	}
+	if err := safety.ValidateOutboundURL(input.Target); err != nil {
+		return nil, fmt.Errorf("target blocked by ssrf policy: %w", err)
+	}
 	if !scope.IsURLInScope(input.Target, input.Scope) {
 		return nil, fmt.Errorf("target is outside configured scan scope")
 	}
@@ -241,6 +245,9 @@ func discoverRuntimeSurface(target, body string, scanScope model.ScanScope) []mo
 
 func runContextualParamProbes(ctx context.Context, target, body string, auth model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, service *Service) []model.Finding {
 	candidates := extractRuntimeEndpoints(target, body, scanScope, 10)
+	if len(options.SeedRuntimeEndpoints) > 0 {
+		candidates = append(candidates, options.SeedRuntimeEndpoints...)
+	}
 	if len(candidates) == 0 {
 		candidates = []string{target}
 	}
@@ -250,9 +257,13 @@ func runContextualParamProbes(ctx context.Context, target, body string, auth mod
 	reflections := make([]string, 0)
 	serverErrors := make([]string, 0)
 
+	maxAttempts := 12
+	if options.GlobalScanBudget > 0 && options.GlobalScanBudget < maxAttempts {
+		maxAttempts = options.GlobalScanBudget
+	}
 	attempts := 0
 	for _, raw := range candidates {
-		if attempts >= 12 {
+		if attempts >= maxAttempts {
 			break
 		}
 		u, err := url.Parse(strings.TrimSpace(raw))
@@ -260,7 +271,7 @@ func runContextualParamProbes(ctx context.Context, target, body string, auth mod
 			continue
 		}
 		for _, p := range params {
-			if attempts >= 12 {
+			if attempts >= maxAttempts {
 				break
 			}
 			probe := *u
@@ -268,6 +279,9 @@ func runContextualParamProbes(ctx context.Context, target, body string, auth mod
 			q.Set(p, marker)
 			probe.RawQuery = q.Encode()
 			if !scope.IsURLInScope(probe.String(), scanScope) {
+				continue
+			}
+			if err := safety.ValidateOutboundURL(probe.String()); err != nil {
 				continue
 			}
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, probe.String(), nil)
@@ -335,6 +349,9 @@ func extractRuntimeEndpoints(target, body string, scanScope model.ScanScope, max
 		}
 		resolved := resolveEndpoint(target, value)
 		if resolved == "" || !scope.IsURLInScope(resolved, scanScope) {
+			return
+		}
+		if err := safety.ValidateOutboundURL(resolved); err != nil {
 			return
 		}
 		seen[resolved] = struct{}{}
@@ -614,8 +631,8 @@ func checkTLS(host string) []model.Finding {
 				Evidence:       notAfter.UTC().Format(time.RFC3339),
 				Recommendation: "Rotate certificate before expiration to avoid outages.",
 				EvidenceFields: map[string]string{
-					"validationType": "safe-observation",
-					"reproStep":      "Inspect leaf certificate NotAfter",
+					"validationType":  "safe-observation",
+					"reproStep":       "Inspect leaf certificate NotAfter",
 					"daysUntilExpiry": strconv.Itoa(int(time.Until(notAfter).Hours() / 24)),
 				},
 			})

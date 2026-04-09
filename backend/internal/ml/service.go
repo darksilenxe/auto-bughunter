@@ -156,6 +156,7 @@ func (s *Service) RecommendFromHistory(ctx context.Context, repo Repository, pro
 		Copilot:             buildCopilotSuggestion(job, dataset.Records),
 		ModelMode:           "historical-deterministic",
 	}
+	recs.ToolSelection = downrankFlakyTools(recs.ToolSelection, job.Findings)
 	if len(dataset.Records) == 0 {
 		recs.ModelMode = "fallback-deterministic"
 	}
@@ -240,6 +241,30 @@ func prioritizeFindings(findings []model.Finding, feedback map[string]float64) [
 		out = out[:10]
 	}
 	return out
+}
+
+func downrankFlakyTools(recs []model.ToolRecommendation, findings []model.Finding) []model.ToolRecommendation {
+	failureRate := 0.0
+	for _, f := range findings {
+		if f.ID != "integration-health-telemetry" || f.EvidenceFields == nil {
+			continue
+		}
+		if raw, ok := f.EvidenceFields["failureRate"]; ok {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > failureRate {
+				failureRate = v
+			}
+		}
+	}
+	if failureRate <= 0 {
+		return recs
+	}
+	penalty := min(0.35, failureRate*0.5)
+	for i := range recs {
+		recs[i].Score = round2(clamp(recs[i].Score-penalty, 0, 1))
+		recs[i].Reason = recs[i].Reason + fmt.Sprintf(" Penalized by %.2f due to flaky integration telemetry.", penalty)
+		recs[i].Confidence = round2(clamp(recs[i].Confidence-penalty/2, 0, 1))
+	}
+	return recs
 }
 
 func (s *Service) feedbackSignals(ctx context.Context, repo Repository) map[string]float64 {

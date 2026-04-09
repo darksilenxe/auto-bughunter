@@ -82,7 +82,16 @@ func main() {
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
 	})
 
-	server := api.NewServer(scanService, aiClient, mlService, allowed, repo, repo, getint("MAX_CONCURRENT_SCANS_PER_TARGET", 1))
+	server := api.NewServer(
+		scanService,
+		aiClient,
+		mlService,
+		allowed,
+		repo,
+		repo,
+		getint("MAX_CONCURRENT_SCANS_PER_TARGET", 1),
+		getint("GLOBAL_SCAN_BUDGET", 5),
+	)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/proxy"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/scope"
 
@@ -37,6 +40,12 @@ type Server struct {
 	maxPerTarget  int
 	semMu         sync.Mutex
 	targetSem     map[string]chan struct{}
+	globalSem     chan struct{}
+	rateMu        sync.Mutex
+	targetLastRun map[string]time.Time
+	webhookURL    string
+	slackWebhook  string
+	notifyMinConf float64
 }
 
 type Repository interface {
@@ -51,9 +60,17 @@ type Repository interface {
 	ListCompletedJobs(ctx context.Context, limit int) ([]*model.ScanJob, error)
 	SaveFeedback(ctx context.Context, feedback model.ReportFeedback) error
 	ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error)
+	SaveFindingVerification(ctx context.Context, verification model.FindingVerification) error
+	GetLatestFindingVerifications(ctx context.Context, scanID string) (map[string]model.FindingVerification, error)
+	SaveSuppressionRule(ctx context.Context, rule model.SuppressionRule) error
+	ListActiveSuppressionRules(ctx context.Context, target string, now time.Time) ([]model.SuppressionRule, error)
+	GetScanState(ctx context.Context, target string) (*model.PersistentScanState, error)
+	UpsertScanState(ctx context.Context, state model.PersistentScanState) error
+	GetRecentJobByIdempotencyKey(ctx context.Context, key, target string, since time.Time) (*model.ScanJob, error)
+	SaveIdempotencyRecord(ctx context.Context, key, target, scanID string, createdAt time.Time) error
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget int) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -74,6 +91,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewAnalysisAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
 
+	if globalBudget <= 0 {
+		globalBudget = 5
+	}
 	return &Server{
 		scanService:   scanService,
 		aiClient:      aiClient,
@@ -84,6 +104,11 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		mlService:     mlService,
 		maxPerTarget:  maxInt(1, maxPerTarget),
 		targetSem:     map[string]chan struct{}{},
+		globalSem:     make(chan struct{}, globalBudget),
+		targetLastRun: map[string]time.Time{},
+		webhookURL:    strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
+		slackWebhook:  strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
+		notifyMinConf: maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
 	}
 }
 
@@ -98,6 +123,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
+	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
+	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
 	return withCORS(mux)
 }
 
@@ -120,6 +147,10 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	target, host, err := normalizeAndValidateTarget(req.Target)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := safety.ValidateOutboundURL(target); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target blocked by outbound safety policy"})
 		return
 	}
 
@@ -146,25 +177,37 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
 		return
 	}
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if req.IdempotencyKey == "" {
+		req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if req.IdempotencyKey != "" {
+		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, target, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
+			writeJSON(w, http.StatusAccepted, map[string]string{"id": existing.ID, "status": existing.Status, "deduplicated": "true"})
+			return
+		}
+	}
 
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
 	job := &model.ScanJob{
-		ID:                 jobID,
-		Target:             target,
-		Status:             "queued",
-		StartedAt:          now,
-		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
-		Options:            req.Options,
-		Scope:              req.Scope,
-		ProgramName:        strings.TrimSpace(req.ProgramName),
+		ID:                   jobID,
+		Target:               target,
+		Status:               "queued",
+		StartedAt:            now,
+		AuthProfileSummary:   model.SummarizeAuthProfile(req.AuthProfile),
+		Options:              req.Options,
+		Scope:                req.Scope,
+		ProgramName:          strings.TrimSpace(req.ProgramName),
 		ProgramPolicyVersion: strings.TrimSpace(req.ProgramPolicyVersion),
 		DisallowedTestTypes:  append([]string(nil), req.DisallowedTestTypes...),
 	}
-
 	if err := s.repo.CreateJob(r.Context(), job); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist scan job"})
 		return
+	}
+	if req.IdempotencyKey != "" {
+		_ = s.repo.SaveIdempotencyRecord(r.Context(), req.IdempotencyKey, target, jobID, now)
 	}
 	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
 
@@ -198,11 +241,25 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
 		return
 	}
+	if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), id); err == nil && len(verifications) > 0 {
+		for i := range job.Findings {
+			if v, ok := verifications[job.Findings[i].ID]; ok {
+				if job.Findings[i].Exploitability == nil {
+					job.Findings[i].Exploitability = &model.Exploitability{}
+				}
+				job.Findings[i].Exploitability.VerifiedStatus = v.Status
+				job.Findings[i].Exploitability.VerifiedNotes = v.Notes
+			}
+		}
+	}
 
 	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
+	releaseGlobal := s.acquireGlobalSlot(options)
+	defer releaseGlobal()
+	s.enforceTargetRateLimit(target, options)
 	release := s.acquireTargetSlot(target, options)
 	defer release()
 
@@ -211,6 +268,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		return
 	}
 	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
+	persistedState, _ := s.repo.GetScanState(context.Background(), target)
+	if persistedState != nil && len(persistedState.KnownRuntimeEndpoints) > 0 {
+		options.SeedRuntimeEndpoints = mergeActions(options.SeedRuntimeEndpoints, persistedState.KnownRuntimeEndpoints)
+		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
+	}
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -233,6 +295,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	job.Findings = redactSensitiveFindings(job.Findings)
+	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
+	job.Findings = s.applySuppressions(target, job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
@@ -290,9 +355,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
+	s.persistScanState(target, job.Findings)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
+	s.notifyFindings(job)
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
 	if job.Options.RescanIntervalMinutes > 0 {
 		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
@@ -464,6 +531,63 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	req.CreatedAt = time.Now().UTC()
 	if err := s.repo.SaveFeedback(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist feedback"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req model.FindingVerification
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.ScanID = strings.TrimSpace(req.ScanID)
+	req.FindingID = strings.TrimSpace(req.FindingID)
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	if req.ScanID == "" || req.FindingID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
+		return
+	}
+	if req.Status != "confirmed" && req.Status != "rejected" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status must be confirmed or rejected"})
+		return
+	}
+	req.ID = uuid.NewString()
+	req.CreatedAt = time.Now().UTC()
+	if err := s.repo.SaveFindingVerification(r.Context(), req); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req model.SuppressionRule
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.Target = strings.TrimSpace(req.Target)
+	req.FindingID = strings.TrimSpace(req.FindingID)
+	req.Category = strings.TrimSpace(req.Category)
+	req.Title = strings.TrimSpace(req.Title)
+	if req.FindingID == "" && req.Category == "" && req.Title == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "one of findingId/category/title is required"})
+		return
+	}
+	req.ID = uuid.NewString()
+	req.CreatedAt = time.Now().UTC()
+	if err := s.repo.SaveSuppressionRule(r.Context(), req); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save suppression"})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
@@ -739,14 +863,11 @@ func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) fun
 		return func() {}
 	}
 	limit := s.maxPerTarget
-	if options.MaxPerTargetConcurrency > 0 {
+	if options.MaxPerTargetConcurrency > 0 && options.MaxPerTargetConcurrency <= 20 {
 		limit = options.MaxPerTargetConcurrency
 	}
-	if limit <= 0 {
+	if limit < 1 || limit > 20 {
 		limit = 1
-	}
-	if limit > 20 {
-		limit = 20
 	}
 	s.semMu.Lock()
 	sem, ok := s.targetSem[host]
@@ -757,6 +878,255 @@ func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) fun
 	s.semMu.Unlock()
 	sem <- struct{}{}
 	return func() { <-sem }
+}
+
+func (s *Server) acquireGlobalSlot(options model.ScanOptions) func() {
+	if s.globalSem == nil {
+		return func() {}
+	}
+	select {
+	case s.globalSem <- struct{}{}:
+	default:
+		s.globalSem <- struct{}{}
+	}
+	return func() { <-s.globalSem }
+}
+
+func (s *Server) enforceTargetRateLimit(target string, options model.ScanOptions) {
+	limitPerMinute := options.TargetRateLimitPerMinute
+	if limitPerMinute <= 0 {
+		return
+	}
+	host := strings.ToLower(strings.TrimSpace(hostFromTarget(target)))
+	if host == "" {
+		return
+	}
+	minGap := time.Minute / time.Duration(limitPerMinute)
+	if minGap <= 0 {
+		return
+	}
+	s.rateMu.Lock()
+	last := s.targetLastRun[host]
+	wait := time.Duration(0)
+	if !last.IsZero() {
+		wait = minGap - time.Since(last)
+	}
+	if wait > 0 {
+		s.rateMu.Unlock()
+		time.Sleep(wait)
+		s.rateMu.Lock()
+	}
+	s.targetLastRun[host] = time.Now()
+	s.rateMu.Unlock()
+}
+
+func redactSensitiveFindings(findings []model.Finding) []model.Finding {
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		f.Evidence = redactSensitiveText(f.Evidence)
+		if f.EvidenceFields != nil {
+			for k, v := range f.EvidenceFields {
+				f.EvidenceFields[k] = redactSensitiveText(v)
+			}
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func redactSensitiveText(value string) string {
+	replacer := strings.NewReplacer(
+		"authorization:", "authorization:[redacted]",
+		"cookie:", "cookie:[redacted]",
+		"token=", "token=[redacted]",
+		"password=", "password=[redacted]",
+	)
+	return replacer.Replace(value)
+}
+
+func (s *Server) applySuppressions(target string, findings []model.Finding) []model.Finding {
+	rules, err := s.repo.ListActiveSuppressionRules(context.Background(), target, time.Now().UTC())
+	if err != nil || len(rules) == 0 {
+		return findings
+	}
+	suppressed := 0
+	out := make([]model.Finding, 0, len(findings)+1)
+	for _, f := range findings {
+		if isSuppressed(f, target, rules) {
+			suppressed++
+			continue
+		}
+		out = append(out, f)
+	}
+	if suppressed > 0 {
+		out = append(out, model.Finding{
+			ID:          "suppression-rules-applied",
+			Category:    "monitoring",
+			Severity:    model.SeverityInfo,
+			Title:       fmt.Sprintf("Suppression rules applied (%d findings hidden)", suppressed),
+			Description: "Active suppression/baseline rules were applied to reduce duplicate or accepted-noise findings.",
+			Evidence:    fmt.Sprintf("suppressed=%d", suppressed),
+			Confidence:  1.0,
+		})
+	}
+	return out
+}
+
+func isSuppressed(f model.Finding, target string, rules []model.SuppressionRule) bool {
+	for _, r := range rules {
+		if r.Target != "" && !strings.EqualFold(strings.TrimSpace(r.Target), strings.TrimSpace(target)) {
+			continue
+		}
+		if r.FindingID != "" && strings.EqualFold(r.FindingID, f.ID) {
+			return true
+		}
+		if r.Category != "" && !strings.EqualFold(r.Category, f.Category) {
+			continue
+		}
+		if r.Title != "" && !strings.EqualFold(r.Title, f.Title) {
+			continue
+		}
+		if r.Category != "" || r.Title != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func buildIntegrationHealthFinding(outputs []agent.AgentOutput) []model.Finding {
+	total := 0
+	failures := 0
+	timeouts := 0
+	flaky := make([]string, 0)
+	for _, out := range outputs {
+		total++
+		status := strings.ToLower(strings.TrimSpace(out.Status))
+		if status != "completed" {
+			failures++
+			flaky = append(flaky, out.AgentName)
+		}
+		if out.Telemetry.TimedOut {
+			timeouts++
+			flaky = append(flaky, out.AgentName)
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	failureRate := float64(failures) / float64(total)
+	timeoutRate := float64(timeouts) / float64(total)
+	if failureRate == 0 && timeoutRate == 0 {
+		return nil
+	}
+	sort.Strings(flaky)
+	return []model.Finding{{
+		ID:          "integration-health-telemetry",
+		Category:    "integration",
+		Severity:    model.SeverityInfo,
+		Title:       "Integration health telemetry indicates flaky execution",
+		Description: "Some agents or integrations failed or timed out; recommendation confidence should be down-ranked for reliability.",
+		Evidence:    fmt.Sprintf("failureRate=%.2f timeoutRate=%.2f", failureRate, timeoutRate),
+		EvidenceFields: map[string]string{
+			"failureRate": fmt.Sprintf("%.2f", failureRate),
+			"timeoutRate": fmt.Sprintf("%.2f", timeoutRate),
+			"flakyTools":  strings.Join(limitStrings(flaky, 8), ","),
+		},
+	}}
+}
+
+func (s *Server) persistScanState(target string, findings []model.Finding) {
+	state := model.PersistentScanState{
+		Target:        target,
+		LastUpdatedAt: time.Now().UTC(),
+	}
+	refs := make([]string, 0)
+	for _, f := range findings {
+		if f.ID == "browser-auth-session-instability" {
+			state.SessionInstability++
+		}
+		if f.ID == "runtime-surface-endpoints" || f.ID == "browser-runtime-references" {
+			for _, p := range strings.Split(f.Evidence, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					refs = append(refs, p)
+				}
+			}
+		}
+	}
+	sort.Strings(refs)
+	state.KnownRuntimeEndpoints = limitStrings(mergeActions(nil, refs), 25)
+	_ = s.repo.UpsertScanState(context.Background(), state)
+}
+
+func (s *Server) notifyFindings(job *model.ScanJob) {
+	if job == nil {
+		return
+	}
+	if s.webhookURL == "" && s.slackWebhook == "" {
+		return
+	}
+	type noteFinding struct {
+		ID         string         `json:"id"`
+		Title      string         `json:"title"`
+		Severity   model.Severity `json:"severity"`
+		Confidence float64        `json:"confidence"`
+		Drift      string         `json:"driftStatus,omitempty"`
+	}
+	selected := make([]noteFinding, 0)
+	for _, f := range job.Findings {
+		if f.Confidence < s.notifyMinConf {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(f.DriftStatus)) != "new" && strings.ToLower(strings.TrimSpace(f.DriftStatus)) != "changed" {
+			continue
+		}
+		selected = append(selected, noteFinding{
+			ID:         f.ID,
+			Title:      f.Title,
+			Severity:   f.Severity,
+			Confidence: f.Confidence,
+			Drift:      f.DriftStatus,
+		})
+	}
+	if len(selected) == 0 {
+		return
+	}
+	payload := map[string]any{
+		"scanId":    job.ID,
+		"target":    job.Target,
+		"findings":  selected,
+		"createdAt": time.Now().UTC().Format(time.RFC3339),
+	}
+	sendWebhookJSON(s.webhookURL, payload)
+	if s.slackWebhook != "" {
+		lines := []string{fmt.Sprintf("*auto-bughunter:* %d high-confidence drift finding(s) on `%s`", len(selected), job.Target)}
+		for _, item := range selected {
+			lines = append(lines, fmt.Sprintf("• [%s] %s (%.2f)", strings.ToUpper(string(item.Severity)), item.Title, item.Confidence))
+		}
+		sendWebhookJSON(s.slackWebhook, map[string]string{"text": strings.Join(limitStrings(lines, 12), "\n")})
+	}
+}
+
+func sendWebhookJSON(target string, payload any) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 func hostFromTarget(target string) string {
@@ -1262,4 +1632,30 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func floatFromEnv(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
