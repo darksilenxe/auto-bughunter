@@ -284,7 +284,21 @@ export default function App() {
             </p>
           )}
           <p className="meta">
-            Integrations requested: nuclei={job.options?.useNucleiIntegration ? "yes" : "no"}, zapBaseline={job.options?.useZapBaselineIntegration ? "yes" : "no"}, subfinder={job.options?.useSubfinderIntegration ? "yes" : "no"}, httpx={job.options?.useHttpxIntegration ? "yes" : "no"}, naabu={job.options?.useNaabuIntegration ? "yes" : "no"}, dnsx={job.options?.useDnsxIntegration ? "yes" : "no"}, katana={job.options?.useKatanaIntegration ? "yes" : "no"}, tlsx={job.options?.useTlsxIntegration ? "yes" : "no"}, cdncheck={job.options?.useCdncheckIntegration ? "yes" : "no"}, asnmap={job.options?.useAsnmapIntegration ? "yes" : "no"}
+            Integrations requested:{" "}
+            {[
+              ["nuclei", job.options?.useNucleiIntegration],
+              ["zapBaseline", job.options?.useZapBaselineIntegration],
+              ["subfinder", job.options?.useSubfinderIntegration],
+              ["httpx", job.options?.useHttpxIntegration],
+              ["naabu", job.options?.useNaabuIntegration],
+              ["dnsx", job.options?.useDnsxIntegration],
+              ["katana", job.options?.useKatanaIntegration],
+              ["tlsx", job.options?.useTlsxIntegration],
+              ["cdncheck", job.options?.useCdncheckIntegration],
+              ["asnmap", job.options?.useAsnmapIntegration],
+            ]
+              .map(([name, val]) => `${name}=${val ? "yes" : "no"}`)
+              .join(", ")}
           </p>
           <div className="stats">
             <span className="pill high">High: {severityCounts.high}</span>

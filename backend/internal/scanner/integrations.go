@@ -709,6 +709,8 @@ func (s *Service) runAsnmap(ctx context.Context, target string) []model.Finding 
 	}}
 }
 
+// hostFromTarget extracts the bare hostname from a full URL target string.
+// If the target cannot be parsed or has no host component, it is returned unchanged.
 func hostFromTarget(target string) string {
 	u, err := url.Parse(target)
 	if err != nil || u.Host == "" {
