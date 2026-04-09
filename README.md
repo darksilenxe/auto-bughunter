@@ -101,7 +101,7 @@ Body:
 
 ### `GET /api/scan/{id}`
 
-Returns job state and findings.
+Returns job state and findings, including per-agent telemetry (`agentRuns`), structured decision data (`dashboard`, `nextActions`), asset relationships (`assetLinks`), and an automated penetration test report (`automatedReport`) with findings/severities/how-found/commands-used.
 
 ## Notes
 
@@ -110,6 +110,7 @@ Returns job state and findings.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
+- Finding records include confidence, source attribution, structured evidence fields, drift status, business tags, and exploitability metadata.
 - Scan scope supports host wildcard patterns (`*.example.com`) and out-of-scope path prefixes.
 - Scan creation and scanner execution enforce per-scan scope (target, integration expansion, and wordlist probes).
 - Proxy replay supports optional per-request scope validation via `scope` on `POST /api/proxy/replay`.

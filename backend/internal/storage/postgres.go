@@ -63,13 +63,29 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	agentRunsJSON, err := json.Marshal(job.AgentRuns)
+	if err != nil {
+		return err
+	}
+	assetLinksJSON, err := json.Marshal(job.AssetLinks)
+	if err != nil {
+		return err
+	}
+	dashboardJSON, err := json.Marshal(job.Dashboard)
+	if err != nil {
+		return err
+	}
+	nextActionsJSON, err := json.Marshal(job.NextActions)
+	if err != nil {
+		return err
+	}
 
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO scans (
-			id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
+			id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
 	if err != nil {
 		return fmt.Errorf("insert scan: %w", err)
 	}
@@ -93,6 +109,22 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 	if err != nil {
 		return err
 	}
+	agentRunsJSON, err := json.Marshal(job.AgentRuns)
+	if err != nil {
+		return err
+	}
+	assetLinksJSON, err := json.Marshal(job.AssetLinks)
+	if err != nil {
+		return err
+	}
+	dashboardJSON, err := json.Marshal(job.Dashboard)
+	if err != nil {
+		return err
+	}
+	nextActionsJSON, err := json.Marshal(job.NextActions)
+	if err != nil {
+		return err
+	}
 
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE scans
@@ -103,9 +135,14 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			error = $6,
 			auth_profile_summary = $7,
 			options = $8,
-			scope = $9
+			scope = $9,
+			agent_runs = $10,
+			asset_links = $11,
+			dashboard = $12,
+			next_actions = $13,
+			automated_report = $14
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
@@ -121,7 +158,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		FROM scans
 		WHERE id = $1
 	`, id)
@@ -131,6 +168,10 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	var summaryRaw []byte
 	var optionsRaw []byte
 	var scopeRaw []byte
+	var agentRunsRaw []byte
+	var assetLinksRaw []byte
+	var dashboardRaw []byte
+	var nextActionsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -143,6 +184,11 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 		&summaryRaw,
 		&optionsRaw,
 		&scopeRaw,
+		&agentRunsRaw,
+		&assetLinksRaw,
+		&dashboardRaw,
+		&nextActionsRaw,
+		&job.AutomatedReport,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -165,6 +211,21 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	if len(scopeRaw) > 0 {
 		_ = json.Unmarshal(scopeRaw, &job.Scope)
 	}
+	if len(agentRunsRaw) > 0 {
+		_ = json.Unmarshal(agentRunsRaw, &job.AgentRuns)
+	}
+	if len(assetLinksRaw) > 0 {
+		_ = json.Unmarshal(assetLinksRaw, &job.AssetLinks)
+	}
+	if len(dashboardRaw) > 0 && string(dashboardRaw) != "null" {
+		var dashboard model.DecisionDashboard
+		if err := json.Unmarshal(dashboardRaw, &dashboard); err == nil {
+			job.Dashboard = &dashboard
+		}
+	}
+	if len(nextActionsRaw) > 0 {
+		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
+	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
 
@@ -185,6 +246,11 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			auth_profile_summary JSONB NULL,
 			options JSONB NOT NULL DEFAULT '{}'::jsonb,
 			scope JSONB NOT NULL DEFAULT '{}'::jsonb
+			,agent_runs JSONB NOT NULL DEFAULT '[]'::jsonb
+			,asset_links JSONB NOT NULL DEFAULT '[]'::jsonb
+			,dashboard JSONB NULL
+			,next_actions JSONB NOT NULL DEFAULT '[]'::jsonb
+			,automated_report TEXT NOT NULL DEFAULT ''
 		)
 	`)
 	if err != nil {
@@ -192,6 +258,21 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.scope column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS agent_runs JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate scans.agent_runs column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS asset_links JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate scans.asset_links column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS dashboard JSONB NULL`); err != nil {
+		return fmt.Errorf("migrate scans.dashboard column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS next_actions JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate scans.next_actions column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS automated_report TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate scans.automated_report column: %w", err)
 	}
 	if _, err := p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_assets (
@@ -239,7 +320,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 
 func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope
+		SELECT id, target, status, started_at, completed_at, findings, ai_summary, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report
 		FROM scans
 		WHERE target = $1 AND status = 'completed' AND id <> $2
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -247,7 +328,7 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	`, target, excludeID)
 
 	var job model.ScanJob
-	var findingsRaw, summaryRaw, optionsRaw, scopeRaw []byte
+	var findingsRaw, summaryRaw, optionsRaw, scopeRaw, agentRunsRaw, assetLinksRaw, dashboardRaw, nextActionsRaw []byte
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
@@ -260,6 +341,11 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 		&summaryRaw,
 		&optionsRaw,
 		&scopeRaw,
+		&agentRunsRaw,
+		&assetLinksRaw,
+		&dashboardRaw,
+		&nextActionsRaw,
+		&job.AutomatedReport,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -281,6 +367,21 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	}
 	if len(scopeRaw) > 0 {
 		_ = json.Unmarshal(scopeRaw, &job.Scope)
+	}
+	if len(agentRunsRaw) > 0 {
+		_ = json.Unmarshal(agentRunsRaw, &job.AgentRuns)
+	}
+	if len(assetLinksRaw) > 0 {
+		_ = json.Unmarshal(assetLinksRaw, &job.AssetLinks)
+	}
+	if len(dashboardRaw) > 0 && string(dashboardRaw) != "null" {
+		var dashboard model.DecisionDashboard
+		if err := json.Unmarshal(dashboardRaw, &dashboard); err == nil {
+			job.Dashboard = &dashboard
+		}
+	}
+	if len(nextActionsRaw) > 0 {
+		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
 	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)

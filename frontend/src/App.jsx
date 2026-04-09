@@ -525,6 +525,39 @@ export default function App() {
               <pre className="summary">{job.aiSummary}</pre>
             </>
           )}
+          {job.dashboard && (
+            <>
+              <h3>Decision Dashboard</h3>
+              <ul className="findings">
+                <li>
+                  <strong>Coverage completeness:</strong> {job.dashboard.coverageCompletenessScore}%
+                  <p><b>Authenticated coverage rate:</b> {(Number(job.dashboard.authenticatedCoverageRate || 0) * 100).toFixed(0)}%</p>
+                  <p><b>Drift:</b> new={job.dashboard.newFindings || 0}, changed={job.dashboard.changedFindings || 0}, resolved={job.dashboard.resolvedFindings || 0}</p>
+                  <p><b>Actionable findings:</b> {job.dashboard.actionableFindings || 0}</p>
+                  {(job.dashboard.topAttackPaths?.length > 0) && <p><b>Top attack paths:</b> {job.dashboard.topAttackPaths.join(", ")}</p>}
+                  {(job.dashboard.untestedReasons?.length > 0) && <p><b>Untested reasons:</b> {job.dashboard.untestedReasons.join(", ")}</p>}
+                </li>
+              </ul>
+            </>
+          )}
+          {(job.nextActions?.length > 0) && (
+            <>
+              <h3>Engagement Next Actions</h3>
+              <ul className="findings">
+                {job.nextActions.map((n, idx) => (
+                  <li key={`next-${idx}`}>
+                    <p>{n}</p>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {job.automatedReport && (
+            <>
+              <h3>Automated Pen Test Report</h3>
+              <pre className="summary">{job.automatedReport}</pre>
+            </>
+          )}
 
           {job.findings?.length > 0 && (
             <>
@@ -535,6 +568,12 @@ export default function App() {
                     <strong>[{f.severity}] {f.title}</strong>
                     <p>{f.description}</p>
                     <p><b>Evidence:</b> {f.evidence}</p>
+                    {f.driftStatus && <p><b>Drift:</b> {f.driftStatus}</p>}
+                    {f.sources?.length > 0 && <p><b>Sources:</b> {f.sources.join(", ")}</p>}
+                    {(f.confidence !== undefined) && <p><b>Confidence:</b> {Number(f.confidence).toFixed(2)}</p>}
+                    {f.evidenceFields && <p><b>Evidence fields:</b> {Object.entries(f.evidenceFields).map(([k, v]) => `${k}=${v}`).join(", ")}</p>}
+                    {f.businessTags?.length > 0 && <p><b>Business tags:</b> {f.businessTags.join(", ")}</p>}
+                    {f.exploitability && <p><b>Exploitability:</b> reachable={String(f.exploitability.reachable)}, requiredRole={f.exploitability.requiredRole || "unknown"}, prerequisites={(f.exploitability.prerequisites || []).join(", ") || "none"}</p>}
                     <p><b>Fix:</b> {f.recommendation}</p>
                   </li>
                 ))}
@@ -550,6 +589,35 @@ export default function App() {
                   <li key={`${a.assetType}-${a.assetKey}-${idx}`}>
                     <strong>[{a.assetType}] {a.assetKey}</strong>
                     {a.assetValue && <p><b>Details:</b> {a.assetValue}</p>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {job.assetLinks?.length > 0 && (
+            <>
+              <h3>Asset Relationship Graph</h3>
+              <ul className="findings">
+                {job.assetLinks.map((l, idx) => (
+                  <li key={`${l.fromType}-${l.fromKey}-${l.relation}-${l.toType}-${l.toKey}-${idx}`}>
+                    <strong>{l.fromType}:{l.fromKey}</strong>
+                    <p>{l.relation} ➜ {l.toType}:{l.toKey}</p>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {job.agentRuns?.length > 0 && (
+            <>
+              <h3>Per-Agent Coverage Telemetry</h3>
+              <ul className="findings">
+                {job.agentRuns.map((a, idx) => (
+                  <li key={`${a.agentName}-${a.startedAt}-${idx}`}>
+                    <strong>{a.agentName}</strong>
+                    <p><b>Status:</b> {a.status} | <b>Duration:</b> {a.durationMs}ms | <b>Timed out:</b> {a.timedOut ? "yes" : "no"}</p>
+                    <p><b>Targets:</b> attempted={a.targetsAttempted || 0}, skipped={a.targetsSkipped || 0}</p>
+                    {a.skippedReasons?.length > 0 && <p><b>Skipped reasons:</b> {a.skippedReasons.join(", ")}</p>}
+                    {a.error && <p><b>Error:</b> {a.error}</p>}
                   </li>
                 ))}
               </ul>

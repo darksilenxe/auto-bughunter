@@ -110,3 +110,69 @@ func extractAssets(target string, findings []model.Finding) []model.ScanAsset {
 	})
 	return out
 }
+
+func extractAssetLinks(target string, assets []model.ScanAsset, findings []model.Finding) []model.ScanAssetLink {
+	links := map[string]model.ScanAssetLink{}
+	add := func(fromType, fromKey, toType, toKey, relation string) {
+		fromType = strings.TrimSpace(strings.ToLower(fromType))
+		toType = strings.TrimSpace(strings.ToLower(toType))
+		fromKey = strings.TrimSpace(strings.ToLower(fromKey))
+		toKey = strings.TrimSpace(strings.ToLower(toKey))
+		relation = strings.TrimSpace(strings.ToLower(relation))
+		if fromType == "" || toType == "" || fromKey == "" || toKey == "" || relation == "" {
+			return
+		}
+		k := fromType + "|" + fromKey + "|" + relation + "|" + toType + "|" + toKey
+		links[k] = model.ScanAssetLink{
+			FromType: fromType,
+			FromKey:  fromKey,
+			ToType:   toType,
+			ToKey:    toKey,
+			Relation: relation,
+		}
+	}
+
+	targetHost := ""
+	if u, err := url.Parse(target); err == nil {
+		targetHost = strings.ToLower(strings.TrimSpace(u.Hostname()))
+	}
+	for _, a := range assets {
+		switch a.AssetType {
+		case "port":
+			h, _, ok := strings.Cut(a.AssetKey, ":")
+			if ok {
+				add("host", h, "port", a.AssetKey, "exposes")
+			}
+		case "endpoint":
+			if targetHost != "" {
+				add("host", targetHost, "endpoint", a.AssetKey, "hosts")
+			}
+		}
+	}
+	for _, f := range findings {
+		ev := strings.TrimSpace(strings.ToLower(f.Evidence))
+		if ev == "" {
+			continue
+		}
+		if strings.Contains(ev, "server:") {
+			add("host", targetHost, "header", "server", "emits")
+		}
+		if strings.Contains(ev, "x-powered-by:") {
+			add("host", targetHost, "header", "x-powered-by", "emits")
+		}
+		if strings.Contains(ev, "wordpress") || strings.Contains(ev, "wp-") {
+			add("host", targetHost, "tech", "wordpress", "runs")
+		}
+	}
+
+	out := make([]model.ScanAssetLink, 0, len(links))
+	for _, link := range links {
+		out = append(out, link)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		li := out[i].FromType + "|" + out[i].FromKey + "|" + out[i].Relation + "|" + out[i].ToType + "|" + out[i].ToKey
+		lj := out[j].FromType + "|" + out[j].FromKey + "|" + out[j].Relation + "|" + out[j].ToType + "|" + out[j].ToKey
+		return li < lj
+	})
+	return out
+}

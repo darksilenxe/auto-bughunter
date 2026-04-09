@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,11 @@ import (
 type integrationState struct {
 	// DiscoveredHosts holds hostnames found by subfinder. They are used as additional
 	// targets by httpx, naabu, and nuclei in subsequent phases.
-	DiscoveredHosts []string
+	DiscoveredHosts  []string
+	OutOfScopeHosts  []string
+	TargetsAttempted int
+	TargetsSkipped   int
+	SkippedReasons   map[string]int
 }
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
@@ -39,7 +44,7 @@ type integrationState struct {
 //	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
-	state := &integrationState{}
+	state := &integrationState{SkippedReasons: map[string]int{}}
 
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseSubfinderIntegration {
@@ -60,21 +65,37 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 
 	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
 	if input.Options.UseNaabuIntegration {
-		for _, t := range expandTargets(input.Target, state, input.Scope) {
+		targets, skipped := expandTargetsWithScope(input.Target, state, input.Scope)
+		state.TargetsAttempted += len(targets)
+		state.TargetsSkipped += skipped
+		if skipped > 0 {
+			state.SkippedReasons["out_of_scope"] += skipped
+		}
+		for _, t := range targets {
 			findings = append(findings, s.runNaabu(ctx, t)...)
 		}
 	}
 
 	// Phase 3 — HTTP probing (primary target + discovered hosts).
 	if input.Options.UseHttpxIntegration {
-		for _, t := range expandTargets(input.Target, state, input.Scope) {
+		targets, skipped := expandTargetsWithScope(input.Target, state, input.Scope)
+		state.TargetsAttempted += len(targets)
+		state.TargetsSkipped += skipped
+		if skipped > 0 {
+			state.SkippedReasons["out_of_scope"] += skipped
+		}
+		for _, t := range targets {
 			findings = append(findings, s.runHttpx(ctx, t)...)
 		}
 	}
 
 	// Phase 4 — Content & endpoint discovery.
 	if input.Options.UseKatanaIntegration {
-		findings = append(findings, s.runKatana(ctx, input.Target)...)
+		katanaDepth := 2
+		if len(state.DiscoveredHosts) >= 8 {
+			katanaDepth = 3
+		}
+		findings = append(findings, s.runKatana(ctx, input.Target, katanaDepth)...)
 	}
 
 	// Phase 5 — TLS and infrastructure analysis.
@@ -196,13 +217,20 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
 	if input.Options.UseNucleiIntegration {
-		for _, t := range expandTargets(input.Target, state, input.Scope) {
+		targets, skipped := expandTargetsWithScope(input.Target, state, input.Scope)
+		state.TargetsAttempted += len(targets)
+		state.TargetsSkipped += skipped
+		if skipped > 0 {
+			state.SkippedReasons["out_of_scope"] += skipped
+		}
+		for _, t := range targets {
 			findings = append(findings, s.runNuclei(ctx, t)...)
 		}
 	}
 	if input.Options.UseZAPBaselineIntegration {
 		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
 	}
+	findings = append(findings, buildIntegrationCoverageFinding(state))
 
 	return findings
 }
@@ -211,13 +239,19 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 // sharing the same URL scheme as the primary target. Hosts that duplicate the primary
 // target's hostname are skipped to avoid scanning the same host twice.
 func expandTargets(target string, state *integrationState, scanScope model.ScanScope) []string {
+	targets, _ := expandTargetsWithScope(target, state, scanScope)
+	return targets
+}
+
+func expandTargetsWithScope(target string, state *integrationState, scanScope model.ScanScope) ([]string, int) {
 	targets := []string{target}
 	if len(state.DiscoveredHosts) == 0 {
-		return scope.FilterTargets(targets, scanScope)
+		filtered := scope.FilterTargets(targets, scanScope)
+		return filtered, len(targets) - len(filtered)
 	}
 	u, err := url.Parse(target)
 	if err != nil {
-		return targets
+		return targets, 0
 	}
 	primaryHost := strings.ToLower(u.Hostname())
 	for _, host := range state.DiscoveredHosts {
@@ -226,7 +260,8 @@ func expandTargets(target string, state *integrationState, scanScope model.ScanS
 		}
 		targets = append(targets, u.Scheme+"://"+host)
 	}
-	return scope.FilterTargets(targets, scanScope)
+	filtered := scope.FilterTargets(targets, scanScope)
+	return filtered, len(targets) - len(filtered)
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
@@ -422,11 +457,17 @@ func (s *Service) runSubfinder(ctx context.Context, target string, state *integr
 	// each discovered subdomain in addition to the primary target.
 	subdomains := 0
 	for _, line := range strings.Split(stdout.String(), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			state.DiscoveredHosts = append(state.DiscoveredHosts, line)
-			subdomains++
+		host := normalizeDiscoveredHost(line)
+		if host == "" {
+			continue
 		}
+		if !scope.IsHostInScope(host, model.ScanScope{IncludeHosts: []string{hostFromTarget(target), "*." + hostFromTarget(target)}}) {
+			state.OutOfScopeHosts = append(state.OutOfScopeHosts, host)
+			state.SkippedReasons["discovered_out_of_scope"]++
+			continue
+		}
+		state.DiscoveredHosts = append(state.DiscoveredHosts, host)
+		subdomains++
 	}
 
 	severity := model.SeverityInfo
@@ -692,7 +733,12 @@ func (s *Service) runShuffleDNS(ctx context.Context, target string, state *integ
 	discovered := make([]string, 0)
 	for _, line := range strings.Split(stdout.String(), "\n") {
 		host := normalizeDiscoveredHost(line)
-		if host == "" || !scope.IsHostInScope(host, scanScope) {
+		if host == "" {
+			continue
+		}
+		if !scope.IsHostInScope(host, scanScope) {
+			state.OutOfScopeHosts = append(state.OutOfScopeHosts, host)
+			state.SkippedReasons["discovered_out_of_scope"]++
 			continue
 		}
 		discovered = append(discovered, host)
@@ -793,7 +839,12 @@ func (s *Service) runCertificateTransparency(ctx context.Context, target string,
 	for _, rec := range records {
 		for _, raw := range strings.Split(rec.NameValue, "\n") {
 			h := normalizeDiscoveredHost(raw)
-			if h == "" || !scope.IsHostInScope(h, scanScope) {
+			if h == "" {
+				continue
+			}
+			if !scope.IsHostInScope(h, scanScope) {
+				state.OutOfScopeHosts = append(state.OutOfScopeHosts, h)
+				state.SkippedReasons["discovered_out_of_scope"]++
 				continue
 			}
 			discoveredSet[h] = struct{}{}
@@ -865,6 +916,8 @@ func (s *Service) runAmassNative(ctx context.Context, target string, state *inte
 		}
 		candidate := label + "." + host
 		if !scope.IsHostInScope(candidate, scanScope) {
+			state.OutOfScopeHosts = append(state.OutOfScopeHosts, candidate)
+			state.SkippedReasons["discovered_out_of_scope"]++
 			continue
 		}
 		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -946,7 +999,7 @@ func (e *ctHTTPError) Error() string {
 	return "crt.sh unexpected status: " + strconv.Itoa(e.status)
 }
 
-func (s *Service) runKatana(ctx context.Context, target string) []model.Finding {
+func (s *Service) runKatana(ctx context.Context, target string, depth int) []model.Finding {
 	if !s.cfg.EnableKatana {
 		return []model.Finding{{
 			ID:             "katana-disabled",
@@ -974,7 +1027,10 @@ func (s *Service) runKatana(ctx context.Context, target string) []model.Finding 
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ictx, s.cfg.KatanaBinary, "-u", target, "-silent", "-depth", "2", "-js-crawl")
+	if depth <= 0 {
+		depth = 2
+	}
+	cmd := exec.CommandContext(ictx, s.cfg.KatanaBinary, "-u", target, "-silent", "-depth", strconv.Itoa(depth), "-js-crawl")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -1004,8 +1060,8 @@ func (s *Service) runKatana(ctx context.Context, target string) []model.Finding 
 		Category:       "integration",
 		Severity:       severity,
 		Title:          title,
-		Description:    "Project Discovery Katana web crawl executed with depth 2 and JS crawling enabled.",
-		Evidence:       "endpoints=" + strconv.Itoa(endpoints),
+		Description:    "Project Discovery Katana web crawl executed with configurable depth and JS crawling enabled.",
+		Evidence:       "endpoints=" + strconv.Itoa(endpoints) + ";depth=" + strconv.Itoa(depth),
 		Recommendation: "Review crawled endpoints for sensitive paths, unprotected APIs, and exposed functionality.",
 	}}
 }
@@ -1252,6 +1308,39 @@ func addDiscoveredHosts(state *integrationState, hosts []string) {
 		}
 		seen[nh] = struct{}{}
 		state.DiscoveredHosts = append(state.DiscoveredHosts, nh)
+	}
+}
+
+func buildIntegrationCoverageFinding(state *integrationState) model.Finding {
+	reasons := make([]string, 0, len(state.SkippedReasons))
+	for reason, count := range state.SkippedReasons {
+		reasons = append(reasons, reason+":"+strconv.Itoa(count))
+	}
+	sort.Strings(reasons)
+	return model.Finding{
+		ID:             "integration-coverage-telemetry",
+		Category:       "coverage",
+		Severity:       model.SeverityInfo,
+		Title:          "Integration target coverage telemetry",
+		Description:    "Telemetry snapshot for attempted and skipped integration targets with scope controls and reason codes.",
+		Evidence:       "targetsAttempted=" + strconv.Itoa(state.TargetsAttempted) + ";targetsSkipped=" + strconv.Itoa(state.TargetsSkipped),
+		Recommendation: "Review skipped target reasons and adjust scope approvals or retry policy as needed.",
+		Sources:        []string{"integration"},
+		Confidence:     0.98,
+		EvidenceFields: map[string]string{
+			"targetsAttempted": strconv.Itoa(state.TargetsAttempted),
+			"targetsSkipped":   strconv.Itoa(state.TargetsSkipped),
+			"skippedReasons":   strings.Join(reasons, ","),
+			"inScopeHosts":     strconv.Itoa(len(state.DiscoveredHosts)),
+			"outOfScopeHosts":  strconv.Itoa(len(state.OutOfScopeHosts)),
+		},
+		BusinessTags: []string{"coverage"},
+		Exploitability: &model.Exploitability{
+			Reachable:       true,
+			RequiredRole:    "analyst",
+			Prerequisites:   []string{"scope_configuration"},
+			AttackPathHints: []string{"scope-tuning", "retry-policy-adjustment"},
+		},
 	}
 }
 

@@ -12,13 +12,26 @@ const (
 )
 
 type Finding struct {
-	ID             string   `json:"id"`
-	Category       string   `json:"category"`
-	Severity       Severity `json:"severity"`
-	Title          string   `json:"title"`
-	Description    string   `json:"description"`
-	Evidence       string   `json:"evidence"`
-	Recommendation string   `json:"recommendation"`
+	ID             string            `json:"id"`
+	Category       string            `json:"category"`
+	Severity       Severity          `json:"severity"`
+	Title          string            `json:"title"`
+	Description    string            `json:"description"`
+	Evidence       string            `json:"evidence"`
+	Recommendation string            `json:"recommendation"`
+	Confidence     float64           `json:"confidence,omitempty"`
+	Sources        []string          `json:"sources,omitempty"`
+	DriftStatus    string            `json:"driftStatus,omitempty"`
+	EvidenceFields map[string]string `json:"evidenceFields,omitempty"`
+	BusinessTags   []string          `json:"businessTags,omitempty"`
+	Exploitability *Exploitability   `json:"exploitability,omitempty"`
+}
+
+type Exploitability struct {
+	Reachable       bool     `json:"reachable"`
+	RequiredRole    string   `json:"requiredRole,omitempty"`
+	Prerequisites   []string `json:"prerequisites,omitempty"`
+	AttackPathHints []string `json:"attackPathHints,omitempty"`
 }
 
 type ScanRequest struct {
@@ -85,7 +98,12 @@ type ScanJob struct {
 	Options            ScanOptions             `json:"options,omitempty"`
 	Scope              ScanScope               `json:"scope,omitempty"`
 	Assets             []ScanAsset             `json:"assets,omitempty"`
+	AssetLinks         []ScanAssetLink         `json:"assetLinks,omitempty"`
 	AuditTrail         []ScanAuditEvent        `json:"auditTrail,omitempty"`
+	AgentRuns          []AgentRunTelemetry     `json:"agentRuns,omitempty"`
+	Dashboard          *DecisionDashboard      `json:"dashboard,omitempty"`
+	NextActions        []string                `json:"nextActions,omitempty"`
+	AutomatedReport    string                  `json:"automatedReport,omitempty"`
 }
 
 type ScanAsset struct {
@@ -95,10 +113,44 @@ type ScanAsset struct {
 	DiscoveredAt time.Time `json:"discoveredAt"`
 }
 
+type ScanAssetLink struct {
+	FromType string `json:"fromType"`
+	FromKey  string `json:"fromKey"`
+	ToType   string `json:"toType"`
+	ToKey    string `json:"toKey"`
+	Relation string `json:"relation"`
+}
+
 type ScanAuditEvent struct {
-	Stage     string    `json:"stage"`
-	Message   string    `json:"message"`
-	Timestamp time.Time `json:"timestamp"`
+	Stage     string            `json:"stage"`
+	Message   string            `json:"message"`
+	Timestamp time.Time         `json:"timestamp"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
+type AgentRunTelemetry struct {
+	AgentName        string            `json:"agentName"`
+	Status           string            `json:"status"`
+	StartedAt        time.Time         `json:"startedAt"`
+	CompletedAt      time.Time         `json:"completedAt"`
+	DurationMs       int64             `json:"durationMs"`
+	TargetsAttempted int               `json:"targetsAttempted,omitempty"`
+	TargetsSkipped   int               `json:"targetsSkipped,omitempty"`
+	SkippedReasons   []string          `json:"skippedReasons,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	TimedOut         bool              `json:"timedOut,omitempty"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+}
+
+type DecisionDashboard struct {
+	CoverageCompletenessScore int      `json:"coverageCompletenessScore"`
+	AuthenticatedCoverageRate float64  `json:"authenticatedCoverageRate"`
+	NewFindings               int      `json:"newFindings"`
+	ChangedFindings           int      `json:"changedFindings"`
+	ResolvedFindings          int      `json:"resolvedFindings"`
+	TopAttackPaths            []string `json:"topAttackPaths,omitempty"`
+	UntestedReasons           []string `json:"untestedReasons,omitempty"`
+	ActionableFindings        int      `json:"actionableFindings"`
 }
 
 func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
