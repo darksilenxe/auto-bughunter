@@ -35,7 +35,7 @@ func NewClient(baseURL, apiKey, model string) *Client {
 }
 
 func (c *Client) Summarize(ctx context.Context, target string, findings []model.Finding) string {
-	if c.APIKey == "" {
+	if !c.shouldCallProvider() {
 		return localReasonerSummary(target, findings)
 	}
 
@@ -62,7 +62,9 @@ func (c *Client) Summarize(ctx context.Context, target string, findings []model.
 	if err != nil {
 		return localReasonerSummary(target, findings)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if strings.TrimSpace(c.APIKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
@@ -97,4 +99,14 @@ func mustJSON(v any) string {
 		return "[]"
 	}
 	return string(b)
+}
+
+func (c *Client) shouldCallProvider() bool {
+	// Keep OpenAI default behavior: require an API key.
+	const defaultOpenAIBase = "https://api.openai.com/v1"
+	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(c.BaseURL)), "/")
+	if strings.TrimSpace(c.APIKey) != "" {
+		return true
+	}
+	return base != strings.ToLower(defaultOpenAIBase)
 }
