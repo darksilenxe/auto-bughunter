@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN go build -o /out/server ./cmd/server
 
-FROM alpine:3.20
+FROM alpine:latest
 RUN apk add --no-cache ca-certificates chromium nss
 WORKDIR /app
 
