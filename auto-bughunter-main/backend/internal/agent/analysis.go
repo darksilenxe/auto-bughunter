@@ -33,10 +33,7 @@ func (a *AnalysisAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
-	allFindings := input.AllFindings
-	if len(allFindings) == 0 {
-		allFindings = input.Previous.Findings
-	}
+	allFindings := input.Previous.Findings
 	if len(allFindings) == 0 {
 		output.DebugNotes = "No findings to analyze"
 		return output, nil

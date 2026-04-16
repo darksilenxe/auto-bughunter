@@ -14,6 +14,7 @@ Do not scan third-party systems without written permission.
 - Headless browser checks: `chromedp` + Chromium
 - Containerization: Docker + Docker Compose
 - AI summary: OpenAI-compatible Chat Completions API
+- Optional external ML inference service: FastAPI + ONNX Runtime
 
 ## Features
 
@@ -26,6 +27,10 @@ Do not scan third-party systems without written permission.
   - **Scanning Agent**: Core security checks (headers, cookies, TLS, headless browser)
   - **Wordlist Agent**: Directory, subdomain, and API endpoint fuzzing
   - **Analysis Agent**: Finding deduplication, severity-based ranking
+  - **ML Triage Agent**: Deterministic risk scoring + exploitability estimation across all findings
+  - **Attack Path Agent**: Cross-category correlation to infer likely multi-step attack chains
+  - **False Positive Review Agent**: Confidence-based shortlist for analyst verification
+  - **Remediation Planner Agent**: AI-assisted prioritized remediation sequence generation
   - **Reporting Agent**: Executive summaries, top-risk identification
 - Built-in checks:
   - Security headers
@@ -41,6 +46,9 @@ Do not scan third-party systems without written permission.
   - OWASP ZAP Baseline
 - Optional AI-generated executive summary for findings
 - Offline AI reasoner (local analysis when no API available)
+- Deterministic ML scoring service for explainable prioritization (no external model dependency)
+- Optional external ML microservice integration (score, attack paths, remediation plan, false-positive candidates)
+- Optional ONNX model-backed scoring in the ML service via `ML_MODEL_PATH`
 
 ## Quick Start
 
@@ -81,7 +89,11 @@ Body:
   },
   "options": {
     "useNucleiIntegration": false,
-    "useZapBaselineIntegration": false
+    "useZapBaselineIntegration": false,
+    "useMlTriageAgent": true,
+    "useAttackPathAgent": true,
+    "useFalsePositiveReviewAgent": true,
+    "useRemediationPlannerAgent": true
   }
 }
 ```
@@ -96,8 +108,11 @@ Returns job state and findings.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - Job records are stored in PostgreSQL table `scans`.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
-- Scans execute agents in sequence: reconnaissance → scanning → wordlist → analysis → reporting. Each agent enriches the findings pipeline.
-- All agents are enabled by default; disable via code configuration if desired.
+- Scans execute agents in sequence: reconnaissance → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.
+- ML agents can be controlled per deployment with `ENABLE_ML_TRIAGE_AGENT`, `ENABLE_ATTACK_PATH_AGENT`, `ENABLE_FALSE_POSITIVE_REVIEW_AGENT`, and `ENABLE_REMEDIATION_PLANNER_AGENT`.
+- ML agents can also be toggled per scan request via scan `options` in the API or frontend form.
+- If `ML_SERVICE_URL` is configured and reachable, ML scoring is delegated to the external service (`/v1/score-findings`, `/v1/attack-paths`, `/v1/remediation-plan`, `/v1/false-positive-candidates`) with automatic fallback to deterministic local logic.
+- Set `ML_MODEL_PATH` (compose env) to enable ONNX-backed scoring in `ml-service`; if model loading or inference fails, the service automatically uses its heuristic scorer.
 - Wordlist agent discovers endpoints by HTTP status code (200-399 range) with concurrent checking (5 parallel requests by default).
 - Wordlists include embedded defaults + optional external sources (SecLists, Kiterunner) with local caching.
 - External wordlist sources are downloaded on-demand, cached for 24 hours, and fall back to embedded defaults if unavailable.

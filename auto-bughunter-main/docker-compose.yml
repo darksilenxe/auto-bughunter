@@ -10,16 +10,6 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
 
-  ml-service:
-    build:
-      context: ./ml-service
-    environment:
-      MODEL_PATH: ${ML_MODEL_PATH:-}
-    ports:
-      - "8090:8090"
-    volumes:
-      - ./ml-service/models:/models:ro
-
   backend:
     build:
       context: ./backend
@@ -27,9 +17,9 @@ services:
       - .env
     ports:
       - "8080:8080"
+      - "8081:8081"
     depends_on:
       - db
-      - ml-service
 
   frontend:
     build:
@@ -41,5 +31,27 @@ services:
     depends_on:
       - backend
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    profiles: ["ai"]
+    ports:
+      - "3001:8080"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      - ollama
+    volumes:
+      - openwebui_data:/app/backend/data
+
 volumes:
   db_data:
+  ollama_data:
+  openwebui_data:

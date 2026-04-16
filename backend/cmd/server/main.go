@@ -46,7 +46,16 @@ func main() {
 		os.Getenv("AI_MODEL"),
 	)
 
-	server := api.NewServer(scanService, aiClient, allowed, repo)
+	agentConfig := api.AgentConfig{
+		EnableMLTriageAgent:      getbool("ENABLE_ML_TRIAGE_AGENT", true),
+		EnableAttackPathAgent:    getbool("ENABLE_ATTACK_PATH_AGENT", true),
+		EnableFalsePositiveAgent: getbool("ENABLE_FALSE_POSITIVE_REVIEW_AGENT", true),
+		EnableRemediationAgent:   getbool("ENABLE_REMEDIATION_PLANNER_AGENT", true),
+		MLServiceURL:             strings.TrimSpace(os.Getenv("ML_SERVICE_URL")),
+		MLServiceTimeout:         time.Duration(getint("ML_SERVICE_TIMEOUT_MS", 3000)) * time.Millisecond,
+	}
+
+	server := api.NewServer(scanService, aiClient, allowed, repo, agentConfig)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,

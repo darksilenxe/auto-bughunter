@@ -12,6 +12,7 @@ import (
 
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scanner"
 
@@ -19,11 +20,21 @@ import (
 )
 
 type Server struct {
-	scanService   *scanner.Service
-	aiClient      *ai.Client
-	allowed       map[string]struct{}
-	repo          Repository
-	agentRegistry *agent.Registry
+	scanService *scanner.Service
+	aiClient    *ai.Client
+	allowed     map[string]struct{}
+	repo        Repository
+	mlService   *ml.Service
+	agentConfig AgentConfig
+}
+
+type AgentConfig struct {
+	EnableMLTriageAgent      bool
+	EnableAttackPathAgent    bool
+	EnableFalsePositiveAgent bool
+	EnableRemediationAgent   bool
+	MLServiceURL             string
+	MLServiceTimeout         time.Duration
 }
 
 type Repository interface {
@@ -32,7 +43,7 @@ type Repository interface {
 	GetJob(ctx context.Context, id string) (*model.ScanJob, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts []string, repo Repository, agentConfig AgentConfig) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -41,24 +52,16 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, allowedHosts [
 		}
 	}
 
-	reg := agent.NewRegistry()
-	reg.Register(agent.NewReconnaissanceAgent(true))
-	reg.Register(agent.NewScanningAgent(scanService, true))
-	reg.Register(agent.NewInputValidationAgent(true))
-	reg.Register(agent.NewInformationDisclosureAgent(true))
-	reg.Register(agent.NewAccessControlAgent(true))
-	reg.Register(agent.NewAPISecurityAgent(true))
-	reg.Register(agent.NewCORSRedirectAgent(true))
-	reg.Register(agent.NewWordlistAgent(true))
-	reg.Register(agent.NewAnalysisAgent(true))
-	reg.Register(agent.NewReportingAgent(true))
-
 	return &Server{
-		scanService:   scanService,
-		aiClient:      aiClient,
-		allowed:       allowed,
-		repo:          repo,
-		agentRegistry: reg,
+		scanService: scanService,
+		aiClient:    aiClient,
+		allowed:     allowed,
+		repo:        repo,
+		mlService: ml.NewService(ml.Config{
+			ExternalURL: agentConfig.MLServiceURL,
+			Timeout:     agentConfig.MLServiceTimeout,
+		}),
+		agentConfig: agentConfig,
 	}
 }
 
@@ -169,7 +172,8 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 		Options:     options,
 	}
 
-	_, findings, err := s.agentRegistry.RunAll(ctx, input)
+	registry := s.newRegistry(options)
+	_, findings, err := registry.RunAll(ctx, input)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
@@ -184,6 +188,33 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, op
 	job.Findings = findings
 	job.AISummary = s.aiClient.Summarize(context.Background(), target, findings)
 	_ = s.repo.UpdateJob(context.Background(), job)
+}
+
+func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
+	reg := agent.NewRegistry()
+
+	reg.Register(agent.NewReconnaissanceAgent(true))
+	reg.Register(agent.NewScanningAgent(s.scanService, true))
+	reg.Register(agent.NewInputValidationAgent(true))
+	reg.Register(agent.NewInformationDisclosureAgent(true))
+	reg.Register(agent.NewAccessControlAgent(true))
+	reg.Register(agent.NewAPISecurityAgent(true))
+	reg.Register(agent.NewCORSRedirectAgent(true))
+	reg.Register(agent.NewWordlistAgent(true))
+	reg.Register(agent.NewAnalysisAgent(true))
+
+	mlTriageEnabled := s.agentConfig.EnableMLTriageAgent && options.UseMLTriageAgent
+	attackPathEnabled := s.agentConfig.EnableAttackPathAgent && options.UseAttackPathAgent
+	falsePositiveEnabled := s.agentConfig.EnableFalsePositiveAgent && options.UseFalsePositiveReview
+	remediationEnabled := s.agentConfig.EnableRemediationAgent && options.UseRemediationPlanner
+
+	reg.Register(agent.NewMLTriageAgent(s.mlService, mlTriageEnabled))
+	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
+	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
+	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
+	reg.Register(agent.NewReportingAgent(true))
+
+	return reg
 }
 
 func normalizeAndValidateTarget(raw string) (string, string, error) {

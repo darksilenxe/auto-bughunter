@@ -45,6 +45,10 @@ type ScanAuthProfileSummary struct {
 type ScanOptions struct {
 	UseNucleiIntegration      bool `json:"useNucleiIntegration,omitempty"`
 	UseZAPBaselineIntegration bool `json:"useZapBaselineIntegration,omitempty"`
+	UseMLTriageAgent          bool `json:"useMlTriageAgent,omitempty"`
+	UseAttackPathAgent        bool `json:"useAttackPathAgent,omitempty"`
+	UseFalsePositiveReview    bool `json:"useFalsePositiveReviewAgent,omitempty"`
+	UseRemediationPlanner     bool `json:"useRemediationPlannerAgent,omitempty"`
 }
 
 type ScanJob struct {

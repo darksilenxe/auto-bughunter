@@ -11,6 +11,10 @@ export default function App() {
   const [basicAuthPassword, setBasicAuthPassword] = useState("");
   const [useNucleiIntegration, setUseNucleiIntegration] = useState(false);
   const [useZapBaselineIntegration, setUseZapBaselineIntegration] = useState(false);
+  const [useMlTriageAgent, setUseMlTriageAgent] = useState(true);
+  const [useAttackPathAgent, setUseAttackPathAgent] = useState(true);
+  const [useFalsePositiveReviewAgent, setUseFalsePositiveReviewAgent] = useState(true);
+  const [useRemediationPlannerAgent, setUseRemediationPlannerAgent] = useState(true);
   const [scanId, setScanId] = useState("");
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -51,6 +55,10 @@ export default function App() {
           options: {
             useNucleiIntegration,
             useZapBaselineIntegration,
+            useMlTriageAgent,
+            useAttackPathAgent,
+            useFalsePositiveReviewAgent,
+            useRemediationPlannerAgent,
           },
         }),
       });
@@ -181,6 +189,42 @@ export default function App() {
             Run optional ZAP Baseline integration
           </label>
 
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useMlTriageAgent}
+              onChange={(e) => setUseMlTriageAgent(e.target.checked)}
+            />
+            Run ML triage agent
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useAttackPathAgent}
+              onChange={(e) => setUseAttackPathAgent(e.target.checked)}
+            />
+            Run attack path agent
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useFalsePositiveReviewAgent}
+              onChange={(e) => setUseFalsePositiveReviewAgent(e.target.checked)}
+            />
+            Run false positive review agent
+          </label>
+
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={useRemediationPlannerAgent}
+              onChange={(e) => setUseRemediationPlannerAgent(e.target.checked)}
+            />
+            Run remediation planner agent
+          </label>
+
           <button disabled={loading}>{loading ? "Running..." : "Start Scan"}</button>
         </form>
         {error && <p className="error">{error}</p>}
@@ -196,7 +240,7 @@ export default function App() {
             </p>
           )}
           <p className="meta">
-            Integrations requested: nuclei={job.options?.useNucleiIntegration ? "yes" : "no"}, zapBaseline={job.options?.useZapBaselineIntegration ? "yes" : "no"}
+            Integrations requested: nuclei={job.options?.useNucleiIntegration ? "yes" : "no"}, zapBaseline={job.options?.useZapBaselineIntegration ? "yes" : "no"}, mlTriage={job.options?.useMlTriageAgent ? "yes" : "no"}, attackPath={job.options?.useAttackPathAgent ? "yes" : "no"}, falsePositiveReview={job.options?.useFalsePositiveReviewAgent ? "yes" : "no"}, remediationPlanner={job.options?.useRemediationPlannerAgent ? "yes" : "no"}
           </p>
           <div className="stats">
             <span className="pill high">High: {severityCounts.high}</span>
