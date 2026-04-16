@@ -11,6 +11,8 @@ import (
 
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
+	"auto-bughunter/backend/internal/ml"
+	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/storage"
 	"auto-bughunter/backend/internal/wordlist"
@@ -18,6 +20,7 @@ import (
 
 func main() {
 	port := getenv("PORT", "8080")
+	proxyPort := getenv("PROXY_PORT", "8081")
 	allowed := splitCSV(os.Getenv("ALLOWED_TARGETS"))
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
 
@@ -36,31 +39,86 @@ func main() {
 	scanService := scanner.NewService(scanner.Config{
 		EnableNuclei:       getbool("ENABLE_NUCLEI_INTEGRATION", false),
 		EnableZAPBaseline:  getbool("ENABLE_ZAP_BASELINE_INTEGRATION", false),
+		EnableSubfinder:    getbool("ENABLE_SUBFINDER_INTEGRATION", false),
+		EnableHttpx:        getbool("ENABLE_HTTPX_INTEGRATION", false),
+		EnableNaabu:        getbool("ENABLE_NAABU_INTEGRATION", false),
+		EnableDnsx:         getbool("ENABLE_DNSX_INTEGRATION", false),
+		EnableShuffleDNS:   getbool("ENABLE_SHUFFLEDNS_INTEGRATION", false),
+		EnableCertTrans:    getbool("ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION", false),
+		EnableAmass:        getbool("ENABLE_AMASS_INTEGRATION", false),
+		EnableKatana:       getbool("ENABLE_KATANA_INTEGRATION", false),
+		EnableTlsx:         getbool("ENABLE_TLSX_INTEGRATION", false),
+		EnableCdncheck:     getbool("ENABLE_CDNCHECK_INTEGRATION", false),
+		EnableAsnmap:       getbool("ENABLE_ASNMAP_INTEGRATION", false),
+		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
+		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
+		EnableSQLMap:       getbool("ENABLE_SQLMAP_INTEGRATION", false),
+		EnableFFUF:         getbool("ENABLE_FFUF_INTEGRATION", false),
+		EnableGobuster:     getbool("ENABLE_GOBUSTER_INTEGRATION", false),
+		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
+		SubfinderBinary:    getenv("SUBFINDER_BINARY", "subfinder"),
+		HttpxBinary:        getenv("HTTPX_BINARY", "httpx"),
+		NaabuBinary:        getenv("NAABU_BINARY", "naabu"),
+		DnsxBinary:         getenv("DNSX_BINARY", "dnsx"),
+		ShuffleDNSBinary:   getenv("SHUFFLEDNS_BINARY", "shuffledns"),
+		KatanaBinary:       getenv("KATANA_BINARY", "katana"),
+		TlsxBinary:         getenv("TLSX_BINARY", "tlsx"),
+		CdncheckBinary:     getenv("CDNCHECK_BINARY", "cdncheck"),
+		AsnmapBinary:       getenv("ASNMAP_BINARY", "asnmap"),
+		FFUFBinary:         getenv("FFUF_BINARY", "ffuf"),
+		GobusterBinary:     getenv("GOBUSTER_BINARY", "gobuster"),
 		IntegrationTimeout: time.Duration(getint("INTEGRATION_TIMEOUT_SECONDS", 90)) * time.Second,
+		DefaultMaxRetries:  getint("DEFAULT_MAX_RETRIES", 1),
+		DefaultBackoff:     time.Duration(getint("DEFAULT_BACKOFF_MILLIS", 400)) * time.Millisecond,
 	})
 	aiClient := ai.NewClient(
 		os.Getenv("AI_API_BASE"),
 		os.Getenv("AI_API_KEY"),
 		os.Getenv("AI_MODEL"),
 	)
+	mlService := ml.NewService(ml.Config{
+		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
+	})
 
-	agentConfig := api.AgentConfig{
-		EnableMLTriageAgent:      getbool("ENABLE_ML_TRIAGE_AGENT", true),
-		EnableAttackPathAgent:    getbool("ENABLE_ATTACK_PATH_AGENT", true),
-		EnableFalsePositiveAgent: getbool("ENABLE_FALSE_POSITIVE_REVIEW_AGENT", true),
-		EnableRemediationAgent:   getbool("ENABLE_REMEDIATION_PLANNER_AGENT", true),
-		MLServiceURL:             strings.TrimSpace(os.Getenv("ML_SERVICE_URL")),
-		MLServiceTimeout:         time.Duration(getint("ML_SERVICE_TIMEOUT_MS", 3000)) * time.Millisecond,
-	}
-
-	server := api.NewServer(scanService, aiClient, allowed, repo, agentConfig)
+	server := api.NewServer(
+		scanService,
+		aiClient,
+		mlService,
+		allowed,
+		repo,
+		repo,
+		getint("MAX_PER_TARGET_CONCURRENCY", 3),
+		getint("GLOBAL_SCAN_BUDGET", 5),
+		api.AgentConfig{
+			EnableMLTriageAgent:      getbool("ENABLE_ML_TRIAGE_AGENT", true),
+			EnableAttackPathAgent:    getbool("ENABLE_ATTACK_PATH_AGENT", true),
+			EnableFalsePositiveAgent: getbool("ENABLE_FALSE_POSITIVE_REVIEW_AGENT", true),
+			EnableRemediationAgent:   getbool("ENABLE_REMEDIATION_PLANNER_AGENT", true),
+		},
+	)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,
 		Handler:           server.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Start the intercepting proxy listener if enabled.
+	if getbool("ENABLE_PROXY", false) {
+		proxyHandler := proxy.NewServer(repo)
+		proxyHttpServer := &http.Server{
+			Addr:              ":" + proxyPort,
+			Handler:           proxyHandler,
+			ReadHeaderTimeout: 30 * time.Second,
+		}
+		go func() {
+			log.Printf("intercepting proxy listening on :%s — configure your browser/tool to use localhost:%s as HTTP proxy", proxyPort, proxyPort)
+			if err := proxyHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("proxy server error: %v", err)
+			}
+		}()
 	}
 
 	log.Printf("backend listening on :%s", port)

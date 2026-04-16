@@ -4,14 +4,19 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
+	"auto-bughunter/backend/internal/scope"
 )
 
 type Service struct {
@@ -20,28 +25,99 @@ type Service struct {
 }
 
 type Config struct {
-	EnableNuclei       bool
-	EnableZAPBaseline  bool
-	NucleiBinary       string
-	ZAPBaselineBinary  string
+	EnableNuclei      bool
+	EnableZAPBaseline bool
+	EnableSubfinder   bool
+	EnableHttpx       bool
+	EnableNaabu       bool
+	EnableDnsx        bool
+	EnableShuffleDNS  bool
+	EnableCertTrans   bool
+	EnableAmass       bool
+	EnableKatana      bool
+	EnableTlsx        bool
+	EnableCdncheck    bool
+	EnableAsnmap      bool
+	EnableWPScan      bool
+	EnableNikto       bool
+	EnableSQLMap      bool
+	EnableFFUF        bool
+	EnableGobuster    bool
+	AllowDestructive  bool
+	NucleiBinary      string
+	ZAPBaselineBinary string
+	SubfinderBinary   string
+	HttpxBinary       string
+	NaabuBinary       string
+	DnsxBinary        string
+	ShuffleDNSBinary  string
+	KatanaBinary      string
+	TlsxBinary        string
+	CdncheckBinary    string
+	AsnmapBinary      string
+	FFUFBinary        string
+	GobusterBinary    string
+
 	IntegrationTimeout time.Duration
+	DefaultMaxRetries  int
+	DefaultBackoff     time.Duration
 }
 
 type RunInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
+	Scope       model.ScanScope
 }
 
 func NewService(cfg Config) *Service {
 	if cfg.IntegrationTimeout <= 0 {
 		cfg.IntegrationTimeout = 90 * time.Second
 	}
+	if cfg.DefaultMaxRetries < 0 {
+		cfg.DefaultMaxRetries = 0
+	}
+	if cfg.DefaultBackoff <= 0 {
+		cfg.DefaultBackoff = 400 * time.Millisecond
+	}
 	if strings.TrimSpace(cfg.NucleiBinary) == "" {
 		cfg.NucleiBinary = "nuclei"
 	}
 	if strings.TrimSpace(cfg.ZAPBaselineBinary) == "" {
 		cfg.ZAPBaselineBinary = "zap-baseline.py"
+	}
+	if strings.TrimSpace(cfg.SubfinderBinary) == "" {
+		cfg.SubfinderBinary = "subfinder"
+	}
+	if strings.TrimSpace(cfg.HttpxBinary) == "" {
+		cfg.HttpxBinary = "httpx"
+	}
+	if strings.TrimSpace(cfg.NaabuBinary) == "" {
+		cfg.NaabuBinary = "naabu"
+	}
+	if strings.TrimSpace(cfg.DnsxBinary) == "" {
+		cfg.DnsxBinary = "dnsx"
+	}
+	if strings.TrimSpace(cfg.ShuffleDNSBinary) == "" {
+		cfg.ShuffleDNSBinary = "shuffledns"
+	}
+	if strings.TrimSpace(cfg.KatanaBinary) == "" {
+		cfg.KatanaBinary = "katana"
+	}
+	if strings.TrimSpace(cfg.TlsxBinary) == "" {
+		cfg.TlsxBinary = "tlsx"
+	}
+	if strings.TrimSpace(cfg.CdncheckBinary) == "" {
+		cfg.CdncheckBinary = "cdncheck"
+	}
+	if strings.TrimSpace(cfg.AsnmapBinary) == "" {
+		cfg.AsnmapBinary = "asnmap"
+	}
+	if strings.TrimSpace(cfg.FFUFBinary) == "" {
+		cfg.FFUFBinary = "ffuf"
+	}
+	if strings.TrimSpace(cfg.GobusterBinary) == "" {
+		cfg.GobusterBinary = "gobuster"
 	}
 
 	return &Service{
@@ -58,12 +134,26 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("unsupported scheme")
 	}
+	if err := safety.ValidateOutboundURL(input.Target); err != nil {
+		return nil, fmt.Errorf("target blocked by ssrf policy: %w", err)
+	}
+	if !scope.IsURLInScope(input.Target, input.Scope) {
+		return nil, fmt.Errorf("target is outside configured scan scope")
+	}
+
+	if input.Options.RequestDelayMillis > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(input.Options.RequestDelayMillis) * time.Millisecond):
+		}
+	}
 
 	var findings []model.Finding
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -75,7 +165,13 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, checkTLS(u.Host)...)
 	}
 
-	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile)
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	bodyText := string(bodyBytes)
+
+	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
+	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
+
+	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",
@@ -94,6 +190,294 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, integrationFindings...)
 
 	return findings, nil
+}
+
+func discoverRuntimeSurface(target, body string, scanScope model.ScanScope) []model.Finding {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+	endpoints := extractRuntimeEndpoints(target, body, scanScope, 18)
+	if len(endpoints) == 0 {
+		return nil
+	}
+
+	findings := []model.Finding{
+		{
+			ID:             "runtime-surface-endpoints",
+			Category:       "discovery",
+			Severity:       model.SeverityInfo,
+			Title:          fmt.Sprintf("Runtime endpoint expansion discovered %d candidate endpoints", len(endpoints)),
+			Description:    "Response content analysis discovered additional API/documentation endpoints from runtime hints (JS/OpenAPI/GraphQL-style markers).",
+			Evidence:       strings.Join(endpoints, ", "),
+			Recommendation: "Prioritize these discovered endpoints for authenticated authorization and input-validation testing.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Parse response body for endpoint markers and validate in-scope URLs",
+			},
+		},
+	}
+
+	lower := strings.ToLower(strings.Join(endpoints, ","))
+	if strings.Contains(lower, "graphql") {
+		findings = append(findings, model.Finding{
+			ID:             "runtime-graphql-surface",
+			Category:       "api",
+			Severity:       model.SeverityInfo,
+			Title:          "GraphQL surface hint detected",
+			Description:    "Runtime analysis indicates GraphQL-related routes that may require schema-level auth and introspection hardening checks.",
+			Evidence:       strings.Join(filterContains(endpoints, "graphql", 6), ", "),
+			Recommendation: "Verify introspection policy, field-level authorization, and resolver input validation.",
+		})
+	}
+	if strings.Contains(lower, "openapi") || strings.Contains(lower, "swagger") || strings.Contains(lower, "api-docs") {
+		findings = append(findings, model.Finding{
+			ID:             "runtime-openapi-surface",
+			Category:       "api",
+			Severity:       model.SeverityInfo,
+			Title:          "API documentation endpoint hint detected",
+			Description:    "Runtime analysis indicates OpenAPI/Swagger documentation endpoints that can expand attack-surface coverage.",
+			Evidence:       strings.Join(filterAnyContains(endpoints, []string{"openapi", "swagger", "api-docs"}, 6), ", "),
+			Recommendation: "Enumerate documented routes and test authorization consistency across endpoints.",
+		})
+	}
+	return findings
+}
+
+func runContextualParamProbes(ctx context.Context, target, body string, auth model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, service *Service) []model.Finding {
+	candidates := extractRuntimeEndpoints(target, body, scanScope, 10)
+	if len(options.SeedRuntimeEndpoints) > 0 {
+		candidates = append(candidates, options.SeedRuntimeEndpoints...)
+	}
+	if len(candidates) == 0 {
+		candidates = []string{target}
+	}
+
+	params := []string{"id", "user", "account", "q", "search", "next", "redirect", "url", "file", "path"}
+	marker := "ABH_REFLECT_PROBE_7f9e2"
+	reflections := make([]string, 0)
+	serverErrors := make([]string, 0)
+
+	maxAttempts := 12
+	if options.GlobalScanBudget > 0 && options.GlobalScanBudget < maxAttempts {
+		maxAttempts = options.GlobalScanBudget
+	}
+	attempts := 0
+	for _, raw := range candidates {
+		if attempts >= maxAttempts {
+			break
+		}
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			continue
+		}
+		for _, p := range params {
+			if attempts >= maxAttempts {
+				break
+			}
+			probe := *u
+			q := probe.Query()
+			q.Set(p, marker)
+			probe.RawQuery = q.Encode()
+			if !scope.IsURLInScope(probe.String(), scanScope) {
+				continue
+			}
+			if err := safety.ValidateOutboundURL(probe.String()); err != nil {
+				continue
+			}
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, probe.String(), nil)
+			ApplyAuthProfile(req, auth)
+			resp, err := service.doRequestWithRetry(ctx, req, options)
+			if err != nil {
+				continue
+			}
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			_ = resp.Body.Close()
+			attempts++
+			bodyLower := strings.ToLower(string(respBody))
+			if strings.Contains(bodyLower, strings.ToLower(marker)) {
+				reflections = append(reflections, probe.String())
+			}
+			if resp.StatusCode >= 500 {
+				serverErrors = append(serverErrors, fmt.Sprintf("%s status=%d", probe.String(), resp.StatusCode))
+			}
+		}
+	}
+
+	findings := make([]model.Finding, 0, 2)
+	if len(reflections) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "contextual-param-reflection",
+			Category:       "input-validation",
+			Severity:       model.SeverityMedium,
+			Title:          "Context-aware probe found reflected parameter input",
+			Description:    "Safe parameter probing observed direct reflection of probe values in responses, which can indicate weak output encoding or input handling paths.",
+			Evidence:       strings.Join(limitStrings(reflections, 6), ", "),
+			Recommendation: "Validate context-aware output encoding and add targeted injection testing for these reflected parameters.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Replay listed URL with marker payload and inspect reflected output",
+			},
+		})
+	}
+	if len(serverErrors) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "contextual-param-error-signal",
+			Category:       "input-validation",
+			Severity:       model.SeverityLow,
+			Title:          "Context-aware probe triggered server error paths",
+			Description:    "Safe parameter probing produced server-side errors that may indicate fragile parser/query handling in specific parameters.",
+			Evidence:       strings.Join(limitStrings(serverErrors, 6), "; "),
+			Recommendation: "Inspect these endpoints for robust validation and add targeted non-destructive input tests.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Replay listed URLs and inspect server logs/trace IDs for parsing exceptions",
+			},
+		})
+	}
+	return findings
+}
+
+func extractRuntimeEndpoints(target, body string, scanScope model.ScanScope, max int) []string {
+	if max <= 0 {
+		max = 12
+	}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		resolved := resolveEndpoint(target, value)
+		if resolved == "" || !scope.IsURLInScope(resolved, scanScope) {
+			return
+		}
+		if err := safety.ValidateOutboundURL(resolved); err != nil {
+			return
+		}
+		seen[resolved] = struct{}{}
+	}
+
+	scriptSrc := regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
+	for _, m := range scriptSrc.FindAllStringSubmatch(body, -1) {
+		if len(m) > 1 {
+			add(m[1])
+		}
+	}
+
+	quotedPath := regexp.MustCompile(`["'](\/(?:api|graphql|openapi|swagger|api-docs)[^"'\s]*)["']`)
+	for _, m := range quotedPath.FindAllStringSubmatch(body, -1) {
+		if len(m) > 1 {
+			add(m[1])
+		}
+	}
+
+	for _, staticPath := range []string{"/openapi.json", "/swagger.json", "/api-docs", "/graphql"} {
+		add(staticPath)
+	}
+
+	out := make([]string, 0, len(seen))
+	for endpoint := range seen {
+		out = append(out, endpoint)
+	}
+	sort.Strings(out)
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
+}
+
+func resolveEndpoint(baseTarget, endpoint string) string {
+	base, err := url.Parse(baseTarget)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return ""
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	if parsed.Scheme != "" && parsed.Host != "" {
+		return parsed.String()
+	}
+	return base.ResolveReference(parsed).String()
+}
+
+func filterContains(items []string, keyword string, max int) []string {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(item), keyword) {
+			out = append(out, item)
+		}
+	}
+	if len(out) > max {
+		return out[:max]
+	}
+	return out
+}
+
+func filterAnyContains(items []string, keywords []string, max int) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		lower := strings.ToLower(item)
+		for _, keyword := range keywords {
+			if strings.Contains(lower, strings.ToLower(strings.TrimSpace(keyword))) {
+				out = append(out, item)
+				break
+			}
+		}
+	}
+	if len(out) > max {
+		return out[:max]
+	}
+	return out
+}
+
+func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, options model.ScanOptions) (*http.Response, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is nil")
+	}
+	maxRetries := s.cfg.DefaultMaxRetries
+	if options.MaxRetries > 0 {
+		maxRetries = options.MaxRetries
+	}
+	backoff := s.cfg.DefaultBackoff
+	if options.BackoffMillis > 0 {
+		backoff = time.Duration(options.BackoffMillis) * time.Millisecond
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		cloned := req.Clone(ctx)
+		resp, err := s.httpClient.Do(cloned)
+		if err == nil && !isRetriableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		if err == nil && resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			lastErr = fmt.Errorf("retriable response status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if attempt == maxRetries {
+			break
+		}
+		wait := backoff * time.Duration(attempt+1)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, lastErr
+}
+
+func isRetriableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
 }
 
 func ApplyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
@@ -144,6 +528,10 @@ func checkSecurityHeaders(h http.Header) []model.Finding {
 				Description:    "The response is missing a commonly recommended security header.",
 				Evidence:       header + " not present",
 				Recommendation: rec,
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET / and inspect response headers",
+				},
 			})
 		}
 	}
@@ -162,6 +550,10 @@ func checkCookies(resp *http.Response) []model.Finding {
 				Description:    "A cookie was observed without HttpOnly.",
 				Evidence:       c.Name,
 				Recommendation: "Set HttpOnly for session/auth cookies.",
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET / and inspect Set-Cookie attributes",
+				},
 			})
 		}
 		if !c.Secure && resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Scheme == "https" {
@@ -173,6 +565,10 @@ func checkCookies(resp *http.Response) []model.Finding {
 				Description:    "A cookie was observed without Secure on an HTTPS target.",
 				Evidence:       c.Name,
 				Recommendation: "Set Secure for sensitive cookies.",
+				EvidenceFields: map[string]string{
+					"validationType": "safe-observation",
+					"reproStep":      "GET HTTPS endpoint and inspect Set-Cookie attributes",
+				},
 			})
 		}
 	}
@@ -197,6 +593,10 @@ func checkTLS(host string) []model.Finding {
 			Description:    "Could not complete TLS handshake with minimum TLS 1.2.",
 			Evidence:       err.Error(),
 			Recommendation: "Ensure valid certificates and modern TLS configuration.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "openssl s_client -connect " + addr + " -tls1_2",
+			},
 		})
 		return findings
 	}
@@ -212,6 +612,10 @@ func checkTLS(host string) []model.Finding {
 			Description:    "The endpoint negotiated an outdated TLS version.",
 			Evidence:       fmt.Sprintf("tlsVersion=%x", state.Version),
 			Recommendation: "Disable TLS 1.0/1.1 and enforce TLS 1.2+.",
+			EvidenceFields: map[string]string{
+				"validationType": "safe-observation",
+				"reproStep":      "Check negotiated TLS version against policy",
+			},
 		})
 	}
 
@@ -226,6 +630,11 @@ func checkTLS(host string) []model.Finding {
 				Description:    "Leaf certificate is close to expiration.",
 				Evidence:       notAfter.UTC().Format(time.RFC3339),
 				Recommendation: "Rotate certificate before expiration to avoid outages.",
+				EvidenceFields: map[string]string{
+					"validationType":  "safe-observation",
+					"reproStep":       "Inspect leaf certificate NotAfter",
+					"daysUntilExpiry": strconv.Itoa(int(time.Until(notAfter).Hours() / 24)),
+				},
 			})
 		}
 	}

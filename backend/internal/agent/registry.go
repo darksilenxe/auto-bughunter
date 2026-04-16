@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -17,17 +19,24 @@ type AgentInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
+	Scope       model.ScanScope
 	Previous    AgentOutput
 	History     []AgentOutput
 	AllFindings []model.Finding
 }
 
 type AgentOutput struct {
-	AgentName  string
-	Findings   []model.Finding
-	Metadata   map[string]string
-	Status     string
-	DebugNotes string
+	AgentName   string
+	Findings    []model.Finding
+	Metadata    map[string]string
+	Status      string
+	DebugNotes  string
+	StartedAt   time.Time
+	CompletedAt time.Time
+	DurationMs  int64
+	TimedOut    bool
+	Error       string
+	Telemetry   model.AgentRunTelemetry
 }
 
 type Registry struct {
@@ -57,6 +66,7 @@ func (r *Registry) Get(name string) Agent {
 func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput, []model.Finding, error) {
 	outputs := make([]AgentOutput, 0, len(r.order))
 	allFindings := make([]model.Finding, 0)
+	cumulativeFindings := make([]model.Finding, 0)
 
 	for _, name := range r.order {
 		agent := r.agents[name]
@@ -74,18 +84,37 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 		if len(outputs) > 0 {
 			input.Previous = outputs[len(outputs)-1]
 		}
-		input.History = append([]AgentOutput(nil), outputs...)
-		input.AllFindings = append([]model.Finding(nil), combineFindingsWithDedup(allFindings)...)
 
+		startedAt := time.Now().UTC()
 		output, err := agent.Run(ctx, input)
+		completedAt := time.Now().UTC()
 		if err != nil {
 			output.Status = "error"
 			output.DebugNotes = err.Error()
+			output.Error = err.Error()
+			output.TimedOut = strings.Contains(strings.ToLower(err.Error()), "deadline exceeded")
 		}
 		if output.AgentName == "" {
 			output.AgentName = agent.Name()
 		}
+		if output.Status == "" {
+			output.Status = "completed"
+		}
+		output.StartedAt = startedAt
+		output.CompletedAt = completedAt
+		output.DurationMs = completedAt.Sub(startedAt).Milliseconds()
+		output.Telemetry = model.AgentRunTelemetry{
+			AgentName:   output.AgentName,
+			Status:      output.Status,
+			StartedAt:   output.StartedAt,
+			CompletedAt: output.CompletedAt,
+			DurationMs:  output.DurationMs,
+			TimedOut:    output.TimedOut,
+			Error:       output.Error,
+			Metadata:    output.Metadata,
+		}
 		outputs = append(outputs, output)
+		cumulativeFindings = append(cumulativeFindings, output.Findings...)
 		allFindings = append(allFindings, output.Findings...)
 	}
 

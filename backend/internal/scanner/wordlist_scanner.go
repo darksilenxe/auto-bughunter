@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/wordlist"
 )
 
@@ -34,11 +35,11 @@ func NewWordlistScanner(maxConcurrency int, timeoutPerCheck time.Duration) *Word
 	}
 }
 
-func (ws *WordlistScanner) ScanDirectories(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+func (ws *WordlistScanner) ScanDirectories(ctx context.Context, target string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) []model.Finding {
 	findings := make([]model.Finding, 0)
 
 	dirs := wordlist.GetCommonDirectoriesWithExternal(ctx)
-	discovered := ws.checkMultiple(ctx, target, dirs, authProfile)
+	discovered := ws.checkMultiple(ctx, target, dirs, authProfile, scanScope)
 
 	if len(discovered) > 0 {
 		evidence := strings.Join(discovered, ", ")
@@ -56,7 +57,7 @@ func (ws *WordlistScanner) ScanDirectories(ctx context.Context, target string, a
 	return findings
 }
 
-func (ws *WordlistScanner) ScanSubdomains(ctx context.Context, target string) []model.Finding {
+func (ws *WordlistScanner) ScanSubdomains(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
 	findings := make([]model.Finding, 0)
 	host := extractHostFromURL(target)
 	if host == "" {
@@ -74,6 +75,9 @@ func (ws *WordlistScanner) ScanSubdomains(ctx context.Context, target string) []
 		}
 
 		testHost := sub + "." + host
+		if !scope.IsHostInScope(testHost, scanScope) {
+			continue
+		}
 		ips, err := net.LookupIP(testHost)
 		if err == nil && len(ips) > 0 {
 			discovered = append(discovered, testHost)
@@ -96,11 +100,11 @@ func (ws *WordlistScanner) ScanSubdomains(ctx context.Context, target string) []
 	return findings
 }
 
-func (ws *WordlistScanner) ScanAPIEndpoints(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+func (ws *WordlistScanner) ScanAPIEndpoints(ctx context.Context, target string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) []model.Finding {
 	findings := make([]model.Finding, 0)
 
 	endpoints := wordlist.GetCommonAPIEndpointsWithExternal(ctx)
-	discovered := ws.checkMultiple(ctx, target, endpoints, authProfile)
+	discovered := ws.checkMultiple(ctx, target, endpoints, authProfile, scanScope)
 
 	if len(discovered) > 0 {
 		evidence := strings.Join(discovered, ", ")
@@ -118,7 +122,7 @@ func (ws *WordlistScanner) ScanAPIEndpoints(ctx context.Context, target string, 
 	return findings
 }
 
-func (ws *WordlistScanner) checkMultiple(ctx context.Context, target string, paths []string, authProfile model.ScanAuthProfile) []string {
+func (ws *WordlistScanner) checkMultiple(ctx context.Context, target string, paths []string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) []string {
 	discovered := make([]string, 0)
 	sem := make(chan struct{}, ws.maxConcurrency)
 	var mu sync.Mutex
@@ -141,7 +145,7 @@ func (ws *WordlistScanner) checkMultiple(ctx context.Context, target string, pat
 			checkCtx, cancel := context.WithTimeout(ctx, ws.timeoutPerCheck)
 			defer cancel()
 
-			if ws.isAccessible(checkCtx, target, p, authProfile) {
+			if ws.isAccessible(checkCtx, target, p, authProfile, scanScope) {
 				mu.Lock()
 				discovered = append(discovered, p)
 				mu.Unlock()
@@ -155,13 +159,16 @@ done:
 	return discovered
 }
 
-func (ws *WordlistScanner) isAccessible(ctx context.Context, target string, path string, authProfile model.ScanAuthProfile) bool {
+func (ws *WordlistScanner) isAccessible(ctx context.Context, target string, path string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) bool {
 	baseURL := target
 	if !strings.HasSuffix(baseURL, "/") {
 		baseURL += "/"
 	}
 	trimmedPath := strings.TrimPrefix(path, "/")
 	fullURL := baseURL + trimmedPath
+	if !scope.IsURLInScope(fullURL, scanScope) {
+		return false
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, fullURL, nil)
 	if err != nil {
