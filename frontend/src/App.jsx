@@ -366,6 +366,27 @@ export default function App() {
             </>
           )}
 
+          {job.status === "completed" && scanId && (
+            <div style={{ margin: "1rem 0" }}>
+              <a
+                href={`${API_BASE}/api/report/${scanId}`}
+                download={`scan-report-${scanId}.pdf`}
+                style={{
+                  display: "inline-block",
+                  padding: "0.5rem 1.2rem",
+                  background: "#1a6e3c",
+                  color: "#fff",
+                  borderRadius: "6px",
+                  textDecoration: "none",
+                  fontWeight: "600",
+                  fontSize: "0.95rem",
+                }}
+              >
+                ⬇ Download PDF Report
+              </a>
+            </div>
+          )}
+
           {job.findings?.length > 0 && (
             <>
               <h3>Findings</h3>
