@@ -2225,11 +2225,15 @@ func generateScanReportPDF(job *model.ScanJob) ([]byte, error) {
 	}
 
 	// Footer with page numbers
+	reportDate := job.StartedAt.UTC()
+	if job.CompletedAt != nil {
+		reportDate = job.CompletedAt.UTC()
+	}
 	pdf.SetFooterFunc(func() {
 		pdf.SetY(-12)
 		pdf.SetFont("Helvetica", "I", 8)
 		pdf.SetTextColor(150, 150, 150)
-		pdf.CellFormat(0, 5, fmt.Sprintf("Page %d — Auto Bughunter Report — %s", pdf.PageNo(), time.Now().UTC().Format("2006-01-02")), "", 0, "C", false, 0, "")
+		pdf.CellFormat(0, 5, fmt.Sprintf("Page %d — Auto Bughunter Report — %s", pdf.PageNo(), reportDate.Format("2006-01-02")), "", 0, "C", false, 0, "")
 	})
 
 	var buf bytes.Buffer
