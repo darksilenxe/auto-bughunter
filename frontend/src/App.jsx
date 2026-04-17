@@ -171,14 +171,17 @@ export default function App() {
   }
 
   async function pollScan(id) {
-    for (let i = 0; i < 80; i += 1) {
+    const POLL_INTERVAL_MS = 1500;
+    const POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+    const MAX_POLLS = Math.ceil(POLL_TIMEOUT_MS / POLL_INTERVAL_MS);
+    for (let i = 0; i < MAX_POLLS; i += 1) {
       const res = await fetch(`${API_BASE}/api/scan/${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Polling failed");
 
       setJob(data);
       if (data.status === "completed" || data.status === "failed") return;
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
     throw new Error("Scan timed out while polling");
   }

@@ -9,6 +9,12 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auto -d autobughunter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   ml-service:
     build:
@@ -29,8 +35,10 @@ services:
       - "8080:8080"
       - "8081:8081"
     depends_on:
-      - db
-      - ml-service
+      db:
+        condition: service_healthy
+      ml-service:
+        condition: service_started
 
   frontend:
     build:

@@ -57,6 +57,7 @@ type Server struct {
 	notifyMinConf float64
 	gateHighBlock int
 	gateMedBlock  int
+	scanTimeout   time.Duration
 }
 
 type Repository interface {
@@ -84,7 +85,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -108,6 +109,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if globalBudget <= 0 {
 		globalBudget = 5
 	}
+	if scanTimeout <= 0 {
+		scanTimeout = 10 * time.Minute
+	}
 	return &Server{
 		scanService:   scanService,
 		aiClient:      aiClient,
@@ -126,6 +130,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		notifyMinConf: maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
 		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
+		scanTimeout:   scanTimeout,
 	}
 }
 
@@ -300,7 +305,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.appendAuditEvent(id, "running", "Scan execution started")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
 	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope)
