@@ -548,6 +548,13 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
 
+	// Autonomous tool-building agents — run after core scanning so they have
+	// rich findings context to work from.  DynamicCommandAgent composes and
+	// executes validated CLI tool invocations; ToolBuilderAgent writes and
+	// runs custom Python probes for specialised tasks.
+	reg.Register(agent.NewDynamicCommandAgent(true))
+	reg.Register(agent.NewToolBuilderAgent(true))
+
 	mlTriageEnabled := s.agentConfig.EnableMLTriageAgent && options.UseMLTriageAgent
 	attackPathEnabled := s.agentConfig.EnableAttackPathAgent && options.UseAttackPathAgent
 	falsePositiveEnabled := s.agentConfig.EnableFalsePositiveAgent && options.UseFalsePositiveReview

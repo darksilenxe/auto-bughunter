@@ -42,6 +42,8 @@ KNOWN_AGENTS: List[str] = [
     "cors_redirect",
     "wordlist",
     "analysis",
+    "dynamic_commands",
+    "tool_builder",
     "ml_triage",
     "attack_path",
     "false_positive_review",
@@ -195,13 +197,345 @@ class QLearner:
 learner = QLearner()
 
 # ---------------------------------------------------------------------------
-# FastAPI app
+# FastAPI app  (must be defined before any @app.route decorators below)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Auto Bughunter Agent Learner", version="1.0.0")
 
+# ---------------------------------------------------------------------------
+# Command generation catalogue
+# ---------------------------------------------------------------------------
 
-# ---- Request / Response models ----------------------------------------
+# Maps finding signal → (binary, arg_template, rationale)
+COMMAND_RULES: List[tuple] = [
+    # (signal_fn, binary, args_factory, rationale)
+]
+
+def _has(findings: List[dict], field: str, substr: str) -> bool:
+    for f in findings:
+        val = str(f.get(field, "")).lower()
+        if substr in val:
+            return True
+    return False
+
+def _target_host(target: str) -> str:
+    from urllib.parse import urlparse
+    try:
+        return urlparse(target).hostname or target
+    except Exception:
+        return target
+
+
+class GenerateCommandRequest(BaseModel):
+    agentName: str = "agent"
+    target: str
+    findings: List[dict] = Field(default_factory=list)
+    maxCommands: int = 5
+
+
+class GeneratedCommand(BaseModel):
+    binary: str
+    args: List[str]
+    rationale: str
+    generatedBy: str
+    timeoutSeconds: int = 60
+
+
+class GenerateCommandResponse(BaseModel):
+    commands: List[GeneratedCommand]
+
+
+class BuildToolRequest(BaseModel):
+    agentName: str = "agent"
+    target: str
+    taskDescription: str
+    findings: List[dict] = Field(default_factory=list)
+
+
+class BuiltTool(BaseModel):
+    name: str
+    language: str
+    code: str
+    rationale: str
+
+
+class BuildToolResponse(BaseModel):
+    tool: BuiltTool
+
+
+@app.post("/v1/generate-command", response_model=GenerateCommandResponse)
+def generate_command(req: GenerateCommandRequest) -> GenerateCommandResponse:
+    """
+    Return a list of tailored pen testing commands based on the current
+    findings context.  All commands target only the authorised scan target.
+    """
+    findings = req.findings
+    target = req.target.rstrip("/")
+    host = _target_host(target)
+    agent_name = req.agentName
+    commands: List[GeneratedCommand] = []
+
+    # SQL injection
+    if _has(findings, "category", "injection") or _has(findings, "title", "sql"):
+        param_url = next(
+            (str(f.get("evidence", "")).split()[0] for f in findings
+             if "?" in str(f.get("evidence", "")) and host in str(f.get("evidence", ""))),
+            f"{target}?id=1",
+        )
+        commands.append(GeneratedCommand(
+            binary="sqlmap",
+            args=["-u", param_url, "--batch", "--level=2", "--risk=1",
+                  "--output-dir=/tmp/auto-bughunter/sqlmap"],
+            rationale="SQL injection indicators detected; probing with sqlmap (safe level/risk)",
+            generatedBy=agent_name,
+            timeoutSeconds=180,
+        ))
+
+    # XSS
+    if _has(findings, "title", "xss") or _has(findings, "title", "cross-site"):
+        param_url = next(
+            (str(f.get("evidence", "")).split()[0] for f in findings
+             if "?" in str(f.get("evidence", "")) and host in str(f.get("evidence", ""))),
+            f"{target}?q=test",
+        )
+        commands.append(GeneratedCommand(
+            binary="dalfox",
+            args=["url", param_url, "--silence", "--no-color"],
+            rationale="XSS indicators found; confirming with dalfox",
+            generatedBy=agent_name,
+            timeoutSeconds=120,
+        ))
+
+    # WordPress
+    if _has(findings, "evidence", "wordpress") or _has(findings, "evidence", "wp-content"):
+        commands.append(GeneratedCommand(
+            binary="wpscan",
+            args=["--url", target, "--enumerate", "vp,vt,u", "--no-banner"],
+            rationale="WordPress detected; enumerating plugins, themes, users",
+            generatedBy=agent_name,
+            timeoutSeconds=120,
+        ))
+
+    # Subdomain/host enumeration
+    if _has(findings, "category", "reconnaissance"):
+        commands.append(GeneratedCommand(
+            binary="subfinder",
+            args=["-d", host, "-silent"],
+            rationale="Running subdomain enumeration to expand attack surface",
+            generatedBy=agent_name,
+            timeoutSeconds=60,
+        ))
+
+    # Directory fuzzing
+    if _has(findings, "title", "form") or _has(findings, "evidence", "forms="):
+        commands.append(GeneratedCommand(
+            binary="ffuf",
+            args=["-u", f"{target}/FUZZ", "-w", "/usr/share/wordlists/dirb/common.txt",
+                  "-t", "20", "-mc", "200,204,301,302,307,401,403", "-s"],
+            rationale="Forms discovered; fuzzing for additional endpoints",
+            generatedBy=agent_name,
+            timeoutSeconds=90,
+        ))
+
+    # WAF detection (fallback)
+    if not commands:
+        commands.append(GeneratedCommand(
+            binary="wafw00f",
+            args=[target, "--no-colors"],
+            rationale="No specific indicators; detecting WAF to adapt attack strategy",
+            generatedBy=agent_name,
+            timeoutSeconds=30,
+        ))
+
+    return GenerateCommandResponse(commands=commands[: req.maxCommands])
+
+
+@app.post("/v1/build-tool", response_model=BuildToolResponse)
+def build_tool(req: BuildToolRequest) -> BuildToolResponse:
+    """
+    Generate a self-contained Python tool script for a specialised task.
+    The script outputs JSON-lines findings to stdout.
+    """
+    desc = req.taskDescription.lower()
+    target = req.target
+    agent_name = req.agentName
+
+    # Pick the right template based on the task description.
+    if any(k in desc for k in ("jwt", "token", "bearer")):
+        tool = _build_jwt_tool(target, agent_name)
+    elif any(k in desc for k in ("graphql", "introspection")):
+        tool = _build_graphql_tool(target, agent_name)
+    elif any(k in desc for k in ("redirect", "open redirect")):
+        tool = _build_redirect_tool(target, agent_name)
+    elif any(k in desc for k in ("header", "csp", "hsts")):
+        tool = _build_header_tool(target, agent_name)
+    else:
+        tool = _build_generic_probe(target, agent_name, req.taskDescription)
+
+    return BuildToolResponse(tool=tool)
+
+
+def _build_jwt_tool(target: str, agent_name: str) -> BuiltTool:
+    return BuiltTool(
+        name="jwt_probe",
+        language="python3",
+        rationale="Detect JWT algorithm confusion, none-alg, and weak-secret vulnerabilities",
+        code=f"""#!/usr/bin/env python3
+import sys, json, base64, urllib.request, urllib.error
+target = "{target}"
+def _b64pad(s): return s + '=' * (-len(s) % 4)
+def emit(f): print(json.dumps(f), flush=True)
+try:
+    req = urllib.request.Request(target)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        body = r.read().decode('utf-8', errors='replace')
+        headers = dict(r.headers)
+except Exception:
+    sys.exit(0)
+tokens = []
+for h, v in headers.items():
+    for part in v.split():
+        if part.startswith('eyJ') and part.count('.') == 2:
+            tokens.append(('header:' + h, part))
+for tok in body.split():
+    if tok.startswith('eyJ') and tok.count('.') == 2:
+        tokens.append(('body', tok))
+for src, tok in tokens[:3]:
+    parts = tok.split('.')
+    try: hdr = json.loads(base64.b64decode(_b64pad(parts[0])).decode())
+    except: hdr = {{}}
+    alg = hdr.get('alg', 'unknown')
+    if alg.lower() in ('none', 'null'):
+        emit({{"id":"jwt-none","category":"access_control","severity":"high",
+               "title":"JWT none-algorithm","description":"Signature bypass possible.",
+               "evidence":f"alg={{alg}} source={{src}}","recommendation":"Reject alg=none tokens."}})
+    elif alg in ('HS256','HS384','HS512'):
+        emit({{"id":"jwt-symmetric","category":"access_control","severity":"medium",
+               "title":f"JWT symmetric algorithm ({{alg}})",
+               "description":"Symmetric JWT may be brute-forced if secret is weak.",
+               "evidence":f"alg={{alg}} source={{src}}","recommendation":"Use RS256/ES256."}})
+""",
+    )
+
+
+def _build_graphql_tool(target: str, agent_name: str) -> BuiltTool:
+    return BuiltTool(
+        name="graphql_probe",
+        language="python3",
+        rationale="Probe GraphQL introspection and batch query abuse",
+        code=f"""#!/usr/bin/env python3
+import sys, json, urllib.request, urllib.error
+target = "{target}"
+def post(url, data):
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, headers={{'Content-Type':'application/json'}})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode()), r.status
+    except Exception as e:
+        return {{}}, 0
+def emit(f): print(json.dumps(f), flush=True)
+for ep in [target.rstrip('/')+p for p in ['/graphql','/api/graphql','/v1/graphql','/query']]:
+    data, status = post(ep, {{'query':'query{{__schema{{types{{name}}}}}}'}})
+    if status == 200 and '__schema' in str(data):
+        types = [t.get('name') for t in data.get('data',{{}}).get('__schema',{{}}).get('types',[])]
+        emit({{"id":"graphql-introspection","category":"information_disclosure","severity":"medium",
+               "title":"GraphQL introspection enabled",
+               "description":f"Schema exposed at {{ep}}.",
+               "evidence":f"endpoint={{ep}} types={{len(types)}}",
+               "recommendation":"Disable introspection in production."}})
+        break
+""",
+    )
+
+
+def _build_redirect_tool(target: str, agent_name: str) -> BuiltTool:
+    return BuiltTool(
+        name="redirect_probe",
+        language="python3",
+        rationale="Probe for open redirect vulnerabilities",
+        code=f"""#!/usr/bin/env python3
+import sys, json, urllib.request, urllib.error, urllib.parse
+target = "{target}"
+canary = 'https://evil.example.com'
+def emit(f): print(json.dumps(f), flush=True)
+for param in ['?next=','?redirect=','?url=','?return=','?goto=']:
+    probe = target.rstrip('/') + '/' + param + urllib.parse.quote(canary)
+    req = urllib.request.Request(probe)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            loc = r.headers.get('Location','')
+    except urllib.error.HTTPError as e:
+        loc = e.headers.get('Location','')
+    except Exception:
+        continue
+    if 'evil.example.com' in loc:
+        emit({{"id":f"redirect-{{param[:10]}}","category":"cors_redirect","severity":"medium",
+               "title":"Open redirect","description":f"Parameter {{param}} accepts arbitrary redirect.",
+               "evidence":f"probe={{probe}} location={{loc}}",
+               "recommendation":"Validate redirect destinations against allowlist."}})
+""",
+    )
+
+
+def _build_header_tool(target: str, agent_name: str) -> BuiltTool:
+    return BuiltTool(
+        name="header_probe",
+        language="python3",
+        rationale="Check for missing or weak security headers",
+        code=f"""#!/usr/bin/env python3
+import sys, json, urllib.request
+target = "{target}"
+def emit(f): print(json.dumps(f), flush=True)
+try:
+    with urllib.request.urlopen(urllib.request.Request(target), timeout=10) as r:
+        headers = {{k.lower(): v for k,v in r.headers.items()}}
+except Exception:
+    sys.exit(0)
+checks = [
+    ('content-security-policy','missing-csp','medium','Missing CSP header','No Content-Security-Policy.','Add a strict CSP.'),
+    ('strict-transport-security','missing-hsts','medium','Missing HSTS header','No HSTS; downgrade attacks possible.','Add HSTS with max-age>=31536000.'),
+    ('x-frame-options','missing-xfo','low','Missing X-Frame-Options','Clickjacking possible.','Set X-Frame-Options: DENY.'),
+    ('x-content-type-options','missing-xcto','low','Missing X-Content-Type-Options','MIME sniffing possible.','Set nosniff.'),
+]
+for hdr, fid, sev, title, desc, rec in checks:
+    if hdr not in headers:
+        emit({{"id":fid,"category":"headers","severity":sev,"title":title,
+               "description":desc,"evidence":f"header '{{hdr}}' absent","recommendation":rec}})
+""",
+    )
+
+
+def _build_generic_probe(target: str, agent_name: str, description: str) -> BuiltTool:
+    """Fallback: generate a simple connectivity + header check."""
+    return BuiltTool(
+        name="generic_probe",
+        language="python3",
+        rationale=f"Generic probe for: {description}",
+        code=f"""#!/usr/bin/env python3
+import sys, json, urllib.request
+target = "{target}"
+def emit(f): print(json.dumps(f), flush=True)
+try:
+    with urllib.request.urlopen(urllib.request.Request(target), timeout=10) as r:
+        headers = {{k.lower(): v for k,v in r.headers.items()}}
+        server = headers.get('server','unknown')
+        powered = headers.get('x-powered-by','')
+        emit({{"id":"generic-info","category":"reconnaissance","severity":"info",
+               "title":"Server technology fingerprint",
+               "description":f"Server header reveals technology stack.",
+               "evidence":f"server={{server}} x-powered-by={{powered}}",
+               "recommendation":"Remove or genericise Server and X-Powered-By headers."}})
+except Exception as e:
+    emit({{"id":"probe-error","category":"reconnaissance","severity":"info",
+           "title":"Probe connectivity issue",
+           "description":str(e),"evidence":target,"recommendation":"Verify target is reachable."}})
+""",
+    )
+
+# ---------------------------------------------------------------------------
+# Request / Response models for spawn / learn endpoints
+# ---------------------------------------------------------------------------
 
 class SpawnRequest(BaseModel):
     sourceAgent: str

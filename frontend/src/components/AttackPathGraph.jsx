@@ -18,12 +18,14 @@ const LAYOUT = {
   api_security:           { x: 450, y: 110 },
   cors_redirect:          { x: 450, y: 200 },
   wordlist:               { x: 450, y: 290 },
-  analysis:               { x: 580, y: 200 },
-  ml_triage:              { x: 700, y: 110 },
-  attack_path:            { x: 700, y: 200 },
-  false_positive_review:  { x: 700, y: 290 },
-  remediation_planner:    { x: 820, y: 155 },
-  reporting:              { x: 820, y: 255 },
+  analysis:               { x: 570, y: 200 },
+  dynamic_commands:       { x: 680, y: 130 },
+  tool_builder:           { x: 680, y: 200 },
+  ml_triage:              { x: 790, y: 100 },
+  attack_path:            { x: 790, y: 185 },
+  false_positive_review:  { x: 790, y: 270 },
+  remediation_planner:    { x: 880, y: 145 },
+  reporting:              { x: 880, y: 240 },
 };
 
 // Default directed edges (source → target)
@@ -38,10 +40,12 @@ const DEFAULT_EDGES = [
   ["api_security", "analysis"],
   ["cors_redirect", "analysis"],
   ["wordlist", "analysis"],
-  ["analysis", "ml_triage"],
-  ["analysis", "attack_path"],
-  ["analysis", "false_positive_review"],
-  ["ml_triage", "remediation_planner"],
+  ["analysis", "dynamic_commands"],
+  ["analysis", "tool_builder"],
+  ["dynamic_commands", "ml_triage"],
+  ["tool_builder", "ml_triage"],
+  ["ml_triage", "attack_path"],
+  ["ml_triage", "false_positive_review"],
   ["attack_path", "remediation_planner"],
   ["false_positive_review", "remediation_planner"],
   ["remediation_planner", "reporting"],
@@ -85,12 +89,14 @@ export default function AttackPathGraph({ events }) {
     }
   }
 
-  // Merge layout: add dynamic spawned agents that aren't in the fixed layout
-  const allNames = new Set([...Object.keys(LAYOUT)]);
+  // Build a mutable layout copy so we never mutate the module-level const.
+  const layout = { ...LAYOUT };
   let dynamicY = 360;
+  const allNames = new Set(Object.keys(layout));
+
   for (const name of Object.keys(nodeStates)) {
     if (!allNames.has(name)) {
-      LAYOUT[name] = { x: 580 + (dynamicEdges.length * 40), y: dynamicY };
+      layout[name] = { x: 580 + (dynamicEdges.length * 40), y: dynamicY };
       dynamicY += 50;
       allNames.add(name);
     }
@@ -125,7 +131,7 @@ export default function AttackPathGraph({ events }) {
 
         {/* Edges */}
         {allEdges.map(([a, b], i) => {
-          const pa = LAYOUT[a], pb = LAYOUT[b];
+          const pa = layout[a], pb = layout[b];
           if (!pa || !pb) return null;
           return (
             <path
@@ -141,7 +147,7 @@ export default function AttackPathGraph({ events }) {
 
         {/* Nodes */}
         {Array.from(allNames).map((name) => {
-          const pos = LAYOUT[name];
+          const pos = layout[name];
           if (!pos) return null;
           const state = nodeStates[name] || "pending";
           const colors = STATE_COLOR[state];

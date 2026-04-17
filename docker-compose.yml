@@ -63,7 +63,7 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
-    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-phi3:mini}"]
+    entrypoint: /bin/sh -c "sleep 5 && ollama pull $${OLLAMA_MODEL:-phi3:mini}"
     volumes:
       - ollama_data:/root/.ollama
 
