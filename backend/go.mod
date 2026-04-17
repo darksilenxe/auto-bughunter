@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.0
 )

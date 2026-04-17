@@ -27,6 +27,7 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/scope"
 
+	"github.com/go-pdf/fpdf"
 	"github.com/google/uuid"
 )
 
@@ -151,6 +152,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
+	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
 	return withCORS(mux)
 }
 
@@ -2059,4 +2061,184 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// handleScanReportPDF serves a PDF report for a completed scan.
+// GET /api/report/{scanId}
+func (s *Server) handleScanReportPDF(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/report/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+
+	job, err := s.repo.GetJob(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+		return
+	}
+	if job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+
+	pdfBytes, err := generateScanReportPDF(job)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PDF"})
+		return
+	}
+
+	filename := fmt.Sprintf("scan-report-%s.pdf", id)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pdfBytes)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(pdfBytes)
+}
+
+// generateScanReportPDF produces a PDF report from a ScanJob.
+func generateScanReportPDF(job *model.ScanJob) ([]byte, error) {
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(15, 15, 15)
+	pdf.SetAutoPageBreak(true, 15)
+	pdf.AddPage()
+
+	pageW, _ := pdf.GetPageSize()
+	contentW := pageW - 30 // left + right margins
+
+	// --- Title ---
+	pdf.SetFont("Helvetica", "B", 20)
+	pdf.SetTextColor(30, 80, 160)
+	pdf.CellFormat(contentW, 10, "Auto Bughunter — Scan Report", "", 1, "C", false, 0, "")
+	pdf.Ln(4)
+
+	// --- Meta ---
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.SetTextColor(80, 80, 80)
+	pdf.CellFormat(contentW, 6, fmt.Sprintf("Target: %s", job.Target), "", 1, "L", false, 0, "")
+	pdf.CellFormat(contentW, 6, fmt.Sprintf("Scan ID: %s", job.ID), "", 1, "L", false, 0, "")
+	pdf.CellFormat(contentW, 6, fmt.Sprintf("Status: %s", job.Status), "", 1, "L", false, 0, "")
+	pdf.CellFormat(contentW, 6, fmt.Sprintf("Started: %s", job.StartedAt.UTC().Format(time.RFC3339)), "", 1, "L", false, 0, "")
+	if job.CompletedAt != nil {
+		pdf.CellFormat(contentW, 6, fmt.Sprintf("Completed: %s", job.CompletedAt.UTC().Format(time.RFC3339)), "", 1, "L", false, 0, "")
+	}
+	if job.ProgramName != "" {
+		pdf.CellFormat(contentW, 6, fmt.Sprintf("Program: %s", job.ProgramName), "", 1, "L", false, 0, "")
+	}
+	pdf.Ln(4)
+
+	// --- Findings Summary ---
+	pdf.SetFont("Helvetica", "B", 13)
+	pdf.SetTextColor(30, 30, 30)
+	pdf.CellFormat(contentW, 8, "Findings Summary", "", 1, "L", false, 0, "")
+
+	counts := map[model.Severity]int{}
+	for _, f := range job.Findings {
+		counts[f.Severity]++
+	}
+	severities := []model.Severity{model.SeverityHigh, model.SeverityMedium, model.SeverityLow, model.SeverityInfo}
+	severityColors := map[model.Severity][3]int{
+		model.SeverityHigh:   {200, 50, 50},
+		model.SeverityMedium: {220, 130, 30},
+		model.SeverityLow:    {50, 130, 200},
+		model.SeverityInfo:   {100, 100, 100},
+	}
+	pdf.SetFont("Helvetica", "", 10)
+	for _, sev := range severities {
+		c := severityColors[sev]
+		pdf.SetTextColor(c[0], c[1], c[2])
+		pdf.CellFormat(contentW, 6, fmt.Sprintf("  %-8s %d", strings.ToUpper(string(sev)), counts[sev]), "", 1, "L", false, 0, "")
+	}
+	pdf.SetTextColor(30, 30, 30)
+	pdf.Ln(4)
+
+	// --- AI Summary ---
+	if job.AISummary != "" {
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.CellFormat(contentW, 8, "AI Summary", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		pdf.MultiCell(contentW, 5, job.AISummary, "", "L", false)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.Ln(2)
+	}
+
+	// --- Findings Detail ---
+	if len(job.Findings) > 0 {
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 8, "Detailed Findings", "", 1, "L", false, 0, "")
+
+		for i, f := range job.Findings {
+			// Section header per finding
+			c := severityColors[f.Severity]
+			pdf.SetFont("Helvetica", "B", 10)
+			pdf.SetTextColor(c[0], c[1], c[2])
+			header := fmt.Sprintf("%d. [%s] %s", i+1, strings.ToUpper(string(f.Severity)), f.Title)
+			pdf.MultiCell(contentW, 6, header, "", "L", false)
+
+			pdf.SetFont("Helvetica", "", 9)
+			pdf.SetTextColor(50, 50, 50)
+			if f.Category != "" {
+				pdf.MultiCell(contentW, 5, "Category: "+f.Category, "", "L", false)
+			}
+			if f.Description != "" {
+				pdf.MultiCell(contentW, 5, "Description: "+f.Description, "", "L", false)
+			}
+			if f.Evidence != "" {
+				pdf.MultiCell(contentW, 5, "Evidence: "+f.Evidence, "", "L", false)
+			}
+			if f.Recommendation != "" {
+				pdf.MultiCell(contentW, 5, "Recommendation: "+f.Recommendation, "", "L", false)
+			}
+			if f.DriftStatus != "" {
+				pdf.MultiCell(contentW, 5, "Drift: "+f.DriftStatus, "", "L", false)
+			}
+			if len(f.Sources) > 0 {
+				pdf.MultiCell(contentW, 5, "Sources: "+strings.Join(f.Sources, ", "), "", "L", false)
+			}
+			if f.Confidence > 0 {
+				pdf.MultiCell(contentW, 5, fmt.Sprintf("Confidence: %.2f", f.Confidence), "", "L", false)
+			}
+			pdf.Ln(3)
+		}
+	}
+
+	// --- Automated Report ---
+	if job.AutomatedReport != "" {
+		pdf.AddPage()
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 8, "Automated Pen Test Report", "", 1, "L", false, 0, "")
+		pdf.SetFont("Courier", "", 8)
+		pdf.SetTextColor(40, 40, 40)
+		pdf.MultiCell(contentW, 4, job.AutomatedReport, "", "L", false)
+	}
+
+	// Footer with page numbers
+	reportDate := job.StartedAt.UTC()
+	if job.CompletedAt != nil {
+		reportDate = job.CompletedAt.UTC()
+	}
+	pdf.SetFooterFunc(func() {
+		pdf.SetY(-12)
+		pdf.SetFont("Helvetica", "I", 8)
+		pdf.SetTextColor(150, 150, 150)
+		pdf.CellFormat(0, 5, fmt.Sprintf("Page %d — Auto Bughunter Report — %s", pdf.PageNo(), reportDate.Format("2006-01-02")), "", 0, "C", false, 0, "")
+	})
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
