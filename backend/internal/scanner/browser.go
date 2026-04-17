@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"sort"
@@ -15,7 +16,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope) ([]model.Finding, error) {
+func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
 	ctx, cancel := chromedp.NewContext(parent)
 	defer cancel()
 
@@ -27,6 +28,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 	var title string
 	var links []string
 	var currentURL string
+	var screenshotBuf []byte
 	u, _ := url.Parse(target)
 	host := ""
 	if u != nil {
@@ -77,12 +79,24 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			const html = f.innerHTML.toLowerCase();
 			return html.includes('csrf') || html.includes('_token') || html.includes('xsrf');
 		}).length`, &csrfLikeCount),
+		chromedp.CaptureScreenshot(&screenshotBuf),
 	)
 
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
 		return nil, err
 	}
+
+	// Emit screenshot of initial page load.
+	if len(screenshotBuf) > 0 && emit != nil {
+		emit(model.ScanEvent{
+			Type:       model.ScanEventScreenshot,
+			AgentName:  "scanner",
+			Message:    fmt.Sprintf("Screenshot: %s (title=%q)", currentURL, title),
+			Screenshot: base64.StdEncoding.EncodeToString(screenshotBuf),
+		})
+	}
+
 	maxPages := 6
 	if options.CrawlMaxPages > 0 {
 		maxPages = options.CrawlMaxPages
@@ -111,6 +125,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 		var pageCsrfLike int
 		var pageLinks []string
 		var pageURL string
+		var pageShot []byte
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(next),
 			chromedp.Location(&pageURL),
@@ -120,6 +135,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 				return html.includes('csrf') || html.includes('_token') || html.includes('xsrf');
 			}).length`, &pageCsrfLike),
 			chromedp.Evaluate(`Array.from(document.querySelectorAll('a[href],script[src],form[action]')).map(el => el.href || el.src || el.action).filter(Boolean).slice(0,100)`, &pageLinks),
+			chromedp.CaptureScreenshot(&pageShot),
 		); err != nil {
 			continue
 		}
@@ -134,6 +150,15 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 				continue
 			}
 			runtimeRefs[ref] = struct{}{}
+		}
+		// Emit per-page screenshot.
+		if len(pageShot) > 0 && emit != nil {
+			emit(model.ScanEvent{
+				Type:       model.ScanEventScreenshot,
+				AgentName:  "scanner",
+				Message:    fmt.Sprintf("Screenshot: %s", pageURL),
+				Screenshot: base64.StdEncoding.EncodeToString(pageShot),
+			})
 		}
 	}
 

@@ -68,6 +68,8 @@ type RunInput struct {
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
 	Scope       model.ScanScope
+	// Emit publishes live events to the per-scan event bus. It is nil-safe.
+	Emit func(model.ScanEvent)
 }
 
 func NewService(cfg Config) *Service {
@@ -151,8 +153,19 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	var findings []model.Finding
 
+	emitCmd := func(cmd, msg string) {
+		if input.Emit != nil {
+			input.Emit(model.ScanEvent{
+				Type:    model.ScanEventCommand,
+				Command: cmd,
+				Message: msg,
+			})
+		}
+	}
+
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
+	emitCmd(fmt.Sprintf("GET %s", input.Target), "Probing target for security headers, cookies, and TLS")
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -162,6 +175,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, checkSecurityHeaders(resp.Header)...)
 	findings = append(findings, checkCookies(resp)...)
 	if u.Scheme == "https" {
+		emitCmd(fmt.Sprintf("tlscheck %s", u.Host), "Checking TLS configuration")
 		findings = append(findings, checkTLS(u.Host)...)
 	}
 
@@ -171,7 +185,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
 
-	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope)
+	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
+	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",

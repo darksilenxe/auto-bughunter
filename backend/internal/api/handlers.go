@@ -59,6 +59,7 @@ type Server struct {
 	gateHighBlock int
 	gateMedBlock  int
 	scanTimeout   time.Duration
+	eventBus      *EventBus
 }
 
 type Repository interface {
@@ -132,6 +133,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:   scanTimeout,
+		eventBus:      NewEventBus(),
 	}
 }
 
@@ -139,7 +141,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
-	mux.HandleFunc("/api/scan/", s.handleGetScan)
+	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
 	// Proxy management endpoints.
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
@@ -154,6 +156,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
 	return withCORS(mux)
+}
+
+// handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
+func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/events") {
+		s.handleScanEvents(w, r)
+		return
+	}
+	s.handleGetScan(w, r)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -291,6 +302,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	release := s.acquireTargetSlot(target, options)
 	defer release()
 
+	emit := s.eventBus.EmitterFor(id)
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: "Scan job started",
+	})
+
 	job, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || job == nil {
 		return
@@ -310,13 +327,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, emit)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
 	if err != nil {
 		job.Status = "failed"
 		job.Error = err.Error()
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Scan failed: " + err.Error(),
+		})
 		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
 		_ = s.repo.UpdateJob(context.Background(), job)
 		return
@@ -417,6 +438,16 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: fmt.Sprintf("Scan completed: %d findings", len(job.Findings)),
+	})
+	// Retain event history for a short window so late-joining SSE clients can still
+	// replay events, then schedule cleanup to free memory.
+	go func() {
+		time.Sleep(5 * time.Minute)
+		s.eventBus.Cleanup(id)
+	}()
 	if job.Options.RescanIntervalMinutes > 0 {
 		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
 		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
@@ -1045,14 +1076,15 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) ([]agent.AgentOutput, []model.Finding, error) {
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
 	input := agent.AgentInput{
 		Target:      target,
 		AuthProfile: authProfile,
 		Options:     options,
 		Scope:       scanScope,
+		Emit:        emit,
 	}
-	outputs, findings, err := s.agentRegistry.RunAll(ctx, input)
+	outputs, findings, err := s.newRegistry(options).RunAll(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -1064,7 +1096,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.agentRegistry.RunAll(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.newRegistry(options).RunAll(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue

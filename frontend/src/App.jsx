@@ -1,6 +1,23 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+
+const EVENT_ICON = {
+  agent_start: "▶",
+  agent_complete: "✔",
+  agent_spawned: "⚡",
+  finding: "🔍",
+  command: "$",
+  screenshot: "📷",
+  info: "ℹ",
+};
+
+const SEVERITY_COLOR = {
+  high: "#e74c3c",
+  medium: "#e67e22",
+  low: "#f1c40f",
+  info: "#95a5a6",
+};
 
 export default function App() {
   const [target, setTarget] = useState("");
@@ -20,6 +37,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Live activity feed (SSE)
+  const [liveEvents, setLiveEvents] = useState([]);
+  const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const eventFeedRef = useRef(null);
+  const sseRef = useRef(null);
+
   // Proxy panel state
   const [proxyRequests, setProxyRequests] = useState([]);
   const [proxyLoading, setProxyLoading] = useState(false);
@@ -29,6 +52,49 @@ export default function App() {
   const [replayBody, setReplayBody] = useState("");
   const [replayResult, setReplayResult] = useState(null);
   const [replayLoading, setReplayLoading] = useState(false);
+
+  // Scroll event feed to bottom as new events arrive.
+  useEffect(() => {
+    if (eventFeedRef.current) {
+      eventFeedRef.current.scrollTop = eventFeedRef.current.scrollHeight;
+    }
+  }, [liveEvents]);
+
+  // Start SSE stream for a scan.
+  const startEventStream = useCallback((id) => {
+    if (sseRef.current) {
+      sseRef.current.close();
+    }
+    setLiveEvents([]);
+    const es = new EventSource(`${API_BASE}/api/scan/${id}/events`);
+    es.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        setLiveEvents((prev) => [...prev, evt]);
+      } catch (_) {/* ignore parse errors */}
+    };
+    es.onerror = () => {
+      es.close();
+    };
+    sseRef.current = es;
+  }, []);
+
+  // Close SSE when scan finishes.
+  useEffect(() => {
+    if (job?.status === "completed" || job?.status === "failed") {
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+    }
+  }, [job?.status]);
+
+  // Cleanup SSE on unmount.
+  useEffect(() => {
+    return () => {
+      if (sseRef.current) sseRef.current.close();
+    };
+  }, []);
 
   const severityCounts = useMemo(() => {
     const counts = { high: 0, medium: 0, low: 0, info: 0 };
@@ -132,6 +198,7 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || "Failed to start scan");
 
       setScanId(data.id);
+      startEventStream(data.id);
       await pollScan(data.id);
     } catch (err) {
       setError(err.message || "Unknown error");
@@ -325,6 +392,114 @@ export default function App() {
             <span className="pill low">Low: {severityCounts.low}</span>
             <span className="pill info">Info: {severityCounts.info}</span>
           </div>
+
+          {/* ── Live Autonomous Activity Feed ────────────────────────── */}
+          {liveEvents.length > 0 && (
+            <>
+              <h3>⚡ Live Activity Feed {job.status === "running" && <span style={{ fontSize: "0.75rem", color: "#2ecc71" }}>● streaming</span>}</h3>
+              <div
+                ref={eventFeedRef}
+                style={{
+                  background: "#0d1117",
+                  borderRadius: "6px",
+                  padding: "0.75rem 1rem",
+                  maxHeight: "320px",
+                  overflowY: "auto",
+                  fontFamily: "monospace",
+                  fontSize: "0.78rem",
+                  lineHeight: "1.6",
+                  border: "1px solid #30363d",
+                }}
+              >
+                {liveEvents.map((evt, idx) => (
+                  <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginBottom: "2px" }}>
+                    <span style={{ color: "#6e7681", flexShrink: 0, width: "180px" }}>
+                      {new Date(evt.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span style={{ flexShrink: 0, width: "18px" }}>
+                      {EVENT_ICON[evt.type] || "·"}
+                    </span>
+                    {evt.type === "finding" && (
+                      <span style={{ color: SEVERITY_COLOR[evt.severity] || "#fff" }}>
+                        [{evt.severity?.toUpperCase()}] {evt.findingTitle}
+                      </span>
+                    )}
+                    {evt.type === "command" && (
+                      <span style={{ color: "#79c0ff" }}>
+                        <span style={{ color: "#6e7681" }}>$ </span>{evt.command}
+                      </span>
+                    )}
+                    {evt.type === "screenshot" && (
+                      <span style={{ color: "#d2a8ff" }}>
+                        {evt.message}{" "}
+                        <button
+                          onClick={() => setSelectedScreenshot(evt.screenshot)}
+                          style={{
+                            background: "none",
+                            border: "1px solid #444",
+                            color: "#d2a8ff",
+                            cursor: "pointer",
+                            fontSize: "0.72rem",
+                            borderRadius: "3px",
+                            padding: "0 4px",
+                          }}
+                        >
+                          view
+                        </button>
+                      </span>
+                    )}
+                    {evt.type === "agent_spawned" && (
+                      <span style={{ color: "#f0e68c" }}>{evt.message}</span>
+                    )}
+                    {evt.type !== "finding" && evt.type !== "command" && evt.type !== "screenshot" && evt.type !== "agent_spawned" && (
+                      <span style={{ color: evt.type === "agent_start" ? "#56d364" : evt.type === "agent_complete" ? "#3fb950" : "#cdd9e5" }}>
+                        {evt.agentName ? `[${evt.agentName}] ` : ""}{evt.message}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Screenshot lightbox */}
+              {selectedScreenshot && (
+                <div
+                  onClick={() => setSelectedScreenshot(null)}
+                  style={{
+                    position: "fixed",
+                    inset: 0,
+                    background: "rgba(0,0,0,0.85)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 1000,
+                    cursor: "zoom-out",
+                  }}
+                >
+                  <img
+                    src={`data:image/png;base64,${selectedScreenshot}`}
+                    alt="Screenshot"
+                    style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: "6px", boxShadow: "0 4px 32px rgba(0,0,0,0.7)" }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button
+                    onClick={() => setSelectedScreenshot(null)}
+                    style={{
+                      position: "absolute",
+                      top: "16px",
+                      right: "24px",
+                      background: "none",
+                      border: "none",
+                      color: "#fff",
+                      fontSize: "2rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+            </>
+          )}
 
           {job.aiSummary && (
             <>
