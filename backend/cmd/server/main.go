@@ -97,6 +97,7 @@ func main() {
 			EnableFalsePositiveAgent: getbool("ENABLE_FALSE_POSITIVE_REVIEW_AGENT", true),
 			EnableRemediationAgent:   getbool("ENABLE_REMEDIATION_PLANNER_AGENT", true),
 		},
+		time.Duration(getint("SCAN_TIMEOUT_SECONDS", 600))*time.Second,
 	)
 
 	httpServer := &http.Server{
