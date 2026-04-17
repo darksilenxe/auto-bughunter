@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/agent"
+	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
@@ -39,27 +40,28 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService   *scanner.Service
-	aiClient      *ai.Client
-	allowed       map[string]struct{}
-	repo          Repository
-	agentRegistry *agent.Registry
-	proxyServer   *proxy.Server
-	mlService     *ml.Service
-	agentConfig   AgentConfig
-	maxPerTarget  int
-	semMu         sync.Mutex
-	targetSem     map[string]chan struct{}
-	globalSem     chan struct{}
-	rateMu        sync.Mutex
-	targetLastRun map[string]time.Time
-	webhookURL    string
-	slackWebhook  string
-	notifyMinConf float64
-	gateHighBlock int
-	gateMedBlock  int
-	scanTimeout   time.Duration
-	eventBus      *EventBus
+	scanService    *scanner.Service
+	aiClient       *ai.Client
+	allowed        map[string]struct{}
+	repo           Repository
+	agentRegistry  *agent.Registry
+	proxyServer    *proxy.Server
+	mlService      *ml.Service
+	agentLearner   *agentlearner.Client
+	agentConfig    AgentConfig
+	maxPerTarget   int
+	semMu          sync.Mutex
+	targetSem      map[string]chan struct{}
+	globalSem      chan struct{}
+	rateMu         sync.Mutex
+	targetLastRun  map[string]time.Time
+	webhookURL     string
+	slackWebhook   string
+	notifyMinConf  float64
+	gateHighBlock  int
+	gateMedBlock   int
+	scanTimeout    time.Duration
+	eventBus       *EventBus
 }
 
 type Repository interface {
@@ -87,7 +89,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -122,6 +124,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		agentRegistry: reg,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
+		agentLearner:  agentLearner,
 		agentConfig:   agentCfg,
 		maxPerTarget:  maxInt(1, maxPerTarget),
 		targetSem:     map[string]chan struct{}{},
@@ -142,11 +145,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
 	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
+	mux.HandleFunc("/api/scans", s.handleListScans)
 	// Proxy management endpoints.
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
+	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
@@ -165,6 +170,68 @@ func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.handleGetScan(w, r)
+}
+func (s *Server) handleAgentWeights(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.agentLearner == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent learner service not configured"})
+		return
+	}
+	weights, err := s.agentLearner.Weights(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, weights)
+}
+
+// handleListScans returns a paginated list of completed scan jobs.
+func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := 50
+	jobs, err := s.repo.ListCompletedJobs(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list scans"})
+		return
+	}
+	// Return lightweight summaries (no full findings) to keep response size small.
+	type scanSummary struct {
+		ID          string     `json:"id"`
+		Target      string     `json:"target"`
+		Status      string     `json:"status"`
+		CreatedAt   time.Time  `json:"createdAt"`
+		CompletedAt *time.Time `json:"completedAt"`
+		FindingCount int       `json:"findingCount"`
+		HighCount   int        `json:"highCount"`
+	}
+	summaries := make([]scanSummary, 0, len(jobs))
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		var high int
+		for _, f := range j.Findings {
+			if f.Severity == model.SeverityHigh {
+				high++
+			}
+		}
+		summaries = append(summaries, scanSummary{
+			ID:           j.ID,
+			Target:       j.Target,
+			Status:       j.Status,
+			CreatedAt:    j.StartedAt,
+			CompletedAt:  j.CompletedAt,
+			FindingCount: len(j.Findings),
+			HighCount:    high,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scans": summaries})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -437,6 +504,20 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
+	// Teach the neural agent learner from this scan's results so future
+	// scans benefit from accumulated knowledge about which agent sequences
+	// produce the best findings.
+	if s.agentLearner != nil {
+		agentSeq := make([]string, 0, len(job.AgentRuns))
+		for _, run := range job.AgentRuns {
+			agentSeq = append(agentSeq, run.AgentName)
+		}
+		var scanDurationMs int64
+		if job.CompletedAt != nil {
+			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
+		}
+		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
+	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
@@ -477,6 +558,12 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
 	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
 	reg.Register(agent.NewReportingAgent(true))
+
+	// Attach the neural learner as the autonomous spawner so it can augment
+	// the static orchestration rules with learned Q-values.
+	if s.agentLearner != nil {
+		reg.SetSpawner(s.agentLearner)
+	}
 
 	return reg
 }

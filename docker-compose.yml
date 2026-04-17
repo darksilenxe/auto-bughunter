@@ -26,6 +26,47 @@ services:
     volumes:
       - ./ml-service/models:/models:ro
 
+  # Autonomous agent learner — hosts the neural Q-learning model that teaches
+  # itself which agent sequences produce the best findings over time.
+  agents:
+    build:
+      context: ./agents
+    environment:
+      WEIGHTS_PATH: /data/agent_weights.json
+      LOG_LEVEL: ${AGENTS_LOG_LEVEL:-INFO}
+    ports:
+      - "8091:8091"
+    volumes:
+      - agents_data:/data
+
+  # Local Ollama LLM — powers AI summaries without any external API key.
+  # On first start it will download the configured model (~2 GB for phi3:mini).
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Pull the default model on startup so the backend can use it immediately.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
+    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-phi3:mini}"]
+    volumes:
+      - ollama_data:/root/.ollama
+
   backend:
     build:
       context: ./backend
@@ -39,6 +80,8 @@ services:
         condition: service_healthy
       ml-service:
         condition: service_started
+      agents:
+        condition: service_started
 
   frontend:
     build:
@@ -50,17 +93,9 @@ services:
     depends_on:
       - backend
 
-  ollama:
-    image: ollama/ollama:latest
-    profiles: ["ai"]
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    profiles: ["ai"]
+    profiles: ["webui"]
     ports:
       - "3001:8080"
     environment:
@@ -74,3 +109,5 @@ volumes:
   db_data:
   ollama_data:
   openwebui_data:
+  agents_data:
+

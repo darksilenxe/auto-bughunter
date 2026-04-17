@@ -53,9 +53,17 @@ type AgentOutput struct {
 	Telemetry   model.AgentRunTelemetry
 }
 
+// Spawner is an optional callback that the registry calls during autonomous
+// orchestration.  It supplements the built-in rules with learned Q-values from
+// the agents service.
+type Spawner interface {
+	Recommend(ctx context.Context, sourceAgent string, findings []model.Finding, topK int, threshold float64) []string
+}
+
 type Registry struct {
-	agents map[string]Agent
-	order  []string
+	agents  map[string]Agent
+	order   []string
+	spawner Spawner
 }
 
 func NewRegistry() *Registry {
@@ -63,6 +71,11 @@ func NewRegistry() *Registry {
 		agents: make(map[string]Agent),
 		order:  make([]string, 0),
 	}
+}
+
+// SetSpawner attaches a learned-spawn recommender to the registry.
+func (r *Registry) SetSpawner(s Spawner) {
+	r.spawner = s
 }
 
 func (r *Registry) Register(agent Agent) {
@@ -165,26 +178,23 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 		allFindings = append(allFindings, output.Findings...)
 		seen[name] = true
 
-		// Autonomous orchestration: decide which follow-up agents to spawn based
-		// on what was discovered. Only add agents that exist in the registry and
-		// have not already run or been queued.
-		for _, spawned := range r.orchestrate(ag.Name(), output, cumulativeFindings) {
-			if !seen[spawned] && r.agents[spawned] != nil {
-				alreadyQueued := false
-				for _, q := range queue[i+1:] {
-					if q == spawned {
-						alreadyQueued = true
-						break
-					}
-				}
-				if !alreadyQueued {
-					queue = append(queue, spawned)
-					Emit(input.Emit, model.ScanEvent{
-						Type:      model.ScanEventAgentSpawned,
-						AgentName: spawned,
-						Message:   fmt.Sprintf("Autonomous decision: queuing agent %q based on findings from %q", spawned, ag.Name()),
-					})
-				}
+		// Autonomous orchestration: merge static rules with learned Q-values.
+		// Use a set to track already-queued agents for O(1) lookup.
+		queuedSet := make(map[string]bool, len(queue))
+		for _, q := range queue[i+1:] {
+			queuedSet[q] = true
+		}
+
+		candidates := r.orchestrate(ctx, ag.Name(), output, cumulativeFindings)
+		for _, spawned := range candidates {
+			if !seen[spawned] && !queuedSet[spawned] && r.agents[spawned] != nil {
+				queue = append(queue, spawned)
+				queuedSet[spawned] = true
+				Emit(input.Emit, model.ScanEvent{
+					Type:      model.ScanEventAgentSpawned,
+					AgentName: spawned,
+					Message:   fmt.Sprintf("Autonomous decision: queuing agent %q based on findings from %q", spawned, ag.Name()),
+				})
 			}
 		}
 	}
@@ -194,7 +204,8 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 
 // orchestrate returns the names of agents that should be spawned autonomously
 // after completedAgent finishes, given the accumulated findings so far.
-func (r *Registry) orchestrate(completedAgent string, output AgentOutput, allFindings []model.Finding) []string {
+// It merges static rules with recommendations from the neural agent learner.
+func (r *Registry) orchestrate(ctx context.Context, completedAgent string, output AgentOutput, allFindings []model.Finding) []string {
 	spawned := make([]string, 0)
 
 	hasHigh := false
@@ -222,27 +233,33 @@ func (r *Registry) orchestrate(completedAgent string, output AgentOutput, allFin
 	_ = hasSQLi
 	_ = hasWordPress
 
+	// Static rules.
 	switch completedAgent {
 	case "scanning":
 		if hasHigh {
-			// Escalate immediately with ML-based attack path analysis for high findings.
 			spawned = append(spawned, "attack_path")
 		}
 	case "input_validation":
-		// After input validation, if forms are found without CSRF, ensure
-		// the CORS/redirect agent runs for a deeper look.
 		if hasManyForms {
 			spawned = append(spawned, "cors_redirect")
 		}
 	case "wordlist":
-		// If wordlist discovered new endpoints, run a fresh analysis pass.
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "analysis")
 		}
 	case "analysis":
-		// If analysis surfaces high-severity items, escalate with ML triage.
 		if hasHigh {
 			spawned = append(spawned, "ml_triage")
+		}
+	}
+
+	// Neural learner recommendations (augment static rules).
+	if r.spawner != nil {
+		learned := r.spawner.Recommend(ctx, completedAgent, allFindings, 3, 0.65)
+		for _, l := range learned {
+			if l != "" {
+				spawned = append(spawned, l)
+			}
 		}
 	}
 
