@@ -74,6 +74,9 @@ const sqliMaxAttempts = 12
 // time-based payloads, no boolean blind attempts) and emits at most one
 // finding per scan.
 func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body string) []model.Finding {
+	if input.Options.PassiveOnly {
+		return nil
+	}
 	candidates := extractRuntimeEndpoints(input.Target, body, input.Scope, 10)
 	if len(input.Options.SeedRuntimeEndpoints) > 0 {
 		candidates = append(candidates, input.Options.SeedRuntimeEndpoints...)
@@ -160,6 +163,7 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 		fmt.Sprintf("Observe a server-side database error signature in the response body — the probe matched %q.", first.signature),
 		"Confirm by removing the quote and verifying the error disappears (control request).",
 	}
+	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
 	return []model.Finding{{
 		ID:                "active-sqli-error-based",
@@ -176,11 +180,13 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 		OWASPCategory:     "A03:2021 - Injection",
 		Sources:           []string{"active-scanner"},
 		ReproductionSteps: steps,
+		PoC:               curl,
 		EvidenceFields: map[string]string{
 			"validationType":  "active-probe",
 			"reproStep":       "Replay the listed URL and confirm the database error signature appears in the response",
 			"errorSignature":  first.signature,
 			"injectedPayload": sqliBenignPayload,
+			"curlReproducer":  curl,
 		},
 	}}
 }

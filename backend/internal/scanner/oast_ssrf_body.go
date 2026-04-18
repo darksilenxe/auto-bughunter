@@ -33,6 +33,9 @@ const defaultOASTBodySSRFWait = 6 * time.Second
 // probe is silently skipped when no OAST service is attached or when no
 // public URL is configured.
 func (s *Service) runOASTBodySSRFProbe(ctx context.Context, input RunInput, body string) []model.Finding {
+	if input.Options.PassiveOnly {
+		return nil
+	}
 	if s.oast == nil || !s.oast.Configured() {
 		return nil
 	}

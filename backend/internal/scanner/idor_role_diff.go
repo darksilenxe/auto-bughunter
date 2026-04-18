@@ -61,6 +61,9 @@ type IDORProbeProfile struct {
 // At most one finding is emitted per (anonymous-vs-role) and per
 // (role-vs-role) pair to avoid swamping the report.
 func (s *Service) RunIDORRoleDiff(ctx context.Context, target string, scanScope model.ScanScope, options model.ScanOptions, baseline model.ScanAuthProfile, roles []model.RoleAuthProfile, emit func(model.ScanEvent)) []model.Finding {
+	if options.PassiveOnly {
+		return nil
+	}
 	candidates := idorCandidateEndpoints(target, options.SeedRuntimeEndpoints, scanScope)
 	if len(candidates) == 0 {
 		return nil

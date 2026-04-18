@@ -197,6 +197,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runActiveSQLiProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runOASTBodySSRFProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runSubdomainTakeoverProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveOpenRedirectProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveCORSProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveSSTIProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveGraphQLIntrospectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSecretsInJSProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
@@ -272,6 +277,9 @@ func discoverRuntimeSurface(target, body string, scanScope model.ScanScope) []mo
 }
 
 func runContextualParamProbes(ctx context.Context, target, body string, auth model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, service *Service) []model.Finding {
+	if options.PassiveOnly {
+		return nil
+	}
 	candidates := extractRuntimeEndpoints(target, body, scanScope, 10)
 	if len(options.SeedRuntimeEndpoints) > 0 {
 		candidates = append(candidates, options.SeedRuntimeEndpoints...)
@@ -484,7 +492,13 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 		if err == nil && !isRetriableStatus(resp.StatusCode) {
 			return resp, nil
 		}
+		// retryAfter is consulted before draining the body so we don't
+		// block on slow connections when the server has already told us
+		// to wait. It defaults to zero when no header is present or the
+		// response is nil.
+		var retryAfter time.Duration
 		if err == nil && resp != nil {
+			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("retriable response status %d", resp.StatusCode)
@@ -495,6 +509,15 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 			break
 		}
 		wait := backoff * time.Duration(attempt+1)
+		// Honour an explicit server-side Retry-After when it is larger
+		// than our default exponential backoff. We cap it at 30s to stop
+		// a misbehaving server from stalling the whole scan.
+		if retryAfter > wait {
+			if retryAfter > 30*time.Second {
+				retryAfter = 30 * time.Second
+			}
+			wait = retryAfter
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -502,6 +525,31 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 		}
 	}
 	return nil, lastErr
+}
+
+// parseRetryAfter parses the value of an HTTP Retry-After header. RFC 9110
+// allows two forms: "delay-seconds" (e.g. `Retry-After: 120`) and an
+// HTTP-date (e.g. `Retry-After: Fri, 31 Dec 2027 23:59:59 GMT`). Returns
+// zero when the value is empty or unparseable.
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		d := time.Until(t)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
 }
 
 func isRetriableStatus(code int) bool {
