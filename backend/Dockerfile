@@ -12,7 +12,10 @@ ARG NUCLEI_VERSION=v3.7.1
 RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@${NUCLEI_VERSION}
 
 # ---------------------------------------------------------------------------
-# Download and unpack OWASP ZAP (provides zap-baseline.py).
+# Download and unpack OWASP ZAP plus the docker helper scripts (zap-baseline.py
+# et al.).  The Linux release tarball does NOT contain those scripts — they
+# live in the zaproxy GitHub repo under `docker/`, so we fetch them separately
+# at the matching version tag.
 # ---------------------------------------------------------------------------
 FROM alpine:latest AS zap-download
 ARG ZAP_VERSION=2.17.0
@@ -23,7 +26,12 @@ RUN apk add --no-cache ca-certificates wget \
     && echo "${ZAP_SHA256}  ZAP_${ZAP_VERSION}_Linux.tar.gz" | sha256sum -c - \
     && tar -xzf "ZAP_${ZAP_VERSION}_Linux.tar.gz" \
     && mv "ZAP_${ZAP_VERSION}" /opt/zaproxy \
-    && rm "ZAP_${ZAP_VERSION}_Linux.tar.gz"
+    && rm "ZAP_${ZAP_VERSION}_Linux.tar.gz" \
+    && for f in zap-baseline.py zap-full-scan.py zap-api-scan.py zap_common.py; do \
+        wget --tries=5 --timeout=60 --waitretry=10 --retry-connrefused \
+            -O "/opt/zaproxy/$f" \
+            "https://raw.githubusercontent.com/zaproxy/zaproxy/v${ZAP_VERSION}/docker/$f"; \
+    done
 
 # ---------------------------------------------------------------------------
 # Runtime image
@@ -34,7 +42,9 @@ RUN apk add --no-cache \
     chromium \
     nss \
     openjdk17-jre-headless \
-    python3
+    python3 \
+    py3-pip \
+    && pip3 install --no-cache-dir --break-system-packages zaproxy pyyaml
 
 WORKDIR /app
 
@@ -44,9 +54,18 @@ COPY --from=zap-download /opt/zaproxy /opt/zaproxy
 
 # Expose zap-baseline.py on PATH and ensure it is executable.
 RUN chmod +x /opt/zaproxy/zap-baseline.py \
-    && ln -s /opt/zaproxy/zap-baseline.py /usr/local/bin/zap-baseline.py
+        /opt/zaproxy/zap-full-scan.py \
+        /opt/zaproxy/zap-api-scan.py \
+        /opt/zaproxy/zap.sh \
+    && ln -s /opt/zaproxy/zap-baseline.py /usr/local/bin/zap-baseline.py \
+    && ln -s /opt/zaproxy/zap-full-scan.py /usr/local/bin/zap-full-scan.py \
+    && ln -s /opt/zaproxy/zap-api-scan.py /usr/local/bin/zap-api-scan.py
 
-ENV PORT=8080
+# zap-baseline.py uses these to find ZAP and to run it directly instead of
+# trying to spawn a docker container.
+ENV IS_CONTAINERIZED=true \
+    ZAP_PATH=/opt/zaproxy/zap.sh \
+    PORT=8080
 EXPOSE 8080
 
 CMD ["/app/server"]
