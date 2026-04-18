@@ -1,0 +1,35 @@
+# Compose overlay that adds an OWASP Juice Shop instance to the stack so the
+# Auto Bughunter platform can run an authorized end-to-end scan against it.
+#
+# Start the full stack with both compose files:
+#
+#   cp testing/juice-shop/.env.juiceshop.example .env
+#   docker compose -f docker-compose.yml \
+#                  -f testing/juice-shop/docker-compose.juiceshop.yml \
+#                  up --build
+#
+# The backend reaches Juice Shop on the internal Docker network as
+# http://juice-shop:3000 — that hostname is what must appear in
+# ALLOWED_TARGETS. Host port 3030 is exposed only for manual browsing
+# (the frontend already binds host port 3000).
+
+services:
+  juice-shop:
+    image: bkimminich/juice-shop:v17.1.1
+    container_name: auto-bughunter-juice-shop
+    ports:
+      - "3030:3000"
+    environment:
+      NODE_ENV: unsafe
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/rest/admin/application-version"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  backend:
+    depends_on:
+      juice-shop:
+        condition: service_healthy
