@@ -83,9 +83,16 @@ services:
       - "8080:8080"
       - "8081:8081"
     # The backend image is now slim — it shells out to per-tool sidecars
-    # (zap, nuclei, chromium) via the shim scripts under
-    # /usr/local/bin/. Mounting the host docker socket lets those shims call
-    # `docker compose exec -T <svc> <tool>` from inside the backend container.
+    # (zap, nuclei, chromium, projectdiscovery, ffuf, gobuster, sqlmap,
+    # nikto, wpscan) via the shim scripts under /usr/local/bin/. Mounting
+    # the host docker socket lets those shims call
+    # `docker compose exec -T <svc> <tool>` from inside the backend
+    # container.
+    #
+    # The backend remains the single orchestrator: it is the only service
+    # that talks to the docker socket and the only service that talks to
+    # the `agents` and `ml-service` HTTP sidecars. No sidecar talks to
+    # another sidecar directly.
     #
     # Security note: docker-socket access is effectively root-equivalent on
     # the host. Acceptable for self-hosted scanner usage; not recommended in
@@ -94,8 +101,15 @@ services:
     # for each affected integration.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
+      # sidecars. Mounted at the same path inside both backend and the
+      # consumer sidecars so `-w <path>` resolves identically on both
+      # sides. Backed by a named volume so it survives container restarts
+      # but stays isolated from the host filesystem.
+      - shared_tmp:/tmp/auto-bughunter-shared
     environment:
       CHROME_REMOTE_URL: ${CHROME_REMOTE_URL:-http://chromium:9222}
+      SHARED_TMP_DIR: /tmp/auto-bughunter-shared
     depends_on:
       db:
         condition: service_healthy
@@ -108,6 +122,18 @@ services:
       nuclei:
         condition: service_started
       chromium:
+        condition: service_started
+      projectdiscovery:
+        condition: service_started
+      ffuf:
+        condition: service_started
+      gobuster:
+        condition: service_started
+      sqlmap:
+        condition: service_started
+      nikto:
+        condition: service_started
+      wpscan:
         condition: service_started
 
   # ------------------------------------------------------------------
@@ -149,6 +175,55 @@ services:
       - --remote-debugging-port=9222
     restart: unless-stopped
 
+  # Shared ProjectDiscovery suite. A single sidecar built locally that
+  # bundles subfinder, httpx, naabu, dnsx, shuffledns, katana, tlsx,
+  # cdncheck and asnmap by COPYing each binary out of its official
+  # upstream image. The matching shims under backend/scripts/shims/
+  # `docker compose exec`s the right tool by name.
+  projectdiscovery:
+    build:
+      context: ./sidecars/projectdiscovery
+    entrypoint: ["/bin/sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # Web fuzzing — ffuf. The backend writes a temporary wordlist into
+  # the shared_tmp volume; ffuf consumes it via the same path.
+  ffuf:
+    image: ghcr.io/ffuf/ffuf:v2.1.0
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - shared_tmp:/tmp/auto-bughunter-shared:ro
+    restart: unless-stopped
+
+  # Directory brute-forcing — gobuster. Same shared-volume pattern as ffuf.
+  gobuster:
+    image: ghcr.io/oj/gobuster:v3.6.0
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - shared_tmp:/tmp/auto-bughunter-shared:ro
+    restart: unless-stopped
+
+  # SQL injection probe (Python). Keeps the Python runtime out of the
+  # backend image entirely. paoloo/sqlmap publishes a single rolling
+  # `latest` tag (no semver tags); pin by digest in production if you
+  # need reproducible builds.
+  sqlmap:
+    image: paoloo/sqlmap:latest
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # Nikto web server scanner (Perl).
+  nikto:
+    image: sullo/nikto:2.5.0
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # WPScan WordPress scanner (Ruby).
+  wpscan:
+    image: wpscanteam/wpscan:3.8.28
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
@@ -177,4 +252,5 @@ volumes:
   openwebui_data:
   agents_data:
   nuclei_templates:
+  shared_tmp:
 

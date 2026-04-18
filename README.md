@@ -92,11 +92,25 @@ The backend container is intentionally slim — it ships only the Go server
 binary plus the Docker CLI. Each heavy security dependency runs in its own
 Docker Compose sidecar:
 
-| Sidecar service | Image                              | What the backend uses it for                           |
-| --------------- | ---------------------------------- | ------------------------------------------------------ |
-| `zap`           | `zaproxy/zap-stable:2.17.0`        | OWASP ZAP daemon + `zap-baseline.py` passive scan      |
-| `nuclei`        | `projectdiscovery/nuclei:v3.7.1`   | Nuclei templated vulnerability scanning                |
-| `chromium`      | `chromedp/headless-shell:latest`   | Headless browser crawl/screenshot via DevTools (9222)  |
+| Sidecar service    | Image                              | What the backend uses it for                                                            |
+| ------------------ | ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `zap`              | `zaproxy/zap-stable:2.17.0`        | OWASP ZAP daemon + `zap-baseline.py` passive scan                                       |
+| `nuclei`           | `projectdiscovery/nuclei:v3.7.1`   | Nuclei templated vulnerability scanning                                                 |
+| `chromium`         | `chromedp/headless-shell:latest`   | Headless browser crawl/screenshot via DevTools (9222)                                   |
+| `projectdiscovery` | local build (see `sidecars/`)      | Shared suite: `subfinder`, `httpx`, `naabu`, `dnsx`, `shuffledns`, `katana`, `tlsx`, `cdncheck`, `asnmap` |
+| `ffuf`             | `ghcr.io/ffuf/ffuf`                | Web content fuzzing (consumes wordlist via the `shared_tmp` volume)                     |
+| `gobuster`         | `ghcr.io/oj/gobuster`              | Directory brute-forcing (consumes wordlist via the `shared_tmp` volume)                 |
+| `sqlmap`           | `paoloo/sqlmap`                    | SQL injection probing — keeps Python out of the backend image                           |
+| `nikto`            | `sullo/nikto`                      | Web server scanner — keeps Perl out of the backend image                                |
+| `wpscan`           | `wpscanteam/wpscan`                | WordPress scanner — keeps Ruby out of the backend image                                 |
+| `agents`           | local build (see `agents/`)        | Autonomous agent learner (HTTP, port 8091)                                              |
+| `ml-service`       | local build (see `ml-service/`)    | ML triage / classifier service (HTTP, port 8090)                                        |
+
+The backend container is the **single orchestrator** of the stack: it is
+the only service that holds the docker socket bind-mount, the only
+service that issues `docker compose exec` into the CLI sidecars, and the
+only service that issues HTTP calls to `agents` / `ml-service`. No
+sidecar talks to another sidecar.
 
 Two integration paths:
 

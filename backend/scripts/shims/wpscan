@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs wpscan inside the `wpscan` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec wpscan wpscan "$@"

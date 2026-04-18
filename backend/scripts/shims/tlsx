@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs tlsx inside the shared `projectdiscovery` sidecar.
+exec /usr/local/bin/sidecar-exec projectdiscovery tlsx "$@"
