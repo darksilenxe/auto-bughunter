@@ -175,6 +175,28 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 
 Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
 
+### Out-of-band (OAST) callback service
+
+When `ENABLE_OAST=true`, the backend starts a second HTTP listener (default
+port `9000`, configurable via `OAST_LISTEN_PORT`) that records inbound
+interactions on `/<token>`. Set `OAST_PUBLIC_BASE_URL` to the externally
+reachable URL of that listener (e.g. `http://oast.example.com:9000`) so
+issued tokens have usable callback URLs.
+
+The scanner uses these tokens to detect blind/out-of-band vulnerabilities
+such as SSRF (header-based SSRF probe is enabled by default whenever OAST
+is configured). Findings include the captured interaction as evidence.
+
+Admin API:
+
+- `GET /api/oast/tokens[?scanId=...]` — list active tokens.
+- `POST /api/oast/tokens` — issue a token. JSON body: `{"scanId":"...","label":"..."}` (both optional).
+- `GET /api/oast/hits/{token}` — list recorded callbacks for a token.
+
+OAST state is in-memory and per-token TTL'd (default 60 minutes); restart
+the backend to clear all tokens. DNS-based interactions are intentionally
+not handled here — only HTTP(S) callbacks to the listener are recorded.
+
 ## Reports
 
 The reporting layer produces professional pen-test deliverables and bug-bounty
