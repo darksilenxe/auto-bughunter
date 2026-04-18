@@ -239,8 +239,27 @@ func BuiltInTools() map[string]func(agentName string) ToolSpec {
 		"xxe_probe":             xxeProbeTool,
 		"rate_limit_probe":      rateLimitProbeTool,
 		"api_keys_probe":        apiKeysProbeTool,
-		"path_traversal_probe":  pathTraversalProbeTool,
-		"log4shell_probe":       log4shellProbeTool,
+		"path_traversal_probe":         pathTraversalProbeTool,
+		"log4shell_probe":              log4shellProbeTool,
+		"nosql_injection_probe":        nosqlInjectionProbeTool,
+		"ldap_injection_probe":         ldapInjectionProbeTool,
+		"crlf_injection_probe":         crlfInjectionProbeTool,
+		"http_smuggling_probe":         httpSmugglingProbeTool,
+		"subdomain_takeover_probe":     subdomainTakeoverProbeTool,
+		"ssl_tls_probe":                sslTlsProbeTool,
+		"host_header_injection_probe":  hostHeaderInjectionProbeTool,
+		"oauth_probe":                  oauthProbeTool,
+		"password_reset_probe":         passwordResetProbeTool,
+		"account_enumeration_probe":    accountEnumerationProbeTool,
+		"mass_assignment_probe":        massAssignmentProbeTool,
+		"verb_tampering_probe":         verbTamperingProbeTool,
+		"deserialization_probe":        deserializationProbeTool,
+		"cache_poisoning_probe":        cachePoisoningProbeTool,
+		"race_condition_probe":         raceConditionProbeTool,
+		"dom_xss_probe":                domXssProbeTool,
+		"http_methods_probe":           httpMethodsProbeTool,
+		"business_logic_probe":         businessLogicProbeTool,
+		"file_upload_probe":            fileUploadProbeTool,
 	}
 }
 
@@ -1889,6 +1908,1724 @@ for payload in jndi_payloads[:4]:
                 ),
             })
             break
+`,
+}
+}
+
+func nosqlInjectionProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "nosql_injection_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect MongoDB and NoSQL injection vulnerabilities via operator injection",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: NoSQL injection probe for MongoDB operator injection."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_nosql(target):
+    payloads = [
+        ("[$ne]", "not-equal operator"),
+        ("[$gt]", "greater-than operator"),
+        ("[$regex]", "regex operator"),
+        ("[$where]", "where clause injection"),
+        ('{"$gt":""}', "JSON operator injection"),
+        ('{"$ne":null}', "null comparison bypass"),
+    ]
+    params = ["username", "password", "user", "id", "email", "q", "search"]
+    
+    for param in params:
+        for payload, desc in payloads:
+            test_url = f"{target}?{param}{payload}=test"
+            try:
+                req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8", errors="ignore")
+                    if any(x in body.lower() for x in ["mongodb", "bson", "objectid", "error", "exception"]):
+                        emit({
+                            "id": f"nosql-{param}-{payload[:5]}",
+                            "category": "injection",
+                            "severity": "high",
+                            "title": f"Potential NoSQL Injection: {desc}",
+                            "description": f"NoSQL operator {payload} in parameter {param} may allow injection",
+                            "evidence": f"url={test_url} response_contains_error_keywords",
+                            "recommendation": "Sanitize user input and use parameterized queries for NoSQL databases",
+                        })
+            except urllib.error.HTTPError as e:
+                if e.code in [500, 502, 503]:
+                    emit({
+                        "id": f"nosql-error-{param}",
+                        "category": "injection",
+                        "severity": "medium",
+                        "title": f"Server error on NoSQL payload injection",
+                        "description": f"HTTP {e.code} when injecting NoSQL operators",
+                        "evidence": f"url={test_url} status={e.code}",
+                        "recommendation": "Investigate server error and ensure input validation",
+                    })
+            except Exception:
+                pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_nosql(sys.argv[1])
+`,
+}
+}
+
+func ldapInjectionProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "ldap_injection_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect LDAP injection vulnerabilities in authentication and search endpoints",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: LDAP injection probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_ldap(target):
+    payloads = [
+        ("*", "wildcard"),
+        ("*)(uid=*))(|(uid=*", "filter bypass"),
+        ("admin)(&)", "boolean injection"),
+        ("*)(objectClass=*", "objectClass enumeration"),
+        (")(cn=*", "CN enumeration"),
+        ("*))%00", "null byte termination"),
+    ]
+    params = ["username", "user", "uid", "cn", "dn", "login", "search"]
+    
+    for param in params:
+        for payload, desc in payloads:
+            encoded = urllib.parse.quote(payload)
+            test_url = f"{target}?{param}={encoded}"
+            try:
+                req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8", errors="ignore")
+                    if any(x in body.lower() for x in ["ldap", "invalid dn", "bad search filter", "javax.naming"]):
+                        emit({
+                            "id": f"ldap-{param}-{desc[:8]}",
+                            "category": "injection",
+                            "severity": "high",
+                            "title": f"Potential LDAP Injection: {desc}",
+                            "description": f"LDAP filter injection via {param} parameter",
+                            "evidence": f"url={test_url}",
+                            "recommendation": "Use LDAP escape functions and parameterized queries",
+                        })
+            except urllib.error.HTTPError as e:
+                if e.code == 500:
+                    emit({
+                        "id": f"ldap-error-{param}",
+                        "category": "injection",
+                        "severity": "medium",
+                        "title": "Server error on LDAP payload",
+                        "description": f"HTTP 500 when injecting LDAP characters in {param}",
+                        "evidence": f"url={test_url}",
+                        "recommendation": "Investigate LDAP query handling",
+                    })
+            except Exception:
+                pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_ldap(sys.argv[1])
+`,
+}
+}
+
+func crlfInjectionProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "crlf_injection_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect HTTP header injection via CRLF sequences",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: CRLF injection probe for header injection."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_crlf(target):
+    marker = "X-Injected-Header: crlf-test"
+    payloads = [
+        ("%0d%0a" + marker, "URL-encoded CRLF"),
+        ("%0D%0A" + marker, "uppercase CRLF"),
+        ("%0a" + marker, "LF only"),
+        ("%E5%98%8A%E5%98%8D" + marker, "UTF-8 encoded CRLF"),
+        ("\\r\\n" + marker, "escaped CRLF"),
+    ]
+    params = ["url", "redirect", "next", "return", "callback", "path"]
+    
+    for param in params:
+        for payload, desc in payloads:
+            test_url = f"{target}?{param}={urllib.parse.quote(payload, safe='')}"
+            try:
+                req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    headers_str = str(resp.headers).lower()
+                    if "x-injected-header" in headers_str or "crlf-test" in headers_str:
+                        emit({
+                            "id": f"crlf-{param}",
+                            "category": "injection",
+                            "severity": "high",
+                            "title": f"CRLF Header Injection: {desc}",
+                            "description": f"Injected header appeared in response via {param}",
+                            "evidence": f"url={test_url}",
+                            "recommendation": "Sanitize newline characters from user input",
+                        })
+            except urllib.error.HTTPError:
+                pass
+            except Exception:
+                pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_crlf(sys.argv[1])
+`,
+}
+}
+
+func httpSmugglingProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "http_smuggling_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect HTTP request smuggling via CL.TE and TE.CL desync",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: HTTP smuggling detection probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import time
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_smuggling(target):
+    parsed = urllib.parse.urlparse(target)
+    host = parsed.netloc or parsed.path.split("/")[0]
+    
+    # Check for Transfer-Encoding handling
+    headers_te = {
+        "User-Agent": "Mozilla/5.0",
+        "Transfer-Encoding": "chunked",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    
+    # Check for conflicting headers acceptance
+    headers_conflict = {
+        "User-Agent": "Mozilla/5.0",
+        "Content-Length": "4",
+        "Transfer-Encoding": "chunked",
+    }
+    
+    try:
+        # Timing-based detection
+        start = time.time()
+        req = urllib.request.Request(target, headers=headers_te, method="POST", data=b"0\r\n\r\n")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            elapsed = time.time() - start
+            if elapsed > 5:
+                emit({
+                    "id": "smuggling-timing",
+                    "category": "protocol",
+                    "severity": "high",
+                    "title": "Potential HTTP Smuggling (timing anomaly)",
+                    "description": f"Server took {elapsed:.1f}s processing TE:chunked request",
+                    "evidence": f"target={target} elapsed={elapsed:.2f}s",
+                    "recommendation": "Review proxy/server configuration for request smuggling",
+                })
+    except Exception:
+        pass
+    
+    # Check for header normalization issues
+    weird_te = ["chunked", " chunked", "chunked ", "identity, chunked", "chunked, identity"]
+    for te_val in weird_te:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0", "Transfer-Encoding": te_val}
+            req = urllib.request.Request(target, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                emit({
+                    "id": f"smuggling-te-{te_val[:5]}",
+                    "category": "protocol",
+                    "severity": "info",
+                    "title": "TE header handling detected",
+                    "description": f"Server rejects malformed TE: '{te_val}'",
+                    "evidence": f"TE='{te_val}' status=400",
+                    "recommendation": "Good - server validates Transfer-Encoding",
+                })
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_smuggling(sys.argv[1])
+`,
+}
+}
+
+func subdomainTakeoverProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "subdomain_takeover_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect dangling DNS records vulnerable to subdomain takeover",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Subdomain takeover detection probe."""
+import json
+import sys
+import urllib.request
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+TAKEOVER_SIGNATURES = [
+    ("There isn't a GitHub Pages site here", "github", "high"),
+    ("Fastly error: unknown domain", "fastly", "high"),
+    ("The request could not be satisfied", "cloudfront", "medium"),
+    ("NoSuchBucket", "s3", "high"),
+    ("herokucdn.com/error-pages", "heroku", "high"),
+    ("The specified bucket does not exist", "gcs", "high"),
+    ("Repository not found", "bitbucket", "medium"),
+    ("Project not found", "gitlab", "medium"),
+    ("Trying to access your account", "tumblr", "medium"),
+    ("Do you want to register", "wordpress", "medium"),
+    ("is not a registered InCloud YouTrack", "youtrack", "medium"),
+    ("Help Center Closed", "zendesk", "medium"),
+    ("Oops - We didn't find your site", "surge", "medium"),
+    ("project not found", "readme", "medium"),
+    ("This domain is not connected", "strikingly", "medium"),
+]
+
+def probe_takeover(target):
+    try:
+        req = urllib.request.Request(target, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            for sig, provider, sev in TAKEOVER_SIGNATURES:
+                if sig.lower() in body.lower():
+                    emit({
+                        "id": f"takeover-{provider}",
+                        "category": "misconfiguration",
+                        "severity": sev,
+                        "title": f"Subdomain Takeover: {provider}",
+                        "description": f"Found {provider} takeover signature",
+                        "evidence": f"signature='{sig[:30]}...'",
+                        "recommendation": f"Remove dangling DNS record or claim {provider} resource",
+                    })
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        for sig, provider, sev in TAKEOVER_SIGNATURES:
+            if sig.lower() in body.lower():
+                emit({
+                    "id": f"takeover-{provider}",
+                    "category": "misconfiguration",
+                    "severity": sev,
+                    "title": f"Subdomain Takeover: {provider}",
+                    "description": f"Found {provider} takeover signature in error page",
+                    "evidence": f"status={e.code} signature='{sig[:30]}...'",
+                    "recommendation": f"Remove dangling DNS record or claim {provider} resource",
+                })
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_takeover(sys.argv[1])
+`,
+}
+}
+
+func sslTlsProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "ssl_tls_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Analyze SSL/TLS configuration for security issues",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: SSL/TLS security analysis probe."""
+import json
+import sys
+import ssl
+import urllib.parse
+import datetime
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_ssl(target):
+    parsed = urllib.parse.urlparse(target)
+    host = parsed.netloc or parsed.path.split("/")[0]
+    if ":" in host:
+        host = host.split(":")[0]
+    port = 443
+    
+    try:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        import socket
+        with socket.create_connection((host, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                cert = ssock.getpeercert(binary_form=False)
+                version = ssock.version()
+                cipher = ssock.cipher()
+                
+                # Check TLS version
+                if version in ["SSLv2", "SSLv3", "TLSv1.0", "TLSv1.1"]:
+                    emit({
+                        "id": f"ssl-{version.lower().replace('.', '')}",
+                        "category": "cryptography",
+                        "severity": "high" if "SSL" in version else "medium",
+                        "title": f"Deprecated TLS Version: {version}",
+                        "description": f"Server supports deprecated {version}",
+                        "evidence": f"version={version}",
+                        "recommendation": "Disable deprecated TLS versions, use TLS 1.2+",
+                    })
+                
+                # Check cipher strength
+                if cipher:
+                    cipher_name = cipher[0]
+                    weak_ciphers = ["RC4", "DES", "3DES", "MD5", "NULL", "EXPORT", "anon"]
+                    for weak in weak_ciphers:
+                        if weak.upper() in cipher_name.upper():
+                            emit({
+                                "id": f"ssl-weak-cipher-{weak.lower()}",
+                                "category": "cryptography",
+                                "severity": "high",
+                                "title": f"Weak Cipher: {cipher_name}",
+                                "description": f"Server uses weak cipher with {weak}",
+                                "evidence": f"cipher={cipher_name}",
+                                "recommendation": "Disable weak ciphers and use strong cipher suites",
+                            })
+                            break
+                
+                # Check certificate expiry
+                if cert and "notAfter" in cert:
+                    try:
+                        expiry_str = cert["notAfter"]
+                        expiry = datetime.datetime.strptime(expiry_str, "%b %d %H:%M:%S %Y %Z")
+                        days_left = (expiry - datetime.datetime.utcnow()).days
+                        if days_left < 0:
+                            emit({
+                                "id": "ssl-cert-expired",
+                                "category": "cryptography",
+                                "severity": "critical",
+                                "title": "SSL Certificate Expired",
+                                "description": f"Certificate expired {abs(days_left)} days ago",
+                                "evidence": f"notAfter={expiry_str}",
+                                "recommendation": "Renew SSL certificate immediately",
+                            })
+                        elif days_left < 30:
+                            emit({
+                                "id": "ssl-cert-expiring",
+                                "category": "cryptography",
+                                "severity": "medium",
+                                "title": "SSL Certificate Expiring Soon",
+                                "description": f"Certificate expires in {days_left} days",
+                                "evidence": f"notAfter={expiry_str}",
+                                "recommendation": "Renew SSL certificate before expiry",
+                            })
+                    except Exception:
+                        pass
+    except Exception as e:
+        emit({
+            "id": "ssl-connection-error",
+            "category": "cryptography",
+            "severity": "info",
+            "title": "SSL Connection Issue",
+            "description": f"Could not establish SSL connection: {str(e)[:50]}",
+            "evidence": f"host={host}:{port}",
+            "recommendation": "Verify SSL/TLS configuration",
+        })
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_ssl(sys.argv[1])
+`,
+}
+}
+
+func hostHeaderInjectionProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "host_header_injection_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect host header injection for cache poisoning and password reset attacks",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Host header injection probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def probe_host_header(target):
+    parsed = urllib.parse.urlparse(target)
+    original_host = parsed.netloc
+    
+    evil_hosts = [
+        ("evil.com", "direct injection"),
+        (f"{original_host}.evil.com", "subdomain injection"),
+        (f"evil.com/{original_host}", "path injection"),
+        (f"{original_host}@evil.com", "auth injection"),
+        (f"{original_host}:@evil.com", "port-auth injection"),
+    ]
+    
+    override_headers = ["X-Forwarded-Host", "X-Host", "X-Forwarded-Server", "X-HTTP-Host-Override"]
+    
+    for evil, desc in evil_hosts:
+        # Test direct Host header
+        try:
+            req = urllib.request.Request(target)
+            req.add_header("Host", evil)
+            req.add_header("User-Agent", "Mozilla/5.0")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                if evil in body:
+                    emit({
+                        "id": f"host-injection-{desc[:8]}",
+                        "category": "injection",
+                        "severity": "high",
+                        "title": f"Host Header Injection: {desc}",
+                        "description": f"Injected host '{evil}' reflected in response",
+                        "evidence": f"Host={evil}",
+                        "recommendation": "Validate Host header against whitelist",
+                    })
+        except Exception:
+            pass
+        
+        # Test override headers
+        for hdr in override_headers:
+            try:
+                req = urllib.request.Request(target)
+                req.add_header(hdr, evil)
+                req.add_header("User-Agent", "Mozilla/5.0")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8", errors="ignore")
+                    if evil in body:
+                        emit({
+                            "id": f"host-override-{hdr.lower()[:8]}",
+                            "category": "injection",
+                            "severity": "high",
+                            "title": f"Host Override via {hdr}",
+                            "description": f"Injected host via {hdr} reflected",
+                            "evidence": f"{hdr}={evil}",
+                            "recommendation": f"Ignore or validate {hdr} header",
+                        })
+            except Exception:
+                pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_host_header(sys.argv[1])
+`,
+}
+}
+
+func oauthProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "oauth_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect OAuth implementation vulnerabilities including redirect URI manipulation",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: OAuth vulnerability probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+OAUTH_ENDPOINTS = [
+    "/oauth/authorize",
+    "/oauth2/authorize",
+    "/auth/authorize",
+    "/authorize",
+    "/oauth/token",
+    "/oauth2/token",
+    "/api/oauth/authorize",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration",
+]
+
+def probe_oauth(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    # Find OAuth endpoints
+    for endpoint in OAUTH_ENDPOINTS:
+        url = base + endpoint
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                if any(x in body.lower() for x in ["client_id", "redirect_uri", "authorization", "grant_type"]):
+                    emit({
+                        "id": f"oauth-endpoint-{endpoint.replace('/', '-')[:15]}",
+                        "category": "authentication",
+                        "severity": "info",
+                        "title": f"OAuth Endpoint Found: {endpoint}",
+                        "description": "OAuth endpoint discovered",
+                        "evidence": f"url={url}",
+                        "recommendation": "Review OAuth implementation security",
+                    })
+                    
+                    # Test redirect_uri manipulation
+                    evil_redirects = [
+                        "https://evil.com",
+                        f"https://evil.com/{parsed.netloc}",
+                        f"https://{parsed.netloc}.evil.com",
+                        "javascript:alert(1)",
+                    ]
+                    for evil_uri in evil_redirects:
+                        test_url = f"{url}?redirect_uri={urllib.parse.quote(evil_uri)}&client_id=test&response_type=code"
+                        try:
+                            req2 = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                                body2 = resp2.read().decode("utf-8", errors="ignore")
+                                if evil_uri in body2 or "evil.com" in resp2.url:
+                                    emit({
+                                        "id": "oauth-open-redirect",
+                                        "category": "authentication",
+                                        "severity": "high",
+                                        "title": "OAuth Open Redirect",
+                                        "description": f"redirect_uri accepts arbitrary value: {evil_uri}",
+                                        "evidence": f"redirect_uri={evil_uri}",
+                                        "recommendation": "Strictly validate redirect_uri against whitelist",
+                                    })
+                        except urllib.error.HTTPError:
+                            pass
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_oauth(sys.argv[1])
+`,
+}
+}
+
+func passwordResetProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "password_reset_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect password reset vulnerabilities including host header poisoning",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Password reset vulnerability probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+RESET_ENDPOINTS = [
+    "/forgot-password",
+    "/password/reset",
+    "/reset-password",
+    "/account/forgot",
+    "/api/password/forgot",
+    "/auth/forgot",
+    "/users/password/new",
+]
+
+def probe_reset(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    for endpoint in RESET_ENDPOINTS:
+        url = base + endpoint
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                if any(x in body.lower() for x in ["email", "reset", "forgot", "password"]):
+                    emit({
+                        "id": f"reset-endpoint-{endpoint.replace('/', '-')[:15]}",
+                        "category": "authentication",
+                        "severity": "info",
+                        "title": f"Password Reset Endpoint: {endpoint}",
+                        "description": "Password reset functionality discovered",
+                        "evidence": f"url={url}",
+                        "recommendation": "Review password reset implementation",
+                    })
+                    
+                    # Test host header poisoning
+                    evil_host = "evil.com"
+                    req2 = urllib.request.Request(url, method="POST")
+                    req2.add_header("Host", evil_host)
+                    req2.add_header("X-Forwarded-Host", evil_host)
+                    req2.add_header("User-Agent", "Mozilla/5.0")
+                    req2.add_header("Content-Type", "application/x-www-form-urlencoded")
+                    try:
+                        data = urllib.parse.urlencode({"email": "test@test.com"}).encode()
+                        with urllib.request.urlopen(req2, data=data, timeout=10) as resp2:
+                            body2 = resp2.read().decode("utf-8", errors="ignore")
+                            if evil_host in body2:
+                                emit({
+                                    "id": "reset-host-poisoning",
+                                    "category": "authentication",
+                                    "severity": "high",
+                                    "title": "Password Reset Host Header Poisoning",
+                                    "description": "Injected host reflected in reset response",
+                                    "evidence": f"Host={evil_host}",
+                                    "recommendation": "Use server-side URL generation, validate Host header",
+                                })
+                    except Exception:
+                        pass
+        except urllib.error.HTTPError:
+            pass
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_reset(sys.argv[1])
+`,
+}
+}
+
+func accountEnumerationProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "account_enumeration_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect user account enumeration via differential responses",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Account enumeration detection probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+import time
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+LOGIN_ENDPOINTS = [
+    "/login",
+    "/signin",
+    "/auth/login",
+    "/api/login",
+    "/api/auth/login",
+    "/users/sign_in",
+    "/account/login",
+]
+
+def probe_enumeration(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    valid_user = "admin"
+    invalid_user = "xyznonexistent12345abc"
+    password = "wrongpassword123"
+    
+    for endpoint in LOGIN_ENDPOINTS:
+        url = base + endpoint
+        
+        try:
+            # Test with likely valid username
+            start1 = time.time()
+            req1 = urllib.request.Request(url, method="POST")
+            req1.add_header("Content-Type", "application/x-www-form-urlencoded")
+            req1.add_header("User-Agent", "Mozilla/5.0")
+            data1 = urllib.parse.urlencode({"username": valid_user, "password": password}).encode()
+            try:
+                with urllib.request.urlopen(req1, data=data1, timeout=10) as resp1:
+                    body1 = resp1.read().decode("utf-8", errors="ignore")
+                    time1 = time.time() - start1
+            except urllib.error.HTTPError as e1:
+                body1 = e1.read().decode("utf-8", errors="ignore") if hasattr(e1, "read") else ""
+                time1 = time.time() - start1
+            
+            # Test with invalid username
+            start2 = time.time()
+            req2 = urllib.request.Request(url, method="POST")
+            req2.add_header("Content-Type", "application/x-www-form-urlencoded")
+            req2.add_header("User-Agent", "Mozilla/5.0")
+            data2 = urllib.parse.urlencode({"username": invalid_user, "password": password}).encode()
+            try:
+                with urllib.request.urlopen(req2, data=data2, timeout=10) as resp2:
+                    body2 = resp2.read().decode("utf-8", errors="ignore")
+                    time2 = time.time() - start2
+            except urllib.error.HTTPError as e2:
+                body2 = e2.read().decode("utf-8", errors="ignore") if hasattr(e2, "read") else ""
+                time2 = time.time() - start2
+            
+            # Compare responses
+            if body1 != body2 and len(body1) != len(body2):
+                emit({
+                    "id": f"enum-response-{endpoint.replace('/', '-')[:10]}",
+                    "category": "authentication",
+                    "severity": "medium",
+                    "title": "Account Enumeration via Response Difference",
+                    "description": f"Different responses for valid vs invalid usernames at {endpoint}",
+                    "evidence": f"valid_len={len(body1)} invalid_len={len(body2)}",
+                    "recommendation": "Return identical responses regardless of username validity",
+                })
+            
+            if abs(time1 - time2) > 0.5:
+                emit({
+                    "id": f"enum-timing-{endpoint.replace('/', '-')[:10]}",
+                    "category": "authentication",
+                    "severity": "low",
+                    "title": "Account Enumeration via Timing Difference",
+                    "description": f"Timing difference: {abs(time1-time2):.2f}s between valid/invalid users",
+                    "evidence": f"valid_time={time1:.2f}s invalid_time={time2:.2f}s",
+                    "recommendation": "Use constant-time comparisons to prevent timing attacks",
+                })
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_enumeration(sys.argv[1])
+`,
+}
+}
+
+func massAssignmentProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "mass_assignment_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect mass assignment vulnerabilities allowing privilege escalation",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Mass assignment vulnerability probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+SENSITIVE_PARAMS = [
+    ("role", "admin"),
+    ("isAdmin", "true"),
+    ("is_admin", "true"),
+    ("admin", "true"),
+    ("privilege", "admin"),
+    ("access_level", "10"),
+    ("permissions", "all"),
+    ("group", "administrators"),
+    ("verified", "true"),
+    ("email_verified", "true"),
+    ("approved", "true"),
+    ("active", "true"),
+]
+
+API_ENDPOINTS = [
+    "/api/user",
+    "/api/users",
+    "/api/profile",
+    "/api/account",
+    "/user/update",
+    "/profile/edit",
+    "/api/v1/users",
+]
+
+def probe_mass_assignment(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    for endpoint in API_ENDPOINTS:
+        url = base + endpoint
+        
+        for param, value in SENSITIVE_PARAMS:
+            # Try PUT/PATCH/POST with sensitive parameter
+            for method in ["PUT", "PATCH", "POST"]:
+                try:
+                    req = urllib.request.Request(url, method=method)
+                    req.add_header("Content-Type", "application/json")
+                    req.add_header("User-Agent", "Mozilla/5.0")
+                    payload = json.dumps({param: value, "name": "test"}).encode()
+                    with urllib.request.urlopen(req, data=payload, timeout=10) as resp:
+                        body = resp.read().decode("utf-8", errors="ignore")
+                        if param in body and value in body:
+                            emit({
+                                "id": f"mass-assign-{param}",
+                                "category": "authorization",
+                                "severity": "high",
+                                "title": f"Mass Assignment: {param}",
+                                "description": f"Server accepted sensitive parameter '{param}={value}'",
+                                "evidence": f"endpoint={endpoint} method={method}",
+                                "recommendation": "Use allowlists for bindable parameters",
+                            })
+                except urllib.error.HTTPError as e:
+                    if e.code in [200, 201, 204]:
+                        emit({
+                            "id": f"mass-assign-{param}-accept",
+                            "category": "authorization",
+                            "severity": "medium",
+                            "title": f"Mass Assignment Possible: {param}",
+                            "description": f"Server did not reject sensitive parameter",
+                            "evidence": f"endpoint={endpoint} status={e.code}",
+                            "recommendation": "Validate and restrict bindable parameters",
+                        })
+                except Exception:
+                    pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_mass_assignment(sys.argv[1])
+`,
+}
+}
+
+func verbTamperingProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "verb_tampering_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect HTTP verb tampering bypasses on protected endpoints",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: HTTP verb tampering probe."""
+import json
+import sys
+import urllib.request
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT"]
+CUSTOM_METHODS = ["GETS", "POSTS", "JEFF", "FOO", "ARBITRARY"]
+
+def probe_verb_tampering(target):
+    baseline_codes = {}
+    
+    # Get baseline with standard GET
+    try:
+        req = urllib.request.Request(target, method="GET", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            baseline_codes["GET"] = resp.code
+    except urllib.error.HTTPError as e:
+        baseline_codes["GET"] = e.code
+    except Exception:
+        baseline_codes["GET"] = 0
+    
+    # Test each method
+    for method in METHODS + CUSTOM_METHODS:
+        if method == "GET":
+            continue
+        try:
+            req = urllib.request.Request(target, method=method, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                code = resp.code
+                body = resp.read().decode("utf-8", errors="ignore")[:500]
+        except urllib.error.HTTPError as e:
+            code = e.code
+            body = e.read().decode("utf-8", errors="ignore")[:500] if hasattr(e, "read") else ""
+        except Exception:
+            continue
+        
+        # Check for bypass (got 200 where GET was 401/403)
+        if baseline_codes.get("GET") in [401, 403] and code == 200:
+            emit({
+                "id": f"verb-bypass-{method.lower()}",
+                "category": "authorization",
+                "severity": "high",
+                "title": f"HTTP Verb Tampering Bypass: {method}",
+                "description": f"{method} returns 200 while GET returns {baseline_codes['GET']}",
+                "evidence": f"GET={baseline_codes['GET']} {method}=200",
+                "recommendation": "Ensure authorization applies to all HTTP methods",
+            })
+        
+        # Check for unexpected method acceptance
+        if method in CUSTOM_METHODS and code == 200:
+            emit({
+                "id": f"verb-custom-{method.lower()}",
+                "category": "misconfiguration",
+                "severity": "low",
+                "title": f"Server Accepts Custom Method: {method}",
+                "description": f"Non-standard HTTP method {method} returns 200",
+                "evidence": f"method={method} status={code}",
+                "recommendation": "Reject unknown HTTP methods",
+            })
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_verb_tampering(sys.argv[1])
+`,
+}
+}
+
+func deserializationProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "deserialization_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect insecure deserialization vulnerabilities",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Insecure deserialization probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+import base64
+import time
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+# PHP serialized object payloads (benign)
+PHP_PAYLOADS = [
+    'O:8:"stdClass":0:{}',
+    'a:1:{s:4:"test";s:5:"value";}',
+    'O:1:"a":1:{s:1:"b";s:1:"c";}',
+]
+
+# Java serialized magic bytes
+JAVA_MAGIC = base64.b64encode(b'\xac\xed\x00\x05').decode()
+
+# Python pickle (benign)
+PYTHON_PICKLE = base64.b64encode(b'\x80\x04\x95\x00\x00\x00\x00\x00\x00\x00\x00}').decode()
+
+def probe_deserialization(target):
+    parsed = urllib.parse.urlparse(target)
+    
+    # Test for PHP deserialization
+    for payload in PHP_PAYLOADS:
+        encoded = base64.b64encode(payload.encode()).decode()
+        test_url = f"{target}?data={urllib.parse.quote(encoded)}"
+        try:
+            start = time.time()
+            req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                elapsed = time.time() - start
+                body = resp.read().decode("utf-8", errors="ignore")
+                if any(x in body.lower() for x in ["unserialize", "stdclass", "__wakeup", "fatal error"]):
+                    emit({
+                        "id": "deser-php",
+                        "category": "injection",
+                        "severity": "critical",
+                        "title": "PHP Deserialization Detected",
+                        "description": "Server appears to unserialize user input",
+                        "evidence": f"payload={payload[:20]}...",
+                        "recommendation": "Avoid unserialize() on user input, use JSON instead",
+                    })
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+            if "unserialize" in body.lower():
+                emit({
+                    "id": "deser-php-error",
+                    "category": "injection",
+                    "severity": "high",
+                    "title": "PHP Deserialization Error",
+                    "description": "Deserialization error message exposed",
+                    "evidence": f"status={e.code}",
+                    "recommendation": "Disable deserialization of user input",
+                })
+        except Exception:
+            pass
+    
+    # Test for Java serialization endpoints
+    java_headers = {"Content-Type": "application/x-java-serialized-object", "User-Agent": "Mozilla/5.0"}
+    try:
+        req = urllib.request.Request(target, method="POST", headers=java_headers, data=base64.b64decode(JAVA_MAGIC))
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            if any(x in body.lower() for x in ["objectinputstream", "classnotfound", "serialization"]):
+                emit({
+                    "id": "deser-java",
+                    "category": "injection",
+                    "severity": "critical",
+                    "title": "Java Deserialization Endpoint",
+                    "description": "Server processes Java serialized objects",
+                    "evidence": "Content-Type: application/x-java-serialized-object accepted",
+                    "recommendation": "Disable Java deserialization or use look-ahead deserialization",
+                })
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_deserialization(sys.argv[1])
+`,
+}
+}
+
+func cachePoisoningProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "cache_poisoning_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect web cache poisoning vulnerabilities",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Web cache poisoning probe."""
+import json
+import sys
+import urllib.request
+import urllib.error
+import random
+import string
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+def random_string(length=8):
+    return "".join(random.choices(string.ascii_lowercase, k=length))
+
+UNKEYED_HEADERS = [
+    ("X-Forwarded-Host", "evil-{rand}.com"),
+    ("X-Forwarded-Scheme", "nothttps"),
+    ("X-Original-URL", "/admin"),
+    ("X-Rewrite-URL", "/admin"),
+    ("X-Forwarded-Proto", "nothttps"),
+    ("X-Host", "evil-{rand}.com"),
+    ("X-Forwarded-Port", "1337"),
+]
+
+def probe_cache_poisoning(target):
+    rand = random_string()
+    
+    for header, value in UNKEYED_HEADERS:
+        test_value = value.replace("{rand}", rand)
+        
+        try:
+            req = urllib.request.Request(target, headers={
+                "User-Agent": "Mozilla/5.0",
+                header: test_value,
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                headers_dict = dict(resp.headers)
+                
+                # Check if value reflected
+                if test_value in body or rand in body:
+                    emit({
+                        "id": f"cache-poison-{header.lower()[:15]}",
+                        "category": "cache",
+                        "severity": "high",
+                        "title": f"Cache Poisoning via {header}",
+                        "description": f"Unkeyed header {header} reflected in response",
+                        "evidence": f"{header}={test_value}",
+                        "recommendation": "Include security-relevant headers in cache key or disable reflection",
+                    })
+                
+                # Check cache headers
+                cache_status = headers_dict.get("X-Cache", "") or headers_dict.get("CF-Cache-Status", "")
+                if "HIT" in cache_status.upper():
+                    emit({
+                        "id": "cache-present",
+                        "category": "cache",
+                        "severity": "info",
+                        "title": "Caching Detected",
+                        "description": "Response served from cache",
+                        "evidence": f"cache_header={cache_status}",
+                        "recommendation": "Review cache configuration for security",
+                    })
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_cache_poisoning(sys.argv[1])
+`,
+}
+}
+
+func raceConditionProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "race_condition_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect race condition vulnerabilities in stateful operations",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Race condition probe via timing analysis."""
+import json
+import sys
+import urllib.request
+import urllib.error
+import time
+import threading
+import queue
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+RACE_ENDPOINTS = [
+    "/api/redeem",
+    "/api/coupon",
+    "/api/transfer",
+    "/api/withdraw",
+    "/checkout",
+    "/api/vote",
+    "/like",
+    "/api/apply",
+]
+
+def make_request(url, result_queue, idx):
+    start = time.time()
+    try:
+        req = urllib.request.Request(url, method="POST", headers={
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }, data=b"amount=1")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            elapsed = time.time() - start
+            result_queue.put((idx, resp.code, elapsed, None))
+    except urllib.error.HTTPError as e:
+        elapsed = time.time() - start
+        result_queue.put((idx, e.code, elapsed, None))
+    except Exception as e:
+        elapsed = time.time() - start
+        result_queue.put((idx, 0, elapsed, str(e)))
+
+def probe_race(target):
+    import urllib.parse
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    for endpoint in RACE_ENDPOINTS:
+        url = base + endpoint
+        
+        # Send concurrent requests
+        result_queue = queue.Queue()
+        threads = []
+        num_requests = 5
+        
+        for i in range(num_requests):
+            t = threading.Thread(target=make_request, args=(url, result_queue, i))
+            threads.append(t)
+        
+        # Start all at once
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        
+        results = []
+        while not result_queue.empty():
+            results.append(result_queue.get())
+        
+        if results:
+            success_count = sum(1 for r in results if r[1] == 200)
+            timings = [r[2] for r in results if r[2] > 0]
+            
+            if success_count > 1:
+                emit({
+                    "id": f"race-{endpoint.replace('/', '-')[:10]}",
+                    "category": "logic",
+                    "severity": "medium",
+                    "title": f"Potential Race Condition: {endpoint}",
+                    "description": f"{success_count}/{num_requests} concurrent requests succeeded",
+                    "evidence": f"endpoint={endpoint} successes={success_count}",
+                    "recommendation": "Implement proper locking/mutex for stateful operations",
+                })
+            
+            if timings and max(timings) - min(timings) > 1.0:
+                emit({
+                    "id": f"race-timing-{endpoint.replace('/', '-')[:10]}",
+                    "category": "logic",
+                    "severity": "info",
+                    "title": f"Timing Variance: {endpoint}",
+                    "description": f"Response time variance: {max(timings)-min(timings):.2f}s",
+                    "evidence": f"min={min(timings):.2f}s max={max(timings):.2f}s",
+                    "recommendation": "Review for potential race condition or resource contention",
+                })
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_race(sys.argv[1])
+`,
+}
+}
+
+func domXssProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "dom_xss_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect DOM-based XSS sinks and sources in JavaScript",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: DOM XSS source/sink detection probe."""
+import json
+import sys
+import urllib.request
+import urllib.error
+import re
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+DOM_SOURCES = [
+    "document.URL",
+    "document.documentURI",
+    "document.baseURI",
+    "location.href",
+    "location.search",
+    "location.hash",
+    "location.pathname",
+    "document.cookie",
+    "document.referrer",
+    "window.name",
+    "postMessage",
+]
+
+DOM_SINKS = [
+    "innerHTML",
+    "outerHTML",
+    "document.write",
+    "document.writeln",
+    "eval(",
+    "setTimeout(",
+    "setInterval(",
+    "Function(",
+    "jQuery.html(",
+    ".html(",
+    "$.globalEval",
+    "location.assign",
+    "location.replace",
+    "element.src",
+]
+
+def probe_dom_xss(target):
+    try:
+        req = urllib.request.Request(target, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+            
+            # Find inline scripts
+            scripts = re.findall(r'<script[^>]*>(.*?)</script>', body, re.DOTALL | re.IGNORECASE)
+            all_js = "\n".join(scripts)
+            
+            # Also check external JS URLs
+            ext_scripts = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', body, re.IGNORECASE)
+            
+            found_sources = []
+            found_sinks = []
+            
+            for source in DOM_SOURCES:
+                if source.lower() in all_js.lower():
+                    found_sources.append(source)
+            
+            for sink in DOM_SINKS:
+                if sink.lower() in all_js.lower():
+                    found_sinks.append(sink)
+            
+            if found_sources and found_sinks:
+                emit({
+                    "id": "dom-xss-potential",
+                    "category": "xss",
+                    "severity": "high",
+                    "title": "Potential DOM XSS: Sources and Sinks Present",
+                    "description": f"Found {len(found_sources)} sources and {len(found_sinks)} sinks in inline JS",
+                    "evidence": f"sources={found_sources[:3]} sinks={found_sinks[:3]}",
+                    "recommendation": "Audit data flow from sources to sinks, sanitize user input",
+                })
+            elif found_sinks:
+                emit({
+                    "id": "dom-xss-sinks",
+                    "category": "xss",
+                    "severity": "medium",
+                    "title": "DOM XSS Sinks Detected",
+                    "description": f"Found {len(found_sinks)} potentially dangerous sinks",
+                    "evidence": f"sinks={found_sinks[:5]}",
+                    "recommendation": "Review sink usage for user-controlled data",
+                })
+            
+            # Check for jQuery version
+            jquery_match = re.search(r'jquery[.-]?(\d+\.\d+\.\d+)', body, re.IGNORECASE)
+            if jquery_match:
+                version = jquery_match.group(1)
+                major, minor, patch = map(int, version.split("."))
+                if major < 3 or (major == 3 and minor < 5):
+                    emit({
+                        "id": "dom-xss-jquery",
+                        "category": "xss",
+                        "severity": "medium",
+                        "title": f"Outdated jQuery: {version}",
+                        "description": "Old jQuery versions have known XSS vulnerabilities",
+                        "evidence": f"version={version}",
+                        "recommendation": "Upgrade jQuery to 3.5.0 or later",
+                    })
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_dom_xss(sys.argv[1])
+`,
+}
+}
+
+func httpMethodsProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "http_methods_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Enumerate allowed HTTP methods and detect dangerous ones",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: HTTP methods enumeration probe."""
+import json
+import sys
+import urllib.request
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"]
+
+DANGEROUS = {
+    "TRACE": ("high", "Can enable XST attacks"),
+    "CONNECT": ("medium", "Proxy tunneling method"),
+    "PUT": ("medium", "May allow file upload"),
+    "DELETE": ("medium", "May allow file deletion"),
+    "PROPFIND": ("low", "WebDAV enumeration"),
+    "PROPPATCH": ("low", "WebDAV modification"),
+    "MKCOL": ("medium", "WebDAV directory creation"),
+    "COPY": ("medium", "WebDAV file copy"),
+    "MOVE": ("medium", "WebDAV file move"),
+}
+
+def probe_methods(target):
+    allowed = []
+    
+    # Try OPTIONS first
+    try:
+        req = urllib.request.Request(target, method="OPTIONS", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            allow_header = resp.headers.get("Allow", "")
+            if allow_header:
+                allowed = [m.strip().upper() for m in allow_header.split(",")]
+                emit({
+                    "id": "http-methods-options",
+                    "category": "information",
+                    "severity": "info",
+                    "title": "HTTP Methods (OPTIONS)",
+                    "description": f"Allowed methods: {', '.join(allowed)}",
+                    "evidence": f"Allow: {allow_header}",
+                    "recommendation": "Disable unnecessary HTTP methods",
+                })
+    except Exception:
+        pass
+    
+    # Test each method
+    for method in METHODS:
+        try:
+            req = urllib.request.Request(target, method=method, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if method not in allowed:
+                    allowed.append(method)
+                
+                if method in DANGEROUS:
+                    sev, desc = DANGEROUS[method]
+                    emit({
+                        "id": f"http-method-{method.lower()}",
+                        "category": "misconfiguration",
+                        "severity": sev,
+                        "title": f"Dangerous Method Enabled: {method}",
+                        "description": desc,
+                        "evidence": f"method={method} status={resp.code}",
+                        "recommendation": f"Disable {method} method if not required",
+                    })
+        except urllib.error.HTTPError as e:
+            if e.code not in [405, 501]:
+                if method not in allowed:
+                    allowed.append(method)
+        except Exception:
+            pass
+    
+    if len(allowed) > 5:
+        emit({
+            "id": "http-methods-many",
+            "category": "misconfiguration",
+            "severity": "low",
+            "title": f"Many HTTP Methods Allowed ({len(allowed)})",
+            "description": f"Server allows {len(allowed)} HTTP methods",
+            "evidence": f"methods={', '.join(allowed)}",
+            "recommendation": "Review and restrict allowed HTTP methods",
+        })
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_methods(sys.argv[1])
+`,
+}
+}
+
+func businessLogicProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "business_logic_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect business logic flaws like negative values and boundary issues",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: Business logic vulnerability probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+LOGIC_TESTS = [
+    ("quantity", ["-1", "0", "999999999", "1.5", "1e10"]),
+    ("amount", ["-100", "0.001", "999999999"]),
+    ("price", ["-50", "0"]),
+    ("count", ["-5", "0", "2147483647"]),
+    ("discount", ["101", "200", "-50"]),
+    ("limit", ["-1", "0", "999999"]),
+]
+
+API_ENDPOINTS = [
+    "/api/cart",
+    "/api/checkout",
+    "/api/order",
+    "/api/purchase",
+    "/api/transfer",
+    "/cart/add",
+    "/checkout",
+]
+
+def probe_business_logic(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    for endpoint in API_ENDPOINTS:
+        url = base + endpoint
+        
+        for param, values in LOGIC_TESTS:
+            for value in values:
+                # Test via query string
+                test_url = f"{url}?{param}={value}"
+                try:
+                    req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        body = resp.read().decode("utf-8", errors="ignore")
+                        
+                        # Check for acceptance of invalid values
+                        if any(x in body.lower() for x in ["success", "added", "created", "ok"]):
+                            if value.startswith("-") or value == "0" or int(float(value)) > 2147483647 if value.replace(".", "").replace("e", "").isdigit() else False:
+                                emit({
+                                    "id": f"logic-{param}-{value[:5]}",
+                                    "category": "logic",
+                                    "severity": "high" if value.startswith("-") else "medium",
+                                    "title": f"Business Logic Flaw: {param}={value}",
+                                    "description": f"Server accepted invalid {param} value",
+                                    "evidence": f"endpoint={endpoint} {param}={value}",
+                                    "recommendation": f"Validate {param} on server-side with proper bounds",
+                                })
+                except urllib.error.HTTPError as e:
+                    if e.code == 200:
+                        emit({
+                            "id": f"logic-accept-{param}",
+                            "category": "logic",
+                            "severity": "medium",
+                            "title": f"Boundary Value Accepted: {param}={value}",
+                            "description": f"Server processed boundary value",
+                            "evidence": f"status=200 {param}={value}",
+                            "recommendation": "Implement proper input validation",
+                        })
+                except Exception:
+                    pass
+                
+                # Test via JSON POST
+                try:
+                    req = urllib.request.Request(url, method="POST", headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Content-Type": "application/json",
+                    })
+                    payload = json.dumps({param: value if not value.lstrip("-").replace(".", "").isdigit() else float(value)})
+                    with urllib.request.urlopen(req, data=payload.encode(), timeout=10) as resp:
+                        body = resp.read().decode("utf-8", errors="ignore")
+                        if "success" in body.lower():
+                            emit({
+                                "id": f"logic-json-{param}",
+                                "category": "logic",
+                                "severity": "medium",
+                                "title": f"JSON Business Logic: {param}={value}",
+                                "description": "Server accepted JSON with boundary value",
+                                "evidence": f"endpoint={endpoint} json={param}:{value}",
+                                "recommendation": "Validate JSON payload values",
+                            })
+                except Exception:
+                    pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_business_logic(sys.argv[1])
+`,
+}
+}
+
+func fileUploadProbeTool(agentName string) ToolSpec {
+return ToolSpec{
+Name:        "file_upload_probe",
+Language:    "python3",
+GeneratedBy: agentName,
+Rationale:   "Detect file upload vulnerabilities and bypass techniques",
+Code: `#!/usr/bin/env python3
+"""Auto-generated: File upload vulnerability probe."""
+import json
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+def emit(finding):
+    print(json.dumps(finding), flush=True)
+
+UPLOAD_ENDPOINTS = [
+    "/upload",
+    "/api/upload",
+    "/api/files",
+    "/file/upload",
+    "/media/upload",
+    "/images/upload",
+    "/api/v1/upload",
+]
+
+DANGEROUS_EXTENSIONS = [
+    (".php", "PHP script"),
+    (".php5", "PHP5 script"),
+    (".phtml", "PHP HTML"),
+    (".jsp", "Java Server Page"),
+    (".jspx", "JSP XML"),
+    (".asp", "ASP script"),
+    (".aspx", "ASP.NET script"),
+    (".exe", "Windows executable"),
+    (".sh", "Shell script"),
+    (".py", "Python script"),
+    (".pl", "Perl script"),
+    (".cgi", "CGI script"),
+    (".htaccess", "Apache config"),
+    (".svg", "SVG with scripts"),
+]
+
+def probe_upload(target):
+    parsed = urllib.parse.urlparse(target)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    for endpoint in UPLOAD_ENDPOINTS:
+        url = base + endpoint
+        
+        # Check if endpoint exists
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                if any(x in body.lower() for x in ["upload", "file", "multipart", "choose"]):
+                    emit({
+                        "id": f"upload-endpoint-{endpoint.replace('/', '-')[:15]}",
+                        "category": "upload",
+                        "severity": "info",
+                        "title": f"Upload Endpoint: {endpoint}",
+                        "description": "File upload functionality discovered",
+                        "evidence": f"url={url}",
+                        "recommendation": "Review file upload security controls",
+                    })
+                    
+                    # Test multipart boundary
+                    boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+                    
+                    for ext, desc in DANGEROUS_EXTENSIONS[:5]:  # Test top 5
+                        filename = f"test{ext}"
+                        body_data = f'''--{boundary}\r
+Content-Disposition: form-data; name="file"; filename="{filename}"\r
+Content-Type: application/octet-stream\r
+\r
+test content\r
+--{boundary}--\r
+'''
+                        try:
+                            req2 = urllib.request.Request(url, method="POST", headers={
+                                "User-Agent": "Mozilla/5.0",
+                                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                            }, data=body_data.encode())
+                            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                                resp_body = resp2.read().decode("utf-8", errors="ignore")
+                                if any(x in resp_body.lower() for x in ["success", "uploaded", "saved", filename]):
+                                    emit({
+                                        "id": f"upload-dangerous-{ext.replace('.', '')}",
+                                        "category": "upload",
+                                        "severity": "critical",
+                                        "title": f"Dangerous Upload Accepted: {ext}",
+                                        "description": f"{desc} upload not blocked",
+                                        "evidence": f"filename={filename} accepted",
+                                        "recommendation": f"Block {ext} file uploads on server-side",
+                                    })
+                        except urllib.error.HTTPError as e:
+                            if e.code in [200, 201]:
+                                emit({
+                                    "id": f"upload-ext-{ext.replace('.', '')}",
+                                    "category": "upload",
+                                    "severity": "high",
+                                    "title": f"Extension Accepted: {ext}",
+                                    "description": f"Server returned success for {ext}",
+                                    "evidence": f"status={e.code}",
+                                    "recommendation": "Implement extension allowlist",
+                                })
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(1)
+    probe_upload(sys.argv[1])
 `,
 }
 }
