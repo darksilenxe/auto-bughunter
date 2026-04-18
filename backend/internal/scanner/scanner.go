@@ -183,6 +183,9 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	bodyText := string(bodyBytes)
 
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
+	findings = append(findings, scanForSecrets(input.Target, bodyText)...)
+	findings = append(findings, runCORSProbe(ctx, input.Target, input.AuthProfile, input.Options, s)...)
+	findings = append(findings, runOpenRedirectProbe(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")

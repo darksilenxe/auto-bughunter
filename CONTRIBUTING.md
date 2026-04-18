@@ -54,7 +54,17 @@ go test -race ./...
 
 # Frontend
 cd frontend
+npm install
 npm run build
+npm test
+```
+
+Or, from the repo root:
+
+```bash
+make test    # backend (race) + frontend (vitest)
+make build   # backend + frontend production build
+make lint    # go vet + golangci-lint (if installed)
 ```
 
 If you have `golangci-lint` installed locally:
