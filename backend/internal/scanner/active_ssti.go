@@ -96,7 +96,16 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 			if attempts >= sstiMaxAttempts {
 				break
 			}
-			for _, payload := range sstiPayloads {
+			var payloads []sstiVariant
+			if input.Options.WAFBypass {
+				payloads = sstiBypassVariants()
+			} else {
+				payloads = make([]sstiVariant, 0, len(sstiPayloads))
+				for _, v := range sstiPayloads {
+					payloads = append(payloads, sstiVariant{engine: v.engine, payload: v.payload, expect: v.expect})
+				}
+			}
+			for _, payload := range payloads {
 				if attempts >= sstiMaxAttempts {
 					break
 				}

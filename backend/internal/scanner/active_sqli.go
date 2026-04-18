@@ -112,37 +112,52 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 			if attempts >= sqliMaxAttempts {
 				break
 			}
-			probe := *base
-			q := probe.Query()
-			// If the parameter already exists, append the quote to its
-			// existing value so we exercise the same code path as the
-			// real app (e.g. id=42 -> id=42'); otherwise seed with "1'".
-			existing := q.Get(p)
-			if existing == "" {
-				existing = "1"
+			payloads := []string{sqliBenignPayload}
+			if input.Options.WAFBypass {
+				payloads = sqliBypassVariants(sqliBenignPayload)
 			}
-			q.Set(p, existing+sqliBenignPayload)
-			probe.RawQuery = q.Encode()
-			probeURL := probe.String()
-			if !scope.IsURLInScope(probeURL, input.Scope) {
-				continue
+			matched := false
+			for _, payload := range payloads {
+				if attempts >= sqliMaxAttempts {
+					break
+				}
+				probe := *base
+				q := probe.Query()
+				// If the parameter already exists, append the breakout to
+				// its existing value so we exercise the same code path as
+				// the real app (e.g. id=42 -> id=42'); otherwise seed
+				// with "1<payload>".
+				existing := q.Get(p)
+				if existing == "" {
+					existing = "1"
+				}
+				q.Set(p, existing+payload)
+				probe.RawQuery = q.Encode()
+				probeURL := probe.String()
+				if !scope.IsURLInScope(probeURL, input.Scope) {
+					continue
+				}
+				// See active_xss.go for the rationale on omitting the
+				// redundant safety check on the constructed URL.
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					continue
+				}
+				ApplyAuthProfile(req, input.AuthProfile)
+				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+				attempts++
+				if err != nil || resp == nil {
+					continue
+				}
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				_ = resp.Body.Close()
+				if sig := matchSQLErrorSignature(string(respBody)); sig != "" {
+					hits = append(hits, hit{url: probeURL, param: p, signature: sig})
+					matched = true
+					break
+				}
 			}
-			// See active_xss.go for the rationale on omitting the
-			// redundant safety check on the constructed URL.
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-			if err != nil {
-				continue
-			}
-			ApplyAuthProfile(req, input.AuthProfile)
-			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
-			attempts++
-			if err != nil || resp == nil {
-				continue
-			}
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-			_ = resp.Body.Close()
-			if sig := matchSQLErrorSignature(string(respBody)); sig != "" {
-				hits = append(hits, hit{url: probeURL, param: p, signature: sig})
+			if matched {
 				break
 			}
 		}

@@ -81,33 +81,47 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 			if attempts >= xssMaxAttempts {
 				break
 			}
-			probe := *base
-			q := probe.Query()
-			q.Set(p, xssMarker)
-			probe.RawQuery = q.Encode()
-			probeURL := probe.String()
-			if !scope.IsURLInScope(probeURL, input.Scope) {
-				continue
+			payloads := []string{xssMarker}
+			if input.Options.WAFBypass {
+				payloads = xssBypassVariants(xssMarker)
 			}
-			// safety.ValidateOutboundURL is intentionally not re-checked
-			// here: the host comes from input.Target (validated by Run)
-			// or from extractRuntimeEndpoints (which validates each
-			// candidate); modifying only the query string cannot change
-			// the host, so the check would be redundant.
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-			if err != nil {
-				continue
+			matched := false
+			for _, payload := range payloads {
+				if attempts >= xssMaxAttempts {
+					break
+				}
+				probe := *base
+				q := probe.Query()
+				q.Set(p, payload)
+				probe.RawQuery = q.Encode()
+				probeURL := probe.String()
+				if !scope.IsURLInScope(probeURL, input.Scope) {
+					continue
+				}
+				// safety.ValidateOutboundURL is intentionally not re-checked
+				// here: the host comes from input.Target (validated by Run)
+				// or from extractRuntimeEndpoints (which validates each
+				// candidate); modifying only the query string cannot change
+				// the host, so the check would be redundant.
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					continue
+				}
+				ApplyAuthProfile(req, input.AuthProfile)
+				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+				attempts++
+				if err != nil || resp == nil {
+					continue
+				}
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+				_ = resp.Body.Close()
+				if isHTMLContextReflection(string(respBody), payload) {
+					hits = append(hits, hit{url: probeURL, param: p})
+					matched = true
+					break
+				}
 			}
-			ApplyAuthProfile(req, input.AuthProfile)
-			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
-			attempts++
-			if err != nil || resp == nil {
-				continue
-			}
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
-			_ = resp.Body.Close()
-			if isHTMLContextReflection(string(respBody), xssMarker) {
-				hits = append(hits, hit{url: probeURL, param: p})
+			if matched {
 				// One reflection is enough to surface the issue; keep
 				// searching other endpoints to enrich evidence but don't
 				// loop indefinitely on the same parameter set.
