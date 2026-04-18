@@ -82,8 +82,12 @@ func main() {
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
+		AuthToken:     os.Getenv("SIDECAR_AUTH_TOKEN"),
 	})
-	agentLearnerClient := agentlearner.NewClient(os.Getenv("AGENT_LEARNER_URL"))
+	agentLearnerClient := agentlearner.NewClientWithToken(
+		os.Getenv("AGENT_LEARNER_URL"),
+		os.Getenv("SIDECAR_AUTH_TOKEN"),
+	)
 
 	// Optional self-hosted OAST (out-of-band) callback service. When enabled,
 	// scanners can request a callback URL and detect blind/out-of-band
