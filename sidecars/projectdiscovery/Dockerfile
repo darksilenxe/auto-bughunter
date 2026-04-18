@@ -19,11 +19,11 @@
 FROM projectdiscovery/subfinder:v2.13.0   AS subfinder
 FROM projectdiscovery/httpx:v1.9.0        AS httpx
 FROM projectdiscovery/naabu:v2.5.0        AS naabu
-FROM projectdiscovery/dnsx:v1.2.3         AS dnsx
-FROM projectdiscovery/shuffledns:v1.2.1   AS shuffledns
+FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
+FROM projectdiscovery/shuffledns:v1.0.8   AS shuffledns
 FROM projectdiscovery/katana:v1.5.0       AS katana
 FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
-FROM projectdiscovery/cdncheck:v1.2.31    AS cdncheck
+FROM projectdiscovery/cdncheck:v1.1.36    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
 
 FROM alpine:3.20
