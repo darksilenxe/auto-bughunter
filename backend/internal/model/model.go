@@ -35,6 +35,11 @@ type Finding struct {
 	Impact            string            `json:"impact,omitempty"`
 	References        []string          `json:"references,omitempty"`
 	PoC               string            `json:"poc,omitempty"`
+	// MITRETechniques is a deterministic list of MITRE ATT&CK technique IDs
+	// (e.g. "T1190", "T1059.007") associated with this finding. Populated
+	// from the finding's category/CWE by mitre.AnnotateFinding so the field
+	// behaves like a sibling of CWE/OWASPCategory.
+	MITRETechniques []string `json:"mitreTechniques,omitempty"`
 }
 
 // ReportTemplateOptions allows callers to customize the cover/branding sections
@@ -344,14 +349,18 @@ type AgentRunTelemetry struct {
 }
 
 type DecisionDashboard struct {
-	CoverageCompletenessScore int      `json:"coverageCompletenessScore"`
-	AuthenticatedCoverageRate float64  `json:"authenticatedCoverageRate"`
-	NewFindings               int      `json:"newFindings"`
-	ChangedFindings           int      `json:"changedFindings"`
-	ResolvedFindings          int      `json:"resolvedFindings"`
-	TopAttackPaths            []string `json:"topAttackPaths,omitempty"`
-	UntestedReasons           []string `json:"untestedReasons,omitempty"`
-	ActionableFindings        int      `json:"actionableFindings"`
+	CoverageCompletenessScore int            `json:"coverageCompletenessScore"`
+	AuthenticatedCoverageRate float64        `json:"authenticatedCoverageRate"`
+	NewFindings               int            `json:"newFindings"`
+	ChangedFindings           int            `json:"changedFindings"`
+	ResolvedFindings          int            `json:"resolvedFindings"`
+	TopAttackPaths            []string       `json:"topAttackPaths,omitempty"`
+	UntestedReasons           []string       `json:"untestedReasons,omitempty"`
+	ActionableFindings        int            `json:"actionableFindings"`
+	// MITREHeatmap is a deterministic count of findings per MITRE ATT&CK
+	// technique ID, used by the dashboard UI to render a heatmap. Empty
+	// when no findings carry MITRE annotations.
+	MITREHeatmap map[string]int `json:"mitreHeatmap,omitempty"`
 }
 
 func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
