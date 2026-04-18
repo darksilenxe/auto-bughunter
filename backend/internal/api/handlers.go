@@ -3,7 +3,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +65,9 @@ type Server struct {
 	gateMedBlock   int
 	scanTimeout    time.Duration
 	eventBus       *EventBus
+	apiToken       string
+	rateLimiter    *rateLimiter
+	webhookSecret  string
 }
 
 type Repository interface {
@@ -137,6 +143,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:   scanTimeout,
 		eventBus:      NewEventBus(),
+		apiToken:      strings.TrimSpace(os.Getenv("API_TOKEN")),
+		rateLimiter:   newRateLimiter(intFromEnv("API_RATE_LIMIT_PER_MINUTE", 0)),
+		webhookSecret: strings.TrimSpace(os.Getenv("WEBHOOK_SIGNING_SECRET")),
 	}
 }
 
@@ -160,13 +169,24 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
-	return withCORS(mux)
+	mux.HandleFunc("/metrics", s.handleMetrics)
+	// Wrap handler chain (innermost first): mux -> auth -> rate limit -> metrics -> CORS.
+	// CORS is outermost so OPTIONS preflights are handled before auth.
+	handler := authMiddleware(s.apiToken, mux)
+	handler = rateLimitMiddleware(s.rateLimiter, handler)
+	handler = metricsMiddleware(handler)
+	return withCORS(handler)
 }
 
-// handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
+// handleScanOrEvents routes /api/scan/{id}, /api/scan/{id}/events, and
+// /api/scan/{id}/sarif.
 func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/events") {
 		s.handleScanEvents(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/sarif") {
+		s.handleScanSARIF(w, r)
 		return
 	}
 	s.handleGetScan(w, r)
@@ -390,6 +410,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.appendAuditEvent(id, "running", "Scan execution started")
+	metrics.recordScanStarted()
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
@@ -407,6 +428,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		})
 		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
 		_ = s.repo.UpdateJob(context.Background(), job)
+		metrics.recordScanCompleted(false)
 		return
 	}
 
@@ -519,6 +541,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
 	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	metrics.recordScanCompleted(true)
+	sevCounts := map[string]int{}
+	for _, f := range job.Findings {
+		sevCounts[strings.ToLower(string(f.Severity))]++
+	}
+	metrics.recordFindings(sevCounts)
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
 		Message: fmt.Sprintf("Scan completed: %d findings", len(job.Findings)),
@@ -1606,17 +1634,18 @@ func (s *Server) notifyFindings(job *model.ScanJob) {
 		"findings":  selected,
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
 	}
-	sendWebhookJSON(s.webhookURL, payload)
+	sendWebhookJSON(s.webhookURL, payload, s.webhookSecret)
 	if s.slackWebhook != "" {
 		lines := []string{fmt.Sprintf("*auto-bughunter:* %d high-confidence drift finding(s) on `%s`", len(selected), job.Target)}
 		for _, item := range selected {
 			lines = append(lines, fmt.Sprintf("• [%s] %s (%.2f)", strings.ToUpper(string(item.Severity)), item.Title, item.Confidence))
 		}
-		sendWebhookJSON(s.slackWebhook, map[string]string{"text": strings.Join(limitStrings(lines, 12), "\n")})
+		// Slack expects an unsigned payload to its incoming webhook URL.
+		sendWebhookJSON(s.slackWebhook, map[string]string{"text": strings.Join(limitStrings(lines, 12), "\n")}, "")
 	}
 }
 
-func sendWebhookJSON(target string, payload any) {
+func sendWebhookJSON(target string, payload any, signingSecret string) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return
@@ -1630,12 +1659,23 @@ func sendWebhookJSON(target string, payload any) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if signingSecret != "" {
+		mac := hmac.New(sha256.New, []byte(signingSecret))
+		mac.Write(body)
+		sig := hex.EncodeToString(mac.Sum(nil))
+		// Use the GitHub-style header (sha256=<hex>) so consumers can verify
+		// payloads with widely-available libraries.
+		req.Header.Set("X-Auto-Bughunter-Signature", "sha256="+sig)
+		req.Header.Set("X-Auto-Bughunter-Timestamp", time.Now().UTC().Format(time.RFC3339))
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		metrics.recordWebhook(false)
 		return
 	}
 	_ = resp.Body.Close()
+	metrics.recordWebhook(resp.StatusCode >= 200 && resp.StatusCode < 300)
 }
 
 func hostFromTarget(target string) string {

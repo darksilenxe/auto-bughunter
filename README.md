@@ -130,6 +130,14 @@ Body:
 
 Returns job state and findings, including per-agent telemetry (`agentRuns`), structured decision data (`dashboard`, `nextActions`), ML recommendations (`modelRecommendations`), asset relationships (`assetLinks`), and an automated penetration test report (`automatedReport`) with findings/severities/how-found/commands-used.
 
+### `GET /api/scan/{id}/sarif`
+
+Returns the scan findings as a [SARIF v2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) document so they can be uploaded directly into GitHub code scanning, Microsoft Defender, or any other SARIF-aware sink. Severity is mapped to SARIF level (`high → error`, `medium → warning`, `low/info → note`).
+
+### `GET /metrics`
+
+Prometheus-style text exposition of operational counters: HTTP requests by method/status, total scans started, scans completed (by outcome), findings produced (by severity), webhook delivery success/failure, and counts of requests rejected by the rate limiter or auth middleware. This endpoint is exempt from API token authentication so Prometheus can scrape it without credentials.
+
 ### `GET /api/ml/engagements?limit=100`
 
 Returns a sanitized, pseudonymized engagement dataset built from completed scans and related telemetry for offline/shadow ML training and evaluation.
@@ -218,6 +226,11 @@ Returns scanner toolchain readiness (binary presence by category) to verify bug 
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.
+- Set `API_TOKEN` to require a bearer token on all `/api/*` routes (except `/api/health` and `/metrics`). The token is accepted via `Authorization: Bearer <token>` or `X-API-Token: <token>`.
+- Set `API_RATE_LIMIT_PER_MINUTE` to apply a per-client (per-IP, honoring `X-Forwarded-For`) rate limit on the API. Limited responses include `X-RateLimit-*` and `Retry-After` headers.
+- Set `WEBHOOK_SIGNING_SECRET` to sign outbound `SCAN_WEBHOOK_URL` payloads with HMAC-SHA256. Consumers verify the `X-Auto-Bughunter-Signature` header (format: `sha256=<hex>`).
+- Operational metrics are exposed in Prometheus text format on `GET /metrics` (HTTP request counts, scan totals, finding counts by severity, webhook outcomes, rate-limit/auth rejections).
+- SARIF export of findings is available at `GET /api/scan/{id}/sarif` for ingestion into GitHub code scanning or other SARIF-aware tools.
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.
