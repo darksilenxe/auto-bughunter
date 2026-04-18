@@ -37,7 +37,12 @@ func (s *Service) runOASTBodySSRFProbe(ctx context.Context, input RunInput, body
 		return nil
 	}
 
-	endpoints := extractRuntimeEndpoints(input.Target, body, input.Scope, 8)
+	// maxBodySSRFEndpoints caps the number of POST destinations to bound
+	// scan time when many runtime endpoints are discovered. Two requests
+	// (form + JSON) are sent per endpoint.
+	const maxBodySSRFEndpoints = 6
+
+	endpoints := extractRuntimeEndpoints(input.Target, body, input.Scope, maxBodySSRFEndpoints)
 	endpoints = append(endpoints, input.Target)
 	endpoints = uniqueEndpoints(endpoints)
 
@@ -68,9 +73,8 @@ func (s *Service) runOASTBodySSRFProbe(ctx context.Context, input RunInput, body
 		return nil
 	}
 
-	const maxEndpoints = 6
-	if len(endpoints) > maxEndpoints {
-		endpoints = endpoints[:maxEndpoints]
+	if len(endpoints) > maxBodySSRFEndpoints {
+		endpoints = endpoints[:maxBodySSRFEndpoints]
 	}
 
 	for _, ep := range endpoints {
