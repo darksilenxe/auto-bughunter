@@ -80,6 +80,20 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
+    # The backend image is now slim — it shells out to per-tool sidecars
+    # (zap, nuclei, chromium) via the shim scripts under
+    # /usr/local/bin/. Mounting the host docker socket lets those shims call
+    # `docker compose exec -T <svc> <tool>` from inside the backend container.
+    #
+    # Security note: docker-socket access is effectively root-equivalent on
+    # the host. Acceptable for self-hosted scanner usage; not recommended in
+    # multi-tenant deployments. To opt out, set SIDECAR_EXEC_DISABLE=1 — the
+    # scanner will then report the standard `<tool>-binary-missing` finding
+    # for each affected integration.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      CHROME_REMOTE_URL: ${CHROME_REMOTE_URL:-http://chromium:9222}
     depends_on:
       db:
         condition: service_healthy
@@ -87,6 +101,51 @@ services:
         condition: service_started
       agents:
         condition: service_started
+      zap:
+        condition: service_started
+      nuclei:
+        condition: service_started
+      chromium:
+        condition: service_started
+
+  # ------------------------------------------------------------------
+  # Tool sidecars — one container per heavy security dependency. The
+  # backend reaches each one via its shim under /usr/local/bin (e.g.
+  # `nuclei`, `zap-baseline.py`).
+  # ------------------------------------------------------------------
+
+  # OWASP ZAP daemon. Ships zap-baseline.py and all of its Python
+  # dependencies on $PATH, so the backend's zap-baseline.py shim just
+  # `docker compose exec`s into here.
+  zap:
+    image: zaproxy/zap-stable:2.17.0
+    # `tail -f /dev/null` keeps the container alive so `exec` works. The
+    # daemon is started on demand by zap-baseline.py itself.
+    entrypoint: ["/bin/sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # Nuclei vulnerability scanner. Same pattern — kept alive so the
+  # backend can `docker compose exec -T nuclei nuclei ...`.
+  nuclei:
+    image: projectdiscovery/nuclei:v3.7.1
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - nuclei_templates:/root/nuclei-templates
+    restart: unless-stopped
+
+  # Headless Chromium exposing the DevTools protocol on 9222. The Go
+  # scanner attaches to this remote browser via chromedp.NewRemoteAllocator
+  # when CHROME_REMOTE_URL is set (see backend/internal/scanner/browser.go).
+  chromium:
+    image: chromedp/headless-shell:latest
+    # --no-sandbox is required because the image runs as root; the
+    # headless-shell entrypoint already wires up --remote-debugging-port.
+    command:
+      - --no-sandbox
+      - --disable-gpu
+      - --remote-debugging-address=0.0.0.0
+      - --remote-debugging-port=9222
+    restart: unless-stopped
 
   frontend:
     build:
@@ -115,4 +174,5 @@ volumes:
   ollama_data:
   openwebui_data:
   agents_data:
+  nuclei_templates:
 

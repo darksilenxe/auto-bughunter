@@ -13,8 +13,8 @@ Do not scan third-party systems without written permission.
 
 - Backend: Go API (`net/http`) with modular scanners
 - Frontend: React + Vite (JavaScript)
-- Headless browser checks: `chromedp` + Chromium
-- Containerization: Docker + Docker Compose
+- Headless browser checks: `chromedp` against a `chromium` sidecar over the DevTools protocol
+- Containerization: Docker + Docker Compose, with heavy security tools split into per-tool sidecars (see [Architecture](#architecture))
 - AI summary: OpenAI-compatible Chat Completions API
 
 ## Features
@@ -85,6 +85,43 @@ AI_API_KEY=
 
 - Frontend: http://localhost:3000
 - Backend health: http://localhost:8080/api/health
+
+## Architecture
+
+The backend container is intentionally slim — it ships only the Go server
+binary plus the Docker CLI. Each heavy security dependency runs in its own
+Docker Compose sidecar:
+
+| Sidecar service | Image                              | What the backend uses it for                           |
+| --------------- | ---------------------------------- | ------------------------------------------------------ |
+| `zap`           | `zaproxy/zap-stable:2.17.0`        | OWASP ZAP daemon + `zap-baseline.py` passive scan      |
+| `nuclei`        | `projectdiscovery/nuclei:v3.7.1`   | Nuclei templated vulnerability scanning                |
+| `chromium`      | `chromedp/headless-shell:latest`   | Headless browser crawl/screenshot via DevTools (9222)  |
+
+Two integration paths:
+
+1. **CLI tools (`nuclei`, `zap-baseline.py`)** — the backend image installs
+   thin shim scripts under `/usr/local/bin` (see
+   `backend/scripts/shims/`) that `exec docker compose exec -T <svc> <tool>
+   "$@"` into the matching sidecar. The Go scanner's existing
+   `exec.LookPath(...)` + stdout parsing keeps working unchanged.
+2. **Headless Chromium** — the Go scanner attaches to the `chromium`
+   sidecar over the DevTools protocol via `chromedp.NewRemoteAllocator`
+   when `CHROME_REMOTE_URL` is set (defaults to
+   `http://chromium:9222`).
+
+### Docker socket requirement
+
+Because the shims call `docker compose exec`, the backend container has
+`/var/run/docker.sock` bind-mounted. **This is effectively
+root-equivalent on the host** — fine for self-hosted single-tenant
+scanner usage, but not appropriate for multi-tenant deployments.
+
+To opt out (e.g. when running the backend binary outside Docker
+Compose), set `SIDECAR_EXEC_DISABLE=1`. The Go scanner will then report
+the standard `<tool>-binary-missing` finding for any integration that
+was enabled but cannot find its tool on `$PATH`, and the rest of the
+scan will run unaffected.
 
 ## API
 

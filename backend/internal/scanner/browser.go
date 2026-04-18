@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,8 +17,26 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// chromedpContext returns a chromedp context. When CHROME_REMOTE_URL is set
+// (e.g. http://chromium:9222 in Docker Compose), it attaches to that
+// long-running headless-shell sidecar via the DevTools protocol instead of
+// trying to launch a local Chromium binary inside the slim backend image.
+func chromedpContext(parent context.Context) (context.Context, context.CancelFunc) {
+	remote := strings.TrimSpace(os.Getenv("CHROME_REMOTE_URL"))
+	if remote == "" {
+		return chromedp.NewContext(parent)
+	}
+	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(parent, remote)
+	ctx, cancelCtx := chromedp.NewContext(allocCtx)
+	cancel := func() {
+		cancelCtx()
+		cancelAlloc()
+	}
+	return ctx, cancel
+}
+
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
-	ctx, cancel := chromedp.NewContext(parent)
+	ctx, cancel := chromedpContext(parent)
 	defer cancel()
 
 	ctx, timeoutCancel := context.WithTimeout(ctx, 35*time.Second)
