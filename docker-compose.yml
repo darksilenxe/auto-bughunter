@@ -107,9 +107,15 @@ services:
       # sides. Backed by a named volume so it survives container restarts
       # but stays isolated from the host filesystem.
       - shared_tmp:/tmp/auto-bughunter-shared
+      # Read-only view of the Assetnote wordlist cache populated by the
+      # `kiterunner` sidecar. Mounted at the same path inside backend and
+      # the consumer sidecars (ffuf, gobuster, kiterunner) so paths in
+      # `-w /wordlists/...` arguments resolve identically on every side.
+      - assetnote_wordlists:/wordlists:ro
     environment:
       CHROME_REMOTE_URL: ${CHROME_REMOTE_URL:-http://chromium:9222}
       SHARED_TMP_DIR: /tmp/auto-bughunter-shared
+      ASSETNOTE_WORDLIST_DIR: /wordlists
     depends_on:
       db:
         condition: service_healthy
@@ -135,6 +141,8 @@ services:
         condition: service_started
       wpscan:
         condition: service_started
+      kiterunner:
+        condition: service_started
 
   # ------------------------------------------------------------------
   # Tool sidecars — one container per heavy security dependency. The
@@ -155,7 +163,7 @@ services:
   # Nuclei vulnerability scanner. Same pattern — kept alive so the
   # backend can `docker compose exec -T nuclei nuclei ...`.
   nuclei:
-    image: projectdiscovery/nuclei:v3.7.1
+    image: projectdiscovery/nuclei:v3.8.0
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     volumes:
       - nuclei_templates:/root/nuclei-templates
@@ -187,12 +195,20 @@ services:
     restart: unless-stopped
 
   # Web fuzzing — ffuf. The backend writes a temporary wordlist into
-  # the shared_tmp volume; ffuf consumes it via the same path.
+  # the shared_tmp volume; ffuf consumes it via the same path. Also gets
+  # the Assetnote wordlist cache (read-only) so the backend can hand off
+  # paths like `/wordlists/<category>/<file>` directly.
+  #
+  # Image note: there is no upstream `ghcr.io/ffuf/ffuf` image (registry
+  # returns "denied" — see Juice Shop CI run #11). The `secsi/ffuf` image
+  # on Docker Hub is the most widely used community image and tracks the
+  # ffuf release tags 1:1.
   ffuf:
-    image: ghcr.io/ffuf/ffuf:v2.1.0
+    image: secsi/ffuf:2.1.0
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     volumes:
       - shared_tmp:/tmp/auto-bughunter-shared:ro
+      - assetnote_wordlists:/wordlists:ro
     restart: unless-stopped
 
   # Directory brute-forcing — gobuster. Same shared-volume pattern as ffuf.
@@ -201,6 +217,21 @@ services:
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     volumes:
       - shared_tmp:/tmp/auto-bughunter-shared:ro
+      - assetnote_wordlists:/wordlists:ro
+    restart: unless-stopped
+
+  # Kiterunner (Assetnote `kr`) sidecar — bundles the `kr` API content
+  # discovery CLI and pre-downloads every wordlist published at
+  # https://wordlists.assetnote.io into the `assetnote_wordlists` named
+  # volume on first start. The same volume is read-only mounted into the
+  # backend, ffuf, and gobuster containers at /wordlists, so a single
+  # cache services every fuzzing tool.
+  kiterunner:
+    build:
+      context: ./sidecars/kiterunner
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+    volumes:
+      - assetnote_wordlists:/wordlists
     restart: unless-stopped
 
   # SQL injection probe (Python). Keeps the Python runtime out of the
@@ -253,4 +284,5 @@ volumes:
   agents_data:
   nuclei_templates:
   shared_tmp:
+  assetnote_wordlists:
 

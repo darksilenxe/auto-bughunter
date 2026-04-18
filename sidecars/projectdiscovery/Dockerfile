@@ -16,15 +16,15 @@
 # in this single file to upgrade the whole suite.
 # ---------------------------------------------------------------------------
 
-FROM projectdiscovery/subfinder:v2.6.6   AS subfinder
-FROM projectdiscovery/httpx:v1.6.9       AS httpx
-FROM projectdiscovery/naabu:v2.3.1       AS naabu
-FROM projectdiscovery/dnsx:v1.2.1        AS dnsx
-FROM projectdiscovery/shuffledns:v1.1.0  AS shuffledns
-FROM projectdiscovery/katana:v1.1.0      AS katana
-FROM projectdiscovery/tlsx:v1.1.6        AS tlsx
-FROM projectdiscovery/cdncheck:v1.1.0    AS cdncheck
-FROM projectdiscovery/asnmap:v1.1.1      AS asnmap
+FROM projectdiscovery/subfinder:v2.13.0   AS subfinder
+FROM projectdiscovery/httpx:v1.9.0        AS httpx
+FROM projectdiscovery/naabu:v2.5.0        AS naabu
+FROM projectdiscovery/dnsx:v1.2.3         AS dnsx
+FROM projectdiscovery/shuffledns:v1.2.1   AS shuffledns
+FROM projectdiscovery/katana:v1.5.0       AS katana
+FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
+FROM projectdiscovery/cdncheck:v1.2.31    AS cdncheck
+FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
 
 FROM alpine:3.20
 
