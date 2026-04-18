@@ -32,12 +32,14 @@ type ProxyStore interface {
 type Config struct {
 	PseudonymSalt string
 	ExternalURL   string
+	AuthToken     string
 	Timeout       time.Duration
 }
 
 type Service struct {
 	salt        string
 	externalURL string
+	authToken   string
 	httpClient  *http.Client
 }
 
@@ -53,6 +55,7 @@ func NewService(cfg Config) *Service {
 	return &Service{
 		salt:        salt,
 		externalURL: strings.TrimRight(strings.TrimSpace(cfg.ExternalURL), "/"),
+		authToken:   strings.TrimSpace(cfg.AuthToken),
 		httpClient:  &http.Client{Timeout: timeout},
 	}
 }
@@ -771,6 +774,9 @@ func (s *Service) postJSON(path string, payload any, out any) bool {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return false

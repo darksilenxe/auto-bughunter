@@ -21,6 +21,7 @@ services:
       context: ./ml-service
     environment:
       MODEL_PATH: ${ML_MODEL_PATH:-}
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
     ports:
       - "8090:8090"
     volumes:
@@ -34,6 +35,7 @@ services:
     environment:
       WEIGHTS_PATH: /data/agent_weights.json
       LOG_LEVEL: ${AGENTS_LOG_LEVEL:-INFO}
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
     ports:
       - "8091:8091"
     volumes:

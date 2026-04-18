@@ -16,18 +16,27 @@ import (
 // All methods are nil-safe: a nil Client is a no-op.
 type Client struct {
 	baseURL    string
+	authToken  string
 	httpClient *http.Client
 }
 
 // NewClient creates a new Client pointing at the agents service.
 // baseURL should be e.g. "http://agents:8091".
 func NewClient(baseURL string) *Client {
+	return NewClientWithToken(baseURL, "")
+}
+
+// NewClientWithToken creates a new Client and, if authToken is non-empty,
+// sends it in the Authorization header on every outgoing request. The
+// matching token must be configured on the sidecar (SIDECAR_AUTH_TOKEN).
+func NewClientWithToken(baseURL, authToken string) *Client {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return nil
 	}
 	return &Client{
 		baseURL:    baseURL,
+		authToken:  strings.TrimSpace(authToken),
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 }
@@ -116,6 +125,7 @@ func (c *Client) Weights(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.applyAuth(httpReq)
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -138,6 +148,7 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.applyAuth(req)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -147,6 +158,13 @@ func (c *Client) post(ctx context.Context, path string, body any, out any) error
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+func (c *Client) applyAuth(req *http.Request) {
+	if c == nil || c.authToken == "" || req == nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+c.authToken)
 }
 
 func toPayload(findings []model.Finding) []findingPayload {

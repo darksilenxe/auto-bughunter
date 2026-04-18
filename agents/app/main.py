@@ -12,6 +12,7 @@ container restarts and accumulates knowledge over time.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import math
@@ -21,13 +22,30 @@ import time
 from typing import Dict, List, Optional
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("agents-service")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 WEIGHTS_PATH = os.getenv("WEIGHTS_PATH", "/data/agent_weights.json")
+
+# Optional shared-secret auth between the backend and this sidecar. When set,
+# every request other than /health must present `Authorization: Bearer <token>`.
+# Leaving it unset preserves the previous open-on-the-compose-network behaviour.
+SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
+_AUTH_EXEMPT_PATHS = {"/health"}
+
+
+def _extract_bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if not header:
+        return ""
+    parts = header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
 
 # ---------------------------------------------------------------------------
 # Known agents (ordered by pipeline stage)
@@ -201,6 +219,18 @@ learner = QLearner()
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Auto Bughunter Agent Learner", version="1.0.0")
+
+
+@app.middleware("http")
+async def _require_sidecar_token(request: Request, call_next):
+    if SIDECAR_AUTH_TOKEN and request.url.path not in _AUTH_EXEMPT_PATHS:
+        provided = _extract_bearer_token(request)
+        if not provided or not hmac.compare_digest(provided, SIDECAR_AUTH_TOKEN):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "invalid or missing sidecar token"},
+            )
+    return await call_next(request)
 
 # ---------------------------------------------------------------------------
 # Command generation catalogue
