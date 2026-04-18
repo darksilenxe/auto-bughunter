@@ -76,6 +76,41 @@ Artifacts are written to `testing/juice-shop/out/`:
   are disabled in the env file so the harness runs fully offline. Flip the
   corresponding `ENABLE_*` flags in `.env` if you want to exercise them.
 
+## Running in CI
+
+This harness also runs unattended on GitHub Actions via
+[`.github/workflows/e2e-juice-shop.yml`](../../.github/workflows/e2e-juice-shop.yml).
+That workflow brings up the same compose stack (minus the heavy bits — see
+below), runs `scan.sh`, asserts the job completed and produced at least one
+finding, and uploads `testing/juice-shop/out/` plus `docker compose logs` as
+build artifacts.
+
+Triggers:
+
+- `workflow_dispatch` (manual; lets you tweak crawl budget / poll timeout / minimum findings)
+- Nightly `schedule` at 04:17 UTC
+- `pull_request`, but **only** when the PR carries the `run-e2e` label — the
+  job is too heavy to gate every PR on by default.
+
+To slim the stack for the runner the workflow:
+
+- Starts only `db`, `ml-service`, `agents`, `backend`, and `juice-shop`
+  (no frontend — the harness drives the API directly).
+- Skips Ollama entirely. The `ollama` and `ollama-init` services in the
+  root `docker-compose.yml` live under the `ollama` compose profile, so they
+  do not start unless you explicitly pass `--profile ollama`. The CI step
+  also blanks out `AI_API_BASE` / `AI_API_KEY` / `AI_MODEL` in `.env` so the
+  backend doesn't try to call a model that isn't running.
+
+Locally, if you want the AI summaries you can opt in with:
+
+```bash
+docker compose --profile ollama \
+  -f docker-compose.yml \
+  -f testing/juice-shop/docker-compose.juiceshop.yml \
+  up --build
+```
+
 ## Tear-down
 
 ```bash
@@ -96,3 +131,4 @@ docker compose \
 | `POLL_TIMEOUT`  | `1200`                               | Max seconds to wait for the job to finish |
 | `POLL_INTERVAL` | `10`                                 | Seconds between status polls |
 | `OUTPUT_DIR`    | `testing/juice-shop/out`             | Where artifacts are written |
+| `CRAWL_MAX_PAGES` | `25`                               | Crawl budget passed to the scanner (CI lowers this for speed) |

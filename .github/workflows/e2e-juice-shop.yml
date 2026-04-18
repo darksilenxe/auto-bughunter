@@ -1,0 +1,179 @@
+name: E2E - Juice Shop Harness
+
+# End-to-end regression test for the Auto Bughunter platform. Brings up the
+# full stack + a bundled OWASP Juice Shop instance via the testing harness in
+# `testing/juice-shop/` and runs an authorized scan against it, asserting on
+# the resulting findings.
+#
+# Triggers:
+#   * Manual: workflow_dispatch (with a tweakable crawl budget input)
+#   * Nightly: 04:17 UTC every day
+#   * Pull request: only when the PR carries the `run-e2e` label (this job is
+#     too heavy to gate every PR on)
+on:
+  workflow_dispatch:
+    inputs:
+      crawl_max_pages:
+        description: "Crawl budget passed to the harness scan"
+        required: false
+        default: "10"
+      poll_timeout:
+        description: "Max seconds to wait for the scan to complete"
+        required: false
+        default: "1500"
+      min_findings:
+        description: "Minimum total findings required for the scan to pass"
+        required: false
+        default: "1"
+  schedule:
+    - cron: "17 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-juice-shop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  juice-shop:
+    name: Run authorized scan against bundled Juice Shop
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Skip on PRs unless the `run-e2e` label is present. workflow_dispatch and
+    # schedule events always run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    env:
+      CRAWL_MAX_PAGES: ${{ github.event.inputs.crawl_max_pages || '10' }}
+      POLL_TIMEOUT: ${{ github.event.inputs.poll_timeout || '1500' }}
+      POLL_INTERVAL: "10"
+      MIN_FINDINGS: ${{ github.event.inputs.min_findings || '1' }}
+      OUTPUT_DIR: testing/juice-shop/out
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ hashFiles('**/Dockerfile', '**/go.sum', '**/package-lock.json', '**/requirements*.txt') }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Prepare CI .env (Ollama disabled, lean stack)
+        run: |
+          set -euo pipefail
+          cp testing/juice-shop/.env.juiceshop.example .env
+          # Disable AI summary calls — Ollama is gated behind the `ollama`
+          # compose profile and is intentionally not started in CI to keep the
+          # runner slim. The scanner runs fine without an AI backend.
+          sed -i 's|^AI_API_BASE=.*$|AI_API_BASE=|'   .env
+          sed -i 's|^AI_API_KEY=.*$|AI_API_KEY=|'     .env
+          sed -i 's|^AI_MODEL=.*$|AI_MODEL=|'         .env
+          sed -i 's|^OLLAMA_MODEL=.*$|OLLAMA_MODEL=|' .env
+          echo "[+] Effective .env:"
+          grep -E '^(AI_|OLLAMA_|ENABLE_|ALLOWED_)' .env || true
+
+      - name: Bring up stack (no Ollama, no frontend)
+        run: |
+          set -euo pipefail
+          # Only start the services needed to run a scan:
+          #   db, ml-service, agents, backend, juice-shop
+          # Ollama is gated behind the `ollama` profile; the frontend isn't
+          # required for the API-driven harness.
+          docker compose \
+            -f docker-compose.yml \
+            -f testing/juice-shop/docker-compose.juiceshop.yml \
+            up --build -d db ml-service agents backend juice-shop
+          docker compose \
+            -f docker-compose.yml \
+            -f testing/juice-shop/docker-compose.juiceshop.yml \
+            ps
+
+      - name: Run authorized scan
+        run: |
+          set -euo pipefail
+          export OUTPUT_DIR POLL_TIMEOUT POLL_INTERVAL CRAWL_MAX_PAGES
+          ./testing/juice-shop/scan.sh
+
+      - name: Assert scan completed and meets findings threshold
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Prefer the explicit `scan-<id>.json` artifact written by scan.sh
+          # on completion, ignoring the `scan-create.json` request envelope.
+          final=""
+          for f in "${OUTPUT_DIR}"/scan-*.json; do
+            base="$(basename "$f")"
+            [[ "$base" == "scan-create.json" ]] && continue
+            final="$f"
+          done
+          if [[ -z "$final" ]]; then
+            echo "::error::No final scan-<id>.json artifact produced"
+            ls -la "${OUTPUT_DIR}" || true
+            exit 1
+          fi
+          echo "[*] inspecting $final"
+          status="$(jq -r '.status // empty' "$final")"
+          findings="$(jq -r '(.findings // []) | length' "$final")"
+          echo "status=${status} findings=${findings} (min required=${MIN_FINDINGS})"
+          if [[ "$status" != "completed" ]]; then
+            echo "::error::scan status was '${status}', expected 'completed'"
+            exit 1
+          fi
+          if (( findings < MIN_FINDINGS )); then
+            echo "::error::scan produced ${findings} findings, expected >= ${MIN_FINDINGS}"
+            exit 1
+          fi
+          echo "[+] scan passed regression gate"
+
+      - name: Upload scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: juice-shop-scan-${{ github.run_id }}
+          path: testing/juice-shop/out/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Collect docker compose logs on failure
+        if: failure()
+        run: |
+          set +e
+          mkdir -p compose-logs
+          docker compose \
+            -f docker-compose.yml \
+            -f testing/juice-shop/docker-compose.juiceshop.yml \
+            logs --no-color --timestamps > compose-logs/all.log
+          docker compose \
+            -f docker-compose.yml \
+            -f testing/juice-shop/docker-compose.juiceshop.yml \
+            ps > compose-logs/ps.txt
+
+      - name: Upload docker compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: juice-shop-compose-logs-${{ github.run_id }}
+          path: compose-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f testing/juice-shop/docker-compose.juiceshop.yml \
+            down -v --remove-orphans || true

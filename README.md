@@ -1,5 +1,7 @@
 # Auto Bughunter (Authorized Security Testing)
 
+[![E2E - Juice Shop Harness](https://github.com/darksilenxe/auto-bughunter/actions/workflows/e2e-juice-shop.yml/badge.svg)](https://github.com/darksilenxe/auto-bughunter/actions/workflows/e2e-juice-shop.yml)
+
 A Dockerized starter platform for **authorized** web application security assessments.
 
 ## Important Use Policy

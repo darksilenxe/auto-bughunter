@@ -14,6 +14,7 @@
 #   POLL_TIMEOUT     Max seconds to wait for completion (default: 1200)
 #   POLL_INTERVAL    Seconds between status polls (default: 10)
 #   OUTPUT_DIR       Directory for saved artifacts (default: testing/juice-shop/out)
+#   CRAWL_MAX_PAGES  Crawl budget passed to the scanner (default: 25)
 
 set -euo pipefail
 
@@ -22,6 +23,7 @@ TARGET_URL="${TARGET_URL:-http://juice-shop:3000}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-1200}"
 POLL_INTERVAL="${POLL_INTERVAL:-10}"
 OUTPUT_DIR="${OUTPUT_DIR:-testing/juice-shop/out}"
+CRAWL_MAX_PAGES="${CRAWL_MAX_PAGES:-25}"
 
 command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
 command -v jq   >/dev/null 2>&1 || { echo "jq is required (apt-get install jq)" >&2; exit 1; }
@@ -64,7 +66,7 @@ read -r -d '' BODY <<JSON || true
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false,
-    "crawlMaxPages": 25
+    "crawlMaxPages": ${CRAWL_MAX_PAGES}
   }
 }
 JSON
