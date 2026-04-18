@@ -175,6 +175,87 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 
 Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
 
+## Reports
+
+The reporting layer produces professional pen-test deliverables and bug-bounty
+submissions in multiple formats. All endpoints are served under `/api/report/`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/report/{scanId}` | Main report. Defaults to PDF for backward compatibility. |
+| `GET /api/report/{scanId}?format=pdf\|md\|html\|json&type=pentest\|executive\|compliance` | Format / report-type negotiation via query string. |
+| `POST /api/report/{scanId}` | Same as GET but accepts `ReportTemplateOptions` (company name, classification, contact, program handle, logo path, report type) in the JSON body for cover-page customization. Query-string parameters take precedence. |
+| `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json` | Single bug-bounty submission for one finding. Defaults to Markdown. |
+| `GET /api/report/{scanId}/bugbounty.zip` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. |
+
+**Report types:**
+
+- `pentest` (default): full pen-test deliverable with cover page, executive
+  summary, scope & methodology, risk-rating methodology, findings grouped by
+  severity (each with CVSS / CWE / OWASP / reproduction steps / impact /
+  remediation / references), **Attack Paths** narratives chained from
+  `Dashboard.TopAttackPaths`, **Remediation Priorities** ranked by severity-
+  weighted impact reduction, **Per-Asset Rollup** pivoting findings by host,
+  **What Changed Since Last Engagement** delta vs. the previous completed
+  scan, **Visual Evidence** (inline screenshots harvested from the agent
+  event stream), and an appendix listing tools, commands, audit trail,
+  assets discovered, and the **Compliance Crosswalk** (PCI DSS / HIPAA /
+  SOC 2 controls keyed off CWE/OWASP).
+- `executive`: one-page summary intended for stakeholders, including the top
+  remediation priorities and the trend vs. the previous engagement.
+- `compliance`: focused PCI DSS v4.0 / HIPAA Security Rule / SOC 2 Common
+  Criteria crosswalk. Empty cells indicate no deterministic mapping is
+  available for the underlying CWE.
+
+**Formats:**
+
+`pdf` (default for `pentest`), `md` / `markdown`, `html`, `json`.
+
+**Tamper-evident delivery:** every PDF, HTML, and Markdown report ends with a
+SHA-256 hash of the canonical report data (the timestamp is excluded so the
+same scan rendered twice produces the same hash). Reviewers can confirm two
+deliverables came from the same underlying findings by comparing the hash.
+
+### Sample bug-bounty submission
+
+```markdown
+# SQL injection in id parameter
+
+## Summary
+
+Error-based SQL injection detected.
+
+## Vulnerability Details
+
+- **Severity:** HIGH
+- **CWE:** CWE-89
+- **CVSS:** 9.8 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
+- **Asset:** https://example.com/users
+- **Affected Parameter:** id
+
+## Steps to Reproduce
+
+1. Identify the vulnerable parameter listed in the finding evidence.
+2. Send an HTTP request that injects a SQL meta-character (e.g. `'`) into that parameter.
+3. Observe a database error in the response or a content/timing difference vs. the baseline.
+4. Confirm exploitability by extracting a known value (e.g. `' OR '1'='1`).
+
+## Impact
+
+An attacker can read, modify, or destroy database contents and may achieve
+remote code execution depending on the database engine configuration.
+
+## Suggested Remediation
+
+Use parameterized queries (prepared statements) for all database interactions.
+
+## References
+
+- https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+- https://cwe.mitre.org/data/definitions/89.html
+- https://owasp.org/Top10/A03_2021-Injection/
+```
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
