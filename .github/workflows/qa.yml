@@ -1,0 +1,88 @@
+name: QA - Backend & Frontend Build
+
+# Fast QA gate that catches backend/frontend build + test breakage before it
+# reaches `main`. This is the lighter counterpart to `qa-container-builds.yml`
+# (which exercises the full Docker compose graph) — it runs on every PR and
+# mirrors the commands a contributor would run locally:
+#
+#   cd backend  && go vet ./... && go test ./...
+#   cd frontend && npm ci       && npm run build
+#
+# Triggers:
+#   * Manual: workflow_dispatch
+#   * Push to main (post-merge regression check)
+#   * Pull request: only when the PR touches backend/frontend sources or this
+#     workflow file itself (keeps docs-only PRs cheap).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/qa.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (go vet + go test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pin to the toolchain declared in backend/go.mod so CI matches the
+          # build environment used by the Dockerfile.
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+  frontend:
+    name: Frontend (npm ci + npm run build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
