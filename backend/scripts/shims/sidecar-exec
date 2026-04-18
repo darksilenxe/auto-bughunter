@@ -1,0 +1,57 @@
+#!/bin/sh
+# sidecar-exec — run a tool that lives in a sibling Docker Compose service.
+#
+# Usage:
+#   sidecar-exec <compose-service> <tool> [args...]
+#
+# Each per-tool shim under this directory (e.g. nuclei, zap-baseline.py) is a
+# tiny wrapper around this script. Splitting the logic out keeps the per-tool
+# shims to a single line and makes the lookup / fallback behaviour easy to
+# audit in one place.
+#
+# Resolution rules:
+#   * If $SIDECAR_EXEC_DISABLE is set to a truthy value, fail immediately so
+#     the Go scanner reports the standard `<tool>-binary-missing` finding
+#     instead of the shim swallowing the lookup.
+#   * If `docker` is not on $PATH (e.g. running outside compose), fail too.
+#   * Otherwise `exec docker compose exec -T <svc> <tool> "$@"`.
+#
+# We forward stdin/stdout/stderr unchanged and propagate the child exit code,
+# which is what `os/exec` in the Go scanner relies on for stdout parsing and
+# error reporting.
+
+set -eu
+
+if [ "$#" -lt 2 ]; then
+    echo "sidecar-exec: usage: sidecar-exec <service> <tool> [args...]" >&2
+    exit 2
+fi
+
+service="$1"
+tool="$2"
+shift 2
+
+case "${SIDECAR_EXEC_DISABLE:-}" in
+    1|true|TRUE|yes|YES)
+        echo "sidecar-exec: SIDECAR_EXEC_DISABLE is set; refusing to run ${tool}" >&2
+        exit 127
+        ;;
+esac
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "sidecar-exec: docker CLI not found on PATH; cannot reach ${service} sidecar" >&2
+    exit 127
+fi
+
+# Prefer `docker compose` (v2 plugin) but fall back to the legacy
+# `docker-compose` binary when present.
+if docker compose version >/dev/null 2>&1; then
+    exec docker compose exec -T "$service" "$tool" "$@"
+fi
+
+if command -v docker-compose >/dev/null 2>&1; then
+    exec docker-compose exec -T "$service" "$tool" "$@"
+fi
+
+echo "sidecar-exec: neither 'docker compose' nor 'docker-compose' is available" >&2
+exit 127
