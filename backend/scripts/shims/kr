@@ -1,0 +1,7 @@
+#!/bin/sh
+# Shim — runs kiterunner (`kr`) inside the `kiterunner` Docker Compose
+# sidecar. The sidecar pre-downloads every Assetnote wordlist into the
+# `assetnote_wordlists` volume (mounted at /wordlists in both the sidecar
+# and the backend), so paths like `/wordlists/automated/httparchive_apiroutes_2024_05_28.txt`
+# resolve identically on both sides.
+exec /usr/local/bin/sidecar-exec kiterunner kr "$@"

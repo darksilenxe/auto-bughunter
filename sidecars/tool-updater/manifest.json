@@ -1,0 +1,21 @@
+{
+  "_comment": "Source-of-truth for software updates checked by the tool-updater sidecar. When you bump a tool image tag in docker-compose.yml or sidecars/projectdiscovery/Dockerfile, update the matching `current` entry here so the report doesn't keep flagging the bump as 'available'. `repo` is a GitHub `owner/name` and `current` is the release tag string as it appears on GitHub Releases (with or without leading `v` — both forms are normalised at compare time).",
+  "tools": [
+    { "name": "nuclei",      "repo": "projectdiscovery/nuclei",      "current": "v3.8.0"  },
+    { "name": "subfinder",   "repo": "projectdiscovery/subfinder",   "current": "v2.13.0" },
+    { "name": "httpx",       "repo": "projectdiscovery/httpx",       "current": "v1.9.0"  },
+    { "name": "naabu",       "repo": "projectdiscovery/naabu",       "current": "v2.5.0"  },
+    { "name": "dnsx",        "repo": "projectdiscovery/dnsx",        "current": "v1.2.3"  },
+    { "name": "shuffledns",  "repo": "projectdiscovery/shuffledns",  "current": "v1.2.1"  },
+    { "name": "katana",      "repo": "projectdiscovery/katana",      "current": "v1.5.0"  },
+    { "name": "tlsx",        "repo": "projectdiscovery/tlsx",        "current": "v1.2.2"  },
+    { "name": "cdncheck",    "repo": "projectdiscovery/cdncheck",    "current": "v1.2.31" },
+    { "name": "asnmap",      "repo": "projectdiscovery/asnmap",      "current": "v1.1.1"  },
+    { "name": "ffuf",        "repo": "ffuf/ffuf",                    "current": "v2.1.0"  },
+    { "name": "gobuster",    "repo": "OJ/gobuster",                  "current": "v3.6.0"  },
+    { "name": "kiterunner",  "repo": "assetnote/kiterunner",         "current": "v1.0.2"  },
+    { "name": "nikto",       "repo": "sullo/nikto",                  "current": "2.5.0"   },
+    { "name": "wpscan",      "repo": "wpscanteam/wpscan",            "current": "3.8.28"  },
+    { "name": "zaproxy",     "repo": "zaproxy/zaproxy",              "current": "v2.17.0" }
+  ]
+}

@@ -1,6 +1,7 @@
 # Auto Bughunter (Authorized Security Testing)
 
 [![E2E - Juice Shop Harness](https://github.com/darksilenxe/auto-bughunter/actions/workflows/e2e-juice-shop.yml/badge.svg)](https://github.com/darksilenxe/auto-bughunter/actions/workflows/e2e-juice-shop.yml)
+[![QA - Container Builds](https://github.com/darksilenxe/auto-bughunter/actions/workflows/qa-container-builds.yml/badge.svg)](https://github.com/darksilenxe/auto-bughunter/actions/workflows/qa-container-builds.yml)
 
 A Dockerized starter platform for **authorized** web application security assessments.
 
@@ -95,11 +96,13 @@ Docker Compose sidecar:
 | Sidecar service    | Image                              | What the backend uses it for                                                            |
 | ------------------ | ---------------------------------- | --------------------------------------------------------------------------------------- |
 | `zap`              | `zaproxy/zap-stable:2.17.0`        | OWASP ZAP daemon + `zap-baseline.py` passive scan                                       |
-| `nuclei`           | `projectdiscovery/nuclei:v3.7.1`   | Nuclei templated vulnerability scanning                                                 |
+| `nuclei`           | `projectdiscovery/nuclei:v3.8.0`   | Nuclei templated vulnerability scanning                                                 |
 | `chromium`         | `chromedp/headless-shell:latest`   | Headless browser crawl/screenshot via DevTools (9222)                                   |
-| `projectdiscovery` | local build (see `sidecars/`)      | Shared suite: `subfinder`, `httpx`, `naabu`, `dnsx`, `shuffledns`, `katana`, `tlsx`, `cdncheck`, `asnmap` |
-| `ffuf`             | `ghcr.io/ffuf/ffuf`                | Web content fuzzing (consumes wordlist via the `shared_tmp` volume)                     |
-| `gobuster`         | `ghcr.io/oj/gobuster`              | Directory brute-forcing (consumes wordlist via the `shared_tmp` volume)                 |
+| `projectdiscovery` | local build (see `sidecars/`)      | Shared suite: `subfinder` v2.13.0, `httpx` v1.9.0, `naabu` v2.5.0, `dnsx` v1.2.3, `shuffledns` v1.2.1, `katana` v1.5.0, `tlsx` v1.2.2, `cdncheck` v1.2.31, `asnmap` v1.1.1 |
+| `ffuf`             | `secsi/ffuf:2.1.0`                 | Web content fuzzing (consumes wordlist via the `shared_tmp` volume; also has read-only `/wordlists` from the kiterunner sidecar) |
+| `gobuster`         | `ghcr.io/oj/gobuster`              | Directory brute-forcing (consumes wordlist via the `shared_tmp` volume; also has read-only `/wordlists` from the kiterunner sidecar) |
+| `kiterunner`       | local build (see `sidecars/`)      | Assetnote `kr` API content discovery — pre-downloads every wordlist from `wordlists.assetnote.io` into the shared `assetnote_wordlists` volume on first start |
+| `tool-updater`     | local build (see `sidecars/`)      | One-shot service that runs on every `docker compose up`: refreshes the `nuclei_templates` volume and queries GitHub Releases for every pinned tool, writing a JSON report consumed by `GET /api/tools/updates`. Re-run on demand via `docker compose run --rm tool-updater` |
 | `sqlmap`           | `paoloo/sqlmap`                    | SQL injection probing — keeps Python out of the backend image                           |
 | `nikto`            | `sullo/nikto`                      | Web server scanner — keeps Perl out of the backend image                                |
 | `wpscan`           | `wpscanteam/wpscan`                | WordPress scanner — keeps Ruby out of the backend image                                 |

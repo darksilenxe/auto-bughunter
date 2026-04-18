@@ -59,6 +59,9 @@ COPY scripts/shims/asnmap            /usr/local/bin/asnmap
 # backend writes is visible inside the sidecar at the same path.
 COPY scripts/shims/ffuf              /usr/local/bin/ffuf
 COPY scripts/shims/gobuster          /usr/local/bin/gobuster
+# Kiterunner — `kr` runs in the kiterunner sidecar, which also hosts the
+# Assetnote wordlist cache mounted at /wordlists in this container.
+COPY scripts/shims/kr                /usr/local/bin/kr
 # CMS / web app scanners — keep Python (sqlmap), Perl (nikto) and Ruby
 # (wpscan) runtimes out of this image entirely.
 COPY scripts/shims/sqlmap            /usr/local/bin/sqlmap
@@ -78,6 +81,7 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/asnmap \
              /usr/local/bin/ffuf \
              /usr/local/bin/gobuster \
+             /usr/local/bin/kr \
              /usr/local/bin/sqlmap \
              /usr/local/bin/nikto \
              /usr/local/bin/wpscan
