@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -56,20 +57,125 @@ func (a *AnalysisAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	return output, nil
 }
 
+// deduplicateFindings collapses near-duplicate findings into a single
+// representative. Two findings are considered duplicates when they share
+// the same category and a normalised "signature" derived from
+// (CWE, ID, affected parameter, host of affected URL). When duplicates
+// cluster:
+//
+//   - The representative is the highest-severity (and, on ties, the
+//     highest-confidence) finding in the cluster.
+//   - The number of additional members and a sample of their affected
+//     URLs is appended to the representative's evidence so a triager can
+//     see at a glance "this issue affects N endpoints" rather than
+//     scrolling past N nearly-identical entries.
+//
+// Findings without enough metadata to compute a signature fall back to
+// the legacy `category:title` key.
 func deduplicateFindings(findings []model.Finding) []model.Finding {
-	seen := make(map[string]struct{})
-	deduped := make([]model.Finding, 0, len(findings))
-
+	groups := make(map[string][]model.Finding)
+	keys := make([]string, 0)
 	for _, f := range findings {
-		key := fmt.Sprintf("%s:%s", f.Category, f.Title)
-		if _, ok := seen[key]; ok {
-			continue
+		key := findingClusterKey(f)
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
 		}
-		seen[key] = struct{}{}
-		deduped = append(deduped, f)
+		groups[key] = append(groups[key], f)
 	}
 
+	deduped := make([]model.Finding, 0, len(groups))
+	for _, key := range keys {
+		members := groups[key]
+		rep := pickClusterRepresentative(members)
+		if len(members) > 1 {
+			rep = annotateWithCluster(rep, members)
+		}
+		deduped = append(deduped, rep)
+	}
 	return deduped
+}
+
+// findingClusterKey builds the normalised signature used to bucket
+// near-duplicate findings. We deliberately key on the *host* (not the
+// full URL) of AffectedURL so a single class of bug repeated across many
+// endpoints on the same target collapses into one entry.
+func findingClusterKey(f model.Finding) string {
+	cat := strings.ToLower(strings.TrimSpace(f.Category))
+	id := strings.ToLower(strings.TrimSpace(f.ID))
+	cwe := strings.ToLower(strings.TrimSpace(f.CWE))
+	param := strings.ToLower(strings.TrimSpace(f.AffectedParameter))
+	host := ""
+	if u, err := url.Parse(f.AffectedURL); err == nil && u.Host != "" {
+		host = strings.ToLower(u.Host)
+	}
+	if id == "" && cwe == "" && param == "" && host == "" {
+		// Fall back to the legacy key so findings without structured
+		// metadata still get a chance to dedupe.
+		return cat + ":" + strings.ToLower(strings.TrimSpace(f.Title))
+	}
+	return strings.Join([]string{cat, id, cwe, param, host}, "|")
+}
+
+// pickClusterRepresentative returns the highest-severity (then highest-
+// confidence) member of the cluster. The first member is returned when
+// the cluster has only one entry.
+func pickClusterRepresentative(members []model.Finding) model.Finding {
+	if len(members) == 0 {
+		return model.Finding{}
+	}
+	best := members[0]
+	for _, m := range members[1:] {
+		if severityScore(m.Severity) > severityScore(best.Severity) {
+			best = m
+			continue
+		}
+		if severityScore(m.Severity) == severityScore(best.Severity) && m.Confidence > best.Confidence {
+			best = m
+		}
+	}
+	return best
+}
+
+// annotateWithCluster appends an "+N more" notice and a small sample of
+// affected URLs to the representative finding. This preserves the dedupe
+// signal without losing visibility into the breadth of the issue.
+func annotateWithCluster(rep model.Finding, members []model.Finding) model.Finding {
+	others := 0
+	urls := make([]string, 0, len(members))
+	seenURL := map[string]struct{}{}
+	if rep.AffectedURL != "" {
+		seenURL[rep.AffectedURL] = struct{}{}
+		urls = append(urls, rep.AffectedURL)
+	}
+	for _, m := range members {
+		if m.AffectedURL == "" || m.AffectedURL == rep.AffectedURL {
+			continue
+		}
+		if _, ok := seenURL[m.AffectedURL]; ok {
+			continue
+		}
+		seenURL[m.AffectedURL] = struct{}{}
+		urls = append(urls, m.AffectedURL)
+		others++
+	}
+	if others == 0 {
+		return rep
+	}
+	if rep.EvidenceFields == nil {
+		rep.EvidenceFields = map[string]string{}
+	}
+	rep.EvidenceFields["affectedCount"] = fmt.Sprintf("%d", len(urls))
+	sample := urls
+	if len(sample) > 6 {
+		sample = sample[:6]
+	}
+	rep.EvidenceFields["clusteredUrls"] = strings.Join(sample, ", ")
+	rep.Evidence = strings.TrimSpace(rep.Evidence)
+	if rep.Evidence != "" {
+		rep.Evidence += "\n\n"
+	}
+	rep.Evidence += fmt.Sprintf("Cluster: %d affected endpoints (sample: %s)", len(urls), strings.Join(sample, ", "))
+	return rep
 }
 
 func scoreAndRankFindings(findings []model.Finding) []model.Finding {

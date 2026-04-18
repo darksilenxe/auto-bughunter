@@ -44,6 +44,9 @@ const xssMaxAttempts = 12
 // runtime endpoint discovery already used elsewhere in the scanner, and
 // auth/scope plumbing.
 func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body string) []model.Finding {
+	if input.Options.PassiveOnly {
+		return nil
+	}
 	candidates := extractRuntimeEndpoints(input.Target, body, input.Scope, 10)
 	if len(input.Options.SeedRuntimeEndpoints) > 0 {
 		candidates = append(candidates, input.Options.SeedRuntimeEndpoints...)
@@ -134,6 +137,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		fmt.Sprintf("Inspect the response body and confirm the literal payload %q appears unescaped (no HTML entity encoding) in an HTML context.", xssMarker),
 		fmt.Sprintf("Repeat with other reflective parameters (%s) to assess scope.", strings.Join(params, ", ")),
 	}
+	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
 	return []model.Finding{{
 		ID:                "active-xss-reflected",
@@ -150,9 +154,11 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		OWASPCategory:     "A03:2021 - Injection",
 		Sources:           []string{"active-scanner"},
 		ReproductionSteps: steps,
+		PoC:               curl,
 		EvidenceFields: map[string]string{
 			"validationType": "active-probe",
 			"reproStep":      "Replay the listed URL and confirm the marker appears unescaped in the HTML body",
+			"curlReproducer": curl,
 		},
 	}}
 }

@@ -77,7 +77,9 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 	if f.Evidence != "" {
 		b.WriteString("## Evidence\n\n```\n" + f.Evidence + "\n```\n\n")
 	}
-	if f.PoC != "" {
+	if curl := strings.TrimSpace(f.EvidenceFields["curlReproducer"]); curl != "" {
+		b.WriteString("## Reproducer\n\n```bash\n" + curl + "\n```\n\n")
+	} else if f.PoC != "" {
 		b.WriteString("## Proof of Concept\n\n```\n" + f.PoC + "\n```\n\n")
 	}
 

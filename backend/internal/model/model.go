@@ -158,6 +158,14 @@ type ScanOptions struct {
 	UseAttackPathAgent     bool `json:"useAttackPathAgent,omitempty"`
 	UseFalsePositiveReview bool `json:"useFalsePositiveReview,omitempty"`
 	UseRemediationPlanner  bool `json:"useRemediationPlanner,omitempty"`
+	// PassiveOnly enables "responsible-disclosure mode": all active
+	// vulnerability probes (XSS, SQLi, OAST SSRF, subdomain takeover,
+	// IDOR role-diff, open-redirect, CORS, SSTI, GraphQL introspection)
+	// are skipped. Passive observations (security headers, cookie flags,
+	// TLS configuration, runtime endpoint discovery, secrets-in-JS) still
+	// run. Useful when assessing assets where written authorisation has
+	// not yet been confirmed.
+	PassiveOnly bool `json:"passiveOnly,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

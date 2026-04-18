@@ -68,6 +68,9 @@ const maxTakeoverHosts = 12
 // only interesting for sibling/sub hosts; the target itself is already
 // covered by the rest of the scanner.
 func (s *Service) runSubdomainTakeoverProbe(ctx context.Context, input RunInput, body string) []model.Finding {
+	if input.Options.PassiveOnly {
+		return nil
+	}
 	targetHost := ""
 	if u, err := url.Parse(input.Target); err == nil {
 		targetHost = strings.ToLower(u.Hostname())
