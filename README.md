@@ -211,6 +211,14 @@ Two additional active probes run on every scan and do not require OAST:
   parser-error signatures (MySQL, PostgreSQL, MSSQL, Oracle, SQLite,
   JDBC/ODBC). Emits a single CWE-89 finding. No UNION/sleep/boolean
   payloads are sent.
+- `subdomain-takeover` — for every concrete in-scope subdomain (from
+  `scope.includeHosts` and runtime endpoint discovery, excluding the
+  target host itself and wildcard patterns), GETs the host and matches
+  the response body against a curated set of dangling-CNAME service
+  fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Fastly, Surge,
+  Tumblr, Bitbucket, Pantheon, Squarespace, Help Scout, Tilda,
+  Unbounce). Emits a single CWE-1104 / OWASP A06 finding listing every
+  confirmed unclaimed host.
 
 When the request includes one or more `authProfiles` (role profiles), an
 active **IDOR role-diff** probe (`idor-role-diff`) runs after the

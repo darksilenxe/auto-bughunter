@@ -196,6 +196,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runActiveXSSProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runActiveSQLiProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runOASTBodySSRFProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSubdomainTakeoverProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
