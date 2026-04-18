@@ -78,7 +78,6 @@ func TestRunSecretsInJSProbe_NoFindingForCleanBundle(t *testing.T) {
 	body := make([]byte, 1024)
 	n, _ := resp.Body.Read(body)
 	_ = resp.Body.Close()
-	_ = strings.TrimSpace
 
 	svc := NewService(Config{})
 	findings := svc.runSecretsInJSProbe(context.Background(), RunInput{Target: target.URL}, string(body[:n]))

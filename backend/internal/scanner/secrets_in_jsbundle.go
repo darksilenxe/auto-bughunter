@@ -48,9 +48,16 @@ var secretPatterns = []secretPattern{
 		pattern: regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z\-]{10,}\b`),
 	},
 	{
-		id:      "slack-webhook",
-		label:   "Slack incoming webhook URL",
-		pattern: regexp.MustCompile(`https://hooks\.slack\.com/services/[A-Z0-9/]{20,}`),
+		id:    "slack-webhook",
+		label: "Slack incoming webhook URL",
+		// Anchor-free pattern is intentional: we are scanning a JS body
+		// for a substring, not validating a URL. The trailing path
+		// segment (`/services/...`) plus the slack.com host with escaped
+		// dots is specific enough to avoid false positives. The host
+		// substring intentionally omits the `https://` prefix so the
+		// pattern still matches when the URL is reconstructed in code
+		// (e.g. `'https://' + h + '/services/...'`).
+		pattern: regexp.MustCompile(`hooks\.slack\.com/services/[A-Z0-9/]{20,}`),
 	},
 	{
 		id:      "github-pat",

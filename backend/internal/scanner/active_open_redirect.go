@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
 
@@ -105,11 +106,15 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 				if !scope.IsURLInScope(probeURL, input.Scope) {
 					continue
 				}
-				// safety.ValidateOutboundURL is intentionally not re-checked
-				// here: candidates come from input.Target (validated by
-				// Run) or from extractRuntimeEndpoints (which validates
-				// each); changing only the query string cannot change
-				// the host.
+				// Re-validate the constructed probe URL against the SSRF
+				// allow-list. The host is inherited from `base` (already
+				// validated upstream by extractRuntimeEndpoints / Run),
+				// but a redundant check here keeps this function safe in
+				// isolation and is recognised by static-analysis taint
+				// trackers as a sanitiser.
+				if err := safety.ValidateOutboundURL(probeURL); err != nil {
+					continue
+				}
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 				if err != nil {
 					continue

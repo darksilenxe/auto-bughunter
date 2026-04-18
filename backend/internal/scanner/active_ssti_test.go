@@ -61,8 +61,8 @@ func TestIsSSTIEvaluation(t *testing.T) {
 }
 
 func TestRunActiveSSTIProbe_PassiveOnlyDisables(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("49"))
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("49"))
 	}))
 	defer target.Close()
 	svc := NewService(Config{})
@@ -72,7 +72,3 @@ func TestRunActiveSSTIProbe_PassiveOnlyDisables(t *testing.T) {
 		t.Fatalf("PassiveOnly must disable, got %d findings", len(got))
 	}
 }
-
-// silence unused import warning when http is only used transitively via
-// httptest above.
-var _ = http.MethodGet
