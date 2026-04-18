@@ -261,7 +261,7 @@ services:
 
   # WPScan WordPress scanner (Ruby).
   wpscan:
-    image: wpscanteam/wpscan:3.8.28
+    image: wpscanteam/wpscan:v3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
@@ -321,4 +321,3 @@ volumes:
   shared_tmp:
   assetnote_wordlists:
   tool_updates:
-
