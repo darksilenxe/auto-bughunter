@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"auto-bughunter/backend/internal/mitre"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -186,9 +187,9 @@ func reproductionTemplates(category string) []string {
 }
 
 // EnrichFinding fills in CVSS / CWE / OWASP / Impact / References /
-// ReproductionSteps fields for a finding when they are not already populated.
-// It never overwrites values that are already present, so any data supplied
-// by a scanner or AI agent takes precedence.
+// ReproductionSteps / MITRETechniques fields for a finding when they are not
+// already populated. It never overwrites values that are already present, so
+// any data supplied by a scanner or AI agent takes precedence.
 func EnrichFinding(f model.Finding) model.Finding {
 	profile, ok := categoryProfiles[strings.ToLower(strings.TrimSpace(f.Category))]
 	if ok {
@@ -217,6 +218,9 @@ func EnrichFinding(f model.Finding) model.Finding {
 	if len(f.ReproductionSteps) == 0 {
 		f.ReproductionSteps = reproductionTemplates(f.Category)
 	}
+	// MITRE ATT&CK annotation runs after CWE/OWASP enrichment so the CWE
+	// field is available for technique resolution.
+	f = mitre.AnnotateFinding(f)
 	return f
 }
 
