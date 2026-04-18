@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,29 +72,83 @@ func (s *Server) serveMainReport(w http.ResponseWriter, r *http.Request, scanID 
 		return
 	}
 
+	ctx := s.buildReportContext(r, job)
+
 	switch reportType {
 	case "executive":
-		s.writeExecutiveReport(w, job, opts, format, scanID)
+		s.writeExecutiveReport(w, job, opts, format, scanID, ctx)
+	case "compliance":
+		s.writeComplianceReport(w, job, opts, format, scanID, ctx)
 	default: // pentest (also default)
-		s.writePentestReport(w, job, opts, format, scanID)
+		s.writePentestReport(w, job, opts, format, scanID, ctx)
 	}
 }
 
-func (s *Server) writePentestReport(w http.ResponseWriter, job *model.ScanJob, opts model.ReportTemplateOptions, format, scanID string) {
+// buildReportContext gathers optional inputs (previous job for delta, harvested
+// screenshots from the event bus) for the requested scan. Failures are
+// silently downgraded — these are nice-to-have inputs and the report is still
+// usable without them.
+func (s *Server) buildReportContext(r *http.Request, job *model.ScanJob) report.ReportContext {
+	ctx := report.ReportContext{}
+	if job == nil {
+		return ctx
+	}
+	if s.repo != nil {
+		if prev, err := s.repo.GetLatestCompletedJobByTarget(r.Context(), job.Target, job.ID); err == nil {
+			ctx.PreviousJob = prev
+		}
+	}
+	if s.eventBus != nil {
+		ctx.Screenshots = harvestScreenshots(s.eventBus.History(job.ID))
+	}
+	return ctx
+}
+
+// harvestScreenshots converts SSE screenshot events into report.Screenshot
+// values, decoding the base64 payload. Invalid entries are skipped.
+func harvestScreenshots(events []model.ScanEvent) []report.Screenshot {
+	out := make([]report.Screenshot, 0, len(events))
+	for _, ev := range events {
+		if ev.Type != model.ScanEventScreenshot || ev.Screenshot == "" {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(ev.Screenshot)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		caption := ev.Message
+		if caption == "" {
+			caption = "Screenshot"
+		}
+		ts := ev.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
+		out = append(out, report.Screenshot{
+			Caption:   caption,
+			AgentName: ev.AgentName,
+			Timestamp: ts,
+			Data:      raw,
+		})
+		if len(out) >= report.MaxInlineScreenshots {
+			break
+		}
+	}
+	return out
+}
+
+func (s *Server) writePentestReport(w http.ResponseWriter, job *model.ScanJob, opts model.ReportTemplateOptions, format, scanID string, ctx report.ReportContext) {
 	switch format {
 	case "md", "markdown":
-		md := report.RenderPentestMarkdown(job, opts)
+		md := report.RenderPentestMarkdown(job, opts, ctx)
 		writeBytes(w, "text/markdown; charset=utf-8", fmt.Sprintf("scan-report-%s.md", scanID), []byte(md), false)
 	case "html":
-		html := report.RenderPentestHTML(job, opts)
-		writeBytes(w, "text/html; charset=utf-8", fmt.Sprintf("scan-report-%s.html", scanID), []byte(html), false)
+		htmlOut := report.RenderPentestHTML(job, opts, ctx)
+		writeBytes(w, "text/html; charset=utf-8", fmt.Sprintf("scan-report-%s.html", scanID), []byte(htmlOut), false)
 	case "json":
-		data := report.BuildPentestReportData(job, opts)
+		data := report.BuildPentestReportData(job, opts, ctx)
 		writeJSON(w, http.StatusOK, data)
 	case "", "pdf":
 		// Default to PDF for backward compatibility with the original
 		// /api/report/{scanId} endpoint.
-		pdfBytes, err := report.RenderPentestPDF(job, opts)
+		pdfBytes, err := report.RenderPentestPDF(job, opts, ctx)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PDF"})
 			return
@@ -104,25 +159,52 @@ func (s *Server) writePentestReport(w http.ResponseWriter, job *model.ScanJob, o
 	}
 }
 
-func (s *Server) writeExecutiveReport(w http.ResponseWriter, job *model.ScanJob, opts model.ReportTemplateOptions, format, scanID string) {
+func (s *Server) writeExecutiveReport(w http.ResponseWriter, job *model.ScanJob, opts model.ReportTemplateOptions, format, scanID string, ctx report.ReportContext) {
 	opts.ReportType = "executive"
 	switch format {
 	case "json":
-		data := report.BuildPentestReportData(job, opts)
+		data := report.BuildPentestReportData(job, opts, ctx)
 		writeJSON(w, http.StatusOK, data)
 	case "html":
-		html := report.RenderPentestHTML(job, opts)
-		writeBytes(w, "text/html; charset=utf-8", fmt.Sprintf("executive-summary-%s.html", scanID), []byte(html), false)
+		htmlOut := report.RenderPentestHTML(job, opts, ctx)
+		writeBytes(w, "text/html; charset=utf-8", fmt.Sprintf("executive-summary-%s.html", scanID), []byte(htmlOut), false)
 	case "pdf":
-		pdfBytes, err := report.RenderPentestPDF(job, opts)
+		pdfBytes, err := report.RenderPentestPDF(job, opts, ctx)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PDF"})
 			return
 		}
 		writeBytes(w, "application/pdf", fmt.Sprintf("executive-summary-%s.pdf", scanID), pdfBytes, true)
 	case "", "md", "markdown":
-		md := report.RenderExecutiveMarkdown(job, opts)
+		md := report.RenderExecutiveMarkdown(job, opts, ctx)
 		writeBytes(w, "text/markdown; charset=utf-8", fmt.Sprintf("executive-summary-%s.md", scanID), []byte(md), false)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported format: " + format})
+	}
+}
+
+// writeComplianceReport renders the focused PCI/HIPAA/SOC2 crosswalk variant.
+func (s *Server) writeComplianceReport(w http.ResponseWriter, job *model.ScanJob, opts model.ReportTemplateOptions, format, scanID string, ctx report.ReportContext) {
+	opts.ReportType = "compliance"
+	switch format {
+	case "json":
+		data := report.BuildPentestReportData(job, opts, ctx)
+		writeJSON(w, http.StatusOK, data)
+	case "html":
+		htmlOut := report.RenderComplianceHTML(job, opts, ctx)
+		writeBytes(w, "text/html; charset=utf-8", fmt.Sprintf("compliance-%s.html", scanID), []byte(htmlOut), false)
+	case "pdf":
+		// PDF re-uses the pentest renderer with the compliance crosswalk
+		// appendix (which is always emitted when ComplianceMatrix is non-empty).
+		pdfBytes, err := report.RenderPentestPDF(job, opts, ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PDF"})
+			return
+		}
+		writeBytes(w, "application/pdf", fmt.Sprintf("compliance-%s.pdf", scanID), pdfBytes, true)
+	case "", "md", "markdown":
+		md := report.RenderComplianceMarkdown(job, opts, ctx)
+		writeBytes(w, "text/markdown; charset=utf-8", fmt.Sprintf("compliance-%s.md", scanID), []byte(md), false)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported format: " + format})
 	}

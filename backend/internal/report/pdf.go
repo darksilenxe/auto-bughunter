@@ -21,8 +21,8 @@ var severityColors = map[model.Severity][3]int{
 // RenderPentestPDF produces a styled, multi-section PDF pen-test report.
 // It always returns a non-empty byte slice for any non-nil ScanJob (the cover
 // page alone is enough to render). The renderer is tolerant of missing data.
-func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions) ([]byte, error) {
-	data := BuildPentestReportData(job, opts)
+func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions, ctx ...ReportContext) ([]byte, error) {
+	data := BuildPentestReportData(job, opts, ctx...)
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 15, 15)
@@ -134,6 +134,165 @@ func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions) ([]b
 		}
 	}
 
+	// --- Attack Paths ---
+	if len(data.AttackPaths) > 0 {
+		pdf.AddPage()
+		pdf.SetFont("Helvetica", "B", 16)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 10, "Attack Paths", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		pdf.MultiCell(contentW, 5, latin1("Chained narratives that demonstrate proven impact by combining individual findings into an end-to-end exploitation story."), "", "L", false)
+		pdf.Ln(2)
+		for i, ap := range data.AttackPaths {
+			pdf.SetFont("Helvetica", "B", 11)
+			pdf.SetTextColor(30, 30, 30)
+			pdf.MultiCell(contentW, 6, latin1(fmt.Sprintf("Path %d - %s", i+1, ap.Title)), "", "L", false)
+			pdf.SetFont("Helvetica", "", 9)
+			pdf.SetTextColor(50, 50, 50)
+			for _, st := range ap.Steps {
+				cs := severityColors[st.Severity]
+				pdf.SetTextColor(cs[0], cs[1], cs[2])
+				detail := st.Detail
+				if detail != "" {
+					detail = " - " + detail
+				}
+				pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("  %d. [%s] %s%s", st.Step, sevDisplay(st.Severity), st.Title, detail)), "", "L", false)
+			}
+			if ap.Impact != "" {
+				pdf.SetFont("Helvetica", "I", 9)
+				pdf.SetTextColor(60, 60, 60)
+				pdf.MultiCell(contentW, 5, latin1("  > "+ap.Impact), "", "L", false)
+				pdf.SetFont("Helvetica", "", 9)
+			}
+			pdf.Ln(2)
+		}
+	}
+
+	// --- Remediation Priorities ---
+	if len(data.RemediationPriorities) > 0 {
+		pdf.AddPage()
+		pdf.SetFont("Helvetica", "B", 16)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 10, "Remediation Priorities", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		pdf.MultiCell(contentW, 5, latin1("Recommendations are ordered by severity-weighted impact reduction. Fix the items at the top of this list first."), "", "L", false)
+		pdf.Ln(2)
+		// Header
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.SetFillColor(241, 245, 249)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(12, 7, "Rank", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(22, 7, "Severity", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(20, 7, "Findings", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(20, 7, "Assets", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(contentW-74, 7, "Recommendation", "1", 1, "L", true, 0, "")
+		pdf.SetFont("Helvetica", "", 8)
+		for _, p := range data.RemediationPriorities {
+			c := severityColors[p.HighestSeverity]
+			pdf.SetTextColor(30, 30, 30)
+			pdf.CellFormat(12, 6, fmt.Sprintf("%d", p.Rank), "1", 0, "C", false, 0, "")
+			pdf.SetTextColor(c[0], c[1], c[2])
+			pdf.CellFormat(22, 6, latin1(sevDisplay(p.HighestSeverity)), "1", 0, "C", false, 0, "")
+			pdf.SetTextColor(30, 30, 30)
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", p.AffectedFindings), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", p.AffectedAssets), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(contentW-74, 6, latin1(truncate(p.Recommendation, 90)), "1", 1, "L", false, 0, "")
+		}
+		pdf.Ln(2)
+	}
+
+	// --- Per-Asset Rollup ---
+	if len(data.AssetRollup) > 0 {
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 8, "Per-Asset Rollup", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.SetFillColor(241, 245, 249)
+		pdf.CellFormat(contentW-80, 7, "Asset", "1", 0, "L", true, 0, "")
+		pdf.CellFormat(20, 7, "High", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(20, 7, "Med", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(20, 7, "Low", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(20, 7, "Info", "1", 1, "C", true, 0, "")
+		pdf.SetFont("Helvetica", "", 8)
+		for _, r := range data.AssetRollup {
+			pdf.CellFormat(contentW-80, 6, latin1(truncate(r.Asset, 60)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", r.HighCount), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", r.MediumCount), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", r.LowCount), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(20, 6, fmt.Sprintf("%d", r.InfoCount), "1", 1, "C", false, 0, "")
+		}
+		pdf.Ln(2)
+	}
+
+	// --- Findings Delta ---
+	if data.Delta.HasPrevious {
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 8, "What Changed Since Last Engagement", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("Comparison against previous scan %s.", data.Delta.PreviousScanID)), "", "L", false)
+		pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("- New findings: %d", len(data.Delta.NewFindings))), "", "L", false)
+		pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("- Resolved findings: %d", len(data.Delta.ResolvedFindings))), "", "L", false)
+		pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("- Carried over (unchanged): %d", data.Delta.UnchangedCount)), "", "L", false)
+		if len(data.Delta.NewFindings) > 0 {
+			pdf.SetFont("Helvetica", "B", 10)
+			pdf.SetTextColor(30, 30, 30)
+			pdf.CellFormat(contentW, 6, "New Findings", "", 1, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "", 9)
+			for _, f := range data.Delta.NewFindings {
+				cs := severityColors[f.Severity]
+				pdf.SetTextColor(cs[0], cs[1], cs[2])
+				pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("  [%s] %s", sevDisplay(f.Severity), f.Title)), "", "L", false)
+			}
+		}
+		if len(data.Delta.ResolvedFindings) > 0 {
+			pdf.SetFont("Helvetica", "B", 10)
+			pdf.SetTextColor(30, 30, 30)
+			pdf.CellFormat(contentW, 6, "Resolved Findings", "", 1, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "", 9)
+			for _, f := range data.Delta.ResolvedFindings {
+				cs := severityColors[f.Severity]
+				pdf.SetTextColor(cs[0], cs[1], cs[2])
+				pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("  [%s] %s", sevDisplay(f.Severity), f.Title)), "", "L", false)
+			}
+		}
+		pdf.Ln(2)
+	}
+
+	// --- Visual Evidence (inline screenshots) ---
+	if len(data.Screenshots) > 0 {
+		pdf.AddPage()
+		pdf.SetFont("Helvetica", "B", 16)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 10, "Visual Evidence", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("%d screenshot(s) captured during the engagement.", len(data.Screenshots))), "", "L", false)
+		pdf.Ln(2)
+		for i, sh := range data.Screenshots {
+			caption := nonEmpty(sh.Caption, sh.URL, fmt.Sprintf("screenshot-%d", i+1))
+			pdf.SetFont("Helvetica", "B", 9)
+			pdf.SetTextColor(30, 30, 30)
+			pdf.MultiCell(contentW, 5, latin1(truncate(caption, 100)), "", "L", false)
+			imageName := fmt.Sprintf("scr-%d.png", i+1)
+			info := pdf.RegisterImageOptionsReader(imageName, fpdf.ImageOptions{ImageType: "PNG", ReadDpi: false}, bytes.NewReader(sh.Data))
+			if info != nil && info.Width() > 0 {
+				// Cap width at contentW; preserve aspect ratio.
+				w := contentW
+				h := info.Height() * (w / info.Width())
+				if h > 140 {
+					h = 140
+					w = info.Width() * (h / info.Height())
+				}
+				pdf.ImageOptions(imageName, 15, pdf.GetY(), w, h, true, fpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+			}
+			pdf.Ln(3)
+		}
+	}
+
 	// --- Appendices ---
 	pdf.AddPage()
 	pdf.SetFont("Helvetica", "B", 16)
@@ -193,6 +352,36 @@ func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions) ([]b
 		}
 	}
 
+	if len(data.ComplianceMatrix) > 0 {
+		pdf.SetFont("Helvetica", "B", 12)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 7, "E. Compliance Crosswalk", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.SetTextColor(60, 60, 60)
+		pdf.MultiCell(contentW, 5, latin1("Findings mapped to PCI DSS v4.0, HIPAA Security Rule, and SOC 2 (Common Criteria) controls. Empty cells indicate no deterministic mapping for the underlying CWE."), "", "L", false)
+		// Header row
+		pdf.SetFont("Helvetica", "B", 8)
+		pdf.SetFillColor(241, 245, 249)
+		pdf.CellFormat(20, 6, "Severity", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(contentW-110, 6, "Finding", "1", 0, "L", true, 0, "")
+		pdf.CellFormat(22, 6, "CWE", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(22, 6, "PCI DSS", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(22, 6, "HIPAA", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(24, 6, "SOC 2", "1", 1, "C", true, 0, "")
+		pdf.SetFont("Helvetica", "", 7)
+		for _, m := range data.ComplianceMatrix {
+			c := severityColors[m.Severity]
+			pdf.SetTextColor(c[0], c[1], c[2])
+			pdf.CellFormat(20, 5, latin1(sevDisplay(m.Severity)), "1", 0, "C", false, 0, "")
+			pdf.SetTextColor(60, 60, 60)
+			pdf.CellFormat(contentW-110, 5, latin1(truncate(m.FindingTitle, 60)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(22, 5, latin1(m.CWE), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(22, 5, latin1(truncate(m.PCI, 18)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(22, 5, latin1(truncate(m.HIPAA, 18)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(24, 5, latin1(truncate(m.SOC2, 20)), "1", 1, "L", false, 0, "")
+		}
+	}
+
 	// Footer
 	reportDate := data.GeneratedAt
 	if job != nil {
@@ -201,11 +390,19 @@ func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions) ([]b
 			reportDate = job.CompletedAt.UTC()
 		}
 	}
+	hashShort := data.ContentHash
+	if len(hashShort) > 16 {
+		hashShort = hashShort[:16] + "..."
+	}
 	pdf.SetFooterFunc(func() {
 		pdf.SetY(-12)
 		pdf.SetFont("Helvetica", "I", 8)
 		pdf.SetTextColor(150, 150, 150)
-		pdf.CellFormat(0, 5, latin1(fmt.Sprintf("Page %d - Auto Bughunter Report - %s", pdf.PageNo(), reportDate.Format("2006-01-02"))), "", 0, "C", false, 0, "")
+		footerLine := fmt.Sprintf("Page %d - Auto Bughunter Report - %s", pdf.PageNo(), reportDate.Format("2006-01-02"))
+		if hashShort != "" {
+			footerLine += " - SHA-256: " + hashShort
+		}
+		pdf.CellFormat(0, 5, latin1(footerLine), "", 0, "C", false, 0, "")
 	})
 
 	var buf bytes.Buffer
@@ -277,4 +474,19 @@ func latin1(s string) string {
 		"\u00A0", " ",
 	)
 	return replacer.Replace(s)
+}
+
+// truncate trims s to at most n runes, appending an ellipsis when shortened.
+func truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 3 {
+		return string(r[:n])
+	}
+	return string(r[:n-3]) + "..."
 }

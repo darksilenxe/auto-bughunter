@@ -36,7 +36,9 @@ func (r *reportTestRepo) GetJob(_ context.Context, id string) (*model.ScanJob, e
 func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error    { panic("not used") }
 func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error    { panic("not used") }
 func (r *reportTestRepo) GetLatestCompletedJobByTarget(context.Context, string, string) (*model.ScanJob, error) {
-	panic("not used")
+	// Returns nil so handler tests that exercise the report context don't
+	// require a previous scan to be present.
+	return nil, nil
 }
 func (r *reportTestRepo) SaveAssets(context.Context, string, []model.ScanAsset) error {
 	panic("not used")

@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"html"
 	"strings"
@@ -12,8 +13,8 @@ import (
 // RenderPentestHTML returns a self-contained HTML document version of the
 // pen-test report. The template is intentionally print-friendly so it can be
 // previewed in the browser and exported with the browser's print dialog.
-func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions) string {
-	data := BuildPentestReportData(job, opts)
+func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions, ctx ...ReportContext) string {
+	data := BuildPentestReportData(job, opts, ctx...)
 	var b bytes.Buffer
 
 	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
@@ -100,6 +101,95 @@ func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions) str
 		}
 	}
 
+	// Attack Paths
+	if len(data.AttackPaths) > 0 {
+		b.WriteString("<h2>Attack Paths</h2>\n")
+		b.WriteString("<p>Chained narratives that demonstrate proven impact by combining individual findings into an end-to-end exploitation story.</p>\n")
+		for i, ap := range data.AttackPaths {
+			b.WriteString(fmt.Sprintf("<h3>Path %d &mdash; %s</h3>\n<ol>", i+1, html.EscapeString(ap.Title)))
+			for _, st := range ap.Steps {
+				detail := st.Detail
+				if detail != "" {
+					detail = " &mdash; " + html.EscapeString(detail)
+				}
+				b.WriteString(fmt.Sprintf("<li><span class=\"sev-%s\">[%s]</span> %s%s</li>",
+					strings.ToLower(string(st.Severity)), sevDisplay(st.Severity), html.EscapeString(st.Title), detail))
+			}
+			b.WriteString("</ol>\n")
+			if ap.Impact != "" {
+				b.WriteString("<blockquote>" + html.EscapeString(ap.Impact) + "</blockquote>\n")
+			}
+		}
+	}
+
+	// Remediation Priorities
+	if len(data.RemediationPriorities) > 0 {
+		b.WriteString("<h2>Remediation Priorities</h2>\n")
+		b.WriteString("<p>Recommendations are ordered by severity-weighted impact reduction. Fix the items at the top of this list first.</p>\n")
+		b.WriteString("<table><tr><th>Rank</th><th>Severity</th><th>Findings</th><th>Assets</th><th>Recommendation</th></tr>")
+		for _, p := range data.RemediationPriorities {
+			b.WriteString(fmt.Sprintf("<tr><td>%d</td><td class=\"sev-%s\">%s</td><td>%d</td><td>%d</td><td>%s</td></tr>",
+				p.Rank, strings.ToLower(string(p.HighestSeverity)), sevDisplay(p.HighestSeverity),
+				p.AffectedFindings, p.AffectedAssets, html.EscapeString(p.Recommendation)))
+		}
+		b.WriteString("</table>\n")
+	}
+
+	// Per-Asset Rollup
+	if len(data.AssetRollup) > 0 {
+		b.WriteString("<h2>Per-Asset Rollup</h2>\n")
+		b.WriteString("<p>Findings grouped by asset (host) so a single owner can see every issue on one system.</p>\n")
+		b.WriteString("<table><tr><th>Asset</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th><th>Sample Finding</th></tr>")
+		for _, r := range data.AssetRollup {
+			sample := ""
+			if len(r.FindingTitles) > 0 {
+				sample = r.FindingTitles[0]
+			}
+			b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>",
+				html.EscapeString(r.Asset), r.HighCount, r.MediumCount, r.LowCount, r.InfoCount, html.EscapeString(sample)))
+		}
+		b.WriteString("</table>\n")
+	}
+
+	// Findings Delta
+	if data.Delta.HasPrevious {
+		b.WriteString("<h2>What Changed Since Last Engagement</h2>\n")
+		b.WriteString(fmt.Sprintf("<p class=\"meta\">Comparison against previous scan <code>%s</code>.</p>\n", html.EscapeString(data.Delta.PreviousScanID)))
+		b.WriteString(fmt.Sprintf("<ul><li><strong>New findings:</strong> %d</li><li><strong>Resolved findings:</strong> %d</li><li><strong>Carried over (unchanged):</strong> %d</li></ul>",
+			len(data.Delta.NewFindings), len(data.Delta.ResolvedFindings), data.Delta.UnchangedCount))
+		if len(data.Delta.NewFindings) > 0 {
+			b.WriteString("<h3>New Findings</h3>\n<ul>")
+			for _, f := range data.Delta.NewFindings {
+				b.WriteString(fmt.Sprintf("<li><span class=\"sev-%s\">[%s]</span> %s</li>",
+					strings.ToLower(string(f.Severity)), sevDisplay(f.Severity), html.EscapeString(f.Title)))
+			}
+			b.WriteString("</ul>\n")
+		}
+		if len(data.Delta.ResolvedFindings) > 0 {
+			b.WriteString("<h3>Resolved Findings</h3>\n<ul>")
+			for _, f := range data.Delta.ResolvedFindings {
+				b.WriteString(fmt.Sprintf("<li><span class=\"sev-%s\">[%s]</span> %s</li>",
+					strings.ToLower(string(f.Severity)), sevDisplay(f.Severity), html.EscapeString(f.Title)))
+			}
+			b.WriteString("</ul>\n")
+		}
+	}
+
+	// Visual Evidence (inline screenshots)
+	if len(data.Screenshots) > 0 {
+		b.WriteString("<h2>Visual Evidence</h2>\n")
+		b.WriteString("<p>Screenshots captured during the engagement, embedded inline as base64 PNGs.</p>\n")
+		for i, sh := range data.Screenshots {
+			caption := html.EscapeString(nonEmpty(sh.Caption, sh.URL, fmt.Sprintf("screenshot-%d", i+1)))
+			b.WriteString("<figure style=\"margin:1rem 0;border:1px solid #cbd5e1;padding:.5rem;background:#f8fafc\">")
+			b.WriteString("<img alt=\"" + caption + "\" style=\"max-width:100%;height:auto\" src=\"data:image/png;base64,")
+			b.WriteString(base64.StdEncoding.EncodeToString(sh.Data))
+			b.WriteString("\">")
+			b.WriteString("<figcaption class=\"meta\">" + caption + "</figcaption>")
+			b.WriteString("</figure>\n")
+		}
+	}
+
 	// Appendix
 	b.WriteString("<h2>Appendix A — Tools Used</h2>\n<ul>")
 	if len(data.ToolsUsed) == 0 {
@@ -119,7 +209,67 @@ func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions) str
 	}
 	b.WriteString("</ul>\n")
 
+	// Compliance crosswalk appendix
+	if len(data.ComplianceMatrix) > 0 {
+		b.WriteString("<h2>Appendix C — Compliance Crosswalk</h2>\n")
+		b.WriteString("<p class=\"meta\">Findings mapped to PCI DSS v4.0, HIPAA Security Rule, and SOC 2 (Common Criteria) controls. Empty cells indicate no deterministic mapping for the underlying CWE.</p>\n")
+		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th></tr>")
+		for _, m := range data.ComplianceMatrix {
+			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+				strings.ToLower(string(m.Severity)),
+				sevDisplay(m.Severity),
+				html.EscapeString(m.FindingTitle),
+				html.EscapeString(m.CWE),
+				html.EscapeString(m.OWASP),
+				html.EscapeString(m.PCI),
+				html.EscapeString(m.HIPAA),
+				html.EscapeString(m.SOC2),
+			))
+		}
+		b.WriteString("</table>\n")
+	}
+
+	if data.ContentHash != "" {
+		b.WriteString("<hr><p class=\"meta\"><strong>Document content hash (SHA-256):</strong> <code>" + html.EscapeString(data.ContentHash) + "</code></p>\n")
+	}
+
 	b.WriteString("</body>\n</html>\n")
+	return b.String()
+}
+
+// RenderComplianceHTML renders a focused compliance crosswalk in HTML.
+func RenderComplianceHTML(job *model.ScanJob, opts model.ReportTemplateOptions, ctx ...ReportContext) string {
+	opts.ReportType = "compliance"
+	data := BuildPentestReportData(job, opts, ctx...)
+	var b bytes.Buffer
+	b.WriteString("<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>")
+	b.WriteString(html.EscapeString(data.Title))
+	b.WriteString("</title><style>body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem auto;max-width:1100px;color:#222;line-height:1.5;padding:0 1rem}h1{color:#1e3a8a;border-bottom:3px solid #1e3a8a;padding-bottom:.4rem}table{border-collapse:collapse;margin:.6rem 0;width:100%}th,td{border:1px solid #cbd5e1;padding:.3rem .6rem;text-align:left;font-size:.9rem}th{background:#f1f5f9}.meta{color:#64748b;font-size:.9rem}.sev-high{color:#b91c1c;font-weight:bold}.sev-medium{color:#c2410c;font-weight:bold}.sev-low{color:#1d4ed8;font-weight:bold}.sev-info{color:#475569}</style></head><body>")
+	b.WriteString("<h1>" + html.EscapeString(data.Title) + "</h1>")
+	if opts.CompanyName != "" {
+		b.WriteString("<p class=\"meta\"><strong>Prepared for:</strong> " + html.EscapeString(opts.CompanyName) + "</p>")
+	}
+	b.WriteString("<p class=\"meta\"><strong>Generated:</strong> " + html.EscapeString(formatTime(data.GeneratedAt)) + "</p>")
+	if job != nil {
+		b.WriteString("<p class=\"meta\"><strong>Target:</strong> " + html.EscapeString(job.Target) + " &nbsp; <strong>Scan ID:</strong> " + html.EscapeString(job.ID) + "</p>")
+	}
+	b.WriteString("<h2>Crosswalk</h2><p>Each finding is mapped to the most relevant PCI DSS v4.0 requirement, HIPAA Security Rule citation, and SOC 2 Common Criteria control.</p>")
+	if len(data.ComplianceMatrix) == 0 {
+		b.WriteString("<p><em>No findings to map.</em></p>")
+	} else {
+		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th></tr>")
+		for _, m := range data.ComplianceMatrix {
+			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+				strings.ToLower(string(m.Severity)), sevDisplay(m.Severity),
+				html.EscapeString(m.FindingTitle), html.EscapeString(m.CWE), html.EscapeString(m.OWASP),
+				html.EscapeString(m.PCI), html.EscapeString(m.HIPAA), html.EscapeString(m.SOC2)))
+		}
+		b.WriteString("</table>")
+	}
+	if data.ContentHash != "" {
+		b.WriteString("<hr><p class=\"meta\"><strong>Document content hash (SHA-256):</strong> <code>" + html.EscapeString(data.ContentHash) + "</code></p>")
+	}
+	b.WriteString("</body></html>")
 	return b.String()
 }
 
