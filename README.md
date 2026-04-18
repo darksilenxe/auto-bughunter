@@ -320,6 +320,23 @@ Use parameterized queries (prepared statements) for all database interactions.
 - https://owasp.org/Top10/A03_2021-Injection/
 ```
 
+## End-to-end test harness (OWASP Juice Shop)
+
+A self-contained testing environment that brings up the full stack alongside
+an authorized [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/)
+target lives in [`testing/juice-shop/`](testing/juice-shop/README.md). It can
+be used to validate that scanning, orchestration, and reporting are working
+before pointing the platform at real targets.
+
+```bash
+cp testing/juice-shop/.env.juiceshop.example .env
+docker compose \
+  -f docker-compose.yml \
+  -f testing/juice-shop/docker-compose.juiceshop.yml \
+  up --build -d
+./testing/juice-shop/scan.sh
+```
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
