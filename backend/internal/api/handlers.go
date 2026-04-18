@@ -44,6 +44,9 @@ type Server struct {
 	allowed       map[string]struct{}
 	repo          Repository
 	agentRegistry *agent.Registry
+	agentFactory  *agent.Factory
+	autonomous    bool
+	maxRounds     int
 	proxyServer   *proxy.Server
 	mlService     *ml.Service
 	agentConfig   AgentConfig
@@ -96,6 +99,8 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	}
 
 	reg := agent.NewRegistry()
+	factory := agent.NewFactory(scanService, mlService)
+	reg.RegisterFactory(factory)
 	reg.Register(agent.NewReconnaissanceAgent(true))
 	reg.Register(agent.NewScanningAgent(scanService, true))
 	reg.Register(agent.NewInputValidationAgent(true))
@@ -106,6 +111,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
+
+	autonomous := boolFromEnv("ENABLE_AUTONOMOUS_ORCHESTRATION", true)
+	maxRounds := maxInt(1, intFromEnv("MAX_ORCHESTRATION_ROUNDS", 10))
 
 	if globalBudget <= 0 {
 		globalBudget = 5
@@ -119,6 +127,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		allowed:       allowed,
 		repo:          repo,
 		agentRegistry: reg,
+		agentFactory:  factory,
+		autonomous:    autonomous,
+		maxRounds:     maxRounds,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
 		agentConfig:   agentCfg,
@@ -1052,7 +1063,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		Options:     options,
 		Scope:       scanScope,
 	}
-	outputs, findings, err := s.agentRegistry.RunAll(ctx, input)
+	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -1064,7 +1075,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.agentRegistry.RunAll(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.runAgents(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue
@@ -1081,6 +1092,26 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	}
 	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
 	return outputs, findings, nil
+}
+
+// runAgents executes the configured agent pipeline. When autonomous
+// orchestration is enabled and an AI provider is reachable, the AI planner
+// drives the loop and may dynamically schedule additional agents based on
+// the findings observed so far. Otherwise it falls back to the static
+// registry order so the historical behavior is preserved exactly.
+func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
+	if !s.autonomous || s.agentFactory == nil {
+		return s.agentRegistry.RunAll(ctx, input)
+	}
+	available := s.agentFactory.Names()
+	staticOrder := s.agentRegistry.Order()
+	fallback := agent.NewStaticPlanner(staticOrder)
+	var planner agent.Planner = fallback
+	if s.aiClient != nil {
+		planner = agent.NewAIPlanner(s.aiClient, available, fallback)
+	}
+	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
+	return orchestrator.Run(ctx, input)
 }
 
 func buildRoleDiffFindings(baseline []model.Finding, perRole map[string][]model.Finding) []model.Finding {
@@ -2053,6 +2084,18 @@ func intFromEnv(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func boolFromEnv(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }
 
 func envOrDefault(key, fallback string) string {

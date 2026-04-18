@@ -221,6 +221,7 @@ Returns scanner toolchain readiness (binary presence by category) to verify bug 
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.
+- Autonomous orchestration is enabled by default (`ENABLE_AUTONOMOUS_ORCHESTRATION=true`): when an AI provider is configured, an AI planner picks the next agent to run after every step and may dynamically spawn additional agents (including repeating earlier stages) based on findings observed so far. The loop is bounded by `MAX_ORCHESTRATION_ROUNDS` (default `10`); when disabled or no AI key is set, the system falls back to the deterministic static pipeline above.
 - ML agents can be controlled per deployment with `ENABLE_ML_TRIAGE_AGENT`, `ENABLE_ATTACK_PATH_AGENT`, `ENABLE_FALSE_POSITIVE_REVIEW_AGENT`, and `ENABLE_REMEDIATION_PLANNER_AGENT`.
 - ML agents can also be toggled per scan request via scan `options` in the API or frontend form.
 - If `ML_SERVICE_URL` is configured and reachable, ML scoring is delegated to the external service (`/v1/score-findings`, `/v1/attack-paths`, `/v1/remediation-plan`, `/v1/false-positive-candidates`) with automatic fallback to deterministic local logic.
