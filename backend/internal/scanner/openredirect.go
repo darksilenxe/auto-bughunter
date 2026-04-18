@@ -3,12 +3,10 @@ package scanner
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
-	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
 
@@ -40,13 +38,6 @@ var openRedirectParams = []string{
 func runOpenRedirectProbe(ctx context.Context, target, body string, auth model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, service *Service) []model.Finding {
 	if service == nil || service.httpClient == nil {
 		return nil
-	}
-
-	// Use a no-follow client variant so we can inspect the 3xx response
-	// directly. The default httpClient follows redirects by default.
-	noFollow := *service.httpClient
-	noFollow.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
 	}
 
 	candidates := extractRuntimeEndpoints(target, body, scanScope, 6)
@@ -84,21 +75,10 @@ func runOpenRedirectProbe(ctx context.Context, target, body string, auth model.S
 			if !scope.IsURLInScope(ps, scanScope) {
 				continue
 			}
-			if err := safety.ValidateOutboundURL(ps); err != nil {
-				continue
-			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, ps, nil)
+			loc, status, err := service.probeRedirectLocation(ctx, ps, auth)
 			if err != nil {
 				continue
 			}
-			ApplyAuthProfile(req, auth)
-			resp, err := noFollow.Do(req)
-			if err != nil {
-				continue
-			}
-			loc := strings.TrimSpace(resp.Header.Get("Location"))
-			status := resp.StatusCode
-			_ = resp.Body.Close()
 			attempts++
 			if status >= 300 && status < 400 && loc != "" && redirectsTo(loc, openRedirectMarker) {
 				hits = append(hits, fmt.Sprintf("%s (param=%s, status=%d)", ps, p, status))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -204,8 +205,15 @@ func validateConfig() error {
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
-		if !strings.HasPrefix(v, "postgres://") && !strings.HasPrefix(v, "postgresql://") {
-			return errors.New("DATABASE_URL must use postgres:// or postgresql:// scheme")
+		u, err := url.Parse(v)
+		if err != nil {
+			return errors.New("DATABASE_URL is not a valid URL: " + err.Error())
+		}
+		if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+			return errors.New("DATABASE_URL must use postgres:// or postgresql:// scheme (got " + u.Scheme + ")")
+		}
+		if u.Host == "" {
+			return errors.New("DATABASE_URL must include a host")
 		}
 	}
 	return nil

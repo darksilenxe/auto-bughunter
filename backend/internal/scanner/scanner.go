@@ -498,6 +498,43 @@ func isRetriableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code == http.StatusBadGateway || code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
 }
 
+// probeRedirectLocation issues a single GET that does not follow redirects
+// and returns the Location header and status code. It is used by the
+// open-redirect probe; the rawURL is validated against the SSRF policy
+// inline so the request can never reach a private/loopback host even when
+// the caller passed an externally-derived value.
+//
+// The function shares the underlying Transport with s.httpClient (so it
+// reuses connection pools and any test-installed transports) but uses a
+// dedicated Client value so disabling redirect-following does not affect
+// concurrent callers of doRequestWithRetry.
+func (s *Service) probeRedirectLocation(ctx context.Context, rawURL string, auth model.ScanAuthProfile) (location string, status int, err error) {
+	if s == nil || s.httpClient == nil {
+		return "", 0, fmt.Errorf("service not initialised")
+	}
+	if err := safety.ValidateOutboundURL(rawURL); err != nil {
+		return "", 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	ApplyAuthProfile(req, auth)
+	client := &http.Client{
+		Transport: s.httpClient.Transport,
+		Timeout:   s.httpClient.Timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	return strings.TrimSpace(resp.Header.Get("Location")), resp.StatusCode, nil
+}
+
 func ApplyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 	if req == nil {
 		return
