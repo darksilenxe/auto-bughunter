@@ -44,6 +44,7 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		AuthProfile: input.AuthProfile,
 		Options:     input.Options,
 		Scope:       input.Scope,
+		Emit:        input.Emit,
 	})
 	if err != nil {
 		if hasAuth(input.AuthProfile) {
@@ -52,6 +53,7 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 				AuthProfile: model.ScanAuthProfile{},
 				Options:     input.Options,
 				Scope:       input.Scope,
+				Emit:        input.Emit,
 			})
 			if fallbackErr == nil {
 				output.Findings = append(output.Findings, unauthFindings...)

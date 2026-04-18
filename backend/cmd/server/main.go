@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/api"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/proxy"
@@ -81,11 +82,13 @@ func main() {
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
 	})
+	agentLearnerClient := agentlearner.NewClient(os.Getenv("AGENT_LEARNER_URL"))
 
 	server := api.NewServer(
 		scanService,
 		aiClient,
 		mlService,
+		agentLearnerClient,
 		allowed,
 		repo,
 		repo,

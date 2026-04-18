@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/agent"
+	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
@@ -39,26 +40,28 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService   *scanner.Service
-	aiClient      *ai.Client
-	allowed       map[string]struct{}
-	repo          Repository
-	agentRegistry *agent.Registry
-	proxyServer   *proxy.Server
-	mlService     *ml.Service
-	agentConfig   AgentConfig
-	maxPerTarget  int
-	semMu         sync.Mutex
-	targetSem     map[string]chan struct{}
-	globalSem     chan struct{}
-	rateMu        sync.Mutex
-	targetLastRun map[string]time.Time
-	webhookURL    string
-	slackWebhook  string
-	notifyMinConf float64
-	gateHighBlock int
-	gateMedBlock  int
-	scanTimeout   time.Duration
+	scanService    *scanner.Service
+	aiClient       *ai.Client
+	allowed        map[string]struct{}
+	repo           Repository
+	agentRegistry  *agent.Registry
+	proxyServer    *proxy.Server
+	mlService      *ml.Service
+	agentLearner   *agentlearner.Client
+	agentConfig    AgentConfig
+	maxPerTarget   int
+	semMu          sync.Mutex
+	targetSem      map[string]chan struct{}
+	globalSem      chan struct{}
+	rateMu         sync.Mutex
+	targetLastRun  map[string]time.Time
+	webhookURL     string
+	slackWebhook   string
+	notifyMinConf  float64
+	gateHighBlock  int
+	gateMedBlock   int
+	scanTimeout    time.Duration
+	eventBus       *EventBus
 }
 
 type Repository interface {
@@ -86,7 +89,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -121,6 +124,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		agentRegistry: reg,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
+		agentLearner:  agentLearner,
 		agentConfig:   agentCfg,
 		maxPerTarget:  maxInt(1, maxPerTarget),
 		targetSem:     map[string]chan struct{}{},
@@ -132,6 +136,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:   scanTimeout,
+		eventBus:      NewEventBus(),
 	}
 }
 
@@ -139,12 +144,14 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
-	mux.HandleFunc("/api/scan/", s.handleGetScan)
+	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
+	mux.HandleFunc("/api/scans", s.handleListScans)
 	// Proxy management endpoints.
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
+	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
@@ -154,6 +161,77 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
 	return withCORS(mux)
+}
+
+// handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
+func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/events") {
+		s.handleScanEvents(w, r)
+		return
+	}
+	s.handleGetScan(w, r)
+}
+func (s *Server) handleAgentWeights(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.agentLearner == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent learner service not configured"})
+		return
+	}
+	weights, err := s.agentLearner.Weights(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, weights)
+}
+
+// handleListScans returns a paginated list of completed scan jobs.
+func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := 50
+	jobs, err := s.repo.ListCompletedJobs(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list scans"})
+		return
+	}
+	// Return lightweight summaries (no full findings) to keep response size small.
+	type scanSummary struct {
+		ID          string     `json:"id"`
+		Target      string     `json:"target"`
+		Status      string     `json:"status"`
+		CreatedAt   time.Time  `json:"createdAt"`
+		CompletedAt *time.Time `json:"completedAt"`
+		FindingCount int       `json:"findingCount"`
+		HighCount   int        `json:"highCount"`
+	}
+	summaries := make([]scanSummary, 0, len(jobs))
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		var high int
+		for _, f := range j.Findings {
+			if f.Severity == model.SeverityHigh {
+				high++
+			}
+		}
+		summaries = append(summaries, scanSummary{
+			ID:           j.ID,
+			Target:       j.Target,
+			Status:       j.Status,
+			CreatedAt:    j.StartedAt,
+			CompletedAt:  j.CompletedAt,
+			FindingCount: len(j.Findings),
+			HighCount:    high,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scans": summaries})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -291,6 +369,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	release := s.acquireTargetSlot(target, options)
 	defer release()
 
+	emit := s.eventBus.EmitterFor(id)
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: "Scan job started",
+	})
+
 	job, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || job == nil {
 		return
@@ -310,13 +394,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, emit)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
 	if err != nil {
 		job.Status = "failed"
 		job.Error = err.Error()
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Scan failed: " + err.Error(),
+		})
 		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
 		_ = s.repo.UpdateJob(context.Background(), job)
 		return
@@ -416,7 +504,31 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
+	// Teach the neural agent learner from this scan's results so future
+	// scans benefit from accumulated knowledge about which agent sequences
+	// produce the best findings.
+	if s.agentLearner != nil {
+		agentSeq := make([]string, 0, len(job.AgentRuns))
+		for _, run := range job.AgentRuns {
+			agentSeq = append(agentSeq, run.AgentName)
+		}
+		var scanDurationMs int64
+		if job.CompletedAt != nil {
+			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
+		}
+		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
+	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: fmt.Sprintf("Scan completed: %d findings", len(job.Findings)),
+	})
+	// Retain event history for a short window so late-joining SSE clients can still
+	// replay events, then schedule cleanup to free memory.
+	go func() {
+		time.Sleep(5 * time.Minute)
+		s.eventBus.Cleanup(id)
+	}()
 	if job.Options.RescanIntervalMinutes > 0 {
 		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
 		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
@@ -436,6 +548,13 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
 
+	// Autonomous tool-building agents — run after core scanning so they have
+	// rich findings context to work from.  DynamicCommandAgent composes and
+	// executes validated CLI tool invocations; ToolBuilderAgent writes and
+	// runs custom Python probes for specialised tasks.
+	reg.Register(agent.NewDynamicCommandAgent(true))
+	reg.Register(agent.NewToolBuilderAgent(true))
+
 	mlTriageEnabled := s.agentConfig.EnableMLTriageAgent && options.UseMLTriageAgent
 	attackPathEnabled := s.agentConfig.EnableAttackPathAgent && options.UseAttackPathAgent
 	falsePositiveEnabled := s.agentConfig.EnableFalsePositiveAgent && options.UseFalsePositiveReview
@@ -446,6 +565,12 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
 	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
 	reg.Register(agent.NewReportingAgent(true))
+
+	// Attach the neural learner as the autonomous spawner so it can augment
+	// the static orchestration rules with learned Q-values.
+	if s.agentLearner != nil {
+		reg.SetSpawner(s.agentLearner)
+	}
 
 	return reg
 }
@@ -1045,14 +1170,15 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) ([]agent.AgentOutput, []model.Finding, error) {
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
 	input := agent.AgentInput{
 		Target:      target,
 		AuthProfile: authProfile,
 		Options:     options,
 		Scope:       scanScope,
+		Emit:        emit,
 	}
-	outputs, findings, err := s.agentRegistry.RunAll(ctx, input)
+	outputs, findings, err := s.newRegistry(options).RunAll(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -1064,7 +1190,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.agentRegistry.RunAll(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.newRegistry(options).RunAll(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue
