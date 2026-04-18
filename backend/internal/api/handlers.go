@@ -19,15 +19,16 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/agent"
+	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/scope"
 
-	"github.com/go-pdf/fpdf"
 	"github.com/google/uuid"
 )
 
@@ -49,6 +50,7 @@ type Server struct {
 	maxRounds     int
 	proxyServer   *proxy.Server
 	mlService     *ml.Service
+	agentLearner  *agentlearner.Client
 	agentConfig   AgentConfig
 	maxPerTarget  int
 	semMu         sync.Mutex
@@ -62,7 +64,13 @@ type Server struct {
 	gateHighBlock int
 	gateMedBlock  int
 	scanTimeout   time.Duration
+	eventBus      *EventBus
+	oast          *oast.Service
 }
+
+// SetOAST attaches an OAST service so its admin endpoints become active.
+// Safe to call with nil to disable.
+func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
 
 type Repository interface {
 	CreateJob(ctx context.Context, job *model.ScanJob) error
@@ -89,7 +97,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	allowed := map[string]struct{}{}
 	for _, h := range allowedHosts {
 		h = strings.TrimSpace(strings.ToLower(h))
@@ -132,6 +140,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		maxRounds:     maxRounds,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
+		agentLearner:  agentLearner,
 		agentConfig:   agentCfg,
 		maxPerTarget:  maxInt(1, maxPerTarget),
 		targetSem:     map[string]chan struct{}{},
@@ -143,6 +152,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:   scanTimeout,
+		eventBus:      NewEventBus(),
 	}
 }
 
@@ -150,12 +160,14 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
-	mux.HandleFunc("/api/scan/", s.handleGetScan)
+	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
+	mux.HandleFunc("/api/scans", s.handleListScans)
 	// Proxy management endpoints.
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
+	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
@@ -163,8 +175,81 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
-	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
+	mux.HandleFunc("/api/report/", s.handleScanReport)
+	mux.HandleFunc("/api/oast/tokens", s.handleOASTTokens)
+	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
 	return withCORS(mux)
+}
+
+// handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
+func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/events") {
+		s.handleScanEvents(w, r)
+		return
+	}
+	s.handleGetScan(w, r)
+}
+func (s *Server) handleAgentWeights(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.agentLearner == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent learner service not configured"})
+		return
+	}
+	weights, err := s.agentLearner.Weights(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, weights)
+}
+
+// handleListScans returns a paginated list of completed scan jobs.
+func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := 50
+	jobs, err := s.repo.ListCompletedJobs(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list scans"})
+		return
+	}
+	// Return lightweight summaries (no full findings) to keep response size small.
+	type scanSummary struct {
+		ID           string     `json:"id"`
+		Target       string     `json:"target"`
+		Status       string     `json:"status"`
+		CreatedAt    time.Time  `json:"createdAt"`
+		CompletedAt  *time.Time `json:"completedAt"`
+		FindingCount int        `json:"findingCount"`
+		HighCount    int        `json:"highCount"`
+	}
+	summaries := make([]scanSummary, 0, len(jobs))
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		var high int
+		for _, f := range j.Findings {
+			if f.Severity == model.SeverityHigh {
+				high++
+			}
+		}
+		summaries = append(summaries, scanSummary{
+			ID:           j.ID,
+			Target:       j.Target,
+			Status:       j.Status,
+			CreatedAt:    j.StartedAt,
+			CompletedAt:  j.CompletedAt,
+			FindingCount: len(j.Findings),
+			HighCount:    high,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scans": summaries})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -302,6 +387,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	release := s.acquireTargetSlot(target, options)
 	defer release()
 
+	emit := s.eventBus.EmitterFor(id)
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: "Scan job started",
+	})
+
 	job, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || job == nil {
 		return
@@ -321,13 +412,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, emit)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
 	if err != nil {
 		job.Status = "failed"
 		job.Error = err.Error()
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Scan failed: " + err.Error(),
+		})
 		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
 		_ = s.repo.UpdateJob(context.Background(), job)
 		return
@@ -427,7 +522,31 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
+	// Teach the neural agent learner from this scan's results so future
+	// scans benefit from accumulated knowledge about which agent sequences
+	// produce the best findings.
+	if s.agentLearner != nil {
+		agentSeq := make([]string, 0, len(job.AgentRuns))
+		for _, run := range job.AgentRuns {
+			agentSeq = append(agentSeq, run.AgentName)
+		}
+		var scanDurationMs int64
+		if job.CompletedAt != nil {
+			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
+		}
+		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
+	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: fmt.Sprintf("Scan completed: %d findings", len(job.Findings)),
+	})
+	// Retain event history for a short window so late-joining SSE clients can still
+	// replay events, then schedule cleanup to free memory.
+	go func() {
+		time.Sleep(5 * time.Minute)
+		s.eventBus.Cleanup(id)
+	}()
 	if job.Options.RescanIntervalMinutes > 0 {
 		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
 		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
@@ -447,6 +566,13 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
 
+	// Autonomous tool-building agents — run after core scanning so they have
+	// rich findings context to work from.  DynamicCommandAgent composes and
+	// executes validated CLI tool invocations; ToolBuilderAgent writes and
+	// runs custom Python probes for specialised tasks.
+	reg.Register(agent.NewDynamicCommandAgent(true))
+	reg.Register(agent.NewToolBuilderAgent(true))
+
 	mlTriageEnabled := s.agentConfig.EnableMLTriageAgent && options.UseMLTriageAgent
 	attackPathEnabled := s.agentConfig.EnableAttackPathAgent && options.UseAttackPathAgent
 	falsePositiveEnabled := s.agentConfig.EnableFalsePositiveAgent && options.UseFalsePositiveReview
@@ -457,6 +583,12 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
 	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
 	reg.Register(agent.NewReportingAgent(true))
+
+	// Attach the neural learner as the autonomous spawner so it can augment
+	// the static orchestration rules with learned Q-values.
+	if s.agentLearner != nil {
+		reg.SetSpawner(s.agentLearner)
+	}
 
 	return reg
 }
@@ -1056,14 +1188,15 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) ([]agent.AgentOutput, []model.Finding, error) {
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
 	input := agent.AgentInput{
 		Target:      target,
 		AuthProfile: authProfile,
 		Options:     options,
 		Scope:       scanScope,
+		Emit:        emit,
 	}
-	outputs, findings, err := s.runAgents(ctx, input)
+	outputs, findings, err := s.newRegistry(options).RunAll(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -1075,7 +1208,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.runAgents(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.newRegistry(options).RunAll(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue
@@ -1091,6 +1224,9 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		findings = append(findings, roleFindings...)
 	}
 	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
+	if s.scanService != nil {
+		findings = append(findings, s.scanService.RunIDORRoleDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
+	}
 	return outputs, findings, nil
 }
 
@@ -2104,184 +2240,4 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return v
-}
-
-// handleScanReportPDF serves a PDF report for a completed scan.
-// GET /api/report/{scanId}
-func (s *Server) handleScanReportPDF(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/report/")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
-		return
-	}
-
-	job, err := s.repo.GetJob(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
-		return
-	}
-	if job == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
-		return
-	}
-
-	pdfBytes, err := generateScanReportPDF(job)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PDF"})
-		return
-	}
-
-	filename := fmt.Sprintf("scan-report-%s.pdf", id)
-	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pdfBytes)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(pdfBytes)
-}
-
-// generateScanReportPDF produces a PDF report from a ScanJob.
-func generateScanReportPDF(job *model.ScanJob) ([]byte, error) {
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(15, 15, 15)
-	pdf.SetAutoPageBreak(true, 15)
-	pdf.AddPage()
-
-	pageW, _ := pdf.GetPageSize()
-	contentW := pageW - 30 // left + right margins
-
-	// --- Title ---
-	pdf.SetFont("Helvetica", "B", 20)
-	pdf.SetTextColor(30, 80, 160)
-	pdf.CellFormat(contentW, 10, "Auto Bughunter — Scan Report", "", 1, "C", false, 0, "")
-	pdf.Ln(4)
-
-	// --- Meta ---
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.SetTextColor(80, 80, 80)
-	pdf.CellFormat(contentW, 6, fmt.Sprintf("Target: %s", job.Target), "", 1, "L", false, 0, "")
-	pdf.CellFormat(contentW, 6, fmt.Sprintf("Scan ID: %s", job.ID), "", 1, "L", false, 0, "")
-	pdf.CellFormat(contentW, 6, fmt.Sprintf("Status: %s", job.Status), "", 1, "L", false, 0, "")
-	pdf.CellFormat(contentW, 6, fmt.Sprintf("Started: %s", job.StartedAt.UTC().Format(time.RFC3339)), "", 1, "L", false, 0, "")
-	if job.CompletedAt != nil {
-		pdf.CellFormat(contentW, 6, fmt.Sprintf("Completed: %s", job.CompletedAt.UTC().Format(time.RFC3339)), "", 1, "L", false, 0, "")
-	}
-	if job.ProgramName != "" {
-		pdf.CellFormat(contentW, 6, fmt.Sprintf("Program: %s", job.ProgramName), "", 1, "L", false, 0, "")
-	}
-	pdf.Ln(4)
-
-	// --- Findings Summary ---
-	pdf.SetFont("Helvetica", "B", 13)
-	pdf.SetTextColor(30, 30, 30)
-	pdf.CellFormat(contentW, 8, "Findings Summary", "", 1, "L", false, 0, "")
-
-	counts := map[model.Severity]int{}
-	for _, f := range job.Findings {
-		counts[f.Severity]++
-	}
-	severities := []model.Severity{model.SeverityHigh, model.SeverityMedium, model.SeverityLow, model.SeverityInfo}
-	severityColors := map[model.Severity][3]int{
-		model.SeverityHigh:   {200, 50, 50},
-		model.SeverityMedium: {220, 130, 30},
-		model.SeverityLow:    {50, 130, 200},
-		model.SeverityInfo:   {100, 100, 100},
-	}
-	pdf.SetFont("Helvetica", "", 10)
-	for _, sev := range severities {
-		c := severityColors[sev]
-		pdf.SetTextColor(c[0], c[1], c[2])
-		pdf.CellFormat(contentW, 6, fmt.Sprintf("  %-8s %d", strings.ToUpper(string(sev)), counts[sev]), "", 1, "L", false, 0, "")
-	}
-	pdf.SetTextColor(30, 30, 30)
-	pdf.Ln(4)
-
-	// --- AI Summary ---
-	if job.AISummary != "" {
-		pdf.SetFont("Helvetica", "B", 13)
-		pdf.CellFormat(contentW, 8, "AI Summary", "", 1, "L", false, 0, "")
-		pdf.SetFont("Helvetica", "", 9)
-		pdf.SetTextColor(50, 50, 50)
-		pdf.MultiCell(contentW, 5, job.AISummary, "", "L", false)
-		pdf.SetTextColor(30, 30, 30)
-		pdf.Ln(2)
-	}
-
-	// --- Findings Detail ---
-	if len(job.Findings) > 0 {
-		pdf.SetFont("Helvetica", "B", 13)
-		pdf.SetTextColor(30, 30, 30)
-		pdf.CellFormat(contentW, 8, "Detailed Findings", "", 1, "L", false, 0, "")
-
-		for i, f := range job.Findings {
-			// Section header per finding
-			c := severityColors[f.Severity]
-			pdf.SetFont("Helvetica", "B", 10)
-			pdf.SetTextColor(c[0], c[1], c[2])
-			header := fmt.Sprintf("%d. [%s] %s", i+1, strings.ToUpper(string(f.Severity)), f.Title)
-			pdf.MultiCell(contentW, 6, header, "", "L", false)
-
-			pdf.SetFont("Helvetica", "", 9)
-			pdf.SetTextColor(50, 50, 50)
-			if f.Category != "" {
-				pdf.MultiCell(contentW, 5, "Category: "+f.Category, "", "L", false)
-			}
-			if f.Description != "" {
-				pdf.MultiCell(contentW, 5, "Description: "+f.Description, "", "L", false)
-			}
-			if f.Evidence != "" {
-				pdf.MultiCell(contentW, 5, "Evidence: "+f.Evidence, "", "L", false)
-			}
-			if f.Recommendation != "" {
-				pdf.MultiCell(contentW, 5, "Recommendation: "+f.Recommendation, "", "L", false)
-			}
-			if f.DriftStatus != "" {
-				pdf.MultiCell(contentW, 5, "Drift: "+f.DriftStatus, "", "L", false)
-			}
-			if len(f.Sources) > 0 {
-				pdf.MultiCell(contentW, 5, "Sources: "+strings.Join(f.Sources, ", "), "", "L", false)
-			}
-			if f.Confidence > 0 {
-				pdf.MultiCell(contentW, 5, fmt.Sprintf("Confidence: %.2f", f.Confidence), "", "L", false)
-			}
-			pdf.Ln(3)
-		}
-	}
-
-	// --- Automated Report ---
-	if job.AutomatedReport != "" {
-		pdf.AddPage()
-		pdf.SetFont("Helvetica", "B", 13)
-		pdf.SetTextColor(30, 30, 30)
-		pdf.CellFormat(contentW, 8, "Automated Pen Test Report", "", 1, "L", false, 0, "")
-		pdf.SetFont("Courier", "", 8)
-		pdf.SetTextColor(40, 40, 40)
-		pdf.MultiCell(contentW, 4, job.AutomatedReport, "", "L", false)
-	}
-
-	// Footer with page numbers
-	reportDate := job.StartedAt.UTC()
-	if job.CompletedAt != nil {
-		reportDate = job.CompletedAt.UTC()
-	}
-	pdf.SetFooterFunc(func() {
-		pdf.SetY(-12)
-		pdf.SetFont("Helvetica", "I", 8)
-		pdf.SetTextColor(150, 150, 150)
-		pdf.CellFormat(0, 5, fmt.Sprintf("Page %d — Auto Bughunter Report — %s", pdf.PageNo(), reportDate.Format("2006-01-02")), "", 0, "C", false, 0, "")
-	})
-
-	var buf bytes.Buffer
-	if err := pdf.Output(&buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -49,20 +50,35 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
 
+	emitCmd := func(tool, args string) {
+		if input.Emit != nil {
+			input.Emit(model.ScanEvent{
+				Type:    model.ScanEventCommand,
+				Command: tool + " " + args,
+				Message: fmt.Sprintf("Running integration tool: %s", tool),
+			})
+		}
+	}
+
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseSubfinderIntegration {
+		emitCmd("subfinder", "-d "+input.Target)
 		findings = append(findings, s.runSubfinder(ctx, input.Target, state)...)
 	}
 	if input.Options.UseDnsxIntegration {
+		emitCmd("dnsx", "-d "+input.Target)
 		findings = append(findings, s.runDnsx(ctx, input.Target)...)
 	}
 	if input.Options.UseShuffleDNSIntegration {
+		emitCmd("shuffledns", "-d "+input.Target)
 		findings = append(findings, s.runShuffleDNS(ctx, input.Target, state, input.Scope)...)
 	}
 	if input.Options.UseCertTransparency {
+		emitCmd("cert-transparency", input.Target)
 		findings = append(findings, s.runCertificateTransparency(ctx, input.Target, state, input.Scope)...)
 	}
 	if input.Options.UseAmassIntegration {
+		emitCmd("amass", "enum -d "+input.Target)
 		findings = append(findings, s.runAmassNative(ctx, input.Target, state, input.Scope)...)
 	}
 
@@ -75,6 +91,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			state.SkippedReasons["out_of_scope"] += skipped
 		}
 		for _, t := range targets {
+			emitCmd("naabu", "-host "+t)
 			findings = append(findings, s.runNaabu(ctx, t)...)
 		}
 	}
@@ -88,6 +105,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			state.SkippedReasons["out_of_scope"] += skipped
 		}
 		for _, t := range targets {
+			emitCmd("httpx", "-u "+t)
 			findings = append(findings, s.runHttpx(ctx, t)...)
 		}
 	}
@@ -98,23 +116,29 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		if len(state.DiscoveredHosts) >= 8 {
 			katanaDepth = 3
 		}
+		emitCmd("katana", fmt.Sprintf("-u %s -depth %d", input.Target, katanaDepth))
 		findings = append(findings, s.runKatana(ctx, input.Target, katanaDepth)...)
 	}
 	if input.Options.UseFFUFIntegration {
+		emitCmd("ffuf", "-u "+input.Target+"/FUZZ")
 		findings = append(findings, s.runFFUF(ctx, input.Target, input.Scope)...)
 	}
 	if input.Options.UseGobusterIntegration {
+		emitCmd("gobuster", "dir -u "+input.Target)
 		findings = append(findings, s.runGobuster(ctx, input.Target, input.Scope)...)
 	}
 
 	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {
+		emitCmd("tlsx", "-u "+input.Target)
 		findings = append(findings, s.runTlsx(ctx, input.Target)...)
 	}
 	if input.Options.UseCdncheckIntegration {
+		emitCmd("cdncheck", "-i "+input.Target)
 		findings = append(findings, s.runCdncheck(ctx, input.Target)...)
 	}
 	if input.Options.UseAsnmapIntegration {
+		emitCmd("asnmap", "-i "+input.Target)
 		findings = append(findings, s.runAsnmap(ctx, input.Target)...)
 	}
 
@@ -123,6 +147,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// • explicit opt-in: UseWPScanIntegration=true → runWPScan (reports "not WordPress" if non-WP)
 	// • auto-trigger:    EnableWPScan=true in config → probe silently; only run if WP detected
 	if input.Options.UseWPScanIntegration {
+		emitCmd("wpscan", "--url "+input.Target)
 		findings = append(findings, s.runWPScan(ctx, input.Target, input.AuthProfile)...)
 	} else if s.cfg.EnableWPScan {
 		result := wpscan.Scan(ctx, input.Target, input.AuthProfile)
@@ -155,6 +180,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
 			})
 		} else {
+			emitCmd("nikto", "-h "+input.Target)
 			findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
 		}
 	} else if s.cfg.EnableNikto {
@@ -196,6 +222,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
 			})
 		} else {
+			emitCmd("sqlmap", "-u "+input.Target)
 			findings = append(findings, s.runSQLMap(ctx, input.Target, input.AuthProfile)...)
 		}
 	} else if s.cfg.EnableSQLMap {
@@ -233,10 +260,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			state.SkippedReasons["out_of_scope"] += skipped
 		}
 		for _, t := range targets {
+			emitCmd("nuclei", "-u "+t)
 			findings = append(findings, s.runNuclei(ctx, t)...)
 		}
 	}
 	if input.Options.UseZAPBaselineIntegration {
+		emitCmd("zap-baseline.py", "-t "+input.Target)
 		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
 	}
 	findings = append(findings, buildIntegrationCoverageFinding(state))

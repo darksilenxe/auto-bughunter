@@ -175,6 +175,151 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 
 Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
 
+### Out-of-band (OAST) callback service
+
+When `ENABLE_OAST=true`, the backend starts a second HTTP listener (default
+port `9000`, configurable via `OAST_LISTEN_PORT`) that records inbound
+interactions on `/<token>`. Set `OAST_PUBLIC_BASE_URL` to the externally
+reachable URL of that listener (e.g. `http://oast.example.com:9000`) so
+issued tokens have usable callback URLs.
+
+The scanner uses these tokens to detect blind/out-of-band vulnerabilities
+such as SSRF. Two OAST-driven SSRF probes are enabled by default whenever
+OAST is configured:
+
+- `oast-ssrf-headers` — injects the callback URL into 11 forwarding/origin
+  headers (`X-Forwarded-For/Host`, `Forwarded`, `X-Original-URL`,
+  `X-Rewrite-URL`, `X-Client-IP`, `X-Real-IP`, `Referer`,
+  `X-HTTP-DestinationURL`, `CF-Connecting-IP`, `True-Client-IP`).
+- `oast-ssrf-body-params` — POSTs the callback URL into common URL-bearing
+  body fields (`url`, `callback`, `webhook`, `redirect`, `next`, `image`,
+  `avatar`, `src`, …) using both `application/x-www-form-urlencoded` and
+  `application/json` encodings against the target and runtime-discovered
+  endpoints.
+
+Findings include the captured interaction as evidence.
+
+Two additional active probes run on every scan and do not require OAST:
+
+- `active-xss-reflected` — injects an HTML-context marker into common
+  reflective parameters (`q`, `search`, `query`, `s`, `keyword`, `name`,
+  `title`, `msg`, …) across runtime-discovered endpoints and inspects
+  the response body for unescaped reflection. Emits a single CWE-79
+  finding.
+- `active-sqli-error-based` — appends a single benign quote to common
+  ID/lookup parameters and matches the response against stable database
+  parser-error signatures (MySQL, PostgreSQL, MSSQL, Oracle, SQLite,
+  JDBC/ODBC). Emits a single CWE-89 finding. No UNION/sleep/boolean
+  payloads are sent.
+- `subdomain-takeover` — for every concrete in-scope subdomain (from
+  `scope.includeHosts` and runtime endpoint discovery, excluding the
+  target host itself and wildcard patterns), GETs the host and matches
+  the response body against a curated set of dangling-CNAME service
+  fingerprints (AWS S3, GitHub Pages, Heroku, Shopify, Fastly, Surge,
+  Tumblr, Bitbucket, Pantheon, Squarespace, Help Scout, Tilda,
+  Unbounce). Emits a single CWE-1104 / OWASP A06 finding listing every
+  confirmed unclaimed host.
+
+When the request includes one or more `authProfiles` (role profiles), an
+active **IDOR role-diff** probe (`idor-role-diff`) runs after the
+per-role scans complete. It replays in-scope endpoints whose path
+contains an opaque object identifier (numeric, UUID, or long hex) as
+each identity (anonymous + baseline + each role) and emits a
+CWE-639 / OWASP A01 finding when two identities receive equivalent
+successful responses (matching status code and body length within 64
+bytes). Anonymous-vs-authenticated parity is reported at high severity.
+
+Admin API:
+
+- `GET /api/oast/tokens[?scanId=...]` — list active tokens.
+- `POST /api/oast/tokens` — issue a token. JSON body: `{"scanId":"...","label":"..."}` (both optional).
+- `GET /api/oast/hits/{token}` — list recorded callbacks for a token.
+
+OAST state is in-memory and per-token TTL'd (default 60 minutes); restart
+the backend to clear all tokens. DNS-based interactions are intentionally
+not handled here — only HTTP(S) callbacks to the listener are recorded.
+
+## Reports
+
+The reporting layer produces professional pen-test deliverables and bug-bounty
+submissions in multiple formats. All endpoints are served under `/api/report/`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/report/{scanId}` | Main report. Defaults to PDF for backward compatibility. |
+| `GET /api/report/{scanId}?format=pdf\|md\|html\|json&type=pentest\|executive\|compliance` | Format / report-type negotiation via query string. |
+| `POST /api/report/{scanId}` | Same as GET but accepts `ReportTemplateOptions` (company name, classification, contact, program handle, logo path, report type) in the JSON body for cover-page customization. Query-string parameters take precedence. |
+| `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json` | Single bug-bounty submission for one finding. Defaults to Markdown. |
+| `GET /api/report/{scanId}/bugbounty.zip` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. |
+
+**Report types:**
+
+- `pentest` (default): full pen-test deliverable with cover page, executive
+  summary, scope & methodology, risk-rating methodology, findings grouped by
+  severity (each with CVSS / CWE / OWASP / reproduction steps / impact /
+  remediation / references), **Attack Paths** narratives chained from
+  `Dashboard.TopAttackPaths`, **Remediation Priorities** ranked by severity-
+  weighted impact reduction, **Per-Asset Rollup** pivoting findings by host,
+  **What Changed Since Last Engagement** delta vs. the previous completed
+  scan, **Visual Evidence** (inline screenshots harvested from the agent
+  event stream), and an appendix listing tools, commands, audit trail,
+  assets discovered, and the **Compliance Crosswalk** (PCI DSS / HIPAA /
+  SOC 2 controls keyed off CWE/OWASP).
+- `executive`: one-page summary intended for stakeholders, including the top
+  remediation priorities and the trend vs. the previous engagement.
+- `compliance`: focused PCI DSS v4.0 / HIPAA Security Rule / SOC 2 Common
+  Criteria crosswalk. Empty cells indicate no deterministic mapping is
+  available for the underlying CWE.
+
+**Formats:**
+
+`pdf` (default for `pentest`), `md` / `markdown`, `html`, `json`.
+
+**Tamper-evident delivery:** every PDF, HTML, and Markdown report ends with a
+SHA-256 hash of the canonical report data (the timestamp is excluded so the
+same scan rendered twice produces the same hash). Reviewers can confirm two
+deliverables came from the same underlying findings by comparing the hash.
+
+### Sample bug-bounty submission
+
+```markdown
+# SQL injection in id parameter
+
+## Summary
+
+Error-based SQL injection detected.
+
+## Vulnerability Details
+
+- **Severity:** HIGH
+- **CWE:** CWE-89
+- **CVSS:** 9.8 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
+- **Asset:** https://example.com/users
+- **Affected Parameter:** id
+
+## Steps to Reproduce
+
+1. Identify the vulnerable parameter listed in the finding evidence.
+2. Send an HTTP request that injects a SQL meta-character (e.g. `'`) into that parameter.
+3. Observe a database error in the response or a content/timing difference vs. the baseline.
+4. Confirm exploitability by extracting a known value (e.g. `' OR '1'='1`).
+
+## Impact
+
+An attacker can read, modify, or destroy database contents and may achieve
+remote code execution depending on the database engine configuration.
+
+## Suggested Remediation
+
+Use parameterized queries (prepared statements) for all database interactions.
+
+## References
+
+- https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+- https://cwe.mitre.org/data/definitions/89.html
+- https://owasp.org/Top10/A03_2021-Injection/
+```
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.

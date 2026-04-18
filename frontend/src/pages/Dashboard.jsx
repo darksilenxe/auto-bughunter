@@ -1,0 +1,194 @@
+import { useState } from "react";
+import { useScan } from "../context/ScanContext";
+import AttackPathGraph from "../components/AttackPathGraph";
+import LiveFeed from "../components/LiveFeed";
+
+export default function Dashboard() {
+  const { startScan, job, loading, error, liveEvents, scanId } = useScan();
+  const [target, setTarget] = useState("");
+  const [headersJson, setHeadersJson] = useState("");
+  const [cookiesJson, setCookiesJson] = useState("");
+  const [userAgent, setUserAgent] = useState("");
+  const [basicAuthUsername, setBasicAuthUsername] = useState("");
+  const [basicAuthPassword, setBasicAuthPassword] = useState("");
+  const [includeHosts, setIncludeHosts] = useState("");
+  const [excludeHosts, setExcludeHosts] = useState("");
+  const [excludePaths, setExcludePaths] = useState("");
+  const [programRules, setProgramRules] = useState("");
+  const [useNuclei, setUseNuclei] = useState(false);
+  const [useZap, setUseZap] = useState(false);
+  const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    let headers = {};
+    let cookies = {};
+    try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
+    try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
+
+    const scopeRules = [];
+    if (programRules.trim()) {
+      for (const line of programRules.split("\n")) {
+        const t = line.trim();
+        if (t) scopeRules.push({ rule: t });
+      }
+    }
+
+    startScan({
+      target,
+      authProfile: {
+        headers, cookies,
+        userAgent: userAgent || undefined,
+        basicAuth: basicAuthUsername
+          ? { username: basicAuthUsername, password: basicAuthPassword }
+          : undefined,
+      },
+      options: {
+        useNucleiIntegration: useNuclei,
+        useZapBaselineIntegration: useZap,
+      },
+      scope: {
+        includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
+        excludeHosts: excludeHosts ? excludeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
+        excludePaths: excludePaths ? excludePaths.split(",").map((h) => h.trim()).filter(Boolean) : [],
+        programRules: scopeRules,
+      },
+    });
+  }
+
+  const isRunning = job?.status === "running" || loading;
+  const sevCounts = { high: 0, medium: 0, low: 0, info: 0 };
+  if (job?.findings) {
+    for (const f of job.findings) {
+      if (sevCounts[f.severity] !== undefined) sevCounts[f.severity]++;
+    }
+  }
+
+  return (
+    <div className="page">
+      <header>
+        <h1>🐛 Auto BugHunter</h1>
+        <p>Fully autonomous bug bounty scanning with local AI</p>
+      </header>
+
+      {/* Scan form */}
+      <section className="card">
+        <h2>Start Autonomous Scan</h2>
+        <form onSubmit={handleSubmit}>
+          <label>
+            Target URL *
+            <input value={target} onChange={(e) => setTarget(e.target.value)}
+              placeholder="https://example.com" required />
+          </label>
+          <label>
+            Auth Headers (JSON)
+            <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
+              placeholder='{"Authorization": "Bearer token"}' />
+          </label>
+          <label>
+            Auth Cookies (JSON)
+            <textarea rows={2} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)}
+              placeholder='{"session": "abc123"}' />
+          </label>
+          <label>
+            User-Agent
+            <input value={userAgent} onChange={(e) => setUserAgent(e.target.value)}
+              placeholder="Mozilla/5.0 ..." />
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            <label>Basic Auth Username
+              <input value={basicAuthUsername} onChange={(e) => setBasicAuthUsername(e.target.value)} />
+            </label>
+            <label>Basic Auth Password
+              <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
+            </label>
+          </div>
+          <label>
+            Scope — Include Hosts (comma-separated)
+            <input value={includeHosts} onChange={(e) => setIncludeHosts(e.target.value)}
+              placeholder="example.com,api.example.com" />
+          </label>
+          <label>
+            Scope — Exclude Hosts
+            <input value={excludeHosts} onChange={(e) => setExcludeHosts(e.target.value)} />
+          </label>
+          <label>
+            Scope — Exclude Paths
+            <input value={excludePaths} onChange={(e) => setExcludePaths(e.target.value)}
+              placeholder="/logout,/admin" />
+          </label>
+          <label>
+            Program Rules (one per line)
+            <textarea rows={3} value={programRules} onChange={(e) => setProgramRules(e.target.value)}
+              placeholder="in_scope: example.com&#10;no_dos_testing&#10;no_account_takeover" />
+          </label>
+          <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+            <label className="check">
+              <input type="checkbox" checked={useNuclei} onChange={(e) => setUseNuclei(e.target.checked)} />
+              Use Nuclei
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />
+              Use ZAP Baseline
+            </label>
+          </div>
+          <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>
+        </form>
+        {error && <p className="error">{error}</p>}
+        {scanId && <p className="meta">Scan ID: {scanId}</p>}
+      </section>
+
+      {/* Attack path graph */}
+      {liveEvents.length > 0 && (
+        <section className="card">
+          <h2>⚡ Autonomous Attack Path</h2>
+          <AttackPathGraph events={liveEvents} />
+          <LiveFeed
+            events={liveEvents}
+            isRunning={isRunning}
+            onScreenshot={(b64) => setSelectedScreenshot(b64)}
+          />
+        </section>
+      )}
+
+      {/* Summary when complete */}
+      {job && job.status !== "running" && (
+        <section className="card">
+          <h2>Status: <span style={{ color: job.status === "completed" ? "#16a34a" : "#dc2626" }}>{job.status}</span></h2>
+          <div className="stats">
+            <span className="pill high">High: {sevCounts.high}</span>
+            <span className="pill medium">Medium: {sevCounts.medium}</span>
+            <span className="pill low">Low: {sevCounts.low}</span>
+            <span className="pill info">Info: {sevCounts.info}</span>
+          </div>
+          {job.aiSummary && (
+            <>
+              <h3>AI Summary</h3>
+              <pre className="summary">{job.aiSummary}</pre>
+            </>
+          )}
+        </section>
+      )}
+
+      {/* Screenshot lightbox */}
+      {selectedScreenshot && (
+        <div
+          onClick={() => setSelectedScreenshot(null)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, cursor: "zoom-out",
+          }}
+        >
+          <img src={`data:image/png;base64,${selectedScreenshot}`} alt="Screenshot"
+            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: "8px" }}
+            onClick={(e) => e.stopPropagation()} />
+          <button onClick={() => setSelectedScreenshot(null)}
+            style={{ position: "absolute", top: "16px", right: "24px", background: "none", border: "none", color: "#fff", fontSize: "2rem", cursor: "pointer" }}>
+            ×
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

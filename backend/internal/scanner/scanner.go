@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
@@ -22,7 +23,14 @@ import (
 type Service struct {
 	httpClient *http.Client
 	cfg        Config
+	oast       *oast.Service
 }
+
+// SetOAST attaches an OAST service. Safe to call with nil to disable.
+func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
+
+// OAST returns the attached OAST service or nil.
+func (s *Service) OAST() *oast.Service { return s.oast }
 
 type Config struct {
 	EnableNuclei      bool
@@ -68,6 +76,8 @@ type RunInput struct {
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
 	Scope       model.ScanScope
+	// Emit publishes live events to the per-scan event bus. It is nil-safe.
+	Emit func(model.ScanEvent)
 }
 
 func NewService(cfg Config) *Service {
@@ -151,8 +161,19 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	var findings []model.Finding
 
+	emitCmd := func(cmd, msg string) {
+		if input.Emit != nil {
+			input.Emit(model.ScanEvent{
+				Type:    model.ScanEventCommand,
+				Command: cmd,
+				Message: msg,
+			})
+		}
+	}
+
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
+	emitCmd(fmt.Sprintf("GET %s", input.Target), "Probing target for security headers, cookies, and TLS")
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -162,6 +183,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, checkSecurityHeaders(resp.Header)...)
 	findings = append(findings, checkCookies(resp)...)
 	if u.Scheme == "https" {
+		emitCmd(fmt.Sprintf("tlscheck %s", u.Host), "Checking TLS configuration")
 		findings = append(findings, checkTLS(u.Host)...)
 	}
 
@@ -170,8 +192,14 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
+	findings = append(findings, s.runOASTHeaderSSRFProbe(ctx, input)...)
+	findings = append(findings, s.runActiveXSSProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveSQLiProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runOASTBodySSRFProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSubdomainTakeoverProbe(ctx, input, bodyText)...)
 
-	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope)
+	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
+	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",
