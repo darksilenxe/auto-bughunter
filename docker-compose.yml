@@ -204,7 +204,9 @@ services:
     restart: unless-stopped
 
   # SQL injection probe (Python). Keeps the Python runtime out of the
-  # backend image entirely.
+  # backend image entirely. paoloo/sqlmap publishes a single rolling
+  # `latest` tag (no semver tags); pin by digest in production if you
+  # need reproducible builds.
   sqlmap:
     image: paoloo/sqlmap:latest
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
@@ -212,13 +214,13 @@ services:
 
   # Nikto web server scanner (Perl).
   nikto:
-    image: sullo/nikto:latest
+    image: sullo/nikto:2.5.0
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
   # WPScan WordPress scanner (Ruby).
   wpscan:
-    image: wpscanteam/wpscan:latest
+    image: wpscanteam/wpscan:3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
