@@ -98,20 +98,26 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 				if attempts >= openRedirectMaxAttempts {
 					break
 				}
-				probe := *base
-				q := probe.Query()
+				// Rebuild the probe URL from explicit, already-validated
+				// fields of `base` (rather than re-stringifying a tainted
+				// parsed URL). The host can only ever equal `base.Host`,
+				// which extractRuntimeEndpoints / Run already passed
+				// through safety.ValidateOutboundURL. This makes the
+				// safety property locally obvious and recognisable to
+				// static taint trackers.
+				q := base.Query()
 				q.Set(p, payload)
-				probe.RawQuery = q.Encode()
-				probeURL := probe.String()
+				safe := url.URL{
+					Scheme:   base.Scheme,
+					Host:     base.Host,
+					Path:     base.Path,
+					RawQuery: q.Encode(),
+				}
+				probeURL := safe.String()
 				if !scope.IsURLInScope(probeURL, input.Scope) {
 					continue
 				}
-				// Re-validate the constructed probe URL against the SSRF
-				// allow-list. The host is inherited from `base` (already
-				// validated upstream by extractRuntimeEndpoints / Run),
-				// but a redundant check here keeps this function safe in
-				// isolation and is recognised by static-analysis taint
-				// trackers as a sanitiser.
+				// Final defence-in-depth check on the constructed URL.
 				if err := safety.ValidateOutboundURL(probeURL); err != nil {
 					continue
 				}

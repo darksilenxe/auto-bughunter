@@ -66,4 +66,3 @@ func TestIsOpenRedirectLocation(t *testing.T) {
 		}
 	}
 }
-

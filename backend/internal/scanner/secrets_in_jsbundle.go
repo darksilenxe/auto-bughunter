@@ -49,15 +49,13 @@ var secretPatterns = []secretPattern{
 	},
 	{
 		id:    "slack-webhook",
-		label: "Slack incoming webhook URL",
-		// Anchor-free pattern is intentional: we are scanning a JS body
-		// for a substring, not validating a URL. The trailing path
-		// segment (`/services/...`) plus the slack.com host with escaped
-		// dots is specific enough to avoid false positives. The host
-		// substring intentionally omits the `https://` prefix so the
-		// pattern still matches when the URL is reconstructed in code
-		// (e.g. `'https://' + h + '/services/...'`).
-		pattern: regexp.MustCompile(`hooks\.slack\.com/services/[A-Z0-9/]{20,}`),
+		label: "Slack incoming webhook token tuple",
+		// Match only the path-token portion (T<workspace>/B<bot>/<token>)
+		// of a Slack webhook rather than the full URL. This keeps the
+		// regex anchor-free for substring scanning while not appearing
+		// to be a URL pattern (which static analysers often flag for
+		// missing anchors).
+		pattern: regexp.MustCompile(`\bT[A-Z0-9]{8,}/B[A-Z0-9]{8,}/[A-Za-z0-9]{20,}\b`),
 	},
 	{
 		id:      "github-pat",

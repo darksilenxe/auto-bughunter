@@ -97,4 +97,3 @@ func TestMaskSecret(t *testing.T) {
 		t.Errorf("empty value should stay empty: %q", got)
 	}
 }
-
