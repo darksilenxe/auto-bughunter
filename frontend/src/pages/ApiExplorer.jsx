@@ -454,7 +454,8 @@ export default function ApiExplorer() {
           unauthenticated and will receive <strong>401 Unauthorized</strong> for protected
           routes. Use a curl/HTTP client with an{" "}
           <code>Authorization: Bearer &lt;token&gt;</code> header in that case. The{" "}
-          <code>/api/health</code> and <code>/metrics</code> endpoints are always exempt.
+          <code>/api/health</code>, <code>/api/ready</code>, <code>/api/openapi.json</code> and{" "}
+          <code>/metrics</code> endpoints are always exempt.
         </p>
       </section>
 
