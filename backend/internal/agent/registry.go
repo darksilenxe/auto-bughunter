@@ -64,6 +64,7 @@ type Registry struct {
 	agents  map[string]Agent
 	order   []string
 	spawner Spawner
+	factory *Factory
 }
 
 func NewRegistry() *Registry {
