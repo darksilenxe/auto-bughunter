@@ -166,6 +166,15 @@ type ScanOptions struct {
 	// run. Useful when assessing assets where written authorisation has
 	// not yet been confirmed.
 	PassiveOnly bool `json:"passiveOnly,omitempty"`
+	// WAFBypass enables polymorphic payload variants in the active XSS,
+	// SQLi and SSTI probes. When a Web Application Firewall blocks the
+	// canonical payload the probe will retry with a small set of mutated
+	// equivalents (case randomisation, whitespace alternatives, alternate
+	// tags/event-handlers, double URL-encoding, comment-decorated
+	// arithmetic etc.). Variants are still bounded by the per-probe
+	// maxAttempts budget and gated by scope.IsURLInScope, so enabling
+	// this does not expand attack surface — only expressiveness.
+	WAFBypass bool `json:"wafBypass,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
