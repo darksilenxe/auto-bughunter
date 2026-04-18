@@ -13,6 +13,7 @@ import (
 	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/api"
 	"auto-bughunter/backend/internal/ml"
+	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/storage"
@@ -84,6 +85,37 @@ func main() {
 	})
 	agentLearnerClient := agentlearner.NewClient(os.Getenv("AGENT_LEARNER_URL"))
 
+	// Optional self-hosted OAST (out-of-band) callback service. When enabled,
+	// scanners can request a callback URL and detect blind/out-of-band
+	// vulnerabilities (e.g. SSRF) by observing inbound interactions.
+	var oastSvc *oast.Service
+	if getbool("ENABLE_OAST", false) {
+		oastSvc = oast.NewService(oast.Config{
+			PublicBaseURL:   strings.TrimSpace(os.Getenv("OAST_PUBLIC_BASE_URL")),
+			TTL:             time.Duration(getint("OAST_TOKEN_TTL_MINUTES", 60)) * time.Minute,
+			MaxBodyBytes:    int64(getint("OAST_MAX_BODY_BYTES", 4096)),
+			MaxHitsPerToken: getint("OAST_MAX_HITS_PER_TOKEN", 25),
+		})
+		scanService.SetOAST(oastSvc)
+		oastAddr := ":" + getenv("OAST_LISTEN_PORT", "9000")
+		oastHttpServer := &http.Server{
+			Addr:              oastAddr,
+			Handler:           oastSvc.Handler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			pub := oastSvc.PublicBaseURL()
+			if pub == "" {
+				log.Printf("OAST listener on %s — WARNING: OAST_PUBLIC_BASE_URL is unset; issued tokens will have empty callback URLs", oastAddr)
+			} else {
+				log.Printf("OAST listener on %s (public base %s)", oastAddr, pub)
+			}
+			if err := oastHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("oast listener error: %v", err)
+			}
+		}()
+	}
+
 	server := api.NewServer(
 		scanService,
 		aiClient,
@@ -102,6 +134,9 @@ func main() {
 		},
 		time.Duration(getint("SCAN_TIMEOUT_SECONDS", 600))*time.Second,
 	)
+	if oastSvc != nil {
+		server.SetOAST(oastSvc)
+	}
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,

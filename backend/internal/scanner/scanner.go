@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
@@ -22,7 +23,14 @@ import (
 type Service struct {
 	httpClient *http.Client
 	cfg        Config
+	oast       *oast.Service
 }
+
+// SetOAST attaches an OAST service. Safe to call with nil to disable.
+func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
+
+// OAST returns the attached OAST service or nil.
+func (s *Service) OAST() *oast.Service { return s.oast }
 
 type Config struct {
 	EnableNuclei      bool
@@ -184,6 +192,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
+	findings = append(findings, s.runOASTHeaderSSRFProbe(ctx, input)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)

@@ -23,6 +23,7 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
@@ -61,7 +62,12 @@ type Server struct {
 	gateMedBlock   int
 	scanTimeout    time.Duration
 	eventBus       *EventBus
+	oast           *oast.Service
 }
+
+// SetOAST attaches an OAST service so its admin endpoints become active.
+// Safe to call with nil to disable.
+func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
 
 type Repository interface {
 	CreateJob(ctx context.Context, job *model.ScanJob) error
@@ -159,6 +165,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
+	mux.HandleFunc("/api/oast/tokens", s.handleOASTTokens)
+	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
 	return withCORS(mux)
 }
 
