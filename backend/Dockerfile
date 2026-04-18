@@ -15,9 +15,12 @@ RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@${NUCLEI_VERS
 # Download and unpack OWASP ZAP (provides zap-baseline.py).
 # ---------------------------------------------------------------------------
 FROM alpine:latest AS zap-download
-ARG ZAP_VERSION=2.15.0
-RUN apk add --no-cache wget \
-    && wget -q "https://github.com/zaproxy/zaproxy/releases/download/v${ZAP_VERSION}/ZAP_${ZAP_VERSION}_Linux.tar.gz" \
+ARG ZAP_VERSION=2.17.0
+ARG ZAP_SHA256=efe799aaa3627db683b43f00c9c210aea0b75c00cc8f0a0f0434d12bb3ddde5a
+RUN apk add --no-cache ca-certificates wget \
+    && wget --tries=5 --timeout=60 --waitretry=10 --retry-connrefused -S \
+        "https://github.com/zaproxy/zaproxy/releases/download/v${ZAP_VERSION}/ZAP_${ZAP_VERSION}_Linux.tar.gz" \
+    && echo "${ZAP_SHA256}  ZAP_${ZAP_VERSION}_Linux.tar.gz" | sha256sum -c - \
     && tar -xzf "ZAP_${ZAP_VERSION}_Linux.tar.gz" \
     && mv "ZAP_${ZAP_VERSION}" /opt/zaproxy \
     && rm "ZAP_${ZAP_VERSION}_Linux.tar.gz"
