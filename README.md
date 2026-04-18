@@ -175,6 +175,72 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 
 Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
 
+## Reports
+
+The reporting layer produces professional pen-test deliverables and bug-bounty
+submissions in multiple formats. All endpoints are served under `/api/report/`.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/report/{scanId}` | Main report. Defaults to PDF for backward compatibility. |
+| `GET /api/report/{scanId}?format=pdf\|md\|html\|json&type=pentest\|executive` | Format / report-type negotiation via query string. |
+| `POST /api/report/{scanId}` | Same as GET but accepts `ReportTemplateOptions` (company name, classification, contact, program handle, logo path, report type) in the JSON body for cover-page customization. Query-string parameters take precedence. |
+| `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json` | Single bug-bounty submission for one finding. Defaults to Markdown. |
+| `GET /api/report/{scanId}/bugbounty.zip` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. |
+
+**Report types:**
+
+- `pentest` (default): full pen-test deliverable with cover page, executive
+  summary, scope & methodology, risk-rating methodology, findings grouped by
+  severity (each with CVSS / CWE / OWASP / reproduction steps / impact /
+  remediation / references) and an appendix listing tools, commands, audit
+  trail, and assets discovered.
+- `executive`: one-page summary intended for stakeholders.
+
+**Formats:**
+
+`pdf` (default for `pentest`), `md` / `markdown`, `html`, `json`.
+
+### Sample bug-bounty submission
+
+```markdown
+# SQL injection in id parameter
+
+## Summary
+
+Error-based SQL injection detected.
+
+## Vulnerability Details
+
+- **Severity:** HIGH
+- **CWE:** CWE-89
+- **CVSS:** 9.8 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
+- **Asset:** https://example.com/users
+- **Affected Parameter:** id
+
+## Steps to Reproduce
+
+1. Identify the vulnerable parameter listed in the finding evidence.
+2. Send an HTTP request that injects a SQL meta-character (e.g. `'`) into that parameter.
+3. Observe a database error in the response or a content/timing difference vs. the baseline.
+4. Confirm exploitability by extracting a known value (e.g. `' OR '1'='1`).
+
+## Impact
+
+An attacker can read, modify, or destroy database contents and may achieve
+remote code execution depending on the database engine configuration.
+
+## Suggested Remediation
+
+Use parameterized queries (prepared statements) for all database interactions.
+
+## References
+
+- https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+- https://cwe.mitre.org/data/definitions/89.html
+- https://owasp.org/Top10/A03_2021-Injection/
+```
+
 ## Notes
 
 - If `ALLOWED_TARGETS` is empty, scans are rejected.
