@@ -50,6 +50,15 @@ func (p *Postgres) Close() error {
 	return p.db.Close()
 }
 
+// Ping verifies that a usable connection to the database can be obtained.
+// It is used by the /api/ready handler to expose dependency health.
+func (p *Postgres) Ping(ctx context.Context) error {
+	if p == nil || p.db == nil {
+		return errors.New("postgres not initialized")
+	}
+	return p.db.PingContext(ctx)
+}
+
 func proxyRetentionFromEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("PROXY_RETENTION_HOURS"))
 	if v == "" {

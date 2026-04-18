@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 const NAV = [
-  { path: "/",         label: "Dashboard",    icon: "⚡" },
-  { path: "/findings", label: "Findings",     icon: "🔍" },
-  { path: "/reports",  label: "Reports",      icon: "📄" },
-  { path: "/scans",    label: "Scan History", icon: "📋" },
-  { path: "/api",      label: "API Explorer", icon: "🔌" },
-  { path: "/settings", label: "Settings",     icon: "⚙️" },
+  { path: "/",             label: "Dashboard",     icon: "⚡" },
+  { path: "/findings",     label: "Findings",      icon: "🔍" },
+  { path: "/attack-paths", label: "Attack Paths",  icon: "🕸️" },
+  { path: "/reports",      label: "Reports",       icon: "📄" },
+  { path: "/scans",        label: "Scan History",  icon: "📋" },
+  { path: "/suppressions", label: "Suppressions",  icon: "🔕" },
+  { path: "/api",          label: "API Explorer",  icon: "🔌" },
+  { path: "/settings",     label: "Settings",      icon: "⚙️" },
 ];
 
 export default function Sidebar() {

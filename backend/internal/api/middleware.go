@@ -36,7 +36,7 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 
 func isAuthExemptPath(p string) bool {
 	switch p {
-	case "/api/health", "/metrics":
+	case "/api/health", "/api/ready", "/api/openapi.json", "/metrics":
 		return true
 	}
 	return false

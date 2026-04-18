@@ -18,6 +18,16 @@ const ENDPOINTS = [
       },
       {
         method: "GET",
+        path: "/api/ready",
+        description: "Readiness probe — verifies dependent subsystems (DB) are reachable. Exempt from auth/rate limit.",
+      },
+      {
+        method: "GET",
+        path: "/api/openapi.json",
+        description: "OpenAPI 3.1 specification of the public HTTP surface. Exempt from auth/rate limit.",
+      },
+      {
+        method: "GET",
         path: "/api/tools/health",
         description: "Returns scanner toolchain readiness (binary presence by category).",
       },
@@ -148,6 +158,12 @@ const ENDPOINTS = [
           title: "Missing X-Frame-Options",
           reason: "Tracked separately in JIRA-1234",
         },
+      },
+      {
+        method: "GET",
+        path: "/api/suppressions",
+        description: "List active suppression rules (optionally scoped to a target host).",
+        queryParams: [{ name: "target", placeholder: "example.com" }],
       },
     ],
   },

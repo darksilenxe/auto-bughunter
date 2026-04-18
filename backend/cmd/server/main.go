@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"auto-bughunter/backend/internal/ai"
@@ -24,6 +27,12 @@ func main() {
 	proxyPort := getenv("PROXY_PORT", "8081")
 	allowed := splitCSV(os.Getenv("ALLOWED_TARGETS"))
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
+
+	// Validate configuration up-front so misconfigurations surface as a
+	// clear error rather than as runtime failures hours later.
+	if err := validateConfig(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 
 	enableSecLists := getbool("ENABLE_SECLISTS_WORDLISTS", true)
 	enableKiterunner := getbool("ENABLE_KITERUNNER_WORDLISTS", true)
@@ -110,25 +119,96 @@ func main() {
 	}
 
 	// Start the intercepting proxy listener if enabled.
+	var proxyHttpServer *http.Server
 	if getbool("ENABLE_PROXY", false) {
 		proxyHandler := proxy.NewServer(repo)
-		proxyHttpServer := &http.Server{
+		proxyHttpServer = &http.Server{
 			Addr:              ":" + proxyPort,
 			Handler:           proxyHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
 		go func() {
 			log.Printf("intercepting proxy listening on :%s — configure your browser/tool to use localhost:%s as HTTP proxy", proxyPort, proxyPort)
-			if err := proxyHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := proxyHttpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("proxy server error: %v", err)
 			}
 		}()
 	}
 
-	log.Printf("backend listening on :%s", port)
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	// Listen for SIGINT/SIGTERM to perform a graceful shutdown of both
+	// HTTP listeners. In-flight requests are given a bounded grace period
+	// (SHUTDOWN_GRACE_SECONDS, default 30) before the process exits.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("backend listening on :%s", port)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+	}()
+
+	select {
+	case sig := <-stop:
+		log.Printf("received %s, shutting down gracefully", sig)
+	case err := <-serverErr:
+		log.Fatalf("server error: %v", err)
 	}
+
+	grace := time.Duration(getint("SHUTDOWN_GRACE_SECONDS", 30)) * time.Second
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
+	if proxyHttpServer != nil {
+		if err := proxyHttpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("proxy graceful shutdown failed: %v", err)
+		}
+	}
+	log.Printf("shutdown complete")
+}
+
+// validateConfig sanity-checks numeric/range environment variables and
+// returns a descriptive error explaining the first problem found. It runs
+// before any expensive initialisation (DB connection, Chrome launch, …)
+// so misconfigurations fail fast.
+func validateConfig() error {
+	intRanges := []struct {
+		key      string
+		min, max int
+	}{
+		{"PORT", 1, 65535},
+		{"PROXY_PORT", 1, 65535},
+		{"INTEGRATION_TIMEOUT_SECONDS", 1, 86400},
+		{"SCAN_TIMEOUT_SECONDS", 1, 86400},
+		{"DEFAULT_MAX_RETRIES", 0, 100},
+		{"DEFAULT_BACKOFF_MILLIS", 0, 600000},
+		{"MAX_PER_TARGET_CONCURRENCY", 1, 1000},
+		{"GLOBAL_SCAN_BUDGET", 1, 10000},
+		{"API_RATE_LIMIT_PER_MINUTE", 0, 1_000_000},
+		{"SHUTDOWN_GRACE_SECONDS", 1, 600},
+	}
+	for _, r := range intRanges {
+		v := strings.TrimSpace(os.Getenv(r.key))
+		if v == "" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return errors.New(r.key + " must be an integer (got " + v + ")")
+		}
+		if n < r.min || n > r.max {
+			return errors.New(r.key + " out of range [" + strconv.Itoa(r.min) + "," + strconv.Itoa(r.max) + "] (got " + v + ")")
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
+		if !strings.HasPrefix(v, "postgres://") && !strings.HasPrefix(v, "postgresql://") {
+			return errors.New("DATABASE_URL must use postgres:// or postgresql:// scheme")
+		}
+	}
+	return nil
 }
 
 func getenv(key, fallback string) string {

@@ -152,6 +152,8 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/ready", s.handleReady)
+	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
 	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
 	mux.HandleFunc("/api/scans", s.handleListScans)
@@ -170,11 +172,15 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/report/", s.handleScanReportPDF)
 	mux.HandleFunc("/metrics", s.handleMetrics)
-	// Wrap handler chain (innermost first): mux -> auth -> rate limit -> metrics -> CORS.
+	// Wrap handler chain (innermost first):
+	//   mux -> auth -> rate limit -> metrics -> request logging -> CORS.
 	// CORS is outermost so OPTIONS preflights are handled before auth.
+	// Request logging sits just inside CORS so the logged status reflects
+	// what the client actually received (including auth/rate-limit denials).
 	handler := authMiddleware(s.apiToken, mux)
 	handler = rateLimitMiddleware(s.rateLimiter, handler)
 	handler = metricsMiddleware(handler)
+	handler = requestLoggingMiddleware(handler)
 	return withCORS(handler)
 }
 
@@ -256,6 +262,42 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// Pinger is satisfied by repositories that can verify connectivity to
+// their backing store. It is checked dynamically by the readiness probe
+// so that test fakes used by handlers_*_test.go don't need to implement it.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
+// handleReady reports whether the service is ready to accept traffic. It
+// fails (503) if any required dependency is unreachable. Liveness (/api/health)
+// stays cheap and dependency-free.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	checks := map[string]string{}
+	overall := http.StatusOK
+	if p, ok := s.repo.(Pinger); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := p.Ping(ctx); err != nil {
+			checks["database"] = "error: " + err.Error()
+			overall = http.StatusServiceUnavailable
+		} else {
+			checks["database"] = "ok"
+		}
+	} else {
+		checks["database"] = "skipped"
+	}
+	status := "ready"
+	if overall != http.StatusOK {
+		status = "not_ready"
+	}
+	writeJSON(w, overall, map[string]any{"status": status, "checks": checks})
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
@@ -803,7 +845,22 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		target := strings.TrimSpace(r.URL.Query().Get("target"))
+		rules, err := s.repo.ListActiveSuppressionRules(r.Context(), target, time.Now().UTC())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list suppressions"})
+			return
+		}
+		if rules == nil {
+			rules = []model.SuppressionRule{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+		return
+	case http.MethodPost:
+		// fall through to creation logic below.
+	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
