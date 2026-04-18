@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Shared ProjectDiscovery sidecar
+#
+# A single container that exposes every ProjectDiscovery CLI the backend
+# scanner shells out to (subfinder, httpx, naabu, dnsx, shuffledns, katana,
+# tlsx, cdncheck, asnmap). Each tool is copied directly out of its official
+# upstream image so we benefit from upstream's pinned dependencies and stay
+# off Go module rebuilds in this repo.
+#
+# The matching shims under backend/scripts/shims/<tool> resolve to
+# `docker compose exec -T projectdiscovery <tool> ...`, which means the Go
+# scanner's existing exec.LookPath / exec.CommandContext code keeps working
+# unchanged.
+#
+# Pinning rationale: pin to a known-good minor for each tool. Bump the tags
+# in this single file to upgrade the whole suite.
+# ---------------------------------------------------------------------------
+
+FROM projectdiscovery/subfinder:v2.6.6   AS subfinder
+FROM projectdiscovery/httpx:v1.6.9       AS httpx
+FROM projectdiscovery/naabu:v2.3.1       AS naabu
+FROM projectdiscovery/dnsx:v1.2.1        AS dnsx
+FROM projectdiscovery/shuffledns:v1.1.0  AS shuffledns
+FROM projectdiscovery/katana:v1.1.0      AS katana
+FROM projectdiscovery/tlsx:v1.1.6        AS tlsx
+FROM projectdiscovery/cdncheck:v1.1.0    AS cdncheck
+FROM projectdiscovery/asnmap:v1.1.1      AS asnmap
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates libc6-compat
+
+COPY --from=subfinder  /usr/local/bin/subfinder  /usr/local/bin/subfinder
+COPY --from=httpx      /usr/local/bin/httpx      /usr/local/bin/httpx
+COPY --from=naabu      /usr/local/bin/naabu      /usr/local/bin/naabu
+COPY --from=dnsx       /usr/local/bin/dnsx       /usr/local/bin/dnsx
+COPY --from=shuffledns /usr/local/bin/shuffledns /usr/local/bin/shuffledns
+COPY --from=katana     /usr/local/bin/katana     /usr/local/bin/katana
+COPY --from=tlsx       /usr/local/bin/tlsx       /usr/local/bin/tlsx
+COPY --from=cdncheck   /usr/local/bin/cdncheck   /usr/local/bin/cdncheck
+COPY --from=asnmap     /usr/local/bin/asnmap     /usr/local/bin/asnmap
+
+# Keep the container alive so `docker compose exec` works on demand. Each
+# invocation is a short-lived child of this PID 1.
+ENTRYPOINT ["/bin/sh", "-c", "tail -f /dev/null"]

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Shim — runs gobuster inside the `gobuster` Docker Compose sidecar.
+#
+# The backend writes a temporary wordlist to $SHARED_TMP_DIR (mounted as a
+# shared docker volume on both backend and gobuster containers) so that the
+# `-w <path>` argument resolves correctly inside the sidecar.
+exec /usr/local/bin/sidecar-exec gobuster gobuster "$@"

@@ -22,8 +22,17 @@ services:
     environment:
       NODE_ENV: unsafe
     restart: unless-stopped
+    # The bkimminich/juice-shop image is a minimal node:bookworm-slim and
+    # ships neither wget nor curl, so previous healthchecks that called
+    # `wget` always failed and `service_healthy` never resolved. Use node
+    # itself — it's guaranteed to be on $PATH because it's the entrypoint
+    # runtime — to perform the HTTP probe.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/rest/admin/application-version"]
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://127.0.0.1:3000/rest/admin/application-version', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 30

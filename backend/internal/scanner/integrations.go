@@ -1631,7 +1631,17 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 }
 
 func writeTemporaryWordlist(entries []string) (string, error) {
-	f, err := os.CreateTemp("", "auto-bughunter-wordlist-*.txt")
+	// Honour SHARED_TMP_DIR so the wordlist file lands in a directory
+	// that's also mounted into the ffuf/gobuster sidecars at the same
+	// path. Falls back to os.TempDir() when unset (e.g. running the
+	// backend binary outside Docker Compose).
+	dir := os.Getenv("SHARED_TMP_DIR")
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+	}
+	f, err := os.CreateTemp(dir, "auto-bughunter-wordlist-*.txt")
 	if err != nil {
 		return "", err
 	}
