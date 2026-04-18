@@ -172,6 +172,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
 	mux.HandleFunc("/api/tools/health", s.handleToolsHealth)
+	mux.HandleFunc("/api/tools/updates", s.handleToolsUpdates)
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
@@ -828,6 +829,54 @@ func (s *Server) handleToolsHealth(w http.ResponseWriter, r *http.Request) {
 		"checkedAt": time.Now().UTC(),
 		"tools":     collectToolHealth(),
 	})
+}
+
+// handleToolsUpdates serves the JSON report produced by the `tool-updater`
+// compose sidecar on every `docker compose up`. The sidecar refreshes the
+// nuclei templates volume and queries GitHub Releases for every pinned
+// tool listed in sidecars/tool-updater/manifest.json, then writes the
+// result to TOOL_UPDATES_REPORT_PATH (mounted read-only into this
+// container). We stream the file straight through to the client so the
+// API stays in lock-step with the sidecar's schema without needing a Go
+// type that has to be kept in sync.
+//
+// Status semantics:
+//   * 200: report is on disk and well-formed JSON — returned verbatim.
+//   * 503: report is not yet present (sidecar hasn't run or is still
+//          working). Includes a hint pointing at the sidecar service.
+//   * 500: the report file exists but couldn't be read or parsed.
+func (s *Server) handleToolsUpdates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimSpace(os.Getenv("TOOL_UPDATES_REPORT_PATH"))
+	if path == "" {
+		path = "/var/lib/auto-bughunter/updates/report.json"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "tool update report is not yet available",
+				"hint":  "the tool-updater compose sidecar runs on every `docker compose up`; trigger manually via `docker compose run --rm tool-updater`",
+			})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read tool update report"})
+		return
+	}
+	// Validate that the file is JSON before returning it as such, so a
+	// truncated/corrupt report doesn't get content-typed as
+	// application/json with garbage in the body.
+	var parsed any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "tool update report is not valid JSON"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {

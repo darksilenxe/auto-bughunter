@@ -76,7 +76,7 @@ jobs:
       - name: Build all locally-built services
         # `docker compose build` only touches services that declare `build:`
         # (backend, frontend, ml-service, agents, projectdiscovery,
-        # kiterunner). Buildx layer cache is reused across runs.
+        # kiterunner, tool-updater). Buildx layer cache is reused across runs.
         env:
           DOCKER_BUILDKIT: "1"
           COMPOSE_DOCKER_CLI_BUILD: "1"

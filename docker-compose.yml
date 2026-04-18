@@ -112,10 +112,15 @@ services:
       # the consumer sidecars (ffuf, gobuster, kiterunner) so paths in
       # `-w /wordlists/...` arguments resolve identically on every side.
       - assetnote_wordlists:/wordlists:ro
+      # Read-only view of the latest software-update report produced by
+      # the `tool-updater` sidecar on every `docker compose up`. Surfaced
+      # via `GET /api/tools/updates`.
+      - tool_updates:/var/lib/auto-bughunter/updates:ro
     environment:
       CHROME_REMOTE_URL: ${CHROME_REMOTE_URL:-http://chromium:9222}
       SHARED_TMP_DIR: /tmp/auto-bughunter-shared
       ASSETNOTE_WORDLIST_DIR: /wordlists
+      TOOL_UPDATES_REPORT_PATH: /var/lib/auto-bughunter/updates/report.json
     depends_on:
       db:
         condition: service_healthy
@@ -143,6 +148,11 @@ services:
         condition: service_started
       kiterunner:
         condition: service_started
+      # tool-updater is a one-shot service; we wait for it to *finish* so
+      # nuclei templates are guaranteed up-to-date and the update report
+      # is on disk before the backend starts serving /api/tools/updates.
+      tool-updater:
+        condition: service_completed_successfully
 
   # ------------------------------------------------------------------
   # Tool sidecars — one container per heavy security dependency. The
@@ -255,6 +265,31 @@ services:
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
+  # Tool-updater — one-shot container that runs on every `docker compose
+  # up`. Refreshes the nuclei templates volume and queries GitHub Releases
+  # for every pinned tool listed in sidecars/tool-updater/manifest.json,
+  # writing a JSON report to the shared `tool_updates` volume. Surfaced
+  # by the backend at `GET /api/tools/updates`.
+  #
+  # Manual re-run (without restarting the platform):
+  #   docker compose run --rm tool-updater
+  tool-updater:
+    build:
+      context: ./sidecars/tool-updater
+    # One-shot: the container exits after writing the report. `restart`
+    # is intentionally `no` so it doesn't loop.
+    restart: "no"
+    environment:
+      # Optional: lift GitHub's 60 req/h unauth rate limit. Leave unset
+      # in dev — the manifest currently has 16 entries, well under quota.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Set to 1 for offline / air-gapped boots.
+      TOOL_UPDATER_SKIP_NUCLEI: ${TOOL_UPDATER_SKIP_NUCLEI:-0}
+      TOOL_UPDATER_SKIP_VERSION: ${TOOL_UPDATER_SKIP_VERSION:-0}
+    volumes:
+      - nuclei_templates:/root/nuclei-templates
+      - tool_updates:/var/lib/auto-bughunter/updates
+
   frontend:
     build:
       context: ./frontend
@@ -285,4 +320,5 @@ volumes:
   nuclei_templates:
   shared_tmp:
   assetnote_wordlists:
+  tool_updates:
 
