@@ -26,18 +26,32 @@ export default function Reports() {
       {/* PDF download */}
       {job.status === "completed" && scanId && (
         <section className="card">
-          <h2>PDF Report</h2>
-          <a
-            href={`${API_BASE}/api/report/${scanId}`}
-            download={`scan-report-${scanId}.pdf`}
-            style={{
-              display: "inline-block", padding: "0.6rem 1.4rem",
-              background: "#7f1d1d", color: "#fff", borderRadius: "8px",
-              textDecoration: "none", fontWeight: 700, fontSize: "0.95rem",
-            }}
-          >
-            ⬇ Download PDF Report
-          </a>
+          <h2>Export</h2>
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <a
+              href={`${API_BASE}/api/report/${scanId}`}
+              download={`scan-report-${scanId}.pdf`}
+              style={{
+                display: "inline-block", padding: "0.6rem 1.4rem",
+                background: "#7f1d1d", color: "#fff", borderRadius: "8px",
+                textDecoration: "none", fontWeight: 700, fontSize: "0.95rem",
+              }}
+            >
+              ⬇ Download PDF Report
+            </a>
+            <a
+              href={`${API_BASE}/api/scan/${scanId}/sarif`}
+              download={`scan-${scanId}.sarif.json`}
+              style={{
+                display: "inline-block", padding: "0.6rem 1.4rem",
+                background: "#1e3a8a", color: "#fff", borderRadius: "8px",
+                textDecoration: "none", fontWeight: 700, fontSize: "0.95rem",
+              }}
+              title="SARIF v2.1.0 — upload to GitHub code scanning or any SARIF-aware tool"
+            >
+              ⬇ Download SARIF
+            </a>
+          </div>
         </section>
       )}
 

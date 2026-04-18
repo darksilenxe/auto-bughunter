@@ -84,6 +84,8 @@ AI_API_KEY=
 - Frontend: http://localhost:3000
 - Backend health: http://localhost:8080/api/health
 
+The frontend includes an **API Explorer** page (`/api`) that lists every backend endpoint and lets you invoke each one — including downloading the SARIF or PDF report for any completed scan.
+
 ## API
 
 ### `POST /api/scan`
