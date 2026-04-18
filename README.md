@@ -184,8 +184,42 @@ reachable URL of that listener (e.g. `http://oast.example.com:9000`) so
 issued tokens have usable callback URLs.
 
 The scanner uses these tokens to detect blind/out-of-band vulnerabilities
-such as SSRF (header-based SSRF probe is enabled by default whenever OAST
-is configured). Findings include the captured interaction as evidence.
+such as SSRF. Two OAST-driven SSRF probes are enabled by default whenever
+OAST is configured:
+
+- `oast-ssrf-headers` — injects the callback URL into 11 forwarding/origin
+  headers (`X-Forwarded-For/Host`, `Forwarded`, `X-Original-URL`,
+  `X-Rewrite-URL`, `X-Client-IP`, `X-Real-IP`, `Referer`,
+  `X-HTTP-DestinationURL`, `CF-Connecting-IP`, `True-Client-IP`).
+- `oast-ssrf-body-params` — POSTs the callback URL into common URL-bearing
+  body fields (`url`, `callback`, `webhook`, `redirect`, `next`, `image`,
+  `avatar`, `src`, …) using both `application/x-www-form-urlencoded` and
+  `application/json` encodings against the target and runtime-discovered
+  endpoints.
+
+Findings include the captured interaction as evidence.
+
+Two additional active probes run on every scan and do not require OAST:
+
+- `active-xss-reflected` — injects an HTML-context marker into common
+  reflective parameters (`q`, `search`, `query`, `s`, `keyword`, `name`,
+  `title`, `msg`, …) across runtime-discovered endpoints and inspects
+  the response body for unescaped reflection. Emits a single CWE-79
+  finding.
+- `active-sqli-error-based` — appends a single benign quote to common
+  ID/lookup parameters and matches the response against stable database
+  parser-error signatures (MySQL, PostgreSQL, MSSQL, Oracle, SQLite,
+  JDBC/ODBC). Emits a single CWE-89 finding. No UNION/sleep/boolean
+  payloads are sent.
+
+When the request includes one or more `authProfiles` (role profiles), an
+active **IDOR role-diff** probe (`idor-role-diff`) runs after the
+per-role scans complete. It replays in-scope endpoints whose path
+contains an opaque object identifier (numeric, UUID, or long hex) as
+each identity (anonymous + baseline + each role) and emits a
+CWE-639 / OWASP A01 finding when two identities receive equivalent
+successful responses (matching status code and body length within 64
+bytes). Anonymous-vs-authenticated parity is reported at high severity.
 
 Admin API:
 
