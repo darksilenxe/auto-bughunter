@@ -12,19 +12,58 @@ const (
 )
 
 type Finding struct {
-	ID             string            `json:"id"`
-	Category       string            `json:"category"`
-	Severity       Severity          `json:"severity"`
-	Title          string            `json:"title"`
-	Description    string            `json:"description"`
-	Evidence       string            `json:"evidence"`
-	Recommendation string            `json:"recommendation"`
-	Confidence     float64           `json:"confidence,omitempty"`
-	Sources        []string          `json:"sources,omitempty"`
-	DriftStatus    string            `json:"driftStatus,omitempty"`
-	EvidenceFields map[string]string `json:"evidenceFields,omitempty"`
-	BusinessTags   []string          `json:"businessTags,omitempty"`
-	Exploitability *Exploitability   `json:"exploitability,omitempty"`
+	ID                string            `json:"id"`
+	Category          string            `json:"category"`
+	Severity          Severity          `json:"severity"`
+	Title             string            `json:"title"`
+	Description       string            `json:"description"`
+	Evidence          string            `json:"evidence"`
+	Recommendation    string            `json:"recommendation"`
+	Confidence        float64           `json:"confidence,omitempty"`
+	Sources           []string          `json:"sources,omitempty"`
+	DriftStatus       string            `json:"driftStatus,omitempty"`
+	EvidenceFields    map[string]string `json:"evidenceFields,omitempty"`
+	BusinessTags      []string          `json:"businessTags,omitempty"`
+	Exploitability    *Exploitability   `json:"exploitability,omitempty"`
+	CVSSVector        string            `json:"cvssVector,omitempty"`
+	CVSSScore         float64           `json:"cvssScore,omitempty"`
+	CWE               string            `json:"cwe,omitempty"`
+	OWASPCategory     string            `json:"owaspCategory,omitempty"`
+	AffectedURL       string            `json:"affectedUrl,omitempty"`
+	AffectedParameter string            `json:"affectedParameter,omitempty"`
+	ReproductionSteps []string          `json:"reproductionSteps,omitempty"`
+	Impact            string            `json:"impact,omitempty"`
+	References        []string          `json:"references,omitempty"`
+	PoC               string            `json:"poc,omitempty"`
+}
+
+// ReportTemplateOptions allows callers to customize the cover/branding sections
+// of generated reports. All fields are optional; sensible defaults are used
+// when a value is empty.
+type ReportTemplateOptions struct {
+	CompanyName    string `json:"companyName,omitempty"`
+	LogoPath       string `json:"logoPath,omitempty"`
+	Classification string `json:"classification,omitempty"`
+	Contact        string `json:"contact,omitempty"`
+	ProgramHandle  string `json:"programHandle,omitempty"`
+	ReportType     string `json:"reportType,omitempty"`
+}
+
+// BugBountySubmission is the canonical structure for a single-finding report
+// suitable for submission to bug-bounty platforms (HackerOne, Bugcrowd, etc.).
+type BugBountySubmission struct {
+	Title       string   `json:"title"`
+	Severity    Severity `json:"severity"`
+	CVSSVector  string   `json:"cvssVector,omitempty"`
+	CVSSScore   float64  `json:"cvssScore,omitempty"`
+	CWE         string   `json:"cwe,omitempty"`
+	Asset       string   `json:"asset,omitempty"`
+	Summary     string   `json:"summary"`
+	Steps       []string `json:"steps,omitempty"`
+	Impact      string   `json:"impact,omitempty"`
+	Remediation string   `json:"remediation,omitempty"`
+	References  []string `json:"references,omitempty"`
+	Attachments []string `json:"attachments,omitempty"`
 }
 
 type Exploitability struct {

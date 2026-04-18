@@ -429,13 +429,14 @@ func testErrorBased(ctx context.Context, client *http.Client, pt injectionPoint)
 		for _, dbe := range dbErrors {
 			if dbe.re.MatchString(body) {
 				return &model.Finding{
-					ID:             "sqlmap-error-based",
-					Category:       "injection",
-					Severity:       model.SeverityHigh,
-					Title:          fmt.Sprintf("SQL injection (error-based) — %s database error in response", dbe.dbName),
-					Description:    "An SQL injection payload caused the database engine to emit an error message that was reflected in the HTTP response. This confirms that user-supplied input is being concatenated into a SQL statement without sanitisation.",
-					Evidence:       fmt.Sprintf("param=%s kind=%s payload=%q dbms=%s", pt.name, pt.kind, payload, dbe.dbName),
-					Recommendation: "Use parameterized queries (prepared statements) for all database interactions. Never concatenate user input into SQL strings.",
+					ID:                "sqlmap-error-based",
+					Category:          "injection",
+					Severity:          model.SeverityHigh,
+					Title:             fmt.Sprintf("SQL injection (error-based) — %s database error in response", dbe.dbName),
+					Description:       "An SQL injection payload caused the database engine to emit an error message that was reflected in the HTTP response. This confirms that user-supplied input is being concatenated into a SQL statement without sanitisation.",
+					Evidence:          fmt.Sprintf("param=%s kind=%s payload=%q dbms=%s", pt.name, pt.kind, payload, dbe.dbName),
+					Recommendation:    "Use parameterized queries (prepared statements) for all database interactions. Never concatenate user input into SQL strings.",
+					AffectedParameter: pt.name,
 				}
 			}
 		}
@@ -475,13 +476,14 @@ func testBooleanBlind(ctx context.Context, client *http.Client, pt injectionPoin
 		// Threshold: true similarity ≥ 80%, false similarity < 60%.
 		if trueSim >= 0.80 && falseSim < 0.60 {
 			return &model.Finding{
-				ID:             "sqlmap-boolean-blind",
-				Category:       "injection",
-				Severity:       model.SeverityHigh,
-				Title:          "SQL injection (boolean-based blind) — response differs on TRUE vs FALSE condition",
-				Description:    "The application returns a different response when a TRUE SQL condition is injected compared to a FALSE condition, confirming that the parameter is evaluated in a SQL statement. No database error is visible but data can be extracted byte-by-byte.",
-				Evidence:       fmt.Sprintf("param=%s kind=%s truePayload=%q falseSimilarity=%.0f%%", pt.name, pt.kind, truePayload, falseSim*100),
-				Recommendation: "Use parameterized queries. Conduct a complete source-code audit for all database interaction points.",
+				ID:                "sqlmap-boolean-blind",
+				Category:          "injection",
+				Severity:          model.SeverityHigh,
+				Title:             "SQL injection (boolean-based blind) — response differs on TRUE vs FALSE condition",
+				Description:       "The application returns a different response when a TRUE SQL condition is injected compared to a FALSE condition, confirming that the parameter is evaluated in a SQL statement. No database error is visible but data can be extracted byte-by-byte.",
+				Evidence:          fmt.Sprintf("param=%s kind=%s truePayload=%q falseSimilarity=%.0f%%", pt.name, pt.kind, truePayload, falseSim*100),
+				Recommendation:    "Use parameterized queries. Conduct a complete source-code audit for all database interaction points.",
+				AffectedParameter: pt.name,
 			}
 		}
 	}
@@ -514,13 +516,14 @@ func testTimeBased(ctx context.Context, pt injectionPoint) *model.Finding {
 
 		if elapsed >= timeBasedThreshold {
 			return &model.Finding{
-				ID:             "sqlmap-time-blind",
-				Category:       "injection",
-				Severity:       model.SeverityHigh,
-				Title:          "SQL injection (time-based blind) — response delayed by sleep payload",
-				Description:    fmt.Sprintf("A SLEEP-based injection payload caused a response delay of %.1f seconds, confirming that the injected SQL is being executed by the database engine. An attacker can extract data character-by-character using timing side-channels.", elapsed.Seconds()),
-				Evidence:       fmt.Sprintf("param=%s kind=%s payload=%q elapsed=%s", pt.name, pt.kind, payload, elapsed.Round(time.Millisecond)),
-				Recommendation: "Use parameterized queries for all SQL statements. Apply strict input validation as defence-in-depth.",
+				ID:                "sqlmap-time-blind",
+				Category:          "injection",
+				Severity:          model.SeverityHigh,
+				Title:             "SQL injection (time-based blind) — response delayed by sleep payload",
+				Description:       fmt.Sprintf("A SLEEP-based injection payload caused a response delay of %.1f seconds, confirming that the injected SQL is being executed by the database engine. An attacker can extract data character-by-character using timing side-channels.", elapsed.Seconds()),
+				Evidence:          fmt.Sprintf("param=%s kind=%s payload=%q elapsed=%s", pt.name, pt.kind, payload, elapsed.Round(time.Millisecond)),
+				Recommendation:    "Use parameterized queries for all SQL statements. Apply strict input validation as defence-in-depth.",
+				AffectedParameter: pt.name,
 			}
 		}
 	}

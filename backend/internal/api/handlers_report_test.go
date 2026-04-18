@@ -1,0 +1,285 @@
+package api
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"auto-bughunter/backend/internal/model"
+)
+
+// reportTestRepo is a hand-rolled fake implementation of the Repository
+// interface that returns a single in-memory ScanJob keyed by ID. It only
+// implements the methods invoked by the report handlers; all other methods
+// panic so accidental use in tests is loud.
+type reportTestRepo struct {
+	jobs map[string]*model.ScanJob
+}
+
+func (r *reportTestRepo) GetJob(_ context.Context, id string) (*model.ScanJob, error) {
+	job, ok := r.jobs[id]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	return job, nil
+}
+
+// The remaining Repository methods are stubbed so the type satisfies the
+// interface. Tests that invoke them will fail loudly.
+func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error    { panic("not used") }
+func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error    { panic("not used") }
+func (r *reportTestRepo) GetLatestCompletedJobByTarget(context.Context, string, string) (*model.ScanJob, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) SaveAssets(context.Context, string, []model.ScanAsset) error {
+	panic("not used")
+}
+func (r *reportTestRepo) GetAssetsByScanID(context.Context, string) ([]model.ScanAsset, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) AppendAuditEvent(context.Context, string, model.ScanAuditEvent) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAuditEvents(context.Context, string) ([]model.ScanAuditEvent, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListCompletedJobs(context.Context, int) ([]*model.ScanJob, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) SaveFeedback(context.Context, model.ReportFeedback) error { panic("not used") }
+func (r *reportTestRepo) ListFeedback(context.Context, int) ([]model.ReportFeedback, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) SaveFindingVerification(context.Context, model.FindingVerification) error {
+	panic("not used")
+}
+func (r *reportTestRepo) GetLatestFindingVerifications(context.Context, string) (map[string]model.FindingVerification, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) SaveSuppressionRule(context.Context, model.SuppressionRule) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListActiveSuppressionRules(context.Context, string, time.Time) ([]model.SuppressionRule, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) GetScanState(context.Context, string) (*model.PersistentScanState, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertScanState(context.Context, model.PersistentScanState) error {
+	panic("not used")
+}
+func (r *reportTestRepo) GetRecentJobByIdempotencyKey(context.Context, string, string, time.Time) (*model.ScanJob, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) SaveIdempotencyRecord(context.Context, string, string, string, time.Time) error {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertAutomationTicket(context.Context, model.AutomationTicket) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ResolveAutomationTicketsMissingFingerprints(context.Context, string, []string, time.Time) (int64, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListOpenAutomationTickets(context.Context, string, int) ([]model.AutomationTicket, error) {
+	panic("not used")
+}
+
+func newReportServer(t *testing.T, jobs map[string]*model.ScanJob) *Server {
+	t.Helper()
+	return &Server{
+		repo: &reportTestRepo{jobs: jobs},
+	}
+}
+
+func sampleReportJob() *model.ScanJob {
+	completed := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	return &model.ScanJob{
+		ID:          "scan-1",
+		Target:      "https://example.com",
+		Status:      "completed",
+		StartedAt:   time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+		CompletedAt: &completed,
+		Findings: []model.Finding{
+			{
+				ID:                "sqlmap-error-based",
+				Category:          "injection",
+				Severity:          model.SeverityHigh,
+				Title:             "SQL injection",
+				AffectedParameter: "id",
+			},
+		},
+	}
+}
+
+func TestHandleScanReport_DefaultsToPDF(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Errorf("expected application/pdf content type, got %q", got)
+	}
+	if !bytes.HasPrefix(rec.Body.Bytes(), []byte("%PDF-")) {
+		t.Errorf("response body is not a PDF")
+	}
+}
+
+func TestHandleScanReport_FormatNegotiation(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	cases := []struct {
+		format         string
+		expectedPrefix string
+		expectedType   string
+	}{
+		{"md", "# Penetration", "text/markdown"},
+		{"html", "<!DOCTYPE html>", "text/html"},
+		{"json", "{", "application/json"},
+	}
+	for _, c := range cases {
+		t.Run(c.format, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?format="+c.format, nil)
+			rec := httptest.NewRecorder()
+			srv.handleScanReport(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.HasPrefix(rec.Header().Get("Content-Type"), c.expectedType) {
+				t.Errorf("expected content-type prefix %q, got %q", c.expectedType, rec.Header().Get("Content-Type"))
+			}
+			if !strings.HasPrefix(rec.Body.String(), c.expectedPrefix) {
+				t.Errorf("expected body prefix %q, got %q", c.expectedPrefix, rec.Body.String()[:min(60, len(rec.Body.String()))])
+			}
+		})
+	}
+}
+
+func TestHandleScanReport_ExecutiveType(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?type=executive&format=md", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Executive Security Summary") {
+		t.Errorf("expected executive summary content, got: %s", rec.Body.String()[:200])
+	}
+}
+
+func TestHandleScanReport_NotFound(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/missing", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleScanReport_SingleFindingMarkdown(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "## Steps to Reproduce") {
+		t.Errorf("expected bug-bounty markdown structure, got: %s", rec.Body.String()[:200])
+	}
+}
+
+func TestHandleScanReport_SingleFindingNotFound(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/finding/missing", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleScanReport_BugBountyZip(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/bugbounty.zip", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/zip" {
+		t.Errorf("expected application/zip content type, got %q", got)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+	if err != nil {
+		t.Fatalf("response is not a valid zip: %v", err)
+	}
+	hasIndex := false
+	for _, f := range zr.File {
+		if f.Name == "INDEX.md" {
+			hasIndex = true
+		}
+	}
+	if !hasIndex {
+		t.Errorf("INDEX.md missing from zip")
+	}
+}
+
+func TestHandleScanReport_PostWithTemplateOptions(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	body, _ := json.Marshal(model.ReportTemplateOptions{
+		CompanyName:    "Posted Co.",
+		Classification: "Internal",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/report/scan-1?format=md", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Posted Co.") {
+		t.Errorf("expected company name from POST body to appear, got: %s", rec.Body.String()[:300])
+	}
+	if !strings.Contains(rec.Body.String(), "Internal") {
+		t.Errorf("expected classification from POST body to appear")
+	}
+}
+
+func TestHandleScanReport_UnsupportedFormat(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?format=docx", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleScanReport_MissingScanID(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{})
+	req := httptest.NewRequest(http.MethodGet, "/api/report/", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
