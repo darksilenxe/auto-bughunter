@@ -32,7 +32,7 @@ type takeoverFingerprint struct {
 // app response of the named service.
 var takeoverFingerprints = []takeoverFingerprint{
 	{Service: "AWS S3", BodyMarker: "NoSuchBucket", Description: "S3 bucket referenced by CNAME does not exist; an attacker can register the bucket name and serve content under the dangling subdomain."},
-	{Service: "GitHub Pages", BodyMarker: "There isn't a GitHub Pages site here", Description: "GitHub Pages site referenced by CNAME has been deleted; an attacker can claim the GitHub repository/organisation and serve content under the dangling subdomain."},
+	{Service: "GitHub Pages", BodyMarker: "There isn't a GitHub Pages site here", Description: "GitHub Pages site referenced by CNAME has been deleted; an attacker can claim the GitHub repository/organization and serve content under the dangling subdomain."},
 	{Service: "Heroku", BodyMarker: "No such app", Description: "Heroku app referenced by CNAME no longer exists; an attacker can register the Heroku app name and serve content under the dangling subdomain."},
 	{Service: "Shopify", BodyMarker: "Sorry, this shop is currently unavailable", Description: "Shopify storefront referenced by CNAME is unclaimed; an attacker can register the shop slug and serve content under the dangling subdomain."},
 	{Service: "Fastly", BodyMarker: "Fastly error: unknown domain", Description: "Fastly service referenced by CNAME has no matching domain configured; an attacker who can claim the Fastly service can serve content under the dangling subdomain."},
@@ -148,7 +148,7 @@ func (s *Service) runSubdomainTakeoverProbe(ctx context.Context, input RunInput,
 	steps := []string{
 		fmt.Sprintf("Resolve %s and confirm it CNAMEs to a third-party service (%s).", first.host, first.service),
 		fmt.Sprintf("Send GET %s and observe the unclaimed-resource response body matching the %s takeover fingerprint.", first.probedURL, first.service),
-		"Register the underlying resource on the third-party service to demonstrate impact (with explicit program authorisation).",
+		"Register the underlying resource on the third-party service to demonstrate impact (with explicit program authorization).",
 	}
 
 	return []model.Finding{{
@@ -158,7 +158,7 @@ func (s *Service) runSubdomainTakeoverProbe(ctx context.Context, input RunInput,
 		Title:             "Subdomain takeover via dangling CNAME",
 		Description:       fmt.Sprintf("One or more in-scope subdomains point to third-party services where the underlying resource has been deleted/unclaimed. The matched service(s): %s. %s", strings.Join(services, ", "), first.description),
 		Evidence:          fmt.Sprintf("Unclaimed third-party responses observed at: %s (services: %s)", strings.Join(limitStrings(urls, 6), ", "), strings.Join(services, ", ")),
-		Recommendation:    "Audit DNS records for CNAMEs pointing to third-party services. Remove records for unclaimed resources, or re-claim/re-create the upstream resource so it is owned by your organisation. Adopt a continuous DNS hygiene check that flags CNAMEs whose target returns a known takeover fingerprint.",
+		Recommendation:    "Audit DNS records for CNAMEs pointing to third-party services. Remove records for unclaimed resources, or re-claim/re-create the upstream resource so it is owned by your organization. Adopt a continuous DNS hygiene check that flags CNAMEs whose target returns a known takeover fingerprint.",
 		Confidence:        0.9,
 		AffectedURL:       first.probedURL,
 		CWE:               "CWE-1104",
