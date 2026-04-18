@@ -21,6 +21,10 @@
 # --- Stage 1: pull the kiterunner release binary -------------------------
 FROM alpine:3.20 AS kr-fetch
 
+# Bump KITERUNNER_VERSION when a new release is published at
+# https://github.com/assetnote/kiterunner/releases. Releases are infrequent
+# (the project is in maintenance mode) so a hard pin is preferred over
+# `latest` to keep the image deterministic.
 ARG KITERUNNER_VERSION=1.0.2
 ARG TARGETARCH=amd64
 

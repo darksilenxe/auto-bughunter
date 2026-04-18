@@ -86,10 +86,9 @@ if [ "${should_sync}" = "1" ]; then
     fi
 
     # Always mark the sync attempt — partial caches are fine, and the user
-    # can re-run with ASSETNOTE_FORCE_SYNC=1 to retry.
+    # can re-run with ASSETNOTE_FORCE_SYNC=1 to retry. The temp manifest
+    # is cleaned up by the EXIT trap installed above.
     : > "${SENTINEL}"
-    rm -f "${tmp_manifest}"
-    trap - EXIT
 else
     echo "kiterunner-sidecar: ${SENTINEL} present (or ASSETNOTE_SKIP_SYNC=1); skipping Assetnote sync"
 fi

@@ -1,0 +1,99 @@
+name: QA - Container Builds
+
+# Full end-to-end build of every container in `docker-compose.yml`. This is
+# the QA gate that catches Dockerfile breakage and unreachable third-party
+# image tags (e.g. `ghcr.io/ffuf/ffuf:v2.1.0` returning 401/denied — see
+# Juice Shop run #11) *before* they take down the heavier `e2e-juice-shop`
+# harness or land on `main`.
+#
+# Triggers:
+#   * Manual: workflow_dispatch
+#   * Push to main (post-merge regression check)
+#   * Pull request: only when the PR touches files that can affect the
+#     container build graph (Dockerfiles, compose, sidecars, shims, or any
+#     of the source trees baked into a local image).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'docker-compose.yml'
+      - '**/Dockerfile'
+      - 'sidecars/**'
+      - 'backend/**'
+      - 'frontend/**'
+      - 'agents/**'
+      - 'ml-service/**'
+      - '.github/workflows/qa-container-builds.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-container-builds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-all:
+    name: Build every compose service
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Buildx layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          # Keyed on every Dockerfile + compose so a change invalidates only
+          # what changed; falls back to the previous cache for any leftovers.
+          key: qa-buildx-${{ runner.os }}-${{ hashFiles('**/Dockerfile', 'docker-compose.yml') }}
+          restore-keys: |
+            qa-buildx-${{ runner.os }}-
+
+      - name: Seed .env for compose validation
+        # `docker compose` fails fast if the file referenced by `env_file:`
+        # doesn't exist, even when we're only building. Use the example as a
+        # safe placeholder — no scan is actually executed in this workflow.
+        run: cp .env.example .env
+
+      - name: Validate compose file
+        # Catches YAML / interpolation problems before we kick off the heavy
+        # build matrix. `--quiet` exits non-zero on any error.
+        run: docker compose config --quiet
+
+      - name: Show resolved build plan
+        run: |
+          docker compose config --services | sort
+          echo "---"
+          docker compose config --images | sort -u
+
+      - name: Build all locally-built services
+        # `docker compose build` only touches services that declare `build:`
+        # (backend, frontend, ml-service, agents, projectdiscovery,
+        # kiterunner). Buildx layer cache is reused across runs.
+        env:
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+        run: docker compose build --progress=plain --pull
+
+      - name: Pull all third-party service images
+        # Verifies that every `image:` reference (nuclei, zap, chromium,
+        # ffuf, gobuster, sqlmap, nikto, wpscan, postgres, ollama, ...)
+        # resolves and is publicly pullable from its registry. This is the
+        # check that would have caught the `ghcr.io/ffuf/ffuf:v2.1.0`
+        # denial pre-merge.
+        run: docker compose pull --ignore-buildable --quiet
+
+      - name: List built/pulled images
+        if: always()
+        run: docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}' | sort
+
+      - name: Cleanup .env
+        if: always()
+        run: rm -f .env
