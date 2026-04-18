@@ -40,29 +40,29 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService    *scanner.Service
-	aiClient       *ai.Client
-	allowed        map[string]struct{}
-	repo           Repository
-	agentRegistry  *agent.Registry
-	proxyServer    *proxy.Server
-	mlService      *ml.Service
-	agentLearner   *agentlearner.Client
-	agentConfig    AgentConfig
-	maxPerTarget   int
-	semMu          sync.Mutex
-	targetSem      map[string]chan struct{}
-	globalSem      chan struct{}
-	rateMu         sync.Mutex
-	targetLastRun  map[string]time.Time
-	webhookURL     string
-	slackWebhook   string
-	notifyMinConf  float64
-	gateHighBlock  int
-	gateMedBlock   int
-	scanTimeout    time.Duration
-	eventBus       *EventBus
-	oast           *oast.Service
+	scanService   *scanner.Service
+	aiClient      *ai.Client
+	allowed       map[string]struct{}
+	repo          Repository
+	agentRegistry *agent.Registry
+	proxyServer   *proxy.Server
+	mlService     *ml.Service
+	agentLearner  *agentlearner.Client
+	agentConfig   AgentConfig
+	maxPerTarget  int
+	semMu         sync.Mutex
+	targetSem     map[string]chan struct{}
+	globalSem     chan struct{}
+	rateMu        sync.Mutex
+	targetLastRun map[string]time.Time
+	webhookURL    string
+	slackWebhook  string
+	notifyMinConf float64
+	gateHighBlock int
+	gateMedBlock  int
+	scanTimeout   time.Duration
+	eventBus      *EventBus
+	oast          *oast.Service
 }
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -209,13 +209,13 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	}
 	// Return lightweight summaries (no full findings) to keep response size small.
 	type scanSummary struct {
-		ID          string     `json:"id"`
-		Target      string     `json:"target"`
-		Status      string     `json:"status"`
-		CreatedAt   time.Time  `json:"createdAt"`
-		CompletedAt *time.Time `json:"completedAt"`
-		FindingCount int       `json:"findingCount"`
-		HighCount   int        `json:"highCount"`
+		ID           string     `json:"id"`
+		Target       string     `json:"target"`
+		Status       string     `json:"status"`
+		CreatedAt    time.Time  `json:"createdAt"`
+		CompletedAt  *time.Time `json:"completedAt"`
+		FindingCount int        `json:"findingCount"`
+		HighCount    int        `json:"highCount"`
 	}
 	summaries := make([]scanSummary, 0, len(jobs))
 	for _, j := range jobs {
@@ -1213,6 +1213,9 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		findings = append(findings, roleFindings...)
 	}
 	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
+	if s.scanService != nil {
+		findings = append(findings, s.scanService.RunIDORRoleDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
+	}
 	return outputs, findings, nil
 }
 
@@ -2195,4 +2198,3 @@ func envOrDefault(key, fallback string) string {
 	}
 	return v
 }
-
