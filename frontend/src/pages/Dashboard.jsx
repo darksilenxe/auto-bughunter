@@ -111,7 +111,7 @@ export default function Dashboard() {
               placeholder='{"Authorization": "Bearer token"}' />
           </label>
           <label>
-            Custom Header
+            Custom Header (overrides the same key from Auth Headers JSON)
             <input value={customHeader} onChange={(e) => setCustomHeader(e.target.value)}
               placeholder="X-Bug-Bounty: HackerOne" />
           </label>
