@@ -3,6 +3,16 @@ import { useScan } from "../context/ScanContext";
 import AttackGraph from "../components/AttackGraph";
 import BurpImport from "../components/BurpImport";
 
+function parseCustomHeader(value) {
+  const text = value.trim();
+  if (!text) return null;
+  const sep = text.indexOf(":");
+  if (sep < 0) return null;
+  const name = text.slice(0, sep).trim();
+  if (!name) return null;
+  return { name, value: text.slice(sep + 1).trim() };
+}
+
 export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
   const [target, setTarget] = useState("");
@@ -40,13 +50,8 @@ export default function Dashboard() {
     let cookies = {};
     try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
     try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
-    const customHeaderText = customHeader.trim();
-    if (customHeaderText) {
-      const sep = customHeaderText.indexOf(":");
-      const name = (sep >= 0 ? customHeaderText.slice(0, sep) : customHeaderText).trim();
-      const value = (sep >= 0 ? customHeaderText.slice(sep + 1) : "").trim();
-      if (name) headers[name] = value;
-    }
+    const parsedCustomHeader = parseCustomHeader(customHeader);
+    if (parsedCustomHeader) headers[parsedCustomHeader.name] = parsedCustomHeader.value;
 
     const scopeRules = [];
     if (programRules.trim()) {
