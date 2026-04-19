@@ -15,6 +15,12 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+const (
+	loginBootstrapTimeout   = 35 * time.Second
+	loginBootstrapLoadDelay = 1200 * time.Millisecond
+	loginBootstrapPostDelay = 2200 * time.Millisecond
+)
+
 func hasStandardLoginCredentials(profile model.ScanAuthProfile) bool {
 	return strings.TrimSpace(profile.Username) != "" || strings.TrimSpace(profile.Password) != ""
 }
@@ -93,7 +99,7 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
 
-	ctx, timeoutCancel := context.WithTimeout(ctx, 35*time.Second)
+	ctx, timeoutCancel := context.WithTimeout(ctx, loginBootstrapTimeout)
 	defer timeoutCancel()
 
 	extraHeaders := make(network.Headers)
@@ -133,9 +139,9 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 		var currentURL string
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(loginURL),
-			chromedp.Sleep(1200*time.Millisecond),
+			chromedp.Sleep(loginBootstrapLoadDelay),
 			chromedp.Evaluate(buildLoginBootstrapScript(profile.Username, profile.Password), &submit),
-			chromedp.Sleep(2200*time.Millisecond),
+			chromedp.Sleep(loginBootstrapPostDelay),
 			chromedp.Location(&currentURL),
 		); err != nil || !submit.OK {
 			continue
