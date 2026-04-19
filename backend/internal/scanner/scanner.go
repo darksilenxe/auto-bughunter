@@ -160,6 +160,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 
 	var findings []model.Finding
+	if hasStandardLoginCredentials(input.AuthProfile) {
+		resolvedProfile, authFindings := bootstrapStandardAuthProfile(ctx, input.Target, input.AuthProfile, input.Scope, input.Emit)
+		input.AuthProfile = resolvedProfile
+		findings = append(findings, authFindings...)
+	}
 
 	emitCmd := func(cmd, msg string) {
 		if input.Emit != nil {

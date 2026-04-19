@@ -9,6 +9,9 @@ export default function Dashboard() {
   const [headersJson, setHeadersJson] = useState("");
   const [cookiesJson, setCookiesJson] = useState("");
   const [userAgent, setUserAgent] = useState("");
+  const [loginUrl, setLoginUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [basicAuthUsername, setBasicAuthUsername] = useState("");
   const [basicAuthPassword, setBasicAuthPassword] = useState("");
   const [includeHosts, setIncludeHosts] = useState("");
@@ -50,6 +53,9 @@ export default function Dashboard() {
       authProfile: {
         headers, cookies,
         userAgent: userAgent || undefined,
+        loginUrl: loginUrl || undefined,
+        username: username || undefined,
+        password: password || undefined,
         basicAuthUsername: basicAuthUsername || undefined,
         basicAuthPassword: basicAuthPassword || undefined,
       },
@@ -84,6 +90,7 @@ export default function Dashboard() {
       {/* Scan form */}
       <section className="card">
         <h2>Start Autonomous Scan</h2>
+        <p className="meta">Authentication is optional. Leave the auth fields empty to run an unauthenticated attack-surface scan.</p>
         <form onSubmit={handleSubmit}>
           <label>
             Target URL *
@@ -105,11 +112,24 @@ export default function Dashboard() {
             <input value={userAgent} onChange={(e) => setUserAgent(e.target.value)}
               placeholder="Mozilla/5.0 ..." />
           </label>
+          <label>
+            Standard Login URL (optional)
+            <input value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)}
+              placeholder="https://example.com/login" />
+          </label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            <label>Basic Auth Username
+            <label>App Username
+              <input value={username} onChange={(e) => setUsername(e.target.value)} />
+            </label>
+            <label>App Password
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </label>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            <label>HTTP Basic Auth Username
               <input value={basicAuthUsername} onChange={(e) => setBasicAuthUsername(e.target.value)} />
             </label>
-            <label>Basic Auth Password
+            <label>HTTP Basic Auth Password
               <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
             </label>
           </div>

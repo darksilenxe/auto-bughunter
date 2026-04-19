@@ -113,7 +113,8 @@ func hasAuth(profile model.ScanAuthProfile) bool {
 	return len(profile.Headers) > 0 ||
 		len(profile.Cookies) > 0 ||
 		strings.TrimSpace(profile.BasicAuthUsername) != "" ||
-		strings.TrimSpace(profile.BasicAuthPassword) != ""
+		strings.TrimSpace(profile.BasicAuthPassword) != "" ||
+		(strings.TrimSpace(profile.Username) != "" && strings.TrimSpace(profile.Password) != "")
 }
 
 func extractCoverageTelemetry(findings []model.Finding) (int, int, []string) {
