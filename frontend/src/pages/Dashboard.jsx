@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { useScan } from "../context/ScanContext";
-import AttackPathGraph from "../components/AttackPathGraph";
 import AttackGraph from "../components/AttackGraph";
-import LiveFeed from "../components/LiveFeed";
 
 export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
@@ -139,13 +137,12 @@ export default function Dashboard() {
         {scanId && <p className="meta">Scan ID: {scanId}</p>}
       </section>
 
-      {/* Attack path graph */}
-      {liveEvents.length > 0 && (
-        <section className="card">
-          <h2>⚡ Autonomous Attack Path</h2>
-          <AttackPathGraph events={liveEvents} />
-          <LiveFeed
-            events={liveEvents}
+      {/* Attack graph — shown from the moment a scan starts through completion */}
+      {(loading || job) && (
+        <section className="card" style={{ padding: "0", overflow: "hidden" }}>
+          <AttackGraph
+            job={job}
+            liveEvents={liveEvents}
             isRunning={isRunning}
             onScreenshot={(b64) => setSelectedScreenshot(b64)}
           />
@@ -155,7 +152,7 @@ export default function Dashboard() {
       {/* Summary when complete */}
       {job && job.status !== "running" && (
         <section className="card">
-          <h2>Status: <span style={{ color: job.status === "completed" ? "#16a34a" : "#dc2626" }}>{job.status}</span></h2>
+          <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : "#ef4444" }}>{job.status}</span></h2>
           <div className="stats">
             <span className="pill high">High: {sevCounts.high}</span>
             <span className="pill medium">Medium: {sevCounts.medium}</span>
@@ -168,14 +165,6 @@ export default function Dashboard() {
               <pre className="summary">{job.aiSummary}</pre>
             </>
           )}
-        </section>
-      )}
-
-      {/* NodeZero-style attack graph (shown once findings or assets are available) */}
-      {job && (job.findings?.length > 0 || job.assets?.length > 0) && (
-        <section className="card">
-          <h2>🗺 Attack Graph</h2>
-          <AttackGraph job={job} liveEvents={liveEvents} />
         </section>
       )}
 

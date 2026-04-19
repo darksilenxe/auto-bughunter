@@ -1,57 +1,60 @@
 /**
- * AttackGraph — NodeZero-style horizontal timeline attack graph.
+ * AttackGraph — NodeZero-style live attack chain visualization.
  *
- * Visualises the attack chain from a completed (or in-progress) scan:
- *   scanner → hosts → services → vulnerabilities → credentials / compromises
+ * Renders during AND after a scan:
+ *   ┌───────────────────────────────────────────────────────────────┐
+ *   │  target: example.com   ● RUNNING  0:05:17  [scanning agent]  │  ← header bar
+ *   │  ⚠ 2 High  △ 3 Med  ▿ 1 Low  ▦ 4 Hosts  ◈ 7 Services        │  ← stat pills
+ *   ├───────────────────────────────────────────────────────────────┤
+ *   │                   [  attack chain SVG  ]                      │  ← graph
+ *   ├────────────────────────┬──────────────────────────────────────┤
+ *   │  Activity Log          │  Finding Detail                      │  ← detail panes
+ *   │  0:02:14 [recon] ...   │  [HIGH] Insecure JWT                 │
+ *   └────────────────────────┴──────────────────────────────────────┘
  *
- * Nodes are positioned on a horizontal timeline (x = elapsed time from scan
- * start) and on a vertical tier (y = node type).  Edges are cubic bezier
- * curves.  Clicking a node opens a detail panel below the graph.
- *
- * Props
- * ─────
- *   job        {object}  – ScanJob object (required)
- *   liveEvents {array}   – SSE events array; used to timestamp findings in
- *                          real time (optional, falls back to estimation)
+ * Props:
+ *   job          {object}   – ScanJob (required; findings empty while running)
+ *   liveEvents   {array}    – SSE ScanEvent stream
+ *   isRunning    {boolean}  – true while scan is in progress
+ *   onScreenshot {fn}       – callback(b64) for screenshot lightbox
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-// ── SVG geometry constants ────────────────────────────────────────────────
+// ── SVG geometry ────────────────────────────────────────────────────────────
 
-const R      = 26;         // node radius
-const SVG_W  = 1100;       // viewBox width
-const SVG_H  = 450;        // viewBox height
-const TL_Y   = SVG_H - 26; // timeline y
-const PAD_L  = 85;         // left padding (origin node)
+const R      = 26;
+const SVG_W  = 1100;
+const SVG_H  = 420;
+const TL_Y   = SVG_H - 26;
+const PAD_L  = 85;
+const PAD_R  = 65;
 
 /** Vertical step between successive collision-avoidance attempts (px). */
 const COLLISION_STEP = 55;
-/** How many radii of clearance are required before two same-tier nodes are
- *  considered non-overlapping.  Slightly >2 to add breathing room. */
+/** Clearance multiplier for overlap detection. */
 const COLLISION_RADIUS_MULTIPLIER = 2.4;
-/** Maximum label character width for the first and second display lines. */
+/** Label line character limits. */
 const LABEL_FIRST_LINE_MAX  = 20;
 const LABEL_SECOND_LINE_MAX = 40;
-const PAD_R  = 65;         // right padding
 
-/** Base vertical position for each node type. */
+/** Base vertical position (y) for each node type tier. */
 const TIER_Y = {
-  host:       88,
-  service:    168,
-  scanner:    230,
-  finding:    300,
-  credential: 368,
-  compromise: 230,
+  host:       80,
+  service:    155,
+  scanner:    220,
+  finding:    285,
+  credential: 350,
+  compromise: 220,
 };
 
-// ── Visual styles per node type ───────────────────────────────────────────
+// ── Visual styles ────────────────────────────────────────────────────────────
 
 const STYLE = {
-  scanner:    { fill: "#3b0a0a", stroke: "#f43f5e", text: "#fecdd3" },
-  host:       { fill: "#172554", stroke: "#60a5fa", text: "#bfdbfe" },
-  service:    { fill: "#052e16", stroke: "#4ade80", text: "#bbf7d0" },
-  credential: { fill: "#1e1b4b", stroke: "#a78bfa", text: "#ddd6fe" },
-  compromise: { fill: "#3b0808", stroke: "#f43f5e", text: "#fecdd3" },
+  scanner:        { fill: "#1e1230", stroke: "#a78bfa", text: "#ddd6fe" },
+  host:           { fill: "#172554", stroke: "#60a5fa", text: "#bfdbfe" },
+  service:        { fill: "#052e16", stroke: "#4ade80", text: "#bbf7d0" },
+  credential:     { fill: "#1e1b4b", stroke: "#818cf8", text: "#c7d2fe" },
+  compromise:     { fill: "#3b0a0a", stroke: "#f43f5e", text: "#fecdd3" },
   finding_high:   { fill: "#3b0808", stroke: "#ef4444", text: "#fca5a5" },
   finding_medium: { fill: "#431407", stroke: "#f97316", text: "#fdba74" },
   finding_low:    { fill: "#3f2a01", stroke: "#fbbf24", text: "#fde68a" },
@@ -59,13 +62,10 @@ const STYLE = {
 };
 
 function nodeStyle(node) {
-  if (node.type === "finding") {
-    return STYLE[`finding_${node.severity}`] || STYLE.finding_info;
-  }
+  if (node.type === "finding") return STYLE[`finding_${node.severity}`] || STYLE.finding_info;
   return STYLE[node.type] || STYLE.finding_info;
 }
 
-/** Unicode icon for each node type. */
 const ICON = {
   scanner:    "◎",
   host:       "▦",
@@ -75,47 +75,52 @@ const ICON = {
   compromise: "⊗",
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+const SEV_LABEL = { high: "HIGH", medium: "MED", low: "LOW", info: "INFO" };
+const SEV_COLOR = { high: "#ef4444", medium: "#f97316", low: "#fbbf24", info: "#6b7280" };
 
-/** Cubic bezier path with vertical control arms. */
+// ── Helper functions ─────────────────────────────────────────────────────────
+
 function bezier(x1, y1, x2, y2) {
   const cx = (x1 + x2) / 2;
   return `M${x1} ${y1} C${cx} ${y1},${cx} ${y2},${x2} ${y2}`;
 }
 
-/** Format elapsed milliseconds as mm:ss. */
 function fmtMs(ms) {
   const s = Math.floor(ms / 1000);
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-/** Trim a URL/string to a displayable label. */
 function shortLabel(str, max = 24) {
   if (!str) return "";
   const s = str.replace(/^https?:\/\//, "");
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
-// ── Graph data builder ────────────────────────────────────────────────────
+function classifyFinding(title, category, severity, exploitability) {
+  const tl = (title    || "").toLowerCase();
+  const cl = (category || "").toLowerCase();
+  if (
+    (severity === "high" && exploitability?.reachable) ||
+    tl.includes("rce") || tl.includes("remote code") ||
+    tl.includes("takeover") || tl.includes("bypass") ||
+    tl.includes("injection")
+  ) return "compromise";
+  if (
+    cl.includes("exposure") ||
+    tl.includes("credential") || tl.includes("password") ||
+    tl.includes("token")      || tl.includes("secret")   ||
+    tl.includes("api key")
+  ) return "credential";
+  return "finding";
+}
 
-/**
- * Build nodes + edges from a ScanJob and optional live event stream.
- * Returns { nodes, edges, scanStart, scanEnd }.
- */
+// ── Graph data builder ────────────────────────────────────────────────────────
+
 function buildGraph(job, liveEvents) {
   const scanStart = new Date(job.startedAt).getTime();
   const scanEnd   = job.completedAt
     ? new Date(job.completedAt).getTime()
     : Date.now();
-  const totalMs = Math.max(scanEnd - scanStart, 1000);
-
-  // Index finding timestamps from SSE stream (more accurate than estimation).
-  const findingTs = {};
-  for (const e of liveEvents || []) {
-    if (e.type === "finding" && e.findingTitle && e.timestamp) {
-      findingTs[e.findingTitle] = new Date(e.timestamp).getTime();
-    }
-  }
 
   const nodeMap = new Map();
   const edges   = [];
@@ -124,130 +129,109 @@ function buildGraph(job, liveEvents) {
     if (!nodeMap.has(node.id)) nodeMap.set(node.id, node);
   }
 
-  // ── 1. Scanner / origin ────────────────────────────────────────────────
+  // Origin / scanner node
   let targetHost = job.target;
   try { targetHost = new URL(job.target).hostname; } catch { /* keep raw */ }
-  add({
-    id:       "__scanner__",
-    type:     "scanner",
-    label:    "Auto BugHunter",
-    sublabel: targetHost,
-    ts:       scanStart,
-    finding:  null,
-  });
+  add({ id: "__scanner__", type: "scanner", label: "Auto BugHunter", sublabel: targetHost, ts: scanStart, finding: null });
 
-  // ── 2. Discovered assets ───────────────────────────────────────────────
-  for (const asset of job.assets || []) {
-    const t  = new Date(asset.discoveredAt).getTime();
-    const at = (asset.assetType || "").toLowerCase();
-    let type;
-    if (["host", "subdomain", "domain"].includes(at))                  type = "host";
-    else if (["endpoint", "url", "port", "service", "path"].includes(at)) type = "service";
-    else continue;
-
-    add({
-      id:       asset.assetKey,
-      type,
-      label:    type === "host" ? "Found Host" : "Found Service",
-      sublabel: shortLabel(asset.assetKey),
-      ts:       Math.max(scanStart, Math.min(t, scanEnd)),
-      finding:  null,
-    });
-  }
-
-  // ── 3. Findings ────────────────────────────────────────────────────────
-  const allFindings = job.findings || [];
-  for (const [i, f] of allFindings.entries()) {
-    const id = f.id || `__f${i}__`;
-    // Spread findings evenly across the second half of the scan timeline
-    // when no live timestamp is available.
-    const estimated = scanStart + totalMs * 0.35
-      + (i / Math.max(allFindings.length, 1)) * totalMs * 0.6;
-    const t = findingTs[f.title] || estimated;
-
-    const tl = (f.title    || "").toLowerCase();
-    const cl = (f.category || "").toLowerCase();
-
-    let type = "finding";
-    if (
-      (f.severity === "high" && f.exploitability?.reachable) ||
-      tl.includes("rce") || tl.includes("remote code") ||
-      tl.includes("takeover") || tl.includes("bypass") ||
-      tl.includes("injection")
-    ) {
-      type = "compromise";
-    } else if (
-      cl.includes("exposure") ||
-      tl.includes("credential") || tl.includes("password") ||
-      tl.includes("token")      || tl.includes("secret")   ||
-      tl.includes("api key")
-    ) {
-      type = "credential";
-    }
-
-    add({
-      id,
-      type,
-      severity: f.severity || "info",
-      label:    f.title,
-      sublabel: shortLabel(f.affectedUrl || ""),
-      ts:       Math.max(scanStart, Math.min(t, scanEnd)),
-      finding:  f,
-    });
-  }
-
-  // ── 4. Edges from explicit asset links ────────────────────────────────
-  for (const link of job.assetLinks || []) {
-    if (nodeMap.has(link.fromKey) && nodeMap.has(link.toKey)) {
-      edges.push({ from: link.fromKey, to: link.toKey });
+  // Index finding events from SSE stream (timestamps + basic metadata)
+  const liveFindingMap = {};
+  for (const e of liveEvents || []) {
+    if (e.type === "finding" && e.findingTitle && e.timestamp) {
+      liveFindingMap[e.findingTitle] = {
+        ts:        new Date(e.timestamp).getTime(),
+        severity:  e.severity  || "info",
+        agentName: e.agentName || "",
+      };
     }
   }
 
-  const hosts    = [...nodeMap.values()].filter(n => n.type === "host")
-    .sort((a, b) => a.ts - b.ts);
-  const services = [...nodeMap.values()].filter(n => n.type === "service");
+  const isComplete = !!job.completedAt;
 
-  // ── 5. Scanner → earliest host (or directly to findings) ──────────────
-  if (hosts.length > 0) {
-    edges.push({ from: "__scanner__", to: hosts[0].id });
-  }
-
-  // ── 6. Host → service (URL substring match) ───────────────────────────
-  for (const svc of services) {
-    const h = hosts.find(h => svc.id.includes(h.id));
-    if (h && !edges.some(e => e.from === h.id && e.to === svc.id)) {
-      edges.push({ from: h.id, to: svc.id });
+  if (isComplete) {
+    // ── Post-completion: use full job data ────────────────────────────────
+    for (const asset of job.assets || []) {
+      const at = (asset.assetType || "").toLowerCase();
+      let type;
+      if (["host", "subdomain", "domain"].includes(at))                      type = "host";
+      else if (["endpoint", "url", "port", "service", "path"].includes(at))  type = "service";
+      else continue;
+      const t = new Date(asset.discoveredAt).getTime();
+      add({
+        id: asset.assetKey, type,
+        label:    type === "host" ? "Found Host" : "Found Service",
+        sublabel: shortLabel(asset.assetKey),
+        ts:       Math.max(scanStart, Math.min(t, scanEnd)),
+        finding:  null,
+      });
     }
-  }
 
-  // ── 7. Service / host / scanner → finding via affectedUrl ─────────────
-  const findingNodes = [...nodeMap.values()].filter(n =>
-    ["finding", "credential", "compromise"].includes(n.type)
-  );
-  for (const fn of findingNodes) {
-    if (edges.some(e => e.to === fn.id)) continue; // already wired
+    const allFindings = job.findings || [];
+    for (const [i, f] of allFindings.entries()) {
+      const id        = f.id || `__f${i}__`;
+      const liveInfo  = liveFindingMap[f.title];
+      const estimated = scanStart + (scanEnd - scanStart) * 0.35
+        + (i / Math.max(allFindings.length, 1)) * (scanEnd - scanStart) * 0.6;
+      const ts   = liveInfo?.ts || estimated;
+      const type = classifyFinding(f.title, f.category, f.severity, f.exploitability);
+      add({ id, type, severity: f.severity || "info", label: f.title, sublabel: shortLabel(f.affectedUrl || ""), ts: Math.max(scanStart, Math.min(ts, scanEnd)), finding: f });
+    }
 
-    const au = fn.finding?.affectedUrl;
-    if (!au) {
-      const anchor = hosts[0]?.id || "__scanner__";
+    // Edges from explicit asset links
+    for (const link of job.assetLinks || []) {
+      if (nodeMap.has(link.fromKey) && nodeMap.has(link.toKey)) {
+        edges.push({ from: link.fromKey, to: link.toKey });
+      }
+    }
+
+    const hosts    = [...nodeMap.values()].filter(n => n.type === "host").sort((a, b) => a.ts - b.ts);
+    const services = [...nodeMap.values()].filter(n => n.type === "service");
+    if (hosts.length > 0) edges.push({ from: "__scanner__", to: hosts[0].id });
+    for (const svc of services) {
+      const h = hosts.find(h => svc.id.includes(h.id));
+      if (h && !edges.some(e => e.from === h.id && e.to === svc.id)) {
+        edges.push({ from: h.id, to: svc.id });
+      }
+    }
+    const findingNodes = [...nodeMap.values()].filter(n => ["finding", "credential", "compromise"].includes(n.type));
+    for (const fn of findingNodes) {
+      if (edges.some(e => e.to === fn.id)) continue;
+      const au       = fn.finding?.affectedUrl;
+      const anchor   = au
+        ? (services.find(s => au.startsWith(s.id) || s.id.startsWith(au.split("?")[0]))?.id
+          || hosts.find(h => au.includes(h.id))?.id
+          || hosts[0]?.id
+          || "__scanner__")
+        : (hosts[0]?.id || "__scanner__");
       edges.push({ from: anchor, to: fn.id });
-      continue;
     }
-    const svcMatch  = services.find(s => au.startsWith(s.id) || s.id.startsWith(au.split("?")[0]));
-    const hostMatch = hosts.find(h => au.includes(h.id));
-    const anchor    = svcMatch?.id || hostMatch?.id || hosts[0]?.id || "__scanner__";
-    edges.push({ from: anchor, to: fn.id });
+
+  } else {
+    // ── Live: build finding nodes from SSE stream ─────────────────────────
+    for (const [title, info] of Object.entries(liveFindingMap)) {
+      const id   = `live_${title}`;
+      const type = classifyFinding(title, "", info.severity, null);
+      add({
+        id, type,
+        severity: info.severity,
+        label:    title,
+        sublabel: info.agentName,
+        ts:       Math.max(scanStart, Math.min(info.ts, scanEnd)),
+        finding:  null,
+        live:     true,
+      });
+    }
+    // Wire all live nodes directly to the scanner origin
+    for (const node of nodeMap.values()) {
+      if (node.type !== "scanner") edges.push({ from: "__scanner__", to: node.id });
+    }
   }
 
   return { nodes: [...nodeMap.values()], edges, scanStart, scanEnd };
 }
 
-// ── Layout ────────────────────────────────────────────────────────────────
+// ── Layout ────────────────────────────────────────────────────────────────────
 
-/**
- * Assign (lx, ly) canvas coordinates to each node.
- * x = proportional to elapsed time, y = tier with overlap avoidance.
- */
 function computeLayout(nodes, scanStart, scanEnd) {
   const totalMs = Math.max(scanEnd - scanStart, 1);
   const usableW = SVG_W - PAD_L - PAD_R;
@@ -259,17 +243,19 @@ function computeLayout(nodes, scanStart, scanEnd) {
     const rawX    = PAD_L + (elapsed / totalMs) * usableW;
     const baseY   = TIER_Y[node.type] || TIER_Y.finding;
 
-    // Try vertical offsets to avoid collision with previously placed nodes.
-    // Offsets alternate above/below the tier baseline in increasing magnitude.
-    const offsets = [0, COLLISION_STEP, -COLLISION_STEP,
-                     COLLISION_STEP * 2, -COLLISION_STEP * 2, COLLISION_STEP * 3];
+    const offsets = [
+      0,
+      COLLISION_STEP, -COLLISION_STEP,
+      COLLISION_STEP * 2, -COLLISION_STEP * 2,
+      COLLISION_STEP * 3,
+    ];
     let y = baseY;
     for (const off of offsets) {
-      const ty = baseY + off;
+      const ty      = baseY + off;
       const blocked = placed.some(
         p => p.type === node.type
           && Math.abs(p.lx - rawX) < COLLISION_RADIUS_MULTIPLIER * R
-          && Math.abs(p.ly - ty)  < COLLISION_RADIUS_MULTIPLIER * R
+          && Math.abs(p.ly - ty)  < COLLISION_RADIUS_MULTIPLIER * R,
       );
       if (!blocked) { y = ty; break; }
     }
@@ -280,151 +266,438 @@ function computeLayout(nodes, scanStart, scanEnd) {
   });
 }
 
-// ── Main component ────────────────────────────────────────────────────────
+// ── Activity log entry formatter ──────────────────────────────────────────────
 
-const SEV_LABEL = { high: "HIGH", medium: "MED", low: "LOW", info: "INFO" };
-const SEV_COLOR = { high: "#ef4444", medium: "#f97316", low: "#fbbf24", info: "#6b7280" };
+function formatActivity(evt) {
+  switch (evt.type) {
+    case "agent_start":
+      return { icon: "▶", color: "#a78bfa", text: `Starting: ${evt.agentName}` };
+    case "agent_complete":
+      return { icon: "✔", color: "#4ade80", text: evt.message || `${evt.agentName} completed` };
+    case "agent_spawned":
+      return { icon: "⚡", color: "#fde68a", text: evt.message || `Spawned: ${evt.agentName}` };
+    case "finding": {
+      const c = SEV_COLOR[evt.severity] || "#9ca3af";
+      return { icon: "⚠", color: c, text: `[${(evt.severity || "info").toUpperCase()}] ${evt.findingTitle}` };
+    }
+    case "command":
+      return { icon: "$", color: "#79c0ff", text: evt.command || evt.message };
+    case "screenshot":
+      return { icon: "📷", color: "#c084fc", text: evt.message || "Screenshot captured", screenshot: evt.screenshot };
+    default:
+      return { icon: "·", color: "#9ca3af", text: evt.message || "" };
+  }
+}
 
-export default function AttackGraph({ job, liveEvents = [] }) {
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function ActivityLog({ events, scanStart, onScreenshot }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [events]);
+
+  const loggable = (events || []).filter(e =>
+    e.type !== "screenshot" ||
+    (e.type === "screenshot" && e.message)
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{
+        fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.07em",
+        color: "rgba(255,255,255,0.4)", textTransform: "uppercase",
+        padding: "8px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+      }}>
+        Activity Log
+      </div>
+      <div
+        ref={ref}
+        style={{
+          flex: 1, overflowY: "auto",
+          padding: "6px 10px",
+          fontFamily: "monospace", fontSize: "0.72rem", lineHeight: 1.7,
+        }}
+      >
+        {loggable.length === 0 && (
+          <div style={{ color: "rgba(255,255,255,0.3)", padding: "6px 0" }}>
+            Waiting for activity…
+          </div>
+        )}
+        {loggable.map((evt, idx) => {
+          const { icon, color, text, screenshot } = formatActivity(evt);
+          const elapsed = scanStart ? Math.max(0, new Date(evt.timestamp).getTime() - scanStart) : 0;
+          return (
+            <div key={idx} style={{ display: "flex", gap: "6px", alignItems: "flex-start", marginBottom: "1px" }}>
+              <span style={{ color: "rgba(255,255,255,0.3)", flexShrink: 0, minWidth: "44px", fontSize: "0.68rem" }}>
+                {fmtMs(elapsed)}
+              </span>
+              <span style={{ color, flexShrink: 0, width: "14px" }}>{icon}</span>
+              <span style={{ color: "rgba(255,255,255,0.78)", flex: 1, wordBreak: "break-all" }}>
+                {text}
+                {screenshot && onScreenshot && (
+                  <button
+                    onClick={() => onScreenshot(screenshot)}
+                    style={{
+                      marginLeft: "6px", background: "none",
+                      border: "1px solid rgba(192,132,252,0.4)",
+                      color: "#c084fc", cursor: "pointer",
+                      fontSize: "0.62rem", borderRadius: "3px",
+                      padding: "0 4px",
+                    }}
+                  >view</button>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FindingDetail({ node, scanStart }) {
+  if (!node) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        height: "100%", color: "rgba(255,255,255,0.25)",
+        fontSize: "0.8rem", textAlign: "center", padding: "16px",
+      }}>
+        Click a node in the graph<br />to see details here
+      </div>
+    );
+  }
+
+  const st = nodeStyle(node);
+
+  return (
+    <div style={{ padding: "10px 14px", overflowY: "auto", height: "100%" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", marginBottom: "8px" }}>
+        <span style={{ fontSize: "1.5rem", color: st.stroke, flexShrink: 0 }}>{ICON[node.type]}</span>
+        <div>
+          {node.finding && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+              <span style={{
+                background: SEV_COLOR[node.severity] || "#6b7280",
+                color: "#fff", padding: "1px 7px", borderRadius: "999px",
+                fontSize: "0.65rem", fontWeight: 700, flexShrink: 0,
+              }}>
+                {(node.severity || "info").toUpperCase()}
+              </span>
+            </div>
+          )}
+          <div style={{ fontWeight: 700, fontSize: "0.88rem", color: "#fff", lineHeight: 1.3 }}>
+            {node.label}
+          </div>
+          {node.sublabel && (
+            <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.4)", fontFamily: "monospace", marginTop: "2px" }}>
+              {node.sublabel}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Metadata table */}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.74rem", marginBottom: "8px" }}>
+        <tbody>
+          <tr>
+            <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Type</td>
+            <td style={{ color: st.stroke, fontWeight: 600 }}>{node.type}</td>
+          </tr>
+          {scanStart > 0 && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>T+</td>
+              <td style={{ fontFamily: "monospace" }}>{fmtMs(Math.max(0, node.ts - scanStart))}</td>
+            </tr>
+          )}
+          {node.finding?.cvssScore > 0 && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>CVSS</td>
+              <td>{node.finding.cvssScore.toFixed(1)}</td>
+            </tr>
+          )}
+          {node.finding?.cwe && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>CWE</td>
+              <td style={{ fontFamily: "monospace" }}>{node.finding.cwe}</td>
+            </tr>
+          )}
+          {node.finding?.owaspCategory && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>OWASP</td>
+              <td>{node.finding.owaspCategory}</td>
+            </tr>
+          )}
+          {node.finding?.affectedUrl && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>URL</td>
+              <td style={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "0.68rem" }}>
+                {node.finding.affectedUrl}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      {/* Description */}
+      {node.finding?.description && (
+        <div style={{ marginBottom: "8px" }}>
+          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "3px" }}>
+            Description
+          </div>
+          <p style={{ margin: 0, lineHeight: 1.5, fontSize: "0.76rem", color: "rgba(255,255,255,0.8)" }}>
+            {node.finding.description}
+          </p>
+        </div>
+      )}
+
+      {/* Mitigations */}
+      {node.finding?.recommendation && (
+        <div style={{ marginBottom: "8px" }}>
+          <div style={{ color: "#4ade80", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "3px" }}>
+            Mitigations
+          </div>
+          <p style={{ margin: 0, lineHeight: 1.5, fontSize: "0.76rem", color: "rgba(255,255,255,0.8)" }}>
+            {node.finding.recommendation}
+          </p>
+        </div>
+      )}
+
+      {/* Evidence */}
+      {node.finding?.evidence && (
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "3px" }}>
+            Evidence
+          </div>
+          <pre style={{
+            margin: 0, padding: "6px 8px",
+            background: "#0d0b14", borderRadius: "6px",
+            fontSize: "0.68rem", overflowX: "auto",
+            maxHeight: "80px", lineHeight: 1.4,
+            border: "1px solid rgba(124,58,237,0.2)",
+            color: "#79c0ff",
+          }}>
+            {node.finding.evidence}
+          </pre>
+        </div>
+      )}
+
+      {/* No-finding fallback */}
+      {!node.finding && node.type !== "scanner" && (
+        <p style={{ margin: 0, color: "rgba(255,255,255,0.4)", fontSize: "0.76rem" }}>
+          Asset discovered {scanStart > 0 ? `at T+${fmtMs(Math.max(0, node.ts - scanStart))}` : ""}.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Main export ────────────────────────────────────────────────────────────────
+
+export default function AttackGraph({ job, liveEvents = [], isRunning = false, onScreenshot }) {
   const [selected, setSelected] = useState(null);
+  const [nowMs,    setNowMs]    = useState(() => Date.now());
 
-  // Build and lay out the graph every time job/events change.
+  // Live elapsed timer – ticks every second while the scan is running.
+  useEffect(() => {
+    if (!isRunning) return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [isRunning]);
+
+  // Build + lay out the graph every time job or events change.
   const laid = useMemo(() => {
-    if (!job) return [];
+    if (!job) return null;
     const { nodes, edges, scanStart, scanEnd } = buildGraph(job, liveEvents);
-    const laidNodes = computeLayout(nodes, scanStart, scanEnd);
-    return { nodes: laidNodes, edges, scanStart, scanEnd };
+    return { nodes: computeLayout(nodes, scanStart, scanEnd), edges, scanStart, scanEnd };
   }, [job, liveEvents]);
 
-  if (!job) return null;
-
+  if (!job || !laid) return null;
   const { nodes, edges, scanStart, scanEnd } = laid;
   if (!nodes || nodes.length === 0) return null;
 
-  // Build a lookup map for edge rendering.
   const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
 
-  // Stats from job findings.
+  // ── Stats ─────────────────────────────────────────────────────────────────
+  // Use job.findings when complete; otherwise count from SSE events.
+  const completedFindings = job.findings || [];
+  const liveFindingEvents = (liveEvents || []).filter(e => e.type === "finding");
+  const findings = completedFindings.length > 0 ? completedFindings : liveFindingEvents;
   const sev = { high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of job.findings || []) sev[f.severity] = (sev[f.severity] || 0) + 1;
-  const hostCount    = (job.assets || []).filter(a => ["host","subdomain","domain"].includes((a.assetType||"").toLowerCase())).length;
-  const serviceCount = (job.assets || []).filter(a => ["endpoint","url","port","service","path"].includes((a.assetType||"").toLowerCase())).length;
+  for (const f of findings) {
+    const s = f.severity || "info";
+    sev[s] = (sev[s] || 0) + 1;
+  }
+  const hostCount    = completedFindings.length > 0
+    ? (job.assets || []).filter(a => ["host","subdomain","domain"].includes((a.assetType||"").toLowerCase())).length
+    : nodes.filter(n => n.type === "host").length;
+  const serviceCount = completedFindings.length > 0
+    ? (job.assets || []).filter(a => ["endpoint","url","port","service","path"].includes((a.assetType||"").toLowerCase())).length
+    : nodes.filter(n => n.type === "service").length;
 
-  // Timeline ticks (6 evenly spaced).
+  // ── Elapsed time ──────────────────────────────────────────────────────────
+  const elapsedMs = scanStart
+    ? Math.max(0, (isRunning ? nowMs : (job.completedAt ? new Date(job.completedAt).getTime() : nowMs)) - scanStart)
+    : 0;
+
+  // ── Currently running agent ───────────────────────────────────────────────
+  const completedAgents = new Set(
+    (liveEvents || []).filter(e => e.type === "agent_complete").map(e => e.agentName)
+  );
+  let currentAgent = "";
+  for (let i = (liveEvents || []).length - 1; i >= 0; i--) {
+    const e = liveEvents[i];
+    if (e.type === "agent_start" && !completedAgents.has(e.agentName)) {
+      currentAgent = e.agentName;
+      break;
+    }
+  }
+
+  // ── Timeline ticks ────────────────────────────────────────────────────────
   const TICK_COUNT = 6;
   const ticks = Array.from({ length: TICK_COUNT + 1 }, (_, i) => ({
-    x:   PAD_L + ((SVG_W - PAD_L - PAD_R) * i) / TICK_COUNT,
-    ms:  ((scanEnd - scanStart) * i) / TICK_COUNT,
+    x:  PAD_L + ((SVG_W - PAD_L - PAD_R) * i) / TICK_COUNT,
+    ms: ((scanEnd - scanStart) * i) / TICK_COUNT,
   }));
 
   const selectedNode = selected ? byId[selected] : null;
 
   return (
-    <div style={{ width: "100%" }}>
-      {/* ── Stats row ─────────────────────────────────────────────────── */}
+    <div style={{ width: "100%", color: "rgba(255,255,255,0.85)" }}>
+
+      {/* ── Header bar ──────────────────────────────────────────────────── */}
       <div style={{
-        display: "flex", gap: "10px", flexWrap: "wrap",
-        marginBottom: "10px", fontSize: "0.8rem",
+        background: "rgba(0,0,0,0.5)",
+        border: "1px solid rgba(124,58,237,0.2)",
+        borderRadius: "10px 10px 0 0",
+        padding: "8px 14px",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        flexWrap: "wrap", gap: "8px",
+        fontSize: "0.8rem",
+      }}>
+        {/* Left: target + status */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>target:</span>
+          <span style={{ fontWeight: 700, fontFamily: "monospace", color: "#c4b5fd" }}>
+            {(() => { try { return new URL(job.target).hostname; } catch { return job.target; } })()}
+          </span>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: "5px",
+            padding: "1px 8px", borderRadius: "999px", fontSize: "0.7rem", fontWeight: 700,
+            background: isRunning ? "rgba(74,222,128,0.15)" : (job.status === "completed" ? "rgba(96,165,250,0.15)" : "rgba(239,68,68,0.15)"),
+            border: `1px solid ${isRunning ? "#4ade80" : (job.status === "completed" ? "#60a5fa" : "#ef4444")}55`,
+            color: isRunning ? "#4ade80" : (job.status === "completed" ? "#60a5fa" : "#ef4444"),
+          }}>
+            {isRunning && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", display: "inline-block", animation: "ag-pulse 1s infinite" }} />}
+            {isRunning ? "RUNNING" : job.status?.toUpperCase()}
+          </span>
+          {isRunning && currentAgent && (
+            <span style={{ color: "#a78bfa", fontSize: "0.72rem", fontFamily: "monospace" }}>
+              [{currentAgent}]
+            </span>
+          )}
+        </div>
+
+        {/* Right: elapsed time */}
+        <div style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.5)", fontSize: "0.78rem" }}>
+          {fmtMs(elapsedMs)}
+        </div>
+      </div>
+
+      {/* ── Stat pills row ───────────────────────────────────────────────── */}
+      <div style={{
+        background: "rgba(0,0,0,0.35)",
+        borderLeft: "1px solid rgba(124,58,237,0.2)",
+        borderRight: "1px solid rgba(124,58,237,0.2)",
+        padding: "6px 14px",
+        display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap",
+        fontSize: "0.75rem",
       }}>
         {[
-          { label: "High",    count: sev.high,    color: SEV_COLOR.high },
-          { label: "Medium",  count: sev.medium,  color: SEV_COLOR.medium },
-          { label: "Low",     count: sev.low,     color: SEV_COLOR.low },
-          { label: "Info",    count: sev.info,    color: SEV_COLOR.info },
-          { label: "Hosts",   count: hostCount,    color: "#60a5fa" },
-          { label: "Services",count: serviceCount, color: "#4ade80" },
+          { label: "High",     count: sev.high,     color: SEV_COLOR.high },
+          { label: "Med",      count: sev.medium,   color: SEV_COLOR.medium },
+          { label: "Low",      count: sev.low,      color: SEV_COLOR.low },
+          { label: "Info",     count: sev.info,     color: SEV_COLOR.info },
+          { label: "Hosts",    count: hostCount,    color: "#60a5fa" },
+          { label: "Services", count: serviceCount, color: "#4ade80" },
         ].map(({ label, count, color }) => (
           <span key={label} style={{
-            background: "rgba(0,0,0,0.55)",
-            border: `1px solid ${color}44`,
-            color: "#fff",
-            borderRadius: "999px",
-            padding: "2px 10px",
-            display: "flex", alignItems: "center", gap: "6px",
+            display: "inline-flex", alignItems: "center", gap: "5px",
+            background: "rgba(0,0,0,0.4)",
+            border: `1px solid ${color}33`,
+            borderRadius: "999px", padding: "1px 8px",
           }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, display: "inline-block" }} />
-            <strong style={{ color }}>{count}</strong> {label}
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />
+            <strong style={{ color }}>{count}</strong>
+            <span style={{ color: "rgba(255,255,255,0.5)" }}>{label}</span>
           </span>
         ))}
       </div>
 
-      {/* ── Graph SVG ─────────────────────────────────────────────────── */}
+      {/* ── Graph SVG ────────────────────────────────────────────────────── */}
       <div style={{ width: "100%", overflowX: "auto" }}>
         <svg
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
           width="100%"
           style={{
             background: "rgba(0,0,0,0.5)",
-            borderRadius: "12px",
             minWidth: "680px",
-            border: "1px solid rgba(255,255,255,0.08)",
+            borderLeft: "1px solid rgba(124,58,237,0.2)",
+            borderRight: "1px solid rgba(124,58,237,0.2)",
           }}
         >
           <defs>
             <marker id="ag-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
               <polygon points="0 0,8 3,0 6" fill="rgba(255,255,255,0.25)" />
             </marker>
-            {/* Glow filter for selected node */}
             <filter id="ag-glow">
               <feGaussianBlur stdDeviation="4" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
-            {/* Subtle pulse filter for compromise nodes */}
             <filter id="ag-danger">
               <feGaussianBlur stdDeviation="2" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
           </defs>
 
-          {/* ── Timeline axis ─────────────────────────────────────────── */}
-          <line
-            x1={PAD_L} y1={TL_Y}
-            x2={SVG_W - PAD_R} y2={TL_Y}
-            stroke="rgba(255,255,255,0.15)" strokeWidth="1"
-          />
+          {/* Timeline axis */}
+          <line x1={PAD_L} y1={TL_Y} x2={SVG_W - PAD_R} y2={TL_Y} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
           {ticks.map((tk, i) => (
             <g key={i}>
-              <line
-                x1={tk.x} y1={TL_Y - 5}
-                x2={tk.x} y2={TL_Y + 5}
-                stroke="rgba(255,255,255,0.2)" strokeWidth="1"
-              />
-              <text
-                x={tk.x} y={TL_Y + 16}
-                textAnchor="middle" fontSize="9"
-                fill="rgba(255,255,255,0.4)"
-                fontFamily="monospace"
-              >
+              <line x1={tk.x} y1={TL_Y - 4} x2={tk.x} y2={TL_Y + 4} stroke="rgba(255,255,255,0.18)" strokeWidth="1" />
+              <text x={tk.x} y={TL_Y + 14} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.35)" fontFamily="monospace">
                 {fmtMs(tk.ms)}
               </text>
             </g>
           ))}
 
-          {/* ── Edges ─────────────────────────────────────────────────── */}
+          {/* Edges */}
           {edges.map((e, i) => {
             const a = byId[e.from], b = byId[e.to];
             if (!a || !b) return null;
-            const isToCompromise = b.type === "compromise";
+            const toCompromise = b.type === "compromise";
             return (
               <path
                 key={i}
                 d={bezier(a.lx, a.ly, b.lx, b.ly)}
-                stroke={isToCompromise ? "rgba(244,63,94,0.45)" : "rgba(255,255,255,0.18)"}
-                strokeWidth={isToCompromise ? "1.8" : "1.4"}
-                strokeDasharray={isToCompromise ? "5 3" : undefined}
+                stroke={toCompromise ? "rgba(244,63,94,0.4)" : "rgba(167,139,250,0.2)"}
+                strokeWidth={toCompromise ? "1.8" : "1.4"}
+                strokeDasharray={toCompromise ? "5 3" : undefined}
                 fill="none"
                 markerEnd="url(#ag-arrow)"
               />
             );
           })}
 
-          {/* ── Nodes ─────────────────────────────────────────────────── */}
+          {/* Nodes */}
           {nodes.map(node => {
-            const st      = nodeStyle(node);
-            const isSelected  = selected === node.id;
-            const isCompromise = node.type === "compromise";
-            const isHighFinding = node.type === "finding" && node.severity === "high";
-            const showProof = isHighFinding || isCompromise;
+            const st          = nodeStyle(node);
+            const isSel       = selected === node.id;
+            const isComp      = node.type === "compromise";
+            const isHighFind  = node.type === "finding" && node.severity === "high";
+            const showBadge   = isHighFind || isComp;
             const labelLines  = node.label.length > LABEL_FIRST_LINE_MAX
               ? [node.label.slice(0, LABEL_FIRST_LINE_MAX), node.label.slice(LABEL_FIRST_LINE_MAX, LABEL_SECOND_LINE_MAX)]
               : [node.label];
@@ -433,125 +706,83 @@ export default function AttackGraph({ job, liveEvents = [] }) {
               <g
                 key={node.id}
                 transform={`translate(${node.lx},${node.ly})`}
-                onClick={() => setSelected(selected === node.id ? null : node.id)}
+                onClick={() => setSelected(isSel ? null : node.id)}
                 style={{ cursor: "pointer" }}
               >
-                {/* Selection / danger glow ring */}
-                {(isSelected || isCompromise) && (
+                {(isSel || isComp) && (
                   <circle
-                    r={R + 10}
-                    fill="none"
-                    stroke={isCompromise ? "#f43f5e" : "#fff"}
-                    strokeWidth={isSelected ? "2" : "1"}
-                    opacity={isSelected ? "0.7" : "0.3"}
+                    r={R + 10} fill="none"
+                    stroke={isComp ? "#f43f5e" : "#a78bfa"}
+                    strokeWidth={isSel ? "2" : "1"}
+                    opacity={isSel ? "0.7" : "0.3"}
                     filter="url(#ag-glow)"
                   >
-                    {isSelected && (
-                      <animate attributeName="opacity" values="0.7;0.3;0.7" dur="1.6s" repeatCount="indefinite" />
-                    )}
+                    {isSel && <animate attributeName="opacity" values="0.7;0.3;0.7" dur="1.6s" repeatCount="indefinite" />}
                   </circle>
                 )}
 
-                {/* Main circle */}
                 <circle
                   r={R}
                   fill={st.fill}
-                  stroke={isSelected ? "#fff" : st.stroke}
-                  strokeWidth={isSelected ? "2.5" : "2"}
-                  filter={isCompromise ? "url(#ag-danger)" : undefined}
+                  stroke={isSel ? "#a78bfa" : st.stroke}
+                  strokeWidth={isSel ? "2.5" : "2"}
+                  filter={isComp ? "url(#ag-danger)" : undefined}
                 />
 
-                {/* Type icon */}
-                <text
-                  y="1" textAnchor="middle" dominantBaseline="middle"
-                  fontSize="13" fill={st.text}
-                  style={{ userSelect: "none", pointerEvents: "none" }}
-                >
+                <text y="1" textAnchor="middle" dominantBaseline="middle" fontSize="13" fill={st.text}
+                  style={{ userSelect: "none", pointerEvents: "none" }}>
                   {ICON[node.type] || "·"}
                 </text>
 
-                {/* Severity dot (findings only) */}
                 {node.finding && (
-                  <circle
-                    cx={R - 6} cy={-(R - 6)}
-                    r="5"
-                    fill={SEV_COLOR[node.severity] || "#6b7280"}
-                    stroke="#000" strokeWidth="1"
-                  />
+                  <circle cx={R - 6} cy={-(R - 6)} r="5" fill={SEV_COLOR[node.severity] || "#6b7280"} stroke="#000" strokeWidth="1" />
                 )}
 
-                {/* PROOF / COMPROMISE badge */}
-                {showProof && (
+                {showBadge && (
                   <g transform={`translate(0,${R + 10})`}>
                     <rect
-                      x={isCompromise ? -38 : -22}
-                      y="0" rx="3"
-                      width={isCompromise ? 76 : 44}
-                      height="14"
-                      fill={isCompromise ? "#7f1d1d" : "#450a0a"}
-                      stroke={isCompromise ? "#f43f5e" : "#ef4444"}
-                      strokeWidth="1"
+                      x={isComp ? -38 : -22} y="0" rx="3"
+                      width={isComp ? 76 : 44} height="14"
+                      fill={isComp ? "#3b0808" : "#450a0a"}
+                      stroke={isComp ? "#f43f5e" : "#ef4444"} strokeWidth="1"
                     />
-                    <text
-                      textAnchor="middle" y="10"
-                      fontSize="7" fill="#fff"
-                      fontFamily="monospace" fontWeight="bold"
-                      style={{ userSelect: "none", pointerEvents: "none" }}
-                    >
-                      {isCompromise ? "HOST COMPROMISE" : "PROOF"}
+                    <text textAnchor="middle" y="10" fontSize="7" fill="#fff" fontFamily="monospace" fontWeight="bold"
+                      style={{ userSelect: "none", pointerEvents: "none" }}>
+                      {isComp ? "HOST COMPROMISE" : "PROOF"}
                     </text>
                   </g>
                 )}
 
-                {/* Node label (type) */}
-                <text
-                  y={-(R + 10)}
-                  textAnchor="middle"
-                  fontSize="8"
-                  fill="rgba(255,255,255,0.55)"
-                  fontFamily="monospace"
-                  style={{ userSelect: "none", pointerEvents: "none" }}
-                >
+                <text y={-(R + 10)} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.45)" fontFamily="monospace"
+                  style={{ userSelect: "none", pointerEvents: "none" }}>
                   {node.type === "finding" ? `${SEV_LABEL[node.severity] || "INFO"} finding` : node.type}
                 </text>
 
-                {/* Node label lines */}
                 {labelLines.map((line, li) => (
-                  <text
-                    key={li}
+                  <text key={li}
                     y={-(R + 22) - (labelLines.length - 1 - li) * 11}
-                    textAnchor="middle"
-                    fontSize="9"
-                    fontWeight="600"
-                    fill={isSelected ? "#fff" : "rgba(255,255,255,0.85)"}
+                    textAnchor="middle" fontSize="9" fontWeight="600"
+                    fill={isSel ? "#e9d5ff" : "rgba(255,255,255,0.85)"}
                     fontFamily="monospace"
-                    style={{ userSelect: "none", pointerEvents: "none" }}
-                  >
+                    style={{ userSelect: "none", pointerEvents: "none" }}>
                     {line}
                   </text>
                 ))}
 
-                {/* Sublabel (URL / hostname) */}
                 {node.sublabel && (
                   <text
                     y={-(R + (labelLines.length > 1 ? 46 : 34))}
-                    textAnchor="middle"
-                    fontSize="7.5"
-                    fill="rgba(255,255,255,0.4)"
-                    fontFamily="monospace"
-                    style={{ userSelect: "none", pointerEvents: "none" }}
-                  >
+                    textAnchor="middle" fontSize="7.5"
+                    fill="rgba(255,255,255,0.35)" fontFamily="monospace"
+                    style={{ userSelect: "none", pointerEvents: "none" }}>
                     {node.sublabel}
                   </text>
                 )}
 
-                {/* Vertical timeline drop-line */}
                 <line
-                  x1="0" y1={R + (showProof ? 24 : 2)}
+                  x1="0" y1={R + (showBadge ? 24 : 2)}
                   x2="0" y2={TL_Y - node.ly}
-                  stroke="rgba(255,255,255,0.07)"
-                  strokeWidth="1"
-                  strokeDasharray="3 4"
+                  stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="3 4"
                 />
               </g>
             );
@@ -559,154 +790,36 @@ export default function AttackGraph({ job, liveEvents = [] }) {
         </svg>
       </div>
 
-      {/* ── Legend ────────────────────────────────────────────────────── */}
+      {/* ── Bottom two-pane (Activity Log | Finding Detail) ─────────────── */}
       <div style={{
-        display: "flex", gap: "14px", flexWrap: "wrap",
-        padding: "6px 2px", marginTop: "6px", fontSize: "0.72rem",
-        color: "rgba(255,255,255,0.55)",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        background: "rgba(0,0,0,0.45)",
+        border: "1px solid rgba(124,58,237,0.2)",
+        borderRadius: "0 0 10px 10px",
+        height: "220px",
+        overflow: "hidden",
       }}>
-        {Object.entries(STYLE)
-          .filter(([k]) => !k.startsWith("finding_"))
-          .map(([type, s]) => (
-            <span key={type} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-              <span style={{
-                display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-                background: s.fill, border: `2px solid ${s.stroke}`,
-              }} />
-              {type}
-            </span>
-          ))}
-        <span style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: STYLE.finding_high.fill, border: `2px solid ${STYLE.finding_high.stroke}` }} />
-          finding (high)
-        </span>
-      </div>
-
-      {/* ── Detail panel ──────────────────────────────────────────────── */}
-      {selectedNode && (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "1rem",
-          marginTop: "1rem",
-          background: "rgba(0,0,0,0.45)",
-          border: "1px solid rgba(255,255,255,0.1)",
-          borderRadius: "10px",
-          padding: "1rem",
-          fontSize: "0.82rem",
-          color: "rgba(255,255,255,0.85)",
-        }}>
-          {/* Left: node metadata */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "0.5rem" }}>
-              <span style={{
-                fontSize: "1.4rem",
-                color: nodeStyle(selectedNode).stroke,
-              }}>
-                {ICON[selectedNode.type]}
-              </span>
-              <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>
-                {selectedNode.label}
-              </span>
-            </div>
-            {selectedNode.sublabel && (
-              <p style={{ margin: "0 0 0.4rem", color: "rgba(255,255,255,0.5)", fontFamily: "monospace", fontSize: "0.78rem" }}>
-                {selectedNode.sublabel}
-              </p>
-            )}
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
-              <tbody>
-                <tr>
-                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>Type</td>
-                  <td style={{ color: nodeStyle(selectedNode).stroke, fontWeight: 600 }}>{selectedNode.type}</td>
-                </tr>
-                {selectedNode.finding && (
-                  <>
-                    <tr>
-                      <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>Severity</td>
-                      <td style={{ color: SEV_COLOR[selectedNode.severity], fontWeight: 700 }}>
-                        {(selectedNode.severity || "").toUpperCase()}
-                      </td>
-                    </tr>
-                    {selectedNode.finding.cvssScore > 0 && (
-                      <tr>
-                        <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>CVSS</td>
-                        <td>{selectedNode.finding.cvssScore.toFixed(1)}</td>
-                      </tr>
-                    )}
-                    {selectedNode.finding.cwe && (
-                      <tr>
-                        <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>CWE</td>
-                        <td style={{ fontFamily: "monospace" }}>{selectedNode.finding.cwe}</td>
-                      </tr>
-                    )}
-                    {selectedNode.finding.owaspCategory && (
-                      <tr>
-                        <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>OWASP</td>
-                        <td>{selectedNode.finding.owaspCategory}</td>
-                      </tr>
-                    )}
-                    {selectedNode.finding.affectedUrl && (
-                      <tr>
-                        <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>URL</td>
-                        <td style={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "0.73rem" }}>
-                          {selectedNode.finding.affectedUrl}
-                        </td>
-                      </tr>
-                    )}
-                    <tr>
-                      <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>T+</td>
-                      <td style={{ fontFamily: "monospace" }}>{fmtMs(selectedNode.ts - (laid.scanStart || 0))}</td>
-                    </tr>
-                  </>
-                )}
-              </tbody>
-            </table>
+        <div style={{ borderRight: "1px solid rgba(124,58,237,0.15)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <ActivityLog events={liveEvents} scanStart={scanStart} onScreenshot={onScreenshot} />
+        </div>
+        <div style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{
+            fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.07em",
+            color: "rgba(255,255,255,0.4)", textTransform: "uppercase",
+            padding: "8px 12px 4px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            flexShrink: 0,
+          }}>
+            {selectedNode ? `${selectedNode.type} detail` : "Finding Detail"}
           </div>
-
-          {/* Right: finding details */}
-          <div>
-            {selectedNode.finding ? (
-              <>
-                {selectedNode.finding.description && (
-                  <div style={{ marginBottom: "0.6rem" }}>
-                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Description</div>
-                    <p style={{ margin: 0, lineHeight: 1.5, fontSize: "0.8rem" }}>{selectedNode.finding.description}</p>
-                  </div>
-                )}
-                {selectedNode.finding.recommendation && (
-                  <div style={{ marginBottom: "0.6rem" }}>
-                    <div style={{ color: "#4ade80", fontSize: "0.72rem", marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Mitigation</div>
-                    <p style={{ margin: 0, lineHeight: 1.5, fontSize: "0.8rem" }}>{selectedNode.finding.recommendation}</p>
-                  </div>
-                )}
-                {selectedNode.finding.evidence && (
-                  <div>
-                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Evidence</div>
-                    <pre style={{
-                      margin: 0, padding: "6px 8px",
-                      background: "#0d1117", borderRadius: "6px",
-                      fontSize: "0.72rem", overflowX: "auto",
-                      maxHeight: "100px", lineHeight: 1.4,
-                      border: "1px solid rgba(255,255,255,0.07)",
-                      color: "#79c0ff",
-                    }}>{selectedNode.finding.evidence}</pre>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ color: "rgba(255,255,255,0.4)", paddingTop: "1rem" }}>
-                {selectedNode.type === "scanner" && (
-                  <p>Scan target: <strong style={{ color: "#fff" }}>{job.target}</strong></p>
-                )}
-                {(selectedNode.type === "host" || selectedNode.type === "service") && (
-                  <p style={{ marginTop: 0 }}>Asset discovered at <strong style={{ color: "#fff", fontFamily: "monospace" }}>{fmtMs(selectedNode.ts - (laid.scanStart || 0))}</strong> into the scan.</p>
-                )}
-              </div>
-            )}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <FindingDetail node={selectedNode} scanStart={scanStart} />
           </div>
         </div>
-      )}
+      </div>
+
+      {/* Pulse keyframe */}
+      <style>{`@keyframes ag-pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }`}</style>
     </div>
   );
 }
