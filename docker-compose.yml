@@ -255,7 +255,7 @@ services:
 
   # Nikto web server scanner (Perl).
   nikto:
-    image: sullo/nikto:2.5.0
+    image: ghcr.io/sullo/nikto@sha256:0bb37022ebfadc38d6a9a2755c03bfd1f9e079e01e8946fe548153d9ba0c2012
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
