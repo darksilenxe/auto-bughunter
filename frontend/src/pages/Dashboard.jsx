@@ -41,7 +41,7 @@ export default function Dashboard() {
     if (programRules.trim()) {
       for (const line of programRules.split("\n")) {
         const t = line.trim();
-        if (t) scopeRules.push({ rule: t });
+        if (t) scopeRules.push(t);
       }
     }
 
@@ -50,9 +50,8 @@ export default function Dashboard() {
       authProfile: {
         headers, cookies,
         userAgent: userAgent || undefined,
-        basicAuth: basicAuthUsername
-          ? { username: basicAuthUsername, password: basicAuthPassword }
-          : undefined,
+        basicAuthUsername: basicAuthUsername || undefined,
+        basicAuthPassword: basicAuthPassword || undefined,
       },
       options: {
         useNucleiIntegration: useNuclei,
