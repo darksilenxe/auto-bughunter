@@ -117,7 +117,7 @@ export default function Dashboard() {
             </label>
           </div>
           <p className="meta" style={{ marginTop: "0.25rem" }}>
-            If the same header name is also present in Auth Headers JSON, this custom header entry wins.
+            This custom header overrides any Auth Headers JSON entry with the same name.
           </p>
           <label>
             Auth Cookies (JSON)
