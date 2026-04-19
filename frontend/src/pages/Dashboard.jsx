@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useScan } from "../context/ScanContext";
 import AttackGraph from "../components/AttackGraph";
 import BurpImport from "../components/BurpImport";
+import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 
 export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
@@ -200,21 +201,24 @@ export default function Dashboard() {
 
       {/* Summary when complete */}
       {job && job.status !== "running" && (
-        <section className="card">
-          <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : "#ef4444" }}>{job.status}</span></h2>
-          <div className="stats">
-            <span className="pill high">High: {sevCounts.high}</span>
-            <span className="pill medium">Medium: {sevCounts.medium}</span>
-            <span className="pill low">Low: {sevCounts.low}</span>
-            <span className="pill info">Info: {sevCounts.info}</span>
-          </div>
-          {job.aiSummary && (
-            <>
-              <h3>AI Summary</h3>
-              <pre className="summary">{job.aiSummary}</pre>
-            </>
-          )}
-        </section>
+        <>
+          <section className="card">
+            <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : "#ef4444" }}>{job.status}</span></h2>
+            <div className="stats">
+              <span className="pill high">High: {sevCounts.high}</span>
+              <span className="pill medium">Medium: {sevCounts.medium}</span>
+              <span className="pill low">Low: {sevCounts.low}</span>
+              <span className="pill info">Info: {sevCounts.info}</span>
+            </div>
+            {job.aiSummary && (
+              <>
+                <h3>AI Summary</h3>
+                <pre className="summary">{job.aiSummary}</pre>
+              </>
+            )}
+          </section>
+          <SecurityKnowledgePanel knowledge={job.modelRecommendations?.securityKnowledge} />
+        </>
       )}
 
       {/* Screenshot lightbox */}

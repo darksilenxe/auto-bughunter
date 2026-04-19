@@ -27,6 +27,15 @@ services:
     volumes:
       - ./ml-service/models:/models:ro
 
+  security-knowledge:
+    build:
+      context: ./security-knowledge
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      KNOWLEDGE_CORPUS_PATH: /app/data/corpus.json
+    ports:
+      - "8092:8092"
+
   # Autonomous agent learner — hosts the neural Q-learning model that teaches
   # itself which agent sequences produce the best findings over time.
   agents:
@@ -91,8 +100,8 @@ services:
     #
     # The backend remains the single orchestrator: it is the only service
     # that talks to the docker socket and the only service that talks to
-    # the `agents` and `ml-service` HTTP sidecars. No sidecar talks to
-    # another sidecar directly.
+    # the `agents`, `ml-service`, and `security-knowledge` HTTP sidecars.
+    # No sidecar talks to another sidecar directly.
     #
     # Security note: docker-socket access is effectively root-equivalent on
     # the host. Acceptable for self-hosted scanner usage; not recommended in
@@ -125,6 +134,8 @@ services:
       db:
         condition: service_healthy
       ml-service:
+        condition: service_started
+      security-knowledge:
         condition: service_started
       agents:
         condition: service_started

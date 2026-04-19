@@ -19,6 +19,18 @@ func sampleJob() *model.ScanJob {
 		StartedAt:   time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
 		CompletedAt: &completed,
 		AISummary:   "Two issues identified during the assessment.",
+		ModelRecommendations: &model.ModelRecommendations{
+			SecurityKnowledge: &model.SecurityKnowledgeContext{
+				LicenseNotice: "Curated notes only.",
+				References: []model.KnowledgeReference{
+					{
+						Title:   "PortSwigger Web Security Academy — SQL injection",
+						URL:     "https://portswigger.net/web-security/sql-injection",
+						Passage: "Curated note: prioritize parameterized queries.",
+					},
+				},
+			},
+		},
 		Findings: []model.Finding{
 			{
 				ID:                "sqlmap-error-based",
@@ -83,6 +95,8 @@ func TestRenderPentestMarkdownIncludesAllSections(t *testing.T) {
 		"Acme Corp",
 		"Classification:** Confidential",
 		"## Executive Summary",
+		"## Security Knowledge References",
+		"PortSwigger Web Security Academy — SQL injection",
 		"## Scope & Methodology",
 		"## Risk Rating Methodology",
 		"## Findings",

@@ -25,6 +25,7 @@ on:
       - 'frontend/**'
       - 'agents/**'
       - 'ml-service/**'
+      - 'security-knowledge/**'
       - '.github/workflows/qa-container-builds.yml'
 
 permissions:

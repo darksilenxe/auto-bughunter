@@ -21,6 +21,7 @@ import (
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/knowledge"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/oast"
@@ -49,6 +50,7 @@ type Server struct {
 	maxRounds     int
 	proxyServer   *proxy.Server
 	mlService     *ml.Service
+	knowledgeSvc  *knowledge.Client
 	agentLearner  *agentlearner.Client
 	agentConfig   AgentConfig
 	maxPerTarget  int
@@ -96,7 +98,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	reg := agent.NewRegistry()
 	factory := agent.NewFactory(scanService, mlService)
 	reg.RegisterFactory(factory)
@@ -130,6 +132,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		maxRounds:     maxRounds,
 		proxyServer:   proxy.NewServer(proxyStore),
 		mlService:     mlService,
+		knowledgeSvc:  knowledgeSvc,
 		agentLearner:  agentLearner,
 		agentConfig:   agentCfg,
 		maxPerTarget:  maxInt(1, maxPerTarget),
@@ -463,8 +466,15 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if len(job.AssetLinks) > 0 {
 		s.appendAuditEvent(id, "inventory-graph", fmt.Sprintf("Built %d asset relationship links", len(job.AssetLinks)))
 	}
-	job.AISummary = s.aiClient.Summarize(context.Background(), target, job.Findings)
 	job.Dashboard = buildDecisionDashboard(job)
+	knowledgeCtx := (*model.SecurityKnowledgeContext)(nil)
+	if s.knowledgeSvc != nil {
+		knowledgeCtx = s.knowledgeSvc.RetrieveForJob(context.Background(), "ai-summary", job, 5)
+		if knowledgeCtx != nil {
+			s.appendAuditEvent(id, "security-knowledge", fmt.Sprintf("Retrieved %d curated references", len(knowledgeCtx.References)))
+		}
+	}
+	job.AISummary = s.aiClient.SummarizeWithKnowledge(context.Background(), target, job.Findings, knowledgeCtx)
 	job.NextActions = buildNextActions(job)
 	if s.mlService != nil {
 		job.ModelRecommendations = s.mlService.RecommendFromHistory(context.Background(), s.repo, s.proxyServer.Store(), job)
@@ -472,6 +482,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
 			s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
 		}
+	}
+	if knowledgeCtx != nil {
+		if job.ModelRecommendations == nil {
+			job.ModelRecommendations = &model.ModelRecommendations{ModelMode: "knowledge-retrieval"}
+		}
+		job.ModelRecommendations.SecurityKnowledge = knowledgeCtx
+		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
 	policyGate := s.evaluatePolicyGate(job.Findings)
 	if strings.EqualFold(policyGate.Status, "blocked") {

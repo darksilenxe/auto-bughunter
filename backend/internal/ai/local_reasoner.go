@@ -9,6 +9,10 @@ import (
 )
 
 func localReasonerSummary(target string, findings []model.Finding) string {
+	return localReasonerSummaryWithKnowledge(target, findings, nil)
+}
+
+func localReasonerSummaryWithKnowledge(target string, findings []model.Finding, knowledge *model.SecurityKnowledgeContext) string {
 	if len(findings) == 0 {
 		return "Offline AI summary: no findings were reported. Continue periodic scans and keep security headers, cookie flags, and TLS settings hardened."
 	}
@@ -50,7 +54,7 @@ func localReasonerSummary(target string, findings []model.Finding) string {
 	sequence := buildRemediationSequence(sorted)
 	topCategories := topCategoryList(categoryCounts, 3)
 
-	return fmt.Sprintf(
+	summary := fmt.Sprintf(
 		"Offline AI summary for %s\n\nRisk summary: high=%d, medium=%d, low=%d, info=%d. Most frequent categories: %s.\n\nTop priorities:\n%s\n\nSuggested remediation sequence:\n%s\n\nMethod: deterministic local reasoning over finding severity, category concentration, and recommendation text.",
 		target,
 		sevCounts[model.SeverityHigh],
@@ -61,6 +65,17 @@ func localReasonerSummary(target string, findings []model.Finding) string {
 		strings.Join(priorities, "\n"),
 		strings.Join(sequence, "\n"),
 	)
+	if knowledge == nil || len(knowledge.References) == 0 {
+		return summary
+	}
+	refs := make([]string, 0, min(3, len(knowledge.References)))
+	for i, ref := range knowledge.References {
+		if i >= 3 {
+			break
+		}
+		refs = append(refs, fmt.Sprintf("- %s (%s)", ref.Title, ref.URL))
+	}
+	return summary + "\n\nSupporting references:\n" + strings.Join(refs, "\n")
 }
 
 func buildRemediationSequence(sorted []model.Finding) []string {
@@ -134,4 +149,11 @@ func compact(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Join(strings.Fields(s), " ")
 	return s
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

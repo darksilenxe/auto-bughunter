@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/agentlearner"
+	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
+	"auto-bughunter/backend/internal/knowledge"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
@@ -83,6 +84,10 @@ func main() {
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
 		AuthToken:     os.Getenv("SIDECAR_AUTH_TOKEN"),
 	})
+	knowledgeClient := knowledge.NewClient(knowledge.Config{
+		ExternalURL: os.Getenv("KNOWLEDGE_SERVICE_URL"),
+		AuthToken:   os.Getenv("SIDECAR_AUTH_TOKEN"),
+	})
 	agentLearnerClient := agentlearner.NewClientWithToken(
 		os.Getenv("AGENT_LEARNER_URL"),
 		os.Getenv("SIDECAR_AUTH_TOKEN"),
@@ -123,6 +128,7 @@ func main() {
 		scanService,
 		aiClient,
 		mlService,
+		knowledgeClient,
 		agentLearnerClient,
 		repo,
 		repo,

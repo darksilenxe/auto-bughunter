@@ -59,6 +59,17 @@ func RenderPentestMarkdown(job *model.ScanJob, opts model.ReportTemplateOptions,
 	}
 	b.WriteString("\n")
 
+	if data.SecurityKnowledge != nil && len(data.SecurityKnowledge.References) > 0 {
+		b.WriteString("## Security Knowledge References\n\n")
+		if data.SecurityKnowledge.LicenseNotice != "" {
+			b.WriteString(data.SecurityKnowledge.LicenseNotice + "\n\n")
+		}
+		for _, ref := range data.SecurityKnowledge.References {
+			b.WriteString(fmt.Sprintf("- **%s** (%s) — %s\n", ref.Title, ref.URL, ref.Passage))
+		}
+		b.WriteString("\n")
+	}
+
 	// --- Scope & Methodology ---
 	b.WriteString("## Scope & Methodology\n\n")
 	if job != nil {

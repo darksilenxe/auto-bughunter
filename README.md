@@ -17,6 +17,7 @@ Do not scan third-party systems without written permission.
 - Headless browser checks: `chromedp` against a `chromium` sidecar over the DevTools protocol
 - Containerization: Docker + Docker Compose, with heavy security tools split into per-tool sidecars (see [Architecture](#architecture))
 - AI summary: OpenAI-compatible Chat Completions API
+- Curated security knowledge retrieval sidecar for cited AppSec context
 
 ## Features
 
@@ -107,12 +108,13 @@ Docker Compose sidecar:
 | `wpscan`           | `wpscanteam/wpscan`                | WordPress scanner — keeps Ruby out of the backend image                                 |
 | `agents`           | local build (see `agents/`)        | Autonomous agent learner (HTTP, port 8091)                                              |
 | `ml-service`       | local build (see `ml-service/`)    | ML triage / classifier service (HTTP, port 8090)                                        |
+| `security-knowledge` | local build (see `security-knowledge/`) | Retrieval-only security context service with curated citations (HTTP, port 8092)    |
 
 The backend container is the **single orchestrator** of the stack: it is
 the only service that holds the docker socket bind-mount, the only
 service that issues `docker compose exec` into the CLI sidecars, and the
-only service that issues HTTP calls to `agents` / `ml-service`. No
-sidecar talks to another sidecar.
+only service that issues HTTP calls to `agents` / `ml-service` /
+`security-knowledge`. No sidecar talks to another sidecar.
 
 Two integration paths:
 
@@ -447,6 +449,8 @@ docker compose \
 - ML agents can also be toggled per scan request via scan `options` in the API or frontend form.
 - If `ML_SERVICE_URL` is configured and reachable, ML scoring is delegated to the external service (`/v1/score-findings`, `/v1/attack-paths`, `/v1/remediation-plan`, `/v1/false-positive-candidates`) with automatic fallback to deterministic local logic.
 - Set `ML_MODEL_PATH` (compose env) to enable ONNX-backed scoring in `ml-service`; if model loading or inference fails, the service automatically uses its heuristic scorer.
+- If `KNOWLEDGE_SERVICE_URL` is configured and reachable, the backend retrieves curated PortSwigger/OWASP/CWE context with source URLs and includes that context in AI summaries, next actions, and generated reports.
+- The seed `security-knowledge` corpus stores short manually-authored notes plus citations rather than mirrored third-party article bodies; confirm licensing before importing additional content.
 - Wordlist agent discovers endpoints by HTTP status code (200-399 range) with concurrent checking (5 parallel requests by default).
 - Wordlists include embedded defaults + optional external sources (SecLists, Kiterunner) with local caching.
 - External wordlist sources are downloaded on-demand, cached for 24 hours, and fall back to embedded defaults if unavailable.
