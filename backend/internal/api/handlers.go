@@ -276,8 +276,8 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
 		return
 	}
-	if !hasAuthorizationProfile(req.AuthProfile) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authProfile is required (headers, cookies, or basic auth)"})
+	if err := validateAuthProfile(req.AuthProfile); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if req.Options.RescanIntervalMinutes < 0 || req.Options.RescanIntervalMinutes > 10080 {
@@ -884,8 +884,8 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target blocked by outbound safety policy"})
 		return
 	}
-	if !hasAuthorizationProfile(req.AuthProfile) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authProfile is required for automation event scans"})
+	if err := validateAuthProfile(req.AuthProfile); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	req.Scope = scope.Normalize(target, req.Scope)
@@ -1148,7 +1148,20 @@ func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {
 	return len(profile.Headers) > 0 ||
 		len(profile.Cookies) > 0 ||
 		strings.TrimSpace(profile.BasicAuthUsername) != "" ||
-		strings.TrimSpace(profile.BasicAuthPassword) != ""
+		strings.TrimSpace(profile.BasicAuthPassword) != "" ||
+		(strings.TrimSpace(profile.Username) != "" && strings.TrimSpace(profile.Password) != "")
+}
+
+func validateAuthProfile(profile model.ScanAuthProfile) error {
+	hasUsername := strings.TrimSpace(profile.Username) != ""
+	hasPassword := strings.TrimSpace(profile.Password) != ""
+	if hasUsername != hasPassword {
+		return errors.New("authProfile username and password must both be provided for standard application authentication")
+	}
+	if strings.TrimSpace(profile.LoginURL) != "" && !hasUsername {
+		return errors.New("authProfile loginUrl requires username and password")
+	}
+	return nil
 }
 
 func applyProgramScope(scanScope model.ScanScope, profile model.ProgramScopeProfile) model.ScanScope {

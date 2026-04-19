@@ -150,6 +150,9 @@ Body:
   "target": "https://example.com",
   "idempotencyKey": "scan-example-2026-04-09T14:00",
   "authProfile": {
+    "loginUrl": "https://example.com/login",
+    "username": "user@example.com",
+    "password": "secret",
     "headers": {"Authorization": "Bearer ..."},
     "cookies": {"sessionid": "..."},
     "userAgent": "Mozilla/5.0",
@@ -180,6 +183,8 @@ Body:
   }
 }
 ```
+
+`authProfile` is optional. Omit it, or send an empty object, to run an unauthenticated scan that only uses the target URL and scope/program data as provided.
 
 ### `GET /api/scan/{id}`
 

@@ -100,6 +100,9 @@ type ScanAuthProfile struct {
 	UserAgent         string            `json:"userAgent,omitempty"`
 	BasicAuthUsername string            `json:"basicAuthUsername,omitempty"`
 	BasicAuthPassword string            `json:"basicAuthPassword,omitempty"`
+	LoginURL          string            `json:"loginUrl,omitempty"`
+	Username          string            `json:"username,omitempty"`
+	Password          string            `json:"password,omitempty"`
 }
 
 type RoleAuthProfile struct {
@@ -117,10 +120,12 @@ type ProgramScopeProfile struct {
 }
 
 type ScanAuthProfileSummary struct {
-	HeaderKeys   []string `json:"headerKeys,omitempty"`
-	CookieNames  []string `json:"cookieNames,omitempty"`
-	HasBasicAuth bool     `json:"hasBasicAuth,omitempty"`
-	UserAgent    string   `json:"userAgent,omitempty"`
+	HeaderKeys      []string `json:"headerKeys,omitempty"`
+	CookieNames     []string `json:"cookieNames,omitempty"`
+	HasBasicAuth    bool     `json:"hasBasicAuth,omitempty"`
+	HasStandardAuth bool     `json:"hasStandardAuth,omitempty"`
+	UserAgent       string   `json:"userAgent,omitempty"`
+	LoginURL        string   `json:"loginUrl,omitempty"`
 }
 
 type ScanOptions struct {
@@ -381,15 +386,24 @@ type DecisionDashboard struct {
 }
 
 func SummarizeAuthProfile(profile ScanAuthProfile) *ScanAuthProfileSummary {
-	if len(profile.Headers) == 0 && len(profile.Cookies) == 0 && profile.UserAgent == "" && profile.BasicAuthUsername == "" && profile.BasicAuthPassword == "" {
+	if len(profile.Headers) == 0 &&
+		len(profile.Cookies) == 0 &&
+		profile.UserAgent == "" &&
+		profile.BasicAuthUsername == "" &&
+		profile.BasicAuthPassword == "" &&
+		profile.LoginURL == "" &&
+		profile.Username == "" &&
+		profile.Password == "" {
 		return nil
 	}
 
 	summary := &ScanAuthProfileSummary{
-		HeaderKeys:   make([]string, 0, len(profile.Headers)),
-		CookieNames:  make([]string, 0, len(profile.Cookies)),
-		HasBasicAuth: profile.BasicAuthUsername != "" || profile.BasicAuthPassword != "",
-		UserAgent:    profile.UserAgent,
+		HeaderKeys:      make([]string, 0, len(profile.Headers)),
+		CookieNames:     make([]string, 0, len(profile.Cookies)),
+		HasBasicAuth:    profile.BasicAuthUsername != "" || profile.BasicAuthPassword != "",
+		HasStandardAuth: profile.Username != "" || profile.Password != "",
+		UserAgent:       profile.UserAgent,
+		LoginURL:        profile.LoginURL,
 	}
 
 	for key := range profile.Headers {

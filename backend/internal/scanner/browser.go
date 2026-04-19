@@ -73,18 +73,10 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 					return err
 				}
 			}
-			for name, value := range profile.Cookies {
-				if host == "" {
-					break
-				}
-				if err := network.SetCookie(name, value).
-					WithDomain(host).
-					WithHTTPOnly(false).
-					Do(ctx); err != nil {
-					return err
-				}
+			if host == "" {
+				return nil
 			}
-			return nil
+			return seedBrowserCookies(ctx, target, profile.Cookies)
 		}),
 	)
 
