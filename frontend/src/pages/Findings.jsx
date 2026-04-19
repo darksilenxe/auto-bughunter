@@ -68,9 +68,9 @@ export default function Findings() {
               key={sev}
               onClick={() => setFilter(sev)}
               style={{
-                background: filter === sev ? "#7f1d1d" : "rgba(0,0,0,0.2)",
-                color: filter === sev ? "#fff" : "#000",
-                border: "1.5px solid rgba(255,255,255,0.3)",
+                background: filter === sev ? "#7c3aed" : "rgba(124,58,237,0.15)",
+                color: filter === sev ? "#fff" : "rgba(255,255,255,0.8)",
+                border: "1.5px solid rgba(124,58,237,0.35)",
                 borderRadius: "999px",
                 padding: "0.3rem 0.8rem",
                 fontSize: "0.82rem",

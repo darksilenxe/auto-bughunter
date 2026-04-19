@@ -1,19 +1,19 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Auto BugHunter — Red/Black Theme
-   Background: deep red  |  Cards: near-white  |  Text: black
+   Auto BugHunter — Black / Purple Theme
+   Background: deep black-purple  |  Cards: dark charcoal  |  Text: light
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  --bg-body:    #7a0000;      /* deep red page background */
-  --bg-card:    #f0e8e8;      /* light pinkish-white cards */
-  --ink:        #000000;      /* black text */
-  --ink-muted:  #4a1414;      /* muted dark-red text */
-  --accent:     #7f1d1d;      /* dark red accent */
-  --accent-lit: #b91c1c;      /* brighter red for hover */
-  --border:     rgba(180,20,20,0.25);
-  --sev-high:   #dc2626;
-  --sev-medium: #ea580c;
-  --sev-low:    #ca8a04;
+  --bg-body:    #0d0b14;      /* near-black with purple undertone */
+  --bg-card:    #16131f;      /* dark charcoal card background */
+  --ink:        #e2d9f3;      /* soft lavender-white text */
+  --ink-muted:  #8b7faa;      /* muted purple text */
+  --accent:     #7c3aed;      /* violet accent */
+  --accent-lit: #9d5ff5;      /* brighter violet for hover */
+  --border:     rgba(124,58,237,0.22);
+  --sev-high:   #ef4444;
+  --sev-medium: #f97316;
+  --sev-low:    #eab308;
   --sev-info:   #6b7280;
 }
 
@@ -29,7 +29,7 @@ html, body {
   font-family: "Inter", "Segoe UI", Arial, sans-serif;
   font-size: 15px;
   color: var(--ink);
-  background: radial-gradient(ellipse at top left, #9b0000 0%, #5a0000 55%, #3a0000 100%);
+  background: radial-gradient(ellipse at top left, #1a1030 0%, #0d0b14 55%, #060410 100%);
   background-attachment: fixed;
 }
 
@@ -67,14 +67,14 @@ header p {
   padding: 1.4rem 1.6rem;
   margin-bottom: 1.4rem;
   border: 1px solid var(--border);
-  box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
 }
 
 .card h2 {
   margin: 0 0 1rem;
   font-size: 1.1rem;
   font-weight: 700;
-  color: var(--accent);
+  color: #a78bfa;
   border-bottom: 2px solid var(--border);
   padding-bottom: 0.5rem;
 }
@@ -115,12 +115,12 @@ input[type="password"],
 input[type="email"],
 input[type="url"],
 textarea {
-  border: 1.5px solid rgba(127,29,29,0.3);
+  border: 1.5px solid rgba(124,58,237,0.35);
   border-radius: 7px;
   padding: 0.45rem 0.7rem;
   font-size: 0.9rem;
-  background: #fff;
-  color: #000;
+  background: #1e1a2e;
+  color: var(--ink);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
@@ -129,7 +129,7 @@ textarea {
 input:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(127,29,29,0.15);
+  box-shadow: 0 0 0 3px rgba(124,58,237,0.2);
 }
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
@@ -172,7 +172,7 @@ button:disabled {
 }
 
 .findings li {
-  background: #fff;
+  background: #1e1a2e;
   border-left: 4px solid var(--border);
   border-radius: 0 8px 8px 0;
   padding: 0.85rem 1rem;
@@ -222,8 +222,8 @@ button:disabled {
 }
 
 pre.summary {
-  background: #1a1a2e;
-  color: #e2e8f0;
+  background: #0d0b14;
+  color: #c4b5fd;
   border-radius: 8px;
   padding: 1rem 1.2rem;
   font-size: 0.82rem;
@@ -232,6 +232,7 @@ pre.summary {
   word-break: break-word;
   line-height: 1.7;
   margin: 0.5rem 0 0;
+  border: 1px solid rgba(124,58,237,0.2);
 }
 
 /* ── Tables ─────────────────────────────────────────────────────────────── */
@@ -241,7 +242,7 @@ table {
 }
 
 th {
-  color: var(--accent);
+  color: #a78bfa;
   font-size: 0.85rem;
 }
 
@@ -259,6 +260,6 @@ td {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(127,29,29,0.4);
+  background: rgba(124,58,237,0.4);
   border-radius: 99px;
 }

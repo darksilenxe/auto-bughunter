@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useScan } from "../context/ScanContext";
-import AttackPathGraph from "../components/AttackPathGraph";
-import LiveFeed from "../components/LiveFeed";
+import AttackGraph from "../components/AttackGraph";
+import BurpImport from "../components/BurpImport";
 
 export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
@@ -18,6 +18,17 @@ export default function Dashboard() {
   const [useNuclei, setUseNuclei] = useState(false);
   const [useZap, setUseZap] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+
+  function handleBurpImport(cfg) {
+    if (cfg.target)       setTarget(cfg.target);
+    if (cfg.includeHosts?.length) setIncludeHosts(cfg.includeHosts.join(", "));
+    if (cfg.excludeHosts?.length) setExcludeHosts(cfg.excludeHosts.join(", "));
+    if (cfg.excludePaths?.length) setExcludePaths(cfg.excludePaths.join(", "));
+    if (Object.keys(cfg.headers || {}).length)
+      setHeadersJson(JSON.stringify(cfg.headers, null, 2));
+    if (Object.keys(cfg.cookies || {}).length)
+      setCookiesJson(JSON.stringify(cfg.cookies, null, 2));
+  }
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -122,6 +133,7 @@ export default function Dashboard() {
             <textarea rows={3} value={programRules} onChange={(e) => setProgramRules(e.target.value)}
               placeholder="in_scope: example.com&#10;no_dos_testing&#10;no_account_takeover" />
           </label>
+          <BurpImport onImport={handleBurpImport} />
           <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
             <label className="check">
               <input type="checkbox" checked={useNuclei} onChange={(e) => setUseNuclei(e.target.checked)} />
@@ -138,13 +150,12 @@ export default function Dashboard() {
         {scanId && <p className="meta">Scan ID: {scanId}</p>}
       </section>
 
-      {/* Attack path graph */}
-      {liveEvents.length > 0 && (
-        <section className="card">
-          <h2>⚡ Autonomous Attack Path</h2>
-          <AttackPathGraph events={liveEvents} />
-          <LiveFeed
-            events={liveEvents}
+      {/* Attack graph — shown from the moment a scan starts through completion */}
+      {(loading || job) && (
+        <section className="card" style={{ padding: "0", overflow: "hidden" }}>
+          <AttackGraph
+            job={job}
+            liveEvents={liveEvents}
             isRunning={isRunning}
             onScreenshot={(b64) => setSelectedScreenshot(b64)}
           />
@@ -154,7 +165,7 @@ export default function Dashboard() {
       {/* Summary when complete */}
       {job && job.status !== "running" && (
         <section className="card">
-          <h2>Status: <span style={{ color: job.status === "completed" ? "#16a34a" : "#dc2626" }}>{job.status}</span></h2>
+          <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : "#ef4444" }}>{job.status}</span></h2>
           <div className="stats">
             <span className="pill high">High: {sevCounts.high}</span>
             <span className="pill medium">Medium: {sevCounts.medium}</span>

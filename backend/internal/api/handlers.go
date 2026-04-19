@@ -42,7 +42,6 @@ type AgentConfig struct {
 type Server struct {
 	scanService   *scanner.Service
 	aiClient      *ai.Client
-	allowed       map[string]struct{}
 	repo          Repository
 	agentRegistry *agent.Registry
 	agentFactory  *agent.Factory
@@ -97,15 +96,7 @@ type Repository interface {
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
 }
 
-func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, allowedHosts []string, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
-	allowed := map[string]struct{}{}
-	for _, h := range allowedHosts {
-		h = strings.TrimSpace(strings.ToLower(h))
-		if h != "" {
-			allowed[h] = struct{}{}
-		}
-	}
-
+func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	reg := agent.NewRegistry()
 	factory := agent.NewFactory(scanService, mlService)
 	reg.RegisterFactory(factory)
@@ -132,7 +123,6 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	return &Server{
 		scanService:   scanService,
 		aiClient:      aiClient,
-		allowed:       allowed,
 		repo:          repo,
 		agentRegistry: reg,
 		agentFactory:  factory,
@@ -176,6 +166,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
+	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/oast/tokens", s.handleOASTTokens)
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
@@ -269,22 +260,13 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, host, err := normalizeAndValidateTarget(req.Target)
+	target, _, err := normalizeAndValidateTarget(req.Target)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := safety.ValidateOutboundURL(target); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target blocked by outbound safety policy"})
-		return
-	}
-
-	if len(s.allowed) == 0 {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "server has no ALLOWED_TARGETS configured"})
-		return
-	}
-	if _, ok := s.allowed[host]; !ok {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target host is not in ALLOWED_TARGETS"})
 		return
 	}
 	req.Scope = applyProgramScope(req.Scope, req.ProgramScopeProfile)
@@ -893,21 +875,13 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	if req.Type == "" {
 		req.Type = "deploy"
 	}
-	target, host, err := normalizeAndValidateTarget(req.Target)
+	target, _, err := normalizeAndValidateTarget(req.Target)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := safety.ValidateOutboundURL(target); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target blocked by outbound safety policy"})
-		return
-	}
-	if len(s.allowed) == 0 {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "server has no ALLOWED_TARGETS configured"})
-		return
-	}
-	if _, ok := s.allowed[host]; !ok {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "target host is not in ALLOWED_TARGETS"})
 		return
 	}
 	if !hasAuthorizationProfile(req.AuthProfile) {

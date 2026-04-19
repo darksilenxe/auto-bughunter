@@ -23,7 +23,6 @@ import (
 func main() {
 	port := getenv("PORT", "8080")
 	proxyPort := getenv("PROXY_PORT", "8081")
-	allowed := splitCSV(os.Getenv("ALLOWED_TARGETS"))
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
 
 	enableSecLists := getbool("ENABLE_SECLISTS_WORDLISTS", true)
@@ -125,7 +124,6 @@ func main() {
 		aiClient,
 		mlService,
 		agentLearnerClient,
-		allowed,
 		repo,
 		repo,
 		getint("MAX_PER_TARGET_CONCURRENCY", 3),
@@ -176,21 +174,6 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return v
-}
-
-func splitCSV(v string) []string {
-	if strings.TrimSpace(v) == "" {
-		return nil
-	}
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func getbool(key string, fallback bool) bool {
