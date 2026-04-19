@@ -111,11 +111,14 @@ export default function Dashboard() {
               <input value={customHeaderName} onChange={(e) => setCustomHeaderName(e.target.value)}
                 placeholder="X-Bug-Bounty" />
             </label>
-            <label>Custom Header Value (overrides the same key from Auth Headers JSON)
+            <label>Custom Header Value
               <input value={customHeaderValue} onChange={(e) => setCustomHeaderValue(e.target.value)}
                 placeholder="your-hackerone-username" />
             </label>
           </div>
+          <p className="meta" style={{ marginTop: "0.25rem" }}>
+            If the same header is also present in Auth Headers JSON, this custom header entry wins.
+          </p>
           <label>
             Auth Cookies (JSON)
             <textarea rows={2} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)}
