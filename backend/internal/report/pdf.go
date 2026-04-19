@@ -94,6 +94,22 @@ func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions, ctx 
 		pdf.Ln(2)
 	}
 
+	if data.SecurityKnowledge != nil && len(data.SecurityKnowledge.References) > 0 {
+		pdf.SetFont("Helvetica", "B", 13)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.CellFormat(contentW, 8, "Security Knowledge References", "", 1, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(50, 50, 50)
+		if data.SecurityKnowledge.LicenseNotice != "" {
+			pdf.MultiCell(contentW, 5, latin1(data.SecurityKnowledge.LicenseNotice), "", "L", false)
+		}
+		for _, ref := range data.SecurityKnowledge.References {
+			pdf.MultiCell(contentW, 5, latin1(fmt.Sprintf("- %s (%s) - %s", ref.Title, ref.URL, ref.Passage)), "", "L", false)
+		}
+		pdf.SetTextColor(30, 30, 30)
+		pdf.Ln(2)
+	}
+
 	// --- Methodology ---
 	pdf.SetFont("Helvetica", "B", 13)
 	pdf.CellFormat(contentW, 8, "Scope & Methodology", "", 1, "L", false, 0, "")

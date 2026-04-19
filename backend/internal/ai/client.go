@@ -35,8 +35,12 @@ func NewClient(baseURL, apiKey, model string) *Client {
 }
 
 func (c *Client) Summarize(ctx context.Context, target string, findings []model.Finding) string {
+	return c.SummarizeWithKnowledge(ctx, target, findings, nil)
+}
+
+func (c *Client) SummarizeWithKnowledge(ctx context.Context, target string, findings []model.Finding, knowledge *model.SecurityKnowledgeContext) string {
 	if !c.shouldCallProvider() {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 
 	payload := map[string]any{
@@ -44,11 +48,11 @@ func (c *Client) Summarize(ctx context.Context, target string, findings []model.
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only.",
+				"content": "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only. Use supplied curated references as supporting context, and preserve citations as source titles plus URLs.",
 			},
 			{
 				"role":    "user",
-				"content": fmt.Sprintf("Target: %s\nFindings JSON: %s\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence.", target, mustJSON(findings)),
+				"content": fmt.Sprintf("Target: %s\nFindings JSON: %s\nKnowledge Context JSON: %s\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.", target, mustJSON(findings), mustJSON(knowledge)),
 			},
 		},
 		"temperature": 0.2,
@@ -56,11 +60,11 @@ func (c *Client) Summarize(ctx context.Context, target string, findings []model.
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 	if strings.TrimSpace(c.APIKey) != "" {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
@@ -69,12 +73,12 @@ func (c *Client) Summarize(ctx context.Context, target string, findings []model.
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 
 	var out struct {
@@ -85,10 +89,10 @@ func (c *Client) Summarize(ctx context.Context, target string, findings []model.
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-		return localReasonerSummary(target, findings)
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 	return out.Choices[0].Message.Content
 }

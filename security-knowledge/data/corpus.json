@@ -1,0 +1,98 @@
+[
+  {
+    "id": "portswigger-sqli-academy",
+    "title": "PortSwigger Web Security Academy — SQL injection",
+    "url": "https://portswigger.net/web-security/sql-injection",
+    "sourceType": "portswigger",
+    "license": "source-url-only",
+    "topic": "injection validation and exploitation",
+    "vulnerabilityClass": "sql injection",
+    "technique": "parameterized queries and query structure validation",
+    "keywords": ["sqli", "database error", "union select", "blind injection"],
+    "passage": "Curated note: prioritize parameterized queries, strict server-side validation, and safe error handling when scanner evidence indicates database-driven input reflection or query manipulation."
+  },
+  {
+    "id": "portswigger-xss-academy",
+    "title": "PortSwigger Web Security Academy — Cross-site scripting",
+    "url": "https://portswigger.net/web-security/cross-site-scripting",
+    "sourceType": "portswigger",
+    "license": "source-url-only",
+    "topic": "client-side execution and output encoding",
+    "vulnerabilityClass": "cross-site scripting",
+    "technique": "context-aware output encoding with template hardening",
+    "keywords": ["xss", "dom xss", "reflected", "stored", "csp"],
+    "passage": "Curated note: match the sink context before recommending fixes; combine output encoding, safer templating, and CSP as defense-in-depth rather than relying on CSP alone."
+  },
+  {
+    "id": "portswigger-access-control",
+    "title": "PortSwigger Web Security Academy — Access control vulnerabilities",
+    "url": "https://portswigger.net/web-security/access-control",
+    "sourceType": "portswigger",
+    "license": "source-url-only",
+    "topic": "authorization weaknesses across roles and workflows",
+    "vulnerabilityClass": "broken access control",
+    "technique": "server-side authorization checks on every sensitive action",
+    "keywords": ["idor", "bypass", "role", "privilege escalation", "authorization"],
+    "passage": "Curated note: when evidence suggests direct object reference or missing role checks, emphasize centralized authorization and workflow-level access verification instead of client-side gating."
+  },
+  {
+    "id": "portswigger-ssrf-academy",
+    "title": "PortSwigger Web Security Academy — SSRF",
+    "url": "https://portswigger.net/web-security/ssrf",
+    "sourceType": "portswigger",
+    "license": "source-url-only",
+    "topic": "outbound request handling and internal service exposure",
+    "vulnerabilityClass": "server-side request forgery",
+    "technique": "allowlist outbound destinations and normalize URLs before fetch",
+    "keywords": ["ssrf", "metadata", "callback", "oast", "internal network"],
+    "passage": "Curated note: highlight URL canonicalization, destination allowlists, and outbound network segmentation when runtime evidence shows user-controlled fetch behavior or OAST callbacks."
+  },
+  {
+    "id": "owasp-api-authz",
+    "title": "OWASP API Security Top 10 — Broken Object Level Authorization",
+    "url": "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/",
+    "sourceType": "owasp",
+    "license": "source-url-only",
+    "topic": "api object-level authorization",
+    "vulnerabilityClass": "api authorization",
+    "technique": "enforce ownership and policy checks per object reference",
+    "keywords": ["api", "bola", "idor", "resource ownership", "object id"],
+    "passage": "Curated note: for API findings, map exposed object identifiers to ownership checks and require authorization decisions for every read or write path, including bulk and nested object endpoints."
+  },
+  {
+    "id": "owasp-logging-monitoring",
+    "title": "OWASP Top 10 — Security logging and monitoring failures",
+    "url": "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/",
+    "sourceType": "owasp",
+    "license": "source-url-only",
+    "topic": "detectability and response quality",
+    "vulnerabilityClass": "monitoring gaps",
+    "technique": "high-signal security telemetry with alert triage",
+    "keywords": ["logging", "monitoring", "audit trail", "alerting"],
+    "passage": "Curated note: if the scan reveals drift, auth instability, or suspicious routing changes, recommend durable audit events and actionable monitoring so exploitation attempts are detectable and explainable."
+  },
+  {
+    "id": "cwe-79",
+    "title": "CWE-79 — Improper Neutralization of Input During Web Page Generation",
+    "url": "https://cwe.mitre.org/data/definitions/79.html",
+    "sourceType": "cwe",
+    "license": "source-url-only",
+    "topic": "input neutralization in rendered content",
+    "vulnerabilityClass": "cross-site scripting",
+    "technique": "encode untrusted data for the output context",
+    "keywords": ["cwe-79", "encoding", "escaping", "javascript"],
+    "passage": "Curated note: use CWE mappings as a stable citation in reports, and align remediation language with the output context that failed rather than generic client-side sanitization."
+  },
+  {
+    "id": "cwe-89",
+    "title": "CWE-89 — Improper Neutralization of Special Elements used in an SQL Command",
+    "url": "https://cwe.mitre.org/data/definitions/89.html",
+    "sourceType": "cwe",
+    "license": "source-url-only",
+    "topic": "unsafe SQL command construction",
+    "vulnerabilityClass": "sql injection",
+    "technique": "bind parameters and constrain query builders",
+    "keywords": ["cwe-89", "prepared statements", "orm", "sql injection"],
+    "passage": "Curated note: prefer remediation language that calls out prepared statements, query builder safety, and reduced database privileges when injection evidence is reproducible."
+  }
+]

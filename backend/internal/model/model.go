@@ -311,6 +311,29 @@ type ModelRecommendations struct {
 	PrioritizedFindings []PrioritizedFinding        `json:"prioritizedFindings,omitempty"`
 	Copilot             EngagementCopilotSuggestion `json:"copilot"`
 	ModelMode           string                      `json:"modelMode,omitempty"`
+	SecurityKnowledge   *SecurityKnowledgeContext   `json:"securityKnowledge,omitempty"`
+}
+
+type SecurityKnowledgeContext struct {
+	Query            string               `json:"query,omitempty"`
+	Stage            string               `json:"stage,omitempty"`
+	CurationMode     string               `json:"curationMode,omitempty"`
+	LicenseNotice    string               `json:"licenseNotice,omitempty"`
+	SuggestedActions []string             `json:"suggestedActions,omitempty"`
+	References       []KnowledgeReference `json:"references,omitempty"`
+}
+
+type KnowledgeReference struct {
+	ID                 string  `json:"id,omitempty"`
+	Title              string  `json:"title,omitempty"`
+	URL                string  `json:"url,omitempty"`
+	SourceType         string  `json:"sourceType,omitempty"`
+	License            string  `json:"license,omitempty"`
+	Topic              string  `json:"topic,omitempty"`
+	VulnerabilityClass string  `json:"vulnerabilityClass,omitempty"`
+	Technique          string  `json:"technique,omitempty"`
+	Passage            string  `json:"passage,omitempty"`
+	Score              float64 `json:"score,omitempty"`
 }
 
 type ToolRecommendation struct {

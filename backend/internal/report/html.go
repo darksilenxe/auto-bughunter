@@ -81,6 +81,23 @@ func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions, ctx
 	}
 	b.WriteString("</table>\n")
 
+	if data.SecurityKnowledge != nil && len(data.SecurityKnowledge.References) > 0 {
+		b.WriteString("<h2>Security Knowledge References</h2>\n")
+		if data.SecurityKnowledge.LicenseNotice != "" {
+			b.WriteString("<p class=\"meta\">" + html.EscapeString(data.SecurityKnowledge.LicenseNotice) + "</p>\n")
+		}
+		b.WriteString("<ul>")
+		for _, ref := range data.SecurityKnowledge.References {
+			b.WriteString(fmt.Sprintf("<li><strong>%s</strong> (<a href=\"%s\">%s</a>) &mdash; %s</li>",
+				html.EscapeString(ref.Title),
+				html.EscapeString(ref.URL),
+				html.EscapeString(ref.URL),
+				html.EscapeString(ref.Passage),
+			))
+		}
+		b.WriteString("</ul>\n")
+	}
+
 	// Methodology
 	b.WriteString("<h2>Scope &amp; Methodology</h2>\n<p>" + html.EscapeString(methodologyText()) + "</p>\n")
 	b.WriteString("<h2>Risk Rating Methodology</h2>\n<p>" + html.EscapeString(riskRatingMethodologyText()) + "</p>\n")
