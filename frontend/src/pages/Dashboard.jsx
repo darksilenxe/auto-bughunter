@@ -7,6 +7,7 @@ export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
+  const [customHeader, setCustomHeader] = useState("");
   const [cookiesJson, setCookiesJson] = useState("");
   const [userAgent, setUserAgent] = useState("");
   const [loginUrl, setLoginUrl] = useState("");
@@ -39,6 +40,13 @@ export default function Dashboard() {
     let cookies = {};
     try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
     try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
+    const customHeaderText = customHeader.trim();
+    if (customHeaderText) {
+      const sep = customHeaderText.indexOf(":");
+      const name = (sep >= 0 ? customHeaderText.slice(0, sep) : customHeaderText).trim();
+      const value = (sep >= 0 ? customHeaderText.slice(sep + 1) : "").trim();
+      if (name) headers[name] = value;
+    }
 
     const scopeRules = [];
     if (programRules.trim()) {
@@ -101,6 +109,11 @@ export default function Dashboard() {
             Auth Headers (JSON)
             <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
               placeholder='{"Authorization": "Bearer token"}' />
+          </label>
+          <label>
+            Custom Header
+            <input value={customHeader} onChange={(e) => setCustomHeader(e.target.value)}
+              placeholder="X-Bug-Bounty: HackerOne" />
           </label>
           <label>
             Auth Cookies (JSON)
