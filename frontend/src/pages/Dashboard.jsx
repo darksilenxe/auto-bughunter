@@ -3,21 +3,12 @@ import { useScan } from "../context/ScanContext";
 import AttackGraph from "../components/AttackGraph";
 import BurpImport from "../components/BurpImport";
 
-function parseCustomHeader(value) {
-  const text = value.trim();
-  if (!text) return null;
-  const sep = text.indexOf(":");
-  if (sep < 0) return null;
-  const name = text.slice(0, sep).trim();
-  if (!name) return null;
-  return { name, value: text.slice(sep + 1).trim() };
-}
-
 export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
-  const [customHeader, setCustomHeader] = useState("");
+  const [customHeaderName, setCustomHeaderName] = useState("");
+  const [customHeaderValue, setCustomHeaderValue] = useState("");
   const [cookiesJson, setCookiesJson] = useState("");
   const [userAgent, setUserAgent] = useState("");
   const [loginUrl, setLoginUrl] = useState("");
@@ -50,8 +41,8 @@ export default function Dashboard() {
     let cookies = {};
     try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
     try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
-    const parsedCustomHeader = parseCustomHeader(customHeader);
-    if (parsedCustomHeader) headers[parsedCustomHeader.name] = parsedCustomHeader.value;
+    const trimmedCustomHeaderName = customHeaderName.trim();
+    if (trimmedCustomHeaderName) headers[trimmedCustomHeaderName] = customHeaderValue.trim();
 
     const scopeRules = [];
     if (programRules.trim()) {
@@ -115,11 +106,16 @@ export default function Dashboard() {
             <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
               placeholder='{"Authorization": "Bearer token"}' />
           </label>
-          <label>
-            Custom Header (overrides the same key from Auth Headers JSON)
-            <input value={customHeader} onChange={(e) => setCustomHeader(e.target.value)}
-              placeholder="X-Bug-Bounty: HackerOne" />
-          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            <label>Custom Header Name
+              <input value={customHeaderName} onChange={(e) => setCustomHeaderName(e.target.value)}
+                placeholder="X-Bug-Bounty" />
+            </label>
+            <label>Custom Header Value (overrides the same key from Auth Headers JSON)
+              <input value={customHeaderValue} onChange={(e) => setCustomHeaderValue(e.target.value)}
+                placeholder="your-hackerone-username" />
+            </label>
+          </div>
           <label>
             Auth Cookies (JSON)
             <textarea rows={2} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)}
