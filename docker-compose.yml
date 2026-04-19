@@ -245,11 +245,10 @@ services:
     restart: unless-stopped
 
   # SQL injection probe (Python). Keeps the Python runtime out of the
-  # backend image entirely. paoloo/sqlmap publishes a single rolling
-  # `latest` tag (no semver tags); pin by digest in production if you
-  # need reproducible builds.
+  # backend image entirely. Pin by digest to avoid mutable-tag drift and
+  # deprecated image manifest formats.
   sqlmap:
-    image: paoloo/sqlmap:latest
+    image: parrotsec/sqlmap@sha256:c5922651223e33bc33b3225de4a494962101a32b0422cba3a247db2a1579f925
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
