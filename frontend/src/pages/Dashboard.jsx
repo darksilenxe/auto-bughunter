@@ -7,6 +7,8 @@ export default function Dashboard() {
   const { startScan, job, loading, error, liveEvents, scanId } = useScan();
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
+  const [customHeaderName, setCustomHeaderName] = useState("");
+  const [customHeaderValue, setCustomHeaderValue] = useState("");
   const [cookiesJson, setCookiesJson] = useState("");
   const [userAgent, setUserAgent] = useState("");
   const [loginUrl, setLoginUrl] = useState("");
@@ -39,6 +41,8 @@ export default function Dashboard() {
     let cookies = {};
     try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
     try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
+    const trimmedCustomHeaderName = customHeaderName.trim();
+    if (trimmedCustomHeaderName) headers[trimmedCustomHeaderName] = customHeaderValue.trim();
 
     const scopeRules = [];
     if (programRules.trim()) {
@@ -102,6 +106,19 @@ export default function Dashboard() {
             <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
               placeholder='{"Authorization": "Bearer token"}' />
           </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            <label>Custom Header Name
+              <input value={customHeaderName} onChange={(e) => setCustomHeaderName(e.target.value)}
+                placeholder="X-Bug-Bounty" />
+            </label>
+            <label>Custom Header Value
+              <input value={customHeaderValue} onChange={(e) => setCustomHeaderValue(e.target.value)}
+                placeholder="your-hackerone-username" />
+            </label>
+          </div>
+          <p className="meta" style={{ marginTop: "0.25rem" }}>
+            This custom header overrides any Auth Headers JSON entry with the same name.
+          </p>
           <label>
             Auth Cookies (JSON)
             <textarea rows={2} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)}
