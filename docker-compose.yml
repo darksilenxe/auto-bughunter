@@ -223,7 +223,7 @@ services:
 
   # Directory brute-forcing — gobuster. Same shared-volume pattern as ffuf.
   gobuster:
-    image: ghcr.io/oj/gobuster:v3.6.0
+    image: ghcr.io/oj/gobuster:latest
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     volumes:
       - shared_tmp:/tmp/auto-bughunter-shared:ro
