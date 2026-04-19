@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
-	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 
 	"github.com/chromedp/cdproto/network"
@@ -46,9 +45,6 @@ func candidateLoginURLs(target string, profile model.ScanAuthProfile, scanScope 
 			return
 		}
 		if !scope.IsURLInScope(resolved.String(), scanScope) {
-			return
-		}
-		if err := safety.ValidateOutboundURL(resolved.String()); err != nil {
 			return
 		}
 		if _, ok := seen[resolved.String()]; ok {

@@ -823,10 +823,10 @@ func (s *Server) handleToolsHealth(w http.ResponseWriter, r *http.Request) {
 // type that has to be kept in sync.
 //
 // Status semantics:
-//   * 200: report is on disk and well-formed JSON — returned verbatim.
-//   * 503: report is not yet present (sidecar hasn't run or is still
-//          working). Includes a hint pointing at the sidecar service.
-//   * 500: the report file exists but couldn't be read or parsed.
+//   - 200: report is on disk and well-formed JSON — returned verbatim.
+//   - 503: report is not yet present (sidecar hasn't run or is still
+//     working). Includes a hint pointing at the sidecar service.
+//   - 500: the report file exists but couldn't be read or parsed.
 func (s *Server) handleToolsUpdates(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

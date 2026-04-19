@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
 )
 
 func TestCandidateLoginURLsPrefersConfiguredLoginURL(t *testing.T) {
-	scope := model.ScanScope{IncludeHosts: []string{"example.com"}}
+	scanScope := scope.Normalize("https://example.com/app", model.ScanScope{IncludeHosts: []string{"example.com"}})
 	profile := model.ScanAuthProfile{LoginURL: "/custom-login"}
 
-	got := candidateLoginURLs("https://example.com/app", profile, scope)
+	got := candidateLoginURLs("https://example.com/app", profile, scanScope)
 	if len(got) == 0 {
 		t.Fatal("expected candidate login URLs")
 	}
@@ -24,7 +25,7 @@ func TestCandidateLoginURLsPrefersConfiguredLoginURL(t *testing.T) {
 func TestBootstrapStandardAuthProfileRejectsIncompleteCredentials(t *testing.T) {
 	profile := model.ScanAuthProfile{Username: "alice"}
 
-	_, findings := bootstrapStandardAuthProfile(context.Background(), "https://example.com", profile, model.ScanScope{IncludeHosts: []string{"example.com"}}, nil)
+	_, findings := bootstrapStandardAuthProfile(context.Background(), "https://example.com", profile, scope.Normalize("https://example.com", model.ScanScope{}), nil)
 	if len(findings) != 1 {
 		t.Fatalf("expected exactly one finding, got %d", len(findings))
 	}

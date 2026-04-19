@@ -371,14 +371,14 @@ type AgentRunTelemetry struct {
 }
 
 type DecisionDashboard struct {
-	CoverageCompletenessScore int            `json:"coverageCompletenessScore"`
-	AuthenticatedCoverageRate float64        `json:"authenticatedCoverageRate"`
-	NewFindings               int            `json:"newFindings"`
-	ChangedFindings           int            `json:"changedFindings"`
-	ResolvedFindings          int            `json:"resolvedFindings"`
-	TopAttackPaths            []string       `json:"topAttackPaths,omitempty"`
-	UntestedReasons           []string       `json:"untestedReasons,omitempty"`
-	ActionableFindings        int            `json:"actionableFindings"`
+	CoverageCompletenessScore int      `json:"coverageCompletenessScore"`
+	AuthenticatedCoverageRate float64  `json:"authenticatedCoverageRate"`
+	NewFindings               int      `json:"newFindings"`
+	ChangedFindings           int      `json:"changedFindings"`
+	ResolvedFindings          int      `json:"resolvedFindings"`
+	TopAttackPaths            []string `json:"topAttackPaths,omitempty"`
+	UntestedReasons           []string `json:"untestedReasons,omitempty"`
+	ActionableFindings        int      `json:"actionableFindings"`
 	// MITREHeatmap is a deterministic count of findings per MITRE ATT&CK
 	// technique ID, used by the dashboard UI to render a heatmap. Empty
 	// when no findings carry MITRE annotations.
