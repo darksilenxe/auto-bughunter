@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useScan } from "../context/ScanContext";
 import AttackPathGraph from "../components/AttackPathGraph";
+import AttackGraph from "../components/AttackGraph";
 import LiveFeed from "../components/LiveFeed";
 
 export default function Dashboard() {
@@ -167,6 +168,14 @@ export default function Dashboard() {
               <pre className="summary">{job.aiSummary}</pre>
             </>
           )}
+        </section>
+      )}
+
+      {/* NodeZero-style attack graph (shown once findings or assets are available) */}
+      {job && (job.findings?.length > 0 || job.assets?.length > 0) && (
+        <section className="card">
+          <h2>🗺 Attack Graph</h2>
+          <AttackGraph job={job} liveEvents={liveEvents} />
         </section>
       )}
 
