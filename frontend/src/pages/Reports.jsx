@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useScan, API_BASE } from "../context/ScanContext";
+import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 
 export default function Reports() {
   const { job, scanId, screenshots } = useScan();
@@ -217,6 +218,8 @@ export default function Reports() {
           <pre className="summary">{job.aiSummary}</pre>
         </section>
       )}
+
+      <SecurityKnowledgePanel knowledge={job.modelRecommendations?.securityKnowledge} />
 
       {/* Screenshots gallery */}
       {screenshots.length > 0 && (
