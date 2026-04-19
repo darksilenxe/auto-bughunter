@@ -86,8 +86,14 @@ function bezier(x1, y1, x2, y2) {
 }
 
 function fmtMs(ms) {
-  const s = Math.floor(ms / 1000);
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const totalS = Math.floor(ms / 1000);
+  const h = Math.floor(totalS / 3600);
+  const m = Math.floor((totalS % 3600) / 60);
+  const s = totalS % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function shortLabel(str, max = 24) {
@@ -699,7 +705,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
             const isHighFind  = node.type === "finding" && node.severity === "high";
             const showBadge   = isHighFind || isComp;
             const labelLines  = node.label.length > LABEL_FIRST_LINE_MAX
-              ? [node.label.slice(0, LABEL_FIRST_LINE_MAX), node.label.slice(LABEL_FIRST_LINE_MAX, LABEL_SECOND_LINE_MAX)]
+              ? [node.label.slice(0, LABEL_FIRST_LINE_MAX), node.label.slice(LABEL_FIRST_LINE_MAX, LABEL_FIRST_LINE_MAX + LABEL_SECOND_LINE_MAX)]
               : [node.label];
 
             return (

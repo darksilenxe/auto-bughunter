@@ -22,7 +22,6 @@ Do not scan third-party systems without written permission.
 
 - Asynchronous scan jobs with multi-agent orchestration
 - PostgreSQL-backed scan persistence
-- Target allowlist enforcement (`ALLOWED_TARGETS`)
 - Authenticated scan profiles (headers, cookies, basic auth, user-agent)
 - Multi-agent architecture:
   - **Reconnaissance Agent**: DNS resolution, service discovery, tech stack probing
@@ -395,7 +394,6 @@ docker compose \
 
 ## Notes
 
-- If `ALLOWED_TARGETS` is empty, scans are rejected.
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.

@@ -26,7 +26,7 @@ harness against any host you are not explicitly authorized to test.
 | File | Purpose |
 |------|---------|
 | `docker-compose.juiceshop.yml` | Compose overlay that adds a `juice-shop` service and makes the backend wait for it to be healthy. |
-| `.env.juiceshop.example`       | Sample `.env` tuned for the harness (`ALLOWED_TARGETS=juice-shop`, optional integrations off, OAST enabled in-cluster). |
+| `.env.juiceshop.example`       | Sample `.env` tuned for the harness (optional integrations off, OAST enabled in-cluster). |
 | `scan.sh`                      | Submits a scan against `http://juice-shop:3000`, polls until completion, summarizes findings and downloads the Markdown pen-test report. |
 
 ## Quick start
@@ -64,8 +64,7 @@ Artifacts are written to `testing/juice-shop/out/`:
 `scan.sh` sends a single `POST /api/scan` request. The important fields:
 
 - `target`: `http://juice-shop:3000` — the in-cluster hostname Juice Shop is
-  reachable on. `ALLOWED_TARGETS=juice-shop` (set in the env file) is what
-  authorizes the host.
+  reachable on.
 - `programScopeProfile.includeHosts`: `["juice-shop"]` so runtime endpoint
   expansion stays inside the container.
 - `authProfile`: a benign custom header + UA. The platform refuses scan
@@ -127,7 +126,7 @@ docker compose \
 | Variable        | Default                              | Notes |
 |-----------------|--------------------------------------|-------|
 | `API_BASE`      | `http://localhost:8080`              | Backend API base URL |
-| `TARGET_URL`    | `http://juice-shop:3000`             | Must match an entry in `ALLOWED_TARGETS` |
+| `TARGET_URL`    | `http://juice-shop:3000`             | Target URL for the scan |
 | `POLL_TIMEOUT`  | `1200`                               | Max seconds to wait for the job to finish |
 | `POLL_INTERVAL` | `10`                                 | Seconds between status polls |
 | `OUTPUT_DIR`    | `testing/juice-shop/out`             | Where artifacts are written |
