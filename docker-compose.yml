@@ -223,7 +223,7 @@ services:
 
   # Directory brute-forcing — gobuster. Same shared-volume pattern as ffuf.
   gobuster:
-    image: ghcr.io/oj/gobuster:v3.6.0
+    image: ghcr.io/oj/gobuster@sha256:244e4b3b59c6c92f9344bfc39d9f35a7fc209da84d045ba10fbb9800408728d2
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     volumes:
       - shared_tmp:/tmp/auto-bughunter-shared:ro
@@ -245,23 +245,22 @@ services:
     restart: unless-stopped
 
   # SQL injection probe (Python). Keeps the Python runtime out of the
-  # backend image entirely. paoloo/sqlmap publishes a single rolling
-  # `latest` tag (no semver tags); pin by digest in production if you
-  # need reproducible builds.
+  # backend image entirely. Pin by digest to avoid mutable-tag drift and
+  # deprecated image manifest formats.
   sqlmap:
-    image: paoloo/sqlmap:latest
+    image: parrotsec/sqlmap@sha256:c5922651223e33bc33b3225de4a494962101a32b0422cba3a247db2a1579f925
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
   # Nikto web server scanner (Perl).
   nikto:
-    image: sullo/nikto:2.5.0
+    image: ghcr.io/sullo/nikto@sha256:0bb37022ebfadc38d6a9a2755c03bfd1f9e079e01e8946fe548153d9ba0c2012
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
   # WPScan WordPress scanner (Ruby).
   wpscan:
-    image: wpscanteam/wpscan:3.8.28
+    image: wpscanteam/wpscan:v3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 
@@ -321,4 +320,3 @@ volumes:
   shared_tmp:
   assetnote_wordlists:
   tool_updates:
-

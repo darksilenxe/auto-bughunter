@@ -103,8 +103,8 @@ Docker Compose sidecar:
 | `gobuster`         | `ghcr.io/oj/gobuster`              | Directory brute-forcing (consumes wordlist via the `shared_tmp` volume; also has read-only `/wordlists` from the kiterunner sidecar) |
 | `kiterunner`       | local build (see `sidecars/`)      | Assetnote `kr` API content discovery — pre-downloads every wordlist from `wordlists.assetnote.io` into the shared `assetnote_wordlists` volume on first start |
 | `tool-updater`     | local build (see `sidecars/`)      | One-shot service that runs on every `docker compose up`: refreshes the `nuclei_templates` volume and queries GitHub Releases for every pinned tool, writing a JSON report consumed by `GET /api/tools/updates`. Re-run on demand via `docker compose run --rm tool-updater` |
-| `sqlmap`           | `paoloo/sqlmap`                    | SQL injection probing — keeps Python out of the backend image                           |
-| `nikto`            | `sullo/nikto`                      | Web server scanner — keeps Perl out of the backend image                                |
+| `sqlmap`           | `parrotsec/sqlmap`                 | SQL injection probing — keeps Python out of the backend image                           |
+| `nikto`            | `ghcr.io/sullo/nikto`              | Web server scanner — keeps Perl out of the backend image                                |
 | `wpscan`           | `wpscanteam/wpscan`                | WordPress scanner — keeps Ruby out of the backend image                                 |
 | `agents`           | local build (see `agents/`)        | Autonomous agent learner (HTTP, port 8091)                                              |
 | `ml-service`       | local build (see `ml-service/`)    | ML triage / classifier service (HTTP, port 8090)                                        |
