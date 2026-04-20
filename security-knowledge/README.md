@@ -58,10 +58,11 @@ references, and avoid mirroring article bodies into the runtime corpus.
    artifact:
 
    ```bash
-   python3 /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/tools/generate_corpus.py \
+   cd security-knowledge
+   python3 tools/generate_corpus.py \
      fetch-web-text \
-     --sources /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/sources/corpus_sources.json \
-     --output /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/data/website_text.json
+     --sources sources/corpus_sources.json \
+     --output data/website_text.json
    ```
 
    This satisfies the website-ingestion workflow: it reads allowed websites,
@@ -70,12 +71,13 @@ references, and avoid mirroring article bodies into the runtime corpus.
 3. Rebuild the generated corpus and review report:
 
    ```bash
-   python3 /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/tools/generate_corpus.py \
+   cd security-knowledge
+   python3 tools/generate_corpus.py \
      build \
-     --sources /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/sources/corpus_sources.json \
-     --website-text /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/data/website_text.json \
-     --output /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/data/corpus.json \
-     --review-output /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge/data/corpus.review.json
+     --sources sources/corpus_sources.json \
+     --website-text data/website_text.json \
+     --output data/corpus.json \
+     --review-output data/corpus.review.json
    ```
 
 4. Review `data/corpus.review.json` for exceptions before committing changes.
@@ -100,7 +102,7 @@ The repository includes lightweight tests for the generator and schema
 compatibility:
 
 ```bash
-cd /home/runner/work/auto-bughunter/auto-bughunter/security-knowledge
+cd security-knowledge
 python3 -m pip install -r requirements.txt
 python3 -m unittest discover -s tests -v
 ```
