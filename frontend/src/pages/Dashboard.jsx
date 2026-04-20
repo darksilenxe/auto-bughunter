@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useScan } from "../context/ScanContext";
 import AttackGraph from "../components/AttackGraph";
+import AttackPathGraph from "../components/AttackPathGraph";
 import BurpImport from "../components/BurpImport";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [useNuclei, setUseNuclei] = useState(false);
   const [useZap, setUseZap] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const [activeGraphTab, setActiveGraphTab] = useState("chain");
 
   function handleBurpImport(cfg) {
     if (cfg.target)       setTarget(cfg.target);
@@ -190,12 +192,53 @@ export default function Dashboard() {
       {/* Attack graph — shown from the moment a scan starts through completion */}
       {(loading || job) && (
         <section className="card" style={{ padding: "0", overflow: "hidden" }}>
-          <AttackGraph
-            job={job}
-            liveEvents={liveEvents}
-            isRunning={isRunning}
-            onScreenshot={(b64) => setSelectedScreenshot(b64)}
-          />
+          {/* Tab bar */}
+          <div style={{
+            display: "flex",
+            background: "rgba(0,0,0,0.55)",
+            borderBottom: "1px solid rgba(124,58,237,0.25)",
+          }}>
+            {[
+              { id: "chain",    label: "⛓ Attack Chain" },
+              { id: "pipeline", label: "⚡ Agent Pipeline" },
+            ].map(({ id, label }) => {
+              const active = activeGraphTab === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setActiveGraphTab(id)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    borderBottom: active ? "2px solid #a78bfa" : "2px solid transparent",
+                    color: active ? "#c4b5fd" : "rgba(255,255,255,0.4)",
+                    fontWeight: active ? 700 : 400,
+                    fontSize: "0.8rem",
+                    padding: "8px 18px",
+                    cursor: "pointer",
+                    letterSpacing: "0.03em",
+                    transition: "color 0.15s, border-color 0.15s",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {activeGraphTab === "chain" && (
+            <AttackGraph
+              job={job}
+              liveEvents={liveEvents}
+              isRunning={isRunning}
+              onScreenshot={(b64) => setSelectedScreenshot(b64)}
+            />
+          )}
+          {activeGraphTab === "pipeline" && (
+            <div style={{ padding: "12px" }}>
+              <AttackPathGraph events={liveEvents} />
+            </div>
+          )}
         </section>
       )}
 
