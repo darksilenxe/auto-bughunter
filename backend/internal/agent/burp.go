@@ -39,6 +39,10 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 )
 
+// burpActiveCheckCount is the number of active scan check functions called in
+// BurpAgent.Run. Update this constant whenever a check is added or removed.
+const burpActiveCheckCount = 10
+
 // BurpAgent replicates Burp Suite active-scan capabilities in pure Go.
 type BurpAgent struct {
 	enabled bool
@@ -102,7 +106,7 @@ func (a *BurpAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, err
 		})
 	}
 
-	output.Metadata["active_checks_run"] = "10"
+	output.Metadata["active_checks_run"] = fmt.Sprintf("%d", burpActiveCheckCount)
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
 	output.DebugNotes = "Burp Suite Go agent: 10 active web scan checks + optional Enterprise API."
 	return output, nil

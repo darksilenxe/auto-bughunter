@@ -36,6 +36,10 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 )
 
+// metasploitNativeProbeCount is the number of native Go probe functions called
+// in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
+const metasploitNativeProbeCount = 13
+
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
 	enabled bool
@@ -102,7 +106,7 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 		})
 	}
 
-	output.Metadata["native_probes_run"] = "13"
+	output.Metadata["native_probes_run"] = fmt.Sprintf("%d", metasploitNativeProbeCount)
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
 	output.DebugNotes = "Metasploit agent: native CVE probes + optional msfrpc module execution."
 	return output, nil
