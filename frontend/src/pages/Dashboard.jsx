@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { useScan } from "../context/ScanContext";
-import AttackGraph from "../components/AttackGraph";
-import AttackPathGraph from "../components/AttackPathGraph";
 import BurpImport from "../components/BurpImport";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 
 export default function Dashboard() {
-  const { startScan, job, loading, error, liveEvents, scanId } = useScan();
+  const { startScan, job, loading, error, scanId } = useScan();
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
   const [customHeaderName, setCustomHeaderName] = useState("");
@@ -24,8 +22,6 @@ export default function Dashboard() {
   const [programRules, setProgramRules] = useState("");
   const [useNuclei, setUseNuclei] = useState(false);
   const [useZap, setUseZap] = useState(false);
-  const [selectedScreenshot, setSelectedScreenshot] = useState(null);
-  const [activeGraphTab, setActiveGraphTab] = useState("chain");
 
   function handleBurpImport(cfg) {
     if (cfg.target)       setTarget(cfg.target);
@@ -189,59 +185,6 @@ export default function Dashboard() {
         {scanId && <p className="meta">Scan ID: {scanId}</p>}
       </section>
 
-      {/* Attack graph — shown from the moment a scan starts through completion */}
-      {(loading || job) && (
-        <section className="card" style={{ padding: "0", overflow: "hidden" }}>
-          {/* Tab bar */}
-          <div style={{
-            display: "flex",
-            background: "rgba(0,0,0,0.55)",
-            borderBottom: "1px solid rgba(124,58,237,0.25)",
-          }}>
-            {[
-              { id: "chain",    label: "⛓ Attack Chain" },
-              { id: "pipeline", label: "⚡ Agent Pipeline" },
-            ].map(({ id, label }) => {
-              const active = activeGraphTab === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => setActiveGraphTab(id)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    borderBottom: active ? "2px solid #a78bfa" : "2px solid transparent",
-                    color: active ? "#c4b5fd" : "rgba(255,255,255,0.4)",
-                    fontWeight: active ? 700 : 400,
-                    fontSize: "0.8rem",
-                    padding: "8px 18px",
-                    cursor: "pointer",
-                    letterSpacing: "0.03em",
-                    transition: "color 0.15s, border-color 0.15s",
-                  }}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          {activeGraphTab === "chain" && (
-            <AttackGraph
-              job={job}
-              liveEvents={liveEvents}
-              isRunning={isRunning}
-              onScreenshot={(b64) => setSelectedScreenshot(b64)}
-            />
-          )}
-          {activeGraphTab === "pipeline" && (
-            <div style={{ padding: "12px" }}>
-              <AttackPathGraph events={liveEvents} />
-            </div>
-          )}
-        </section>
-      )}
-
       {/* Summary when complete */}
       {job && job.status !== "running" && (
         <>
@@ -264,25 +207,6 @@ export default function Dashboard() {
         </>
       )}
 
-      {/* Screenshot lightbox */}
-      {selectedScreenshot && (
-        <div
-          onClick={() => setSelectedScreenshot(null)}
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000, cursor: "zoom-out",
-          }}
-        >
-          <img src={`data:image/png;base64,${selectedScreenshot}`} alt="Screenshot"
-            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: "8px" }}
-            onClick={(e) => e.stopPropagation()} />
-          <button onClick={() => setSelectedScreenshot(null)}
-            style={{ position: "absolute", top: "16px", right: "24px", background: "none", border: "none", color: "#fff", fontSize: "2rem", cursor: "pointer" }}>
-            ×
-          </button>
-        </div>
-      )}
     </div>
   );
 }

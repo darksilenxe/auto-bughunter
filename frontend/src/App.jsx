@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
+import AttackGraph from "./pages/AttackGraph";
 import Findings from "./pages/Findings";
 import Reports from "./pages/Reports";
 import Scans from "./pages/Scans";
@@ -12,11 +13,12 @@ export default function App() {
       <Sidebar />
       <main style={{ paddingLeft: "0" }}>
         <Routes>
-          <Route path="/"         element={<Dashboard />} />
-          <Route path="/findings" element={<Findings />} />
-          <Route path="/reports"  element={<Reports />} />
-          <Route path="/scans"    element={<Scans />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/"             element={<Dashboard />} />
+          <Route path="/attack-graph" element={<AttackGraph />} />
+          <Route path="/findings"     element={<Findings />} />
+          <Route path="/reports"      element={<Reports />} />
+          <Route path="/scans"        element={<Scans />} />
+          <Route path="/settings"     element={<Settings />} />
         </Routes>
       </main>
     </div>
