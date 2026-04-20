@@ -238,6 +238,9 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	hasSQLi := false
 	hasWordPress := false
 	hasManyForms := false
+	hasSSRFIndicator := false
+	hasAuthIssue := false
+	hasUploadEndpoint := false
 	for _, f := range allFindings {
 		if f.Severity == model.SeverityHigh {
 			hasHigh = true
@@ -254,6 +257,21 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if strings.Contains(title, "form") && (strings.Contains(title, "csrf") || strings.Contains(ev, "forms=")) {
 			hasManyForms = true
 		}
+		if strings.Contains(cat, "ssrf") || strings.Contains(title, "ssrf") ||
+			strings.Contains(title, "server-side request") || strings.Contains(title, "proxy") ||
+			strings.Contains(ev, "url=") || strings.Contains(ev, "fetch=") {
+			hasSSRFIndicator = true
+		}
+		if strings.Contains(cat, "access_control") || strings.Contains(cat, "auth") ||
+			strings.Contains(title, "authentication") || strings.Contains(title, "session") ||
+			strings.Contains(title, "jwt") || strings.Contains(title, "token") ||
+			strings.Contains(title, "credential") {
+			hasAuthIssue = true
+		}
+		if strings.Contains(title, "upload") || strings.Contains(ev, "upload") ||
+			strings.Contains(title, "file") || strings.Contains(ev, "multipart") {
+			hasUploadEndpoint = true
+		}
 	}
 
 	_ = hasSQLi
@@ -269,9 +287,44 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasManyForms {
 			spawned = append(spawned, "cors_redirect")
 		}
+		// SQL/command injection findings warrant deeper auth and SSRF testing.
+		if hasSQLi {
+			spawned = append(spawned, "auth_bypass")
+		}
+	case "api_security":
+		// API proxy/fetch patterns often co-occur with SSRF.
+		if hasSSRFIndicator {
+			spawned = append(spawned, "ssrf")
+		}
+	case "access_control":
+		// Weak/missing auth warrants dedicated auth bypass testing.
+		if hasAuthIssue || hasHigh {
+			spawned = append(spawned, "auth_bypass")
+		}
+	case "information_disclosure":
+		// Exposed endpoints may accept file uploads; also check auth.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
+		}
+		if hasAuthIssue {
+			spawned = append(spawned, "auth_bypass")
+		}
+	case "reconnaissance":
+		// Upload surface discovered during recon.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
+		}
+		// Any server-side fetcher hint from recon data.
+		if hasSSRFIndicator {
+			spawned = append(spawned, "ssrf")
+		}
 	case "wordlist":
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "analysis")
+		}
+		// Wordlist may expose upload endpoints.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
 		}
 	case "analysis":
 		if hasHigh {

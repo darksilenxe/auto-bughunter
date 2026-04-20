@@ -1,3 +1,5 @@
+name: auto-bughunter
+
 services:
   db:
     image: postgres:16.2-alpine
@@ -126,6 +128,12 @@ services:
     # for each affected integration.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Compose file mounted read-only so the sidecar-exec shim can run
+      # `docker compose exec -T <svc> <tool>` from inside the backend
+      # container. COMPOSE_FILE below tells docker compose where to find it,
+      # and the top-level `name:` field pins the project name so container
+      # look-ups always succeed regardless of the host working directory.
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
       # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
       # sidecars. Mounted at the same path inside both backend and the
       # consumer sidecars so `-w <path>` resolves identically on both
@@ -146,6 +154,9 @@ services:
       SHARED_TMP_DIR: /tmp/auto-bughunter-shared
       ASSETNOTE_WORDLIST_DIR: /wordlists
       TOOL_UPDATES_REPORT_PATH: /var/lib/auto-bughunter/updates/report.json
+      # Tell docker compose (used by sidecar-exec shims) where to find the
+      # compose file and which project name to use when exec-ing into sidecars.
+      COMPOSE_FILE: /app/docker-compose.yml
     depends_on:
       db:
         condition: service_healthy
@@ -162,7 +173,7 @@ services:
       nuclei:
         condition: service_started
       chromium:
-        condition: service_started
+        condition: service_healthy
       projectdiscovery:
         condition: service_started
       ffuf:
@@ -221,6 +232,15 @@ services:
       - --remote-debugging-address=0.0.0.0
       - --remote-debugging-port=9222
     restart: unless-stopped
+    healthcheck:
+      # Probe the DevTools /json/version endpoint to confirm headless-shell
+      # is accepting connections before the backend tries to attach via
+      # chromedp.NewRemoteAllocator.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9222/json/version >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   # Shared ProjectDiscovery suite. A single sidecar built locally that
   # bundles subfinder, httpx, naabu, dnsx, shuffledns, katana, tlsx,
