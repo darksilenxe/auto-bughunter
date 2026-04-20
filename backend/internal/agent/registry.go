@@ -259,7 +259,8 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 		if strings.Contains(cat, "ssrf") || strings.Contains(title, "ssrf") ||
 			strings.Contains(title, "server-side request") || strings.Contains(title, "proxy") ||
-			strings.Contains(ev, "url=") || strings.Contains(ev, "fetch=") {
+			strings.Contains(ev, "param=url") || strings.Contains(ev, "param=fetch") ||
+			strings.Contains(ev, "param=proxy") || strings.Contains(ev, "param=src") {
 			hasSSRFIndicator = true
 		}
 		if strings.Contains(cat, "access_control") || strings.Contains(cat, "auth") ||

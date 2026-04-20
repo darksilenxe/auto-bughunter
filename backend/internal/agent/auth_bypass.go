@@ -200,11 +200,12 @@ func testJWTWeakSecret(ctx context.Context, client *http.Client, target string, 
 	payload["is_admin"] = true
 	payloadJSON, _ := json.Marshal(payload)
 
-	// Common weak HMAC secrets used in insecure JWT configurations
+	// Common weak HMAC secrets used in insecure JWT configurations.
+	// Empty string is omitted — an empty HS256 key is already indistinguishable
+	// from alg:none in practice and is covered by testJWTAlgNone.
 	weakSecrets := []string{
 		"secret", "password", "changeme", "123456", "qwerty",
 		"jwt_secret", "mysecret", "youshallnotpass", "supersecret",
-		"", // alg:none fallback handled above; try empty string as secret too
 	}
 
 	for _, secret := range weakSecrets {
@@ -407,7 +408,7 @@ func testSessionFixation(ctx context.Context, client *http.Client, target string
 		if !sc.HttpOnly {
 			missing = append(missing, "HttpOnly")
 		}
-		if sc.SameSite == http.SameSiteDefaultMode {
+		if sc.SameSite == http.SameSiteDefaultMode || sc.SameSite == http.SameSiteNoneMode {
 			missing = append(missing, "SameSite")
 		}
 		if len(missing) > 0 {
