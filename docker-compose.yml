@@ -157,6 +157,11 @@ services:
       # Tell docker compose (used by sidecar-exec shims) where to find the
       # compose file and which project name to use when exec-ing into sidecars.
       COMPOSE_FILE: /app/docker-compose.yml
+      # Metasploit RPC — set MSF_RPC_URL and MSF_RPC_PASSWORD to enable live
+      # Metasploit module execution. Leave MSF_RPC_URL empty to run only the
+      # built-in native Go web exploit probes (no msfrpcd required).
+      MSF_RPC_URL: ${MSF_RPC_URL:-}
+      MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy
@@ -185,6 +190,8 @@ services:
       nikto:
         condition: service_started
       wpscan:
+        condition: service_started
+      metasploit:
         condition: service_started
       kiterunner:
         condition: service_started
@@ -312,6 +319,25 @@ services:
     image: wpscanteam/wpscan:v3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
+
+  # Metasploit Framework — optional sidecar for running web exploit modules
+  # via msfrpcd JSON-RPC. The container is kept alive with `tail -f /dev/null`;
+  # start msfrpcd inside it to enable the RPC phase of the MetasploitAgent:
+  #
+  #   docker compose exec metasploit \
+  #     msfrpcd -P "${MSF_RPC_PASSWORD}" -S false -a 0.0.0.0 -p 55553 -f
+  #
+  # Then set MSF_RPC_URL=http://metasploit:55553 and MSF_RPC_PASSWORD in the
+  # backend environment. The MetasploitAgent's native Go probes run regardless
+  # of whether msfrpcd is active.
+  metasploit:
+    image: metasploitframework/metasploit-framework:latest
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+    # msfrpcd listens on 55553 inside the compose network; no host-port
+    # binding needed because the backend reaches it via the service name.
+    expose:
+      - "55553"
 
   # Tool-updater — one-shot container that runs on every `docker compose
   # up`. Refreshes the nuclei templates volume and queries GitHub Releases

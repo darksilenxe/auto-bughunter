@@ -241,6 +241,7 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	hasSSRFIndicator := false
 	hasAuthIssue := false
 	hasUploadEndpoint := false
+	hasRCEIndicator := false
 	for _, f := range allFindings {
 		if f.Severity == model.SeverityHigh {
 			hasHigh = true
@@ -273,6 +274,13 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 			strings.Contains(title, "file") || strings.Contains(ev, "multipart") {
 			hasUploadEndpoint = true
 		}
+		if strings.Contains(cat, "remote_code_execution") || strings.Contains(cat, "rce") ||
+			strings.Contains(title, "rce") || strings.Contains(title, "remote code") ||
+			strings.Contains(title, "log4shell") || strings.Contains(title, "spring4shell") ||
+			strings.Contains(title, "shellshock") || strings.Contains(title, "struts") ||
+			strings.Contains(title, "path traversal") || strings.Contains(title, "webshell") {
+			hasRCEIndicator = true
+		}
 	}
 
 	_ = hasSQLi
@@ -283,6 +291,10 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	case "scanning":
 		if hasHigh {
 			spawned = append(spawned, "attack_path")
+		}
+		// Any high-severity finding during scanning warrants Metasploit exploit probes.
+		if hasHigh || hasRCEIndicator {
+			spawned = append(spawned, "metasploit")
 		}
 	case "input_validation":
 		if hasManyForms {
@@ -330,6 +342,15 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	case "analysis":
 		if hasHigh {
 			spawned = append(spawned, "ml_triage")
+		}
+		// RCE-class findings trigger Metasploit exploit verification.
+		if hasRCEIndicator {
+			spawned = append(spawned, "metasploit")
+		}
+	case "attack_path":
+		// After attack path analysis, if RCE indicators exist escalate to Metasploit.
+		if hasRCEIndicator || hasHigh {
+			spawned = append(spawned, "metasploit")
 		}
 	}
 
