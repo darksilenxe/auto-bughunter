@@ -236,19 +236,18 @@ services:
   # when CHROME_REMOTE_URL is set (see backend/internal/scanner/browser.go).
   chromium:
     image: chromedp/headless-shell:latest
-    # --no-sandbox is required because the image runs as root; the
-    # headless-shell entrypoint already wires up --remote-debugging-port.
+    # The image entrypoint (run.sh) already passes --no-sandbox,
+    # --remote-debugging-address=0.0.0.0, and --remote-debugging-port=9223
+    # to headless-shell, and runs socat to forward host port 9222 → 9223.
+    # Only pass flags not already set by the entrypoint to avoid conflicts.
     command:
-      - --no-sandbox
       - --disable-gpu
-      - --remote-debugging-address=0.0.0.0
-      - --remote-debugging-port=9222
     restart: unless-stopped
     healthcheck:
-      # Probe the DevTools /json/version endpoint to confirm headless-shell
-      # is accepting connections before the backend tries to attach via
-      # chromedp.NewRemoteAllocator.
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9222/json/version >/dev/null 2>&1 || exit 1"]
+      # Probe the DevTools port via socat (wget/curl are not in this image).
+      # socat is already present in chromedp/headless-shell for the port
+      # forwarding shim, so this avoids any extra dependency.
+      test: ["CMD-SHELL", "socat -u /dev/null TCP4:localhost:9222 2>/dev/null || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 12
