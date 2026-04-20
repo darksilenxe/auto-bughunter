@@ -633,6 +633,80 @@ func TestProbeExchangeProxyLogon_Vulnerable(t *testing.T) {
 	}
 }
 
+func TestProbeWebAssemblyModuleAbuse_NotDetected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("<html>no wasm</html>")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeWebAssemblyModuleAbuse(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings when no wasm module is exposed, got %d", len(findings))
+	}
+}
+
+func TestProbeWebAssemblyModuleAbuse_DetectedNoUpload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app.wasm" {
+			w.Header().Set("Content-Type", "application/wasm")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}) //nolint:errcheck
+			return
+		}
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeWebAssemblyModuleAbuse(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected a wasm surface finding when wasm module is detected")
+	}
+	if findings[0].ID != "msf-wasm-surface-detected" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeWebAssemblyModuleAbuse_ExploitableUpload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app.wasm":
+			w.Header().Set("Content-Type", "application/wasm")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}) //nolint:errcheck
+		case r.Method == http.MethodPut && r.URL.Path == "/uploads/abh_probe_8f3a2b.wasm":
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodGet && r.URL.Path == "/uploads/abh_probe_8f3a2b.wasm":
+			w.Header().Set("Content-Type", "application/wasm")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}) //nolint:errcheck
+		case r.Method == http.MethodDelete && r.URL.Path == "/uploads/abh_probe_8f3a2b.wasm":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeWebAssemblyModuleAbuse(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected a wasm exploit finding when upload/overwrite works")
+	}
+	if findings[0].ID != "msf-wasm-module-overwrite" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+	if findings[0].Severity != model.SeverityHigh {
+		t.Errorf("expected High severity, got %s", findings[0].Severity)
+	}
+}
+
 func TestFactory_NativeProbesCount(t *testing.T) {
 	t.Setenv("MSF_RPC_URL", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -645,8 +719,7 @@ func TestFactory_NativeProbesCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Metadata["native_probes_run"] != "13" {
-		t.Errorf("expected native_probes_run=13, got %q", out.Metadata["native_probes_run"])
+	if out.Metadata["native_probes_run"] != "14" {
+		t.Errorf("expected native_probes_run=14, got %q", out.Metadata["native_probes_run"])
 	}
 }
-

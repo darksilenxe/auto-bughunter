@@ -38,7 +38,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 13
+const metasploitNativeProbeCount = 14
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -85,6 +85,7 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probeCitrixADCTraversal(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeThinkPHPRCE(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -182,11 +183,11 @@ func probeLog4Shell(ctx context.Context, client *http.Client, target string, pro
 				Recommendation: "Upgrade Log4j to ≥2.17.1 (Java 8) or ≥2.12.4 (Java 7). " +
 					"Set log4j2.formatMsgNoLookups=true as an interim mitigation. " +
 					"Enforce egress firewall rules to prevent outbound LDAP/RMI connections.",
-				AffectedURL:   target,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:           "CWE-917",
-				CVSSScore:     10.0,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+				AffectedURL:     target,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-917",
+				CVSSScore:       10.0,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1059.007"},
 				References: []string{
 					"https://nvd.nist.gov/vuln/detail/CVE-2021-44228",
@@ -263,11 +264,11 @@ func probeSpring4Shell(ctx context.Context, client *http.Client, target string, 
 				Recommendation: "Upgrade Spring Framework to ≥5.3.18 / ≥5.2.20. " +
 					"Upgrade Spring Boot to ≥2.6.6 / ≥2.5.12. " +
 					"Apply the @InitBinder DataBinder.setDisallowedFields workaround.",
-				AffectedURL:    probeURL,
-				OWASPCategory:  "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:            "CWE-94",
-				CVSSScore:      9.8,
-				CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-94",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190"},
 				References: []string{
 					"https://nvd.nist.gov/vuln/detail/CVE-2022-22965",
@@ -313,18 +314,18 @@ func probeShellshock(ctx context.Context, client *http.Client, target string, pr
 
 		if strings.Contains(string(body), canary) {
 			return []model.Finding{{
-				ID:          "msf-shellshock",
-				Category:    "remote_code_execution",
-				Severity:    model.SeverityHigh,
-				Title:       "Shellshock (CVE-2014-6271) Remote Code Execution",
-				Description: "The target executed a bash function injected via an HTTP header, confirming Shellshock vulnerability (CVE-2014-6271/CVE-2014-7169). Attackers can run arbitrary OS commands without authentication.",
-				Evidence:    fmt.Sprintf("path=%s canary=%q found_in_response=true", path, canary),
-				Recommendation: "Upgrade bash to a patched version. Replace CGI scripts with FCGI or modern server-side handlers. Disable CGI execution if not needed.",
-				AffectedURL:    u.String(),
-				OWASPCategory:  "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:            "CWE-78",
-				CVSSScore:      10.0,
-				CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+				ID:              "msf-shellshock",
+				Category:        "remote_code_execution",
+				Severity:        model.SeverityHigh,
+				Title:           "Shellshock (CVE-2014-6271) Remote Code Execution",
+				Description:     "The target executed a bash function injected via an HTTP header, confirming Shellshock vulnerability (CVE-2014-6271/CVE-2014-7169). Attackers can run arbitrary OS commands without authentication.",
+				Evidence:        fmt.Sprintf("path=%s canary=%q found_in_response=true", path, canary),
+				Recommendation:  "Upgrade bash to a patched version. Replace CGI scripts with FCGI or modern server-side handlers. Disable CGI execution if not needed.",
+				AffectedURL:     u.String(),
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-78",
+				CVSSScore:       10.0,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1059.004"},
 				ReproductionSteps: []string{
 					fmt.Sprintf(`curl -H 'User-Agent: () { ignored; }; echo; echo %s' %s`, canary, u.String()),
@@ -410,11 +411,11 @@ func probeApacheStrutsS2057(ctx context.Context, client *http.Client, target str
 				Evidence:    fmt.Sprintf("probe_path=%q indicator=%s response_status=%d baseline_status=%d", suffix, reason, resp.StatusCode, baseStatus),
 				Recommendation: "Upgrade Apache Struts to ≥2.3.35 or ≥2.5.17. " +
 					"Set `struts.mapper.alwaysSelectFullNamespace` to `false`.",
-				AffectedURL:    probeURL,
-				OWASPCategory:  "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:            "CWE-20",
-				CVSSScore:      10.0,
-				CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-20",
+				CVSSScore:       10.0,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190"},
 				References: []string{
 					"https://nvd.nist.gov/vuln/detail/CVE-2018-11776",
@@ -476,11 +477,11 @@ func probePHPCGIInjection(ctx context.Context, client *http.Client, target strin
 					Recommendation: "Upgrade PHP to a patched version (≥5.3.13 / ≥5.4.3). " +
 						"Configure the web server to strip query strings containing command-line switches. " +
 						"Avoid using PHP CGI; prefer PHP-FPM.",
-					AffectedURL:    probeURL,
-					OWASPCategory:  "OWASP A06:2021 - Vulnerable and Outdated Components",
-					CWE:            "CWE-88",
-					CVSSScore:      7.5,
-					CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+					AffectedURL:     probeURL,
+					OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+					CWE:             "CWE-88",
+					CVSSScore:       7.5,
+					CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
 					MITRETechniques: []string{"T1190"},
 					References: []string{
 						"https://nvd.nist.gov/vuln/detail/CVE-2012-1823",
@@ -563,18 +564,18 @@ func probeHTTPPutWebshell(ctx context.Context, client *http.Client, target strin
 		// If body contains the canary, PHP was executed — full RCE.
 		if strings.Contains(string(body), canary) {
 			return []model.Finding{{
-				ID:          "msf-http-put-webshell",
-				Category:    "remote_code_execution",
-				Severity:    model.SeverityHigh,
-				Title:       "HTTP PUT webshell upload and execution confirmed",
-				Description: "The server accepted an unauthenticated HTTP PUT request and subsequently executed the uploaded PHP file, confirming arbitrary remote code execution. This is consistent with misconfigured WebDAV or Apache `mod_dav`.",
-				Evidence:    fmt.Sprintf("upload_url=%s put_status=%d get_canary_found=true", uploadURL, putResp.StatusCode),
-				Recommendation: "Disable HTTP PUT/WebDAV if not required. If WebDAV is needed, enforce strong authentication and restrict writable directories. Block server-side execution in upload directories.",
-				AffectedURL:    uploadURL,
-				OWASPCategory:  "OWASP A05:2021 - Security Misconfiguration",
-				CWE:            "CWE-434",
-				CVSSScore:      9.8,
-				CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				ID:              "msf-http-put-webshell",
+				Category:        "remote_code_execution",
+				Severity:        model.SeverityHigh,
+				Title:           "HTTP PUT webshell upload and execution confirmed",
+				Description:     "The server accepted an unauthenticated HTTP PUT request and subsequently executed the uploaded PHP file, confirming arbitrary remote code execution. This is consistent with misconfigured WebDAV or Apache `mod_dav`.",
+				Evidence:        fmt.Sprintf("upload_url=%s put_status=%d get_canary_found=true", uploadURL, putResp.StatusCode),
+				Recommendation:  "Disable HTTP PUT/WebDAV if not required. If WebDAV is needed, enforce strong authentication and restrict writable directories. Block server-side execution in upload directories.",
+				AffectedURL:     uploadURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-434",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1505.003"},
 				References: []string{
 					"https://www.rapid7.com/db/modules/exploit/unix/http/apache_mod_cgi_bash_env_exec/",
@@ -585,12 +586,12 @@ func probeHTTPPutWebshell(ctx context.Context, client *http.Client, target strin
 
 		// PUT accepted but execution failed — still a misconfiguration finding.
 		return []model.Finding{{
-			ID:          "msf-http-put-allowed",
-			Category:    "security_misconfiguration",
-			Severity:    model.SeverityMedium,
-			Title:       "Unauthenticated HTTP PUT method allowed",
-			Description: "The server accepted an unauthenticated HTTP PUT request. Although the uploaded PHP file was not executed (possibly due to no PHP handler in that directory), arbitrary file upload could still lead to data tampering or code execution in another context.",
-			Evidence:    fmt.Sprintf("upload_url=%s put_status=%d php_executed=false", uploadURL, putResp.StatusCode),
+			ID:             "msf-http-put-allowed",
+			Category:       "security_misconfiguration",
+			Severity:       model.SeverityMedium,
+			Title:          "Unauthenticated HTTP PUT method allowed",
+			Description:    "The server accepted an unauthenticated HTTP PUT request. Although the uploaded PHP file was not executed (possibly due to no PHP handler in that directory), arbitrary file upload could still lead to data tampering or code execution in another context.",
+			Evidence:       fmt.Sprintf("upload_url=%s put_status=%d php_executed=false", uploadURL, putResp.StatusCode),
 			Recommendation: "Disable HTTP PUT/DELETE/WebDAV methods unless explicitly required. Enforce authentication before accepting any write operations.",
 			AffectedURL:    uploadURL,
 			OWASPCategory:  "OWASP A05:2021 - Security Misconfiguration",
@@ -646,11 +647,11 @@ func probeApachePathTraversal(ctx context.Context, client *http.Client, target s
 				Recommendation: "Upgrade Apache HTTP Server to ≥2.4.51 immediately. " +
 					"Set `Require all denied` on all directories unless explicitly needed. " +
 					"Disable mod_cgi if not required.",
-				AffectedURL:    probeURL,
-				OWASPCategory:  "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:            "CWE-22",
-				CVSSScore:      9.8,
-				CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1083"},
 				ReproductionSteps: []string{
 					fmt.Sprintf("curl -v '%s'", probeURL),
@@ -664,6 +665,136 @@ func probeApachePathTraversal(ctx context.Context, client *http.Client, target s
 		}
 	}
 	return nil
+}
+
+// probeWebAssemblyModuleAbuse detects exposed WebAssembly modules and attempts a
+// safe exploitation path by uploading a probe .wasm file via unauthenticated
+// HTTP PUT to common writable directories.
+func probeWebAssemblyModuleAbuse(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	wasmPaths := []string{
+		"/app.wasm", "/main.wasm", "/index.wasm",
+		"/assets/app.wasm", "/static/app.wasm", "/pkg/app_bg.wasm",
+	}
+	uploadTargets := []string{
+		"/uploads/abh_probe_8f3a2b.wasm",
+		"/webdav/abh_probe_8f3a2b.wasm",
+		"/public/abh_probe_8f3a2b.wasm",
+	}
+	wasmMagic := []byte{0x00, 0x61, 0x73, 0x6d}
+	wasmProbePayload := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+
+	base := strings.TrimRight(target, "/")
+	detectedURL := ""
+	detectEvidence := ""
+
+	for _, path := range wasmPaths {
+		probeURL := base + path
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+
+		contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+		isWasm := resp.StatusCode == http.StatusOK &&
+			(strings.Contains(contentType, "application/wasm") ||
+				(len(body) >= 4 && bytes.Equal(body[:4], wasmMagic)))
+		if isWasm {
+			detectedURL = probeURL
+			detectEvidence = fmt.Sprintf("detected_wasm_url=%s status=%d content_type=%q magic=%t", probeURL, resp.StatusCode, contentType, len(body) >= 4 && bytes.Equal(body[:4], wasmMagic))
+			break
+		}
+	}
+
+	if detectedURL == "" {
+		return nil
+	}
+
+	for _, uploadPath := range uploadTargets {
+		uploadURL := base + uploadPath
+		putReq, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, bytes.NewReader(wasmProbePayload))
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(putReq, profile)
+		putReq.Header.Set("Content-Type", "application/wasm")
+
+		putResp, err := client.Do(putReq)
+		if err != nil {
+			continue
+		}
+		io.Copy(io.Discard, putResp.Body) //nolint:errcheck
+		putResp.Body.Close()
+
+		if putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
+			continue
+		}
+
+		getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, uploadURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(getReq, profile)
+
+		getResp, err := client.Do(getReq)
+		if err != nil {
+			continue
+		}
+		getBody, _ := io.ReadAll(io.LimitReader(getResp.Body, 8192))
+		getResp.Body.Close()
+
+		delReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, uploadURL, nil)
+		if err == nil {
+			scanner.ApplyAuthProfile(delReq, profile)
+			delResp, err := client.Do(delReq)
+			if err == nil {
+				io.Copy(io.Discard, delResp.Body) //nolint:errcheck
+				delResp.Body.Close()
+			}
+		}
+
+		if getResp.StatusCode == http.StatusOK && len(getBody) >= 4 && bytes.Equal(getBody[:4], wasmMagic) {
+			return []model.Finding{{
+				ID:              "msf-wasm-module-overwrite",
+				Category:        "security_misconfiguration",
+				Severity:        model.SeverityHigh,
+				Title:           "Unauthenticated WebAssembly module upload/overwrite confirmed",
+				Description:     "The application exposes WebAssembly content and also accepts unauthenticated HTTP PUT uploads for a .wasm file in a web-accessible path. Attackers can deploy malicious WebAssembly payloads and execute arbitrary client-side logic in users' browsers.",
+				Evidence:        fmt.Sprintf("%s put_upload_url=%s put_status=%d get_status=%d uploaded_magic=true", detectEvidence, uploadURL, putResp.StatusCode, getResp.StatusCode),
+				Recommendation:  "Disable unauthenticated HTTP PUT/WebDAV methods. Restrict write access on static asset directories. Enforce Subresource Integrity (SRI), strong CSP, and signed asset pipelines for WebAssembly modules.",
+				AffectedURL:     uploadURL,
+				OWASPCategory:   "OWASP A08:2021 - Software and Data Integrity Failures",
+				CWE:             "CWE-434",
+				CVSSScore:       8.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:N",
+				MITRETechniques: []string{"T1190", "T1189"},
+				References: []string{
+					"https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/",
+					"https://w3c.github.io/webappsec-subresource-integrity/",
+				},
+			}}
+		}
+	}
+
+	return []model.Finding{{
+		ID:             "msf-wasm-surface-detected",
+		Category:       "security_misconfiguration",
+		Severity:       model.SeverityLow,
+		Title:          "WebAssembly module surface detected",
+		Description:    "The target serves at least one WebAssembly module. An unauthenticated upload/overwrite attempt for a probe .wasm payload was not successful on common writable paths, but the WebAssembly attack surface exists and should be integrity-protected.",
+		Evidence:       detectEvidence,
+		Recommendation: "Protect WebAssembly assets with integrity controls (SRI/signing), enforce strict CSP, and keep PUT/WebDAV disabled on public paths unless required and authenticated.",
+		AffectedURL:    detectedURL,
+		OWASPCategory:  "OWASP A08:2021 - Software and Data Integrity Failures",
+		CWE:            "CWE-353",
+	}}
 }
 
 // ── Metasploit RPC ────────────────────────────────────────────────────────────
@@ -811,8 +942,8 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 				Evidence:    fmt.Sprintf("module=%s rhost=%s rport=%s result=%v", mod.name, rhost, rport, result),
 				Recommendation: "Apply the vendor patch immediately. " +
 					"See module references for remediation guidance.",
-				AffectedURL:   target,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
+				AffectedURL:     target,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
 				MITRETechniques: []string{"T1190"},
 			}
 			if mod.cve != "" {
@@ -869,10 +1000,10 @@ func msfRunModule(ctx context.Context, client *http.Client, rpcURL, token, modul
 		optMap[k] = v
 	}
 	payload := map[string]interface{}{
-		"method":  "module.execute",
-		"token":   token,
-		"mtype":   "auxiliary",
-		"mname":   moduleName,
+		"method":    "module.execute",
+		"token":     token,
+		"mtype":     "auxiliary",
+		"mname":     moduleName,
 		"datastore": optMap,
 	}
 	var resp msfRPCResponse
@@ -968,11 +1099,11 @@ func probeDrupalgeddon2(ctx context.Context, client *http.Client, target string,
 				Recommendation: "Upgrade Drupal core to ≥7.58, ≥8.3.9, ≥8.4.6, or ≥8.5.1. " +
 					"Enable Drupal's security advisory mailing list. " +
 					"Consider a WAF rule blocking #post_render and #lazy_builder in POST bodies.",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:           "CWE-94",
-				CVSSScore:     9.8,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-94",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1059.004"},
 				ReproductionSteps: []string{
 					fmt.Sprintf("POST %s with body: %s", probeURL, formBody),
@@ -1061,11 +1192,11 @@ func probeConfluenceOGNL(ctx context.Context, client *http.Client, target string
 				Recommendation: "Apply Atlassian's security advisory for CVE-2022-26134 immediately. " +
 					"Upgrade Confluence Server/Data Center to a patched version. " +
 					"Block external access to Confluence until patched.",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:           "CWE-74",
-				CVSSScore:     9.8,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-74",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190"},
 				References: []string{
 					"https://nvd.nist.gov/vuln/detail/CVE-2022-26134",
@@ -1137,11 +1268,11 @@ func probeJenkinsScriptConsole(ctx context.Context, client *http.Client, target 
 				Recommendation: "Enable Jenkins authentication and restrict the /script endpoint to Jenkins administrators. " +
 					"Apply the principle of least privilege to all Jenkins roles. " +
 					"Enable Script Security and the Groovy Sandbox.",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A05:2021 - Security Misconfiguration",
-				CWE:           "CWE-306",
-				CVSSScore:     9.8,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-306",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1059.007"},
 				ReproductionSteps: []string{
 					fmt.Sprintf("GET %s", probeURL),
@@ -1200,11 +1331,11 @@ func probeCitrixADCTraversal(ctx context.Context, client *http.Client, target st
 				Recommendation: "Apply Citrix security bulletin CTX267027 immediately. " +
 					"Upgrade to Citrix ADC/Gateway 11.1, 12.0, 12.1, or 13.0 with the fix applied. " +
 					"As an interim, follow CTX267679 mitigation steps (responder policy).",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:           "CWE-22",
-				CVSSScore:     9.8,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190", "T1083"},
 				ReproductionSteps: []string{
 					fmt.Sprintf("curl -k '%s'", probeURL),
@@ -1287,11 +1418,11 @@ func probeThinkPHPRCE(ctx context.Context, client *http.Client, target string, p
 				Recommendation: "Upgrade ThinkPHP to ≥5.0.24 or ≥5.1.31. " +
 					"Disable debug mode in production (APP_DEBUG=false). " +
 					"Validate and sanitise all routing parameters server-side.",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-				CWE:           "CWE-94",
-				CVSSScore:     9.8,
-				CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-94",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
 				MITRETechniques: []string{"T1190"},
 				References: []string{
 					"https://nvd.nist.gov/vuln/detail/CVE-2018-20062",
@@ -1406,11 +1537,11 @@ func probeExchangeProxyLogon(ctx context.Context, client *http.Client, target st
 			Recommendation: "Apply Microsoft Exchange emergency patches for March 2021 (KB5000871). " +
 				"Block external access to /ecp and /owa until patched. " +
 				"Run the Microsoft Safety Scanner to detect existing webshells.",
-			AffectedURL:   ssrfURL,
-			OWASPCategory: "OWASP A06:2021 - Vulnerable and Outdated Components",
-			CWE:           "CWE-918",
-			CVSSScore:     9.1,
-			CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+			AffectedURL:     ssrfURL,
+			OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+			CWE:             "CWE-918",
+			CVSSScore:       9.1,
+			CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
 			MITRETechniques: []string{"T1190", "T1505.003"},
 			References: []string{
 				"https://nvd.nist.gov/vuln/detail/CVE-2021-26855",
