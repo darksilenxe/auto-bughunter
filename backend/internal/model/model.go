@@ -209,11 +209,32 @@ type ScanJob struct {
 	AuditTrail           []ScanAuditEvent        `json:"auditTrail,omitempty"`
 	AgentRuns            []AgentRunTelemetry     `json:"agentRuns,omitempty"`
 	Dashboard            *DecisionDashboard      `json:"dashboard,omitempty"`
+	AttackGraph          *AttackGraphData        `json:"attackGraph,omitempty"`
 	NextActions          []string                `json:"nextActions,omitempty"`
 	AutomatedReport      string                  `json:"automatedReport,omitempty"`
 	ProgramName          string                  `json:"programName,omitempty"`
 	ProgramPolicyVersion string                  `json:"programPolicyVersion,omitempty"`
 	DisallowedTestTypes  []string                `json:"disallowedTestTypes,omitempty"`
+}
+
+type AttackGraphData struct {
+	Source string            `json:"source,omitempty"`
+	Nodes  []AttackGraphNode `json:"nodes,omitempty"`
+	Edges  []AttackGraphEdge `json:"edges,omitempty"`
+}
+
+type AttackGraphNode struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Label    string `json:"label,omitempty"`
+	Sublabel string `json:"sublabel,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	TS       int64  `json:"ts,omitempty"`
+}
+
+type AttackGraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type ReportFeedback struct {

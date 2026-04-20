@@ -21,6 +21,7 @@ import (
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/attackgraph"
 	"auto-bughunter/backend/internal/knowledge"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
@@ -67,11 +68,20 @@ type Server struct {
 	scanTimeout   time.Duration
 	eventBus      *EventBus
 	oast          *oast.Service
+	attackGraphDB AttackGraphStore
 }
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
 // Safe to call with nil to disable.
 func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
+
+// SetAttackGraphStore attaches an optional graph database-backed attack graph store.
+func (s *Server) SetAttackGraphStore(store AttackGraphStore) { s.attackGraphDB = store }
+
+type AttackGraphStore interface {
+	SaveAttackGraph(ctx context.Context, scanID, target string, graph *model.AttackGraphData) error
+	LoadAttackGraph(ctx context.Context, scanID string) (*model.AttackGraphData, error)
+}
 
 type Repository interface {
 	CreateJob(ctx context.Context, job *model.ScanJob) error
@@ -362,6 +372,11 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if s.attackGraphDB != nil {
+		if graph, err := s.attackGraphDB.LoadAttackGraph(r.Context(), id); err == nil && graph != nil {
+			job.AttackGraph = graph
+		}
+	}
 
 	writeJSON(w, http.StatusOK, job)
 }
@@ -465,6 +480,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.AssetLinks = extractAssetLinks(target, job.Assets, job.Findings)
 	if len(job.AssetLinks) > 0 {
 		s.appendAuditEvent(id, "inventory-graph", fmt.Sprintf("Built %d asset relationship links", len(job.AssetLinks)))
+	}
+	if s.attackGraphDB != nil {
+		graph := attackgraph.Build(job)
+		if err := s.attackGraphDB.SaveAttackGraph(context.Background(), id, target, graph); err == nil {
+			job.AttackGraph = graph
+			s.appendAuditEvent(id, "attack-graph", fmt.Sprintf("Persisted attack graph nodes=%d edges=%d", len(graph.Nodes), len(graph.Edges)))
+		}
 	}
 	job.Dashboard = buildDecisionDashboard(job)
 	knowledgeCtx := (*model.SecurityKnowledgeContext)(nil)

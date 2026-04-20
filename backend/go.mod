@@ -8,6 +8,7 @@ require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.0
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 )
 
 require (

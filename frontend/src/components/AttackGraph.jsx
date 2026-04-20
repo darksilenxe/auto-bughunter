@@ -120,6 +120,28 @@ function classifyFinding(title, category, severity, exploitability) {
   return "finding";
 }
 
+function buildGraphFromBackend(job, scanStart, scanEnd) {
+  const data = job?.attackGraph;
+  if (!data || !Array.isArray(data.nodes) || data.nodes.length === 0) return null;
+  const findingByID = Object.fromEntries((job.findings || []).map((f) => [f.id, f]));
+  const nodes = data.nodes
+    .filter((n) => n?.id)
+    .map((n) => ({
+      id: n.id,
+      type: n.type || "finding",
+      severity: n.severity || "info",
+      label: n.label || n.id,
+      sublabel: n.sublabel || "",
+      ts: Math.max(scanStart, Math.min(Number(n.ts) || scanStart, scanEnd)),
+      finding: findingByID[n.id] || null,
+    }));
+  const nodeSet = new Set(nodes.map((n) => n.id));
+  const edges = (data.edges || [])
+    .filter((e) => e?.from && e?.to && nodeSet.has(e.from) && nodeSet.has(e.to))
+    .map((e) => ({ from: e.from, to: e.to }));
+  return { nodes, edges };
+}
+
 // ── Graph data builder ────────────────────────────────────────────────────────
 
 function buildGraph(job, liveEvents) {
@@ -155,6 +177,10 @@ function buildGraph(job, liveEvents) {
   const isComplete = !!job.completedAt;
 
   if (isComplete) {
+    const backendGraph = buildGraphFromBackend(job, scanStart, scanEnd);
+    if (backendGraph) {
+      return { nodes: backendGraph.nodes, edges: backendGraph.edges, scanStart, scanEnd };
+    }
     // ── Post-completion: use full job data ────────────────────────────────
     for (const asset of job.assets || []) {
       const at = (asset.assetType || "").toLowerCase();

@@ -16,6 +16,22 @@ services:
       retries: 10
       start_period: 10s
 
+  neo4j:
+    image: neo4j:5.26.1
+    environment:
+      NEO4J_AUTH: ${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-neo4jpass}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   ml-service:
     build:
       context: ./ml-service
@@ -132,6 +148,8 @@ services:
       TOOL_UPDATES_REPORT_PATH: /var/lib/auto-bughunter/updates/report.json
     depends_on:
       db:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
       ml-service:
         condition: service_started
@@ -324,6 +342,7 @@ services:
 
 volumes:
   db_data:
+  neo4j_data:
   ollama_data:
   openwebui_data:
   agents_data:
