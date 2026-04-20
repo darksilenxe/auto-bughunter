@@ -162,6 +162,11 @@ services:
       # built-in native Go web exploit probes (no msfrpcd required).
       MSF_RPC_URL: ${MSF_RPC_URL:-}
       MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
+      # Burp Suite Enterprise REST API — set BURP_API_URL and BURP_API_KEY to
+      # trigger a Burp Suite Enterprise active scan in addition to the native
+      # Go active-scan checks. Leave empty to run only the built-in checks.
+      BURP_API_URL: ${BURP_API_URL:-}
+      BURP_API_KEY: ${BURP_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

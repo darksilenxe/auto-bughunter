@@ -422,3 +422,231 @@ func TestMetasploitFindings_HaveRequiredFields(t *testing.T) {
 		}
 	}
 }
+
+// ── Extended probe tests ──────────────────────────────────────────────────────
+
+func TestProbeDrupalgeddon2_NotVulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("no drupal here")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeDrupalgeddon2(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings on non-vulnerable server, got %d", len(findings))
+	}
+}
+
+func TestProbeDrupalgeddon2_Vulnerable(t *testing.T) {
+	canary := "DRUPAL_CVE201876_CANARY"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate Drupal echoing the canary as if passthru was executed.
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(canary)) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeDrupalgeddon2(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected Drupalgeddon2 finding when canary is in response")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-drupalgeddon2" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeConfluenceOGNL_NotVulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeConfluenceOGNL(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings, got %d", len(findings))
+	}
+}
+
+func TestProbeConfluenceOGNL_Vulnerable(t *testing.T) {
+	first := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if first {
+			first = false
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Atlassian Confluence ognl error valuestack")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeConfluenceOGNL(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected Confluence OGNL finding when keyword is in response")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-confluence-ognl" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeJenkinsScriptConsole_NotVulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeJenkinsScriptConsole(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings on protected Jenkins, got %d", len(findings))
+	}
+}
+
+func TestProbeJenkinsScriptConsole_Exposed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/script" {
+			w.WriteHeader(http.StatusOK)
+			// Return a Jenkins-like script console page.
+			w.Write([]byte(`<html><body><textarea id="script"></textarea><button>Run Script</button><p>groovy script console</p></body></html>`)) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeJenkinsScriptConsole(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected Jenkins script console finding when endpoint is exposed")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-jenkins-script-console" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeCitrixADCTraversal_NotVulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCitrixADCTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings, got %d", len(findings))
+	}
+}
+
+func TestProbeCitrixADCTraversal_Vulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[global]\nworkgroup = WORKGROUP\n")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCitrixADCTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected Citrix traversal finding when smb.conf is returned")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-citrix-adc-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeThinkPHPRCE_NotVulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("normal app response")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeThinkPHPRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Errorf("expected no findings, got %d", len(findings))
+	}
+}
+
+func TestProbeThinkPHPRCE_Vulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("PHP Version 7.4.3 phpinfo() zend engine details")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeThinkPHPRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected ThinkPHP RCE finding when phpinfo() is in response")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-thinkphp-rce" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeExchangeProxyLogon_NotExchange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeExchangeProxyLogon(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	// Should produce no findings when the server is not Exchange.
+	if len(findings) > 0 {
+		t.Errorf("expected no findings on non-Exchange server, got %d", len(findings))
+	}
+}
+
+func TestProbeExchangeProxyLogon_Vulnerable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fingerprinting paths return Exchange indicators.
+		if strings.Contains(r.URL.Path, "/owa") {
+			w.Header().Set("X-OWA-Version", "15.1.2375.7")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Microsoft Exchange Server OWA")) //nolint:errcheck
+			return
+		}
+		// ProxyLogon SSRF endpoint.
+		if strings.Contains(r.URL.Path, "proxyLogon") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("exchange proxylogon ssrf response")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeExchangeProxyLogon(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Error("expected Exchange ProxyLogon finding on vulnerable server")
+	}
+	if len(findings) > 0 && findings[0].ID != "msf-exchange-proxylogon" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestFactory_NativeProbesCount(t *testing.T) {
+	t.Setenv("MSF_RPC_URL", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := NewMetasploitAgent(true)
+	out, err := a.Run(context.Background(), newMetasploitInput(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Metadata["native_probes_run"] != "13" {
+		t.Errorf("expected native_probes_run=13, got %q", out.Metadata["native_probes_run"])
+	}
+}
+

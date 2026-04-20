@@ -296,6 +296,8 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasHigh || hasRCEIndicator {
 			spawned = append(spawned, "metasploit")
 		}
+		// Burp active scan runs after any scanning phase.
+		spawned = append(spawned, "burp")
 	case "input_validation":
 		if hasManyForms {
 			spawned = append(spawned, "cors_redirect")
@@ -304,6 +306,8 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasSQLi {
 			spawned = append(spawned, "auth_bypass")
 		}
+		// Burp active scan complements input validation for injection checks.
+		spawned = append(spawned, "burp")
 	case "api_security":
 		// API proxy/fetch patterns often co-occur with SSRF.
 		if hasSSRFIndicator {
@@ -331,6 +335,8 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasSSRFIndicator {
 			spawned = append(spawned, "ssrf")
 		}
+		// Burp active scan after recon surfaces new endpoints.
+		spawned = append(spawned, "burp")
 	case "wordlist":
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "analysis")

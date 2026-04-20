@@ -38,6 +38,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("auth_bypass", func() Agent { return NewAuthBypassAgent(true) })
 	f.Register("file_upload", func() Agent { return NewFileUploadAgent(true) })
 	f.Register("metasploit", func() Agent { return NewMetasploitAgent(true) })
+	f.Register("burp", func() Agent { return NewBurpAgent(true) })
 	f.Register("wordlist", func() Agent { return NewWordlistAgent(true) })
 	f.Register("analysis", func() Agent { return NewAnalysisAgent(true) })
 	f.Register("ml_triage", func() Agent { return NewMLTriageAgent(mlService, true) })
