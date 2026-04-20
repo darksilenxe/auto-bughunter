@@ -8,6 +8,8 @@
  *   failed    → red fill
  */
 
+import { useRef, useState } from "react";
+
 // Fixed layout positions (x, y as % of the SVG viewBox 0 0 900 420)
 const LAYOUT = {
   reconnaissance:         { x: 60,  y: 200 },
@@ -68,7 +70,53 @@ function arrowPath(x1, y1, x2, y2) {
 }
 
 export default function AttackPathGraph({ events }) {
-  // Derive node states from the live event stream.
+  const [nodeOffsets, setNodeOffsets] = useState({});
+  const dragState = useRef(null);   // { id, startX, startY, origDx, origDy }
+  const didDrag   = useRef(false);
+  const svgRef    = useRef(null);
+
+  // ── Drag helpers ─────────────────────────────────────────────────────────
+  function svgPoint(e) {
+    const svg = svgRef.current;
+    if (!svg) return { x: e.clientX, y: e.clientY };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+
+  function onNodePointerDown(e, nodeId) {
+    e.stopPropagation();
+    svgRef.current?.setPointerCapture(e.pointerId);
+    const p   = svgPoint(e);
+    const off = nodeOffsets[nodeId] || { dx: 0, dy: 0 };
+    dragState.current = { id: nodeId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
+    didDrag.current   = false;
+  }
+
+  function onSVGPointerMove(e) {
+    if (!dragState.current) return;
+    const p  = svgPoint(e);
+    const dx = dragState.current.origDx + (p.x - dragState.current.startX);
+    const dy = dragState.current.origDy + (p.y - dragState.current.startY);
+    if (Math.abs(p.x - dragState.current.startX) > 3 ||
+        Math.abs(p.y - dragState.current.startY) > 3) {
+      didDrag.current = true;
+    }
+    setNodeOffsets(prev => ({ ...prev, [dragState.current.id]: { dx, dy } }));
+  }
+
+  function onSVGPointerUp() {
+    dragState.current = null;
+  }
+
+  /** Effective position of a named node accounting for user drag. */
+  function effPos(name, basePos) {
+    const off = nodeOffsets[name];
+    return { x: basePos.x + (off?.dx || 0), y: basePos.y + (off?.dy || 0) };
+  }
+
+  // ── Derive node states from the live event stream ────────────────────────
   const nodeStates = {};
   const dynamicEdges = []; // edges for spawned agents
 
@@ -110,8 +158,12 @@ export default function AttackPathGraph({ events }) {
   return (
     <div style={{ width: "100%", overflowX: "auto" }}>
       <svg
+        ref={svgRef}
         viewBox="0 0 900 420"
         width="100%"
+        onPointerMove={onSVGPointerMove}
+        onPointerUp={onSVGPointerUp}
+        onPointerLeave={onSVGPointerUp}
         style={{ background: "rgba(0,0,0,0.35)", borderRadius: "10px", minWidth: "600px" }}
       >
         <defs>
@@ -129,14 +181,15 @@ export default function AttackPathGraph({ events }) {
           ))}
         </defs>
 
-        {/* Edges */}
+        {/* Edges — use effective positions so edges track dragged nodes */}
         {allEdges.map(([a, b], i) => {
           const pa = layout[a], pb = layout[b];
           if (!pa || !pb) return null;
+          const ea = effPos(a, pa), eb = effPos(b, pb);
           return (
             <path
               key={i}
-              d={arrowPath(pa.x, pa.y, pb.x, pb.y)}
+              d={arrowPath(ea.x, ea.y, eb.x, eb.y)}
               stroke="rgba(255,255,255,0.2)"
               strokeWidth="1.5"
               fill="none"
@@ -147,14 +200,20 @@ export default function AttackPathGraph({ events }) {
 
         {/* Nodes */}
         {Array.from(allNames).map((name) => {
-          const pos = layout[name];
-          if (!pos) return null;
-          const state = nodeStates[name] || "pending";
+          const base = layout[name];
+          if (!base) return null;
+          const { x, y } = effPos(name, base);
+          const state  = nodeStates[name] || "pending";
           const colors = STATE_COLOR[state];
           const isRunning = state === "running";
           const label = name.replace(/_/g, " ");
           return (
-            <g key={name} transform={`translate(${pos.x},${pos.y})`}>
+            <g
+              key={name}
+              transform={`translate(${x},${y})`}
+              onPointerDown={(e) => onNodePointerDown(e, name)}
+              style={{ cursor: "grab" }}
+            >
               {isRunning && (
                 <circle r="34" fill="none" stroke="#fbbf24" strokeWidth="2" opacity="0.5">
                   <animate attributeName="r" values="28;38;28" dur="1.4s" repeatCount="indefinite" />
@@ -175,7 +234,7 @@ export default function AttackPathGraph({ events }) {
                 fontSize="7"
                 fontFamily="monospace"
                 fill={colors.text}
-                style={{ userSelect: "none" }}
+                style={{ userSelect: "none", pointerEvents: "none" }}
               >
                 {label.length > 16
                   ? label.split(" ").map((w, i) => (
@@ -187,14 +246,33 @@ export default function AttackPathGraph({ events }) {
           );
         })}
       </svg>
-      {/* Legend */}
-      <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", padding: "6px 4px", fontSize: "0.72rem" }}>
-        {Object.entries(STATE_COLOR).map(([state, c]) => (
-          <span key={state} style={{ display: "flex", alignItems: "center", gap: "5px", color: "rgba(0,0,0,0.8)" }}>
-            <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: c.stroke }} />
-            {state}
-          </span>
-        ))}
+
+      {/* Controls row: Reset Layout button + legend */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "6px 4px", fontSize: "0.72rem" }}>
+        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+          {Object.entries(STATE_COLOR).map(([state, c]) => (
+            <span key={state} style={{ display: "flex", alignItems: "center", gap: "5px", color: "rgba(0,0,0,0.8)" }}>
+              <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: c.stroke }} />
+              {state}
+            </span>
+          ))}
+        </div>
+        {Object.keys(nodeOffsets).length > 0 && (
+          <button
+            onClick={() => setNodeOffsets({})}
+            style={{
+              background: "none",
+              border: "1px solid rgba(167,139,250,0.4)",
+              color: "#a78bfa",
+              fontSize: "0.7rem",
+              padding: "2px 8px",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            ↺ Reset Layout
+          </button>
+        )}
       </div>
     </div>
   );

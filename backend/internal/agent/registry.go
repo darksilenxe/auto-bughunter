@@ -238,6 +238,10 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	hasSQLi := false
 	hasWordPress := false
 	hasManyForms := false
+	hasSSRFIndicator := false
+	hasAuthIssue := false
+	hasUploadEndpoint := false
+	hasRCEIndicator := false
 	for _, f := range allFindings {
 		if f.Severity == model.SeverityHigh {
 			hasHigh = true
@@ -254,6 +258,29 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if strings.Contains(title, "form") && (strings.Contains(title, "csrf") || strings.Contains(ev, "forms=")) {
 			hasManyForms = true
 		}
+		if strings.Contains(cat, "ssrf") || strings.Contains(title, "ssrf") ||
+			strings.Contains(title, "server-side request") || strings.Contains(title, "proxy") ||
+			strings.Contains(ev, "param=url") || strings.Contains(ev, "param=fetch") ||
+			strings.Contains(ev, "param=proxy") || strings.Contains(ev, "param=src") {
+			hasSSRFIndicator = true
+		}
+		if strings.Contains(cat, "access_control") || strings.Contains(cat, "auth") ||
+			strings.Contains(title, "authentication") || strings.Contains(title, "session") ||
+			strings.Contains(title, "jwt") || strings.Contains(title, "token") ||
+			strings.Contains(title, "credential") {
+			hasAuthIssue = true
+		}
+		if strings.Contains(title, "upload") || strings.Contains(ev, "upload") ||
+			strings.Contains(title, "file") || strings.Contains(ev, "multipart") {
+			hasUploadEndpoint = true
+		}
+		if strings.Contains(cat, "remote_code_execution") || strings.Contains(cat, "rce") ||
+			strings.Contains(title, "rce") || strings.Contains(title, "remote code") ||
+			strings.Contains(title, "log4shell") || strings.Contains(title, "spring4shell") ||
+			strings.Contains(title, "shellshock") || strings.Contains(title, "struts") ||
+			strings.Contains(title, "path traversal") || strings.Contains(title, "webshell") {
+			hasRCEIndicator = true
+		}
 	}
 
 	_ = hasSQLi
@@ -265,17 +292,71 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasHigh {
 			spawned = append(spawned, "attack_path")
 		}
+		// Any high-severity finding during scanning warrants Metasploit exploit probes.
+		if hasHigh || hasRCEIndicator {
+			spawned = append(spawned, "metasploit")
+		}
+		// Burp active scan runs after any scanning phase.
+		spawned = append(spawned, "burp")
 	case "input_validation":
 		if hasManyForms {
 			spawned = append(spawned, "cors_redirect")
 		}
+		// SQL/command injection findings warrant deeper auth and SSRF testing.
+		if hasSQLi {
+			spawned = append(spawned, "auth_bypass")
+		}
+		// Burp active scan complements input validation for injection checks.
+		spawned = append(spawned, "burp")
+	case "api_security":
+		// API proxy/fetch patterns often co-occur with SSRF.
+		if hasSSRFIndicator {
+			spawned = append(spawned, "ssrf")
+		}
+	case "access_control":
+		// Weak/missing auth warrants dedicated auth bypass testing.
+		if hasAuthIssue || hasHigh {
+			spawned = append(spawned, "auth_bypass")
+		}
+	case "information_disclosure":
+		// Exposed endpoints may accept file uploads; also check auth.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
+		}
+		if hasAuthIssue {
+			spawned = append(spawned, "auth_bypass")
+		}
+	case "reconnaissance":
+		// Upload surface discovered during recon.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
+		}
+		// Any server-side fetcher hint from recon data.
+		if hasSSRFIndicator {
+			spawned = append(spawned, "ssrf")
+		}
+		// Burp active scan after recon surfaces new endpoints.
+		spawned = append(spawned, "burp")
 	case "wordlist":
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "analysis")
 		}
+		// Wordlist may expose upload endpoints.
+		if hasUploadEndpoint {
+			spawned = append(spawned, "file_upload")
+		}
 	case "analysis":
 		if hasHigh {
 			spawned = append(spawned, "ml_triage")
+		}
+		// RCE-class findings trigger Metasploit exploit verification.
+		if hasRCEIndicator {
+			spawned = append(spawned, "metasploit")
+		}
+	case "attack_path":
+		// After attack path analysis, if RCE indicators exist escalate to Metasploit.
+		if hasRCEIndicator || hasHigh {
+			spawned = append(spawned, "metasploit")
 		}
 	}
 

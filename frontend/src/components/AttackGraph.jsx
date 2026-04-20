@@ -529,8 +529,12 @@ function FindingDetail({ node, scanStart }) {
 // ── Main export ────────────────────────────────────────────────────────────────
 
 export default function AttackGraph({ job, liveEvents = [], isRunning = false, onScreenshot }) {
-  const [selected, setSelected] = useState(null);
-  const [nowMs,    setNowMs]    = useState(() => Date.now());
+  const [selected,     setSelected]     = useState(null);
+  const [nowMs,        setNowMs]        = useState(() => Date.now());
+  const [nodeOffsets,  setNodeOffsets]  = useState({});   // { [id]: {dx,dy} }
+  const dragState  = useRef(null);   // { id, startX, startY, origDx, origDy }
+  const didDrag    = useRef(false);
+  const svgRef     = useRef(null);
 
   // Live elapsed timer – ticks every second while the scan is running.
   useEffect(() => {
@@ -538,6 +542,53 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
   }, [isRunning]);
+
+  // Reset drag offsets whenever a new scan job starts.
+  useEffect(() => { setNodeOffsets({}); }, [job?.id]);
+
+  // ── Drag helpers ──────────────────────────────────────────────────────────
+  /** Convert a PointerEvent's client coordinates into SVG viewBox coordinates. */
+  function svgPoint(e) {
+    const svg = svgRef.current;
+    if (!svg) return { x: e.clientX, y: e.clientY };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  }
+
+  function onNodePointerDown(e, nodeId) {
+    e.stopPropagation();
+    // Capture pointer on the SVG so we keep receiving events even when the
+    // pointer leaves the node or the SVG boundary.
+    svgRef.current?.setPointerCapture(e.pointerId);
+    const p = svgPoint(e);
+    const off = nodeOffsets[nodeId] || { dx: 0, dy: 0 };
+    dragState.current = { id: nodeId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
+    didDrag.current   = false;
+  }
+
+  function onSVGPointerMove(e) {
+    if (!dragState.current) return;
+    const p  = svgPoint(e);
+    const dx = dragState.current.origDx + (p.x - dragState.current.startX);
+    const dy = dragState.current.origDy + (p.y - dragState.current.startY);
+    if (Math.abs(p.x - dragState.current.startX) > 3 ||
+        Math.abs(p.y - dragState.current.startY) > 3) {
+      didDrag.current = true;
+    }
+    setNodeOffsets(prev => ({ ...prev, [dragState.current.id]: { dx, dy } }));
+  }
+
+  function onSVGPointerUp() {
+    dragState.current = null;
+  }
+
+  /** Returns the effective (post-drag) screen position of a laid-out node. */
+  function effPos(node) {
+    const off = nodeOffsets[node.id];
+    return { lx: node.lx + (off?.dx || 0), ly: node.ly + (off?.dy || 0) };
+  }
 
   // Build + lay out the graph every time job or events change.
   const laid = useMemo(() => {
@@ -632,9 +683,28 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
           )}
         </div>
 
-        {/* Right: elapsed time */}
-        <div style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.5)", fontSize: "0.78rem" }}>
-          {fmtMs(elapsedMs)}
+        {/* Right: elapsed time + reset button */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {Object.keys(nodeOffsets).length > 0 && (
+            <button
+              onClick={() => setNodeOffsets({})}
+              title="Reset node positions"
+              style={{
+                background: "none",
+                border: "1px solid rgba(167,139,250,0.35)",
+                color: "#a78bfa",
+                fontSize: "0.7rem",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              ↺ Reset Layout
+            </button>
+          )}
+          <div style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.5)", fontSize: "0.78rem" }}>
+            {fmtMs(elapsedMs)}
+          </div>
         </div>
       </div>
 
@@ -671,13 +741,18 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
       {/* ── Graph SVG ────────────────────────────────────────────────────── */}
       <div style={{ width: "100%", overflowX: "auto" }}>
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
           width="100%"
+          onPointerMove={onSVGPointerMove}
+          onPointerUp={onSVGPointerUp}
+          onPointerLeave={onSVGPointerUp}
           style={{
             background: "rgba(0,0,0,0.5)",
             minWidth: "680px",
             borderLeft: "1px solid rgba(124,58,237,0.2)",
             borderRight: "1px solid rgba(124,58,237,0.2)",
+            cursor: dragState.current ? "grabbing" : "default",
           }}
         >
           <defs>
@@ -709,11 +784,12 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
           {edges.map((e, i) => {
             const a = byId[e.from], b = byId[e.to];
             if (!a || !b) return null;
+            const ea = effPos(a), eb = effPos(b);
             const toCompromise = b.type === "compromise";
             return (
               <path
                 key={i}
-                d={bezier(a.lx, a.ly, b.lx, b.ly)}
+                d={bezier(ea.lx, ea.ly, eb.lx, eb.ly)}
                 stroke={toCompromise ? "rgba(244,63,94,0.4)" : "rgba(167,139,250,0.2)"}
                 strokeWidth={toCompromise ? "1.8" : "1.4"}
                 strokeDasharray={toCompromise ? "5 3" : undefined}
@@ -733,13 +809,18 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
             const labelLines  = node.label.length > LABEL_FIRST_LINE_MAX
               ? [node.label.slice(0, LABEL_FIRST_LINE_MAX), node.label.slice(LABEL_FIRST_LINE_MAX, LABEL_FIRST_LINE_MAX + LABEL_SECOND_LINE_MAX)]
               : [node.label];
+            const { lx, ly } = effPos(node);
 
             return (
               <g
                 key={node.id}
-                transform={`translate(${node.lx},${node.ly})`}
-                onClick={() => setSelected(isSel ? null : node.id)}
-                style={{ cursor: "pointer" }}
+                transform={`translate(${lx},${ly})`}
+                onPointerDown={(e) => onNodePointerDown(e, node.id)}
+                onClick={() => {
+                  if (didDrag.current) { didDrag.current = false; return; }
+                  setSelected(isSel ? null : node.id);
+                }}
+                style={{ cursor: "grab" }}
               >
                 {(isSel || isComp) && (
                   <circle
@@ -813,7 +894,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
 
                 <line
                   x1="0" y1={R + (showBadge ? 24 : 2)}
-                  x2="0" y2={TL_Y - node.ly}
+                  x2="0" y2={TL_Y - ly}
                   stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="3 4"
                 />
               </g>

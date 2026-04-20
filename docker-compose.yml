@@ -1,3 +1,5 @@
+name: auto-bughunter
+
 services:
   db:
     image: postgres:16.2-alpine
@@ -126,6 +128,12 @@ services:
     # for each affected integration.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Compose file mounted read-only so the sidecar-exec shim can run
+      # `docker compose exec -T <svc> <tool>` from inside the backend
+      # container. COMPOSE_FILE below tells docker compose where to find it,
+      # and the top-level `name:` field pins the project name so container
+      # look-ups always succeed regardless of the host working directory.
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
       # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
       # sidecars. Mounted at the same path inside both backend and the
       # consumer sidecars so `-w <path>` resolves identically on both
@@ -146,6 +154,19 @@ services:
       SHARED_TMP_DIR: /tmp/auto-bughunter-shared
       ASSETNOTE_WORDLIST_DIR: /wordlists
       TOOL_UPDATES_REPORT_PATH: /var/lib/auto-bughunter/updates/report.json
+      # Tell docker compose (used by sidecar-exec shims) where to find the
+      # compose file and which project name to use when exec-ing into sidecars.
+      COMPOSE_FILE: /app/docker-compose.yml
+      # Metasploit RPC — set MSF_RPC_URL and MSF_RPC_PASSWORD to enable live
+      # Metasploit module execution. Leave MSF_RPC_URL empty to run only the
+      # built-in native Go web exploit probes (no msfrpcd required).
+      MSF_RPC_URL: ${MSF_RPC_URL:-}
+      MSF_RPC_PASSWORD: ${MSF_RPC_PASSWORD:-}
+      # Burp Suite Enterprise REST API — set BURP_API_URL and BURP_API_KEY to
+      # trigger a Burp Suite Enterprise active scan in addition to the native
+      # Go active-scan checks. Leave empty to run only the built-in checks.
+      BURP_API_URL: ${BURP_API_URL:-}
+      BURP_API_KEY: ${BURP_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -162,7 +183,7 @@ services:
       nuclei:
         condition: service_started
       chromium:
-        condition: service_started
+        condition: service_healthy
       projectdiscovery:
         condition: service_started
       ffuf:
@@ -174,6 +195,8 @@ services:
       nikto:
         condition: service_started
       wpscan:
+        condition: service_started
+      metasploit:
         condition: service_started
       kiterunner:
         condition: service_started
@@ -221,6 +244,15 @@ services:
       - --remote-debugging-address=0.0.0.0
       - --remote-debugging-port=9222
     restart: unless-stopped
+    healthcheck:
+      # Probe the DevTools /json/version endpoint to confirm headless-shell
+      # is accepting connections before the backend tries to attach via
+      # chromedp.NewRemoteAllocator.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9222/json/version >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   # Shared ProjectDiscovery suite. A single sidecar built locally that
   # bundles subfinder, httpx, naabu, dnsx, shuffledns, katana, tlsx,
@@ -292,6 +324,25 @@ services:
     image: wpscanteam/wpscan:v3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
+
+  # Metasploit Framework — optional sidecar for running web exploit modules
+  # via msfrpcd JSON-RPC. The container is kept alive with `tail -f /dev/null`;
+  # start msfrpcd inside it to enable the RPC phase of the MetasploitAgent:
+  #
+  #   docker compose exec metasploit \
+  #     msfrpcd -P "${MSF_RPC_PASSWORD}" -S false -a 0.0.0.0 -p 55553 -f
+  #
+  # Then set MSF_RPC_URL=http://metasploit:55553 and MSF_RPC_PASSWORD in the
+  # backend environment. The MetasploitAgent's native Go probes run regardless
+  # of whether msfrpcd is active.
+  metasploit:
+    image: metasploitframework/metasploit-framework:latest
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+    # msfrpcd listens on 55553 inside the compose network; no host-port
+    # binding needed because the backend reaches it via the service name.
+    expose:
+      - "55553"
 
   # Tool-updater — one-shot container that runs on every `docker compose
   # up`. Refreshes the nuclei templates volume and queries GitHub Releases
