@@ -12,6 +12,7 @@ import (
 	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
+	"auto-bughunter/backend/internal/graphdb"
 	"auto-bughunter/backend/internal/knowledge"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/oast"
@@ -37,6 +38,16 @@ func main() {
 	defer func() {
 		_ = repo.Close()
 	}()
+
+	attackGraphStore, err := graphdb.NewNeo4jStore(context.Background())
+	if err != nil {
+		log.Fatalf("neo4j init failed: %v", err)
+	}
+	if attackGraphStore != nil {
+		defer func() {
+			_ = attackGraphStore.Close(context.Background())
+		}()
+	}
 
 	scanService := scanner.NewService(scanner.Config{
 		EnableNuclei:       getbool("ENABLE_NUCLEI_INTEGRATION", false),
@@ -144,6 +155,9 @@ func main() {
 	)
 	if oastSvc != nil {
 		server.SetOAST(oastSvc)
+	}
+	if attackGraphStore != nil {
+		server.SetAttackGraphStore(attackGraphStore)
 	}
 
 	httpServer := &http.Server{

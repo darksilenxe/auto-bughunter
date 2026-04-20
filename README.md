@@ -23,6 +23,7 @@ Do not scan third-party systems without written permission.
 
 - Asynchronous scan jobs with multi-agent orchestration
 - PostgreSQL-backed scan persistence
+- Optional Neo4j-backed attack-graph persistence for visualization replay
 - Authenticated scan profiles (headers, cookies, basic auth, user-agent)
 - Multi-agent architecture:
   - **Reconnaissance Agent**: DNS resolution, service discovery, tech stack probing
@@ -109,6 +110,7 @@ Docker Compose sidecar:
 | `agents`           | local build (see `agents/`)        | Autonomous agent learner (HTTP, port 8091)                                              |
 | `ml-service`       | local build (see `ml-service/`)    | ML triage / classifier service (HTTP, port 8090)                                        |
 | `security-knowledge` | local build (see `security-knowledge/`) | Retrieval-only security context service with curated citations (HTTP, port 8092)    |
+| `neo4j`            | `neo4j:5.26.1`                     | Optional graph database storing attack-graph snapshots returned to the frontend (Bolt 7687 / HTTP 7474) |
 
 The backend container is the **single orchestrator** of the stack: it is
 the only service that holds the docker socket bind-mount, the only
