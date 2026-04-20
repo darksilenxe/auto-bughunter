@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -57,19 +59,23 @@ func (a *AuthBypassAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	return output, nil
 }
 
-// jwtHeaderPayload builds a JWT with a custom header and an already-serialised
-// payload JSON string, signing with the provided secret (empty = alg:none).
+// buildJWT constructs a JWT with the given header and payload JSON strings.
+// When secret is empty the token uses alg:none (no signature). When secret
+// is non-empty the token is HMAC-SHA256 signed with that key so that weak-
+// secret tests submit a correctly-formed signed token.
 func buildJWT(header, payloadJSON, secret string) string {
 	h := base64.RawURLEncoding.EncodeToString([]byte(header))
 	p := base64.RawURLEncoding.EncodeToString([]byte(payloadJSON))
 	if secret == "" {
-		// alg:none — no signature
+		// alg:none — no signature segment
 		return h + "." + p + "."
 	}
-	// Weak HMAC-SHA256 using stdlib (crypto/hmac) is not imported here to
-	// keep the file self-contained; we use an empty signature intentionally
-	// to test servers that skip verification entirely.
-	return h + "." + p + "."
+	// HMAC-SHA256 signature
+	signingInput := h + "." + p
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(signingInput))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signingInput + "." + sig
 }
 
 // extractJWT looks for a Bearer token in the auth profile headers and cookies.

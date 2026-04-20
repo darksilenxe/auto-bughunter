@@ -150,7 +150,7 @@ func testUnrestrictedFileUpload(ctx context.Context, client *http.Client, target
 	}{
 		{"shell.php", "application/x-php", "<?php echo 'upload-test-php'; ?>", "PHP web shell"},
 		{"shell.php5", "application/x-php", "<?php echo 'upload-test-php5'; ?>", "PHP5 web shell"},
-		{"shell.phtml", "application/x-php", "<? echo 'upload-test-phtml'; ?>", "phtml web shell"},
+		{"shell.phtml", "application/x-php", "<?php echo 'upload-test-phtml'; ?>", "phtml web shell"},
 		{"shell.jsp", "text/plain", "<% out.print(\"upload-test-jsp\"); %>", "JSP web shell"},
 		{"shell.aspx", "text/plain", "<%@ Page Language=\"C#\" %><% Response.Write(\"upload-test-aspx\"); %>", "ASPX web shell"},
 		{"shell.svg", "image/svg+xml", `<svg xmlns="http://www.w3.org/2000/svg"><script>alert('xss')</script></svg>`, "SVG XSS payload"},

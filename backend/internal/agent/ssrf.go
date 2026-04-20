@@ -203,9 +203,9 @@ func testCloudMetadataSSRF(ctx context.Context, client *http.Client, target stri
 
 	for _, path := range proxyPaths {
 		for _, meta := range metadataURLs {
-			testURL := base + path + url.QueryEscape(meta.url)
+			affectedURL := base + path + url.QueryEscape(meta.url)
 
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, affectedURL, nil)
 			if err != nil {
 				continue
 			}
@@ -231,7 +231,7 @@ func testCloudMetadataSSRF(ctx context.Context, client *http.Client, target stri
 						Description:    "A server-side proxy endpoint fetched the cloud instance metadata service, leaking IAM credentials, instance details, and other sensitive data.",
 						Evidence:       fmt.Sprintf("endpoint=%s metadata_url=%s keyword=%q", path, meta.url, kw),
 						Recommendation: "Block outbound requests to 169.254.169.254, metadata.google.internal, and similar link-local addresses at the application and network (egress firewall) layers.",
-						AffectedURL:    testURL,
+						AffectedURL:    affectedURL,
 						OWASPCategory:  "OWASP A10:2021 - Server-Side Request Forgery",
 						CWE:            "CWE-918",
 					})
@@ -267,9 +267,9 @@ func testInternalServiceSSRF(ctx context.Context, client *http.Client, target st
 
 	for _, svc := range internalTargets {
 		for _, param := range proxyParams {
-			testURL := base + "/?" + param + url.QueryEscape(svc.url)
+			affectedURL := base + "/?" + param + url.QueryEscape(svc.url)
 
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, affectedURL, nil)
 			if err != nil {
 				continue
 			}
@@ -293,7 +293,7 @@ func testInternalServiceSSRF(ctx context.Context, client *http.Client, target st
 						Description:    fmt.Sprintf("The application relayed a request to an internal %s instance, exposing internal infrastructure to the attacker.", svc.label),
 						Evidence:       fmt.Sprintf("param=%s internal_url=%s response_keyword=%q", param, svc.url, kw),
 						Recommendation: "Implement an egress allowlist. Never use raw user-supplied URLs for server-side fetches. Deploy a dedicated fetch proxy with strict allowlisting.",
-						AffectedURL:    testURL,
+						AffectedURL:    affectedURL,
 						OWASPCategory:  "OWASP A10:2021 - Server-Side Request Forgery",
 						CWE:            "CWE-918",
 					})
