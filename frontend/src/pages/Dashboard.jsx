@@ -22,6 +22,10 @@ export default function Dashboard() {
   const [programRules, setProgramRules] = useState("");
   const [useNuclei, setUseNuclei] = useState(false);
   const [useZap, setUseZap] = useState(false);
+  const [useMLTriage, setUseMLTriage] = useState(false);
+  const [useAttackPath, setUseAttackPath] = useState(false);
+  const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(false);
+  const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
 
   function handleBurpImport(cfg) {
     if (cfg.target)       setTarget(cfg.target);
@@ -65,6 +69,10 @@ export default function Dashboard() {
       options: {
         useNucleiIntegration: useNuclei,
         useZapBaselineIntegration: useZap,
+        useMLTriageAgent: useMLTriage,
+        useAttackPathAgent: useAttackPath,
+        useFalsePositiveReview,
+        useRemediationPlanner,
       },
       scope: {
         includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
@@ -177,6 +185,24 @@ export default function Dashboard() {
             <label className="check">
               <input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />
               Use ZAP Baseline
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+            <label className="check">
+              <input type="checkbox" checked={useMLTriage} onChange={(e) => setUseMLTriage(e.target.checked)} />
+              ML Triage Agent
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />
+              Attack Path Agent
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />
+              False Positive Review
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />
+              Remediation Planner
             </label>
           </div>
           <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>
