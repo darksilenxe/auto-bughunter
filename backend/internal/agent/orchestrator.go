@@ -164,6 +164,11 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			if !agent.Enabled() {
 				continue
 			}
+			Emit(input.Emit, model.ScanEvent{
+				Type:      model.ScanEventAgentStart,
+				AgentName: agent.Name(),
+				Message:   fmt.Sprintf("Agent %q started", agent.Name()),
+			})
 
 			input.AllFindings = combineFindingsWithDedup(allFindings)
 			if len(outputs) > 0 {
@@ -223,6 +228,21 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				Error:       output.Error,
 				Metadata:    output.Metadata,
 			}
+			for _, f := range output.Findings {
+				Emit(input.Emit, model.ScanEvent{
+					Type:         model.ScanEventFinding,
+					AgentName:    output.AgentName,
+					FindingTitle: f.Title,
+					Severity:     string(f.Severity),
+					Message:      fmt.Sprintf("[%s] %s", f.Severity, f.Title),
+				})
+			}
+			Emit(input.Emit, model.ScanEvent{
+				Type:      model.ScanEventAgentComplete,
+				AgentName: output.AgentName,
+				Message:   fmt.Sprintf("Agent %q completed in %dms with %d finding(s)", output.AgentName, output.DurationMs, len(output.Findings)),
+				Metadata:  output.Metadata,
+			})
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
 			delete(forcePending, output.AgentName)

@@ -73,6 +73,47 @@ func TestOrchestratorRunsAgentsAndStops(t *testing.T) {
 	}
 }
 
+func TestOrchestratorEmitsLifecycleEvents(t *testing.T) {
+	finding := model.Finding{ID: "f1", Category: "x", Severity: model.SeverityLow, Title: "t", Evidence: "e"}
+	factory := newTestFactory(map[string]Agent{
+		"a": &fixedAgent{name: "a", enabled: true, findings: []model.Finding{finding}},
+		"b": &fixedAgent{name: "b", enabled: true},
+	})
+	planner := NewStaticPlanner([]string{"a", "b"})
+	orch := NewOrchestrator(planner, factory, 5)
+
+	var events []model.ScanEvent
+	_, _, err := orch.Run(context.Background(), AgentInput{
+		Target: "https://example.com",
+		Emit: func(evt model.ScanEvent) {
+			events = append(events, evt)
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	got := make([]string, 0, len(events))
+	for _, evt := range events {
+		got = append(got, string(evt.Type)+":"+evt.AgentName)
+	}
+	want := []string{
+		"agent_start:a",
+		"finding:a",
+		"agent_complete:a",
+		"agent_start:b",
+		"agent_complete:b",
+	}
+	if len(got) < len(want) {
+		t.Fatalf("expected at least %d events, got %d (%v)", len(want), len(got), got)
+	}
+	for i, expected := range want {
+		if got[i] != expected {
+			t.Fatalf("event %d mismatch: got %q want %q; all=%v", i, got[i], expected, got)
+		}
+	}
+}
+
 func TestOrchestratorMissingAgentRecordsError(t *testing.T) {
 	factory := newTestFactory(map[string]Agent{
 		"known": &fixedAgent{name: "known", enabled: true},
