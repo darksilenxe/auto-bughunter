@@ -962,6 +962,13 @@ func (s *Server) handleAutomationOperatorFeedback(w http.ResponseWriter, r *http
 	if req.Decision == "approve" {
 		outcome = "accepted"
 	}
+	notesJSON, _ := json.Marshal(map[string]string{
+		"decision":        req.Decision,
+		"agent":           req.AgentName,
+		"actionId":        actionID,
+		"suggestedAction": req.SuggestedAction,
+		"notes":           req.Notes,
+	})
 	feedback := model.ReportFeedback{
 		ID:          uuid.NewString(),
 		ScanID:      req.ScanID,
@@ -969,7 +976,7 @@ func (s *Server) handleAutomationOperatorFeedback(w http.ResponseWriter, r *http
 		Category:    "autonomy-action",
 		Title:       firstNonEmpty(req.SuggestedAction, "autonomous operator decision"),
 		Outcome:     outcome,
-		Notes:       strings.TrimSpace("decision=" + req.Decision + ";agent=" + req.AgentName + ";actionId=" + actionID + ";suggestedAction=" + req.SuggestedAction + ";notes=" + req.Notes),
+		Notes:       string(notesJSON),
 		CreatedAt:   time.Now().UTC(),
 		ProgramName: strings.TrimSpace(job.ProgramName),
 	}
@@ -1598,9 +1605,6 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 	if !governance.OperatorOverride.AllowEmergencyStop {
 		options.AutonomyEmergencyStop = false
 	}
-	if governance.OperatorOverride.RequireAuditLogging && !governance.OperatorOverride.AllowEmergencyStop {
-		options.AutonomyEmergencyStop = false
-	}
 	return options
 }
 
@@ -1884,8 +1888,7 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 	}
 	if stage == "prod" &&
 		pack.GovernanceProfile.EvaluationGate.PromoteToProdOnlyIfPass &&
-		pack.GovernanceProfile.EvaluationGate.RequireReplayBenchmark &&
-		!strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Replay-Benchmark-Pass")), "true") {
+		pack.GovernanceProfile.EvaluationGate.RequireReplayBenchmark {
 		passed, delta, benchErr := s.runReplayBenchmark(r.Context(), workspaceID, pack.GovernanceProfile.EvaluationGate.MinKPIDeltaScore)
 		if benchErr != nil {
 			writeJSON(w, http.StatusPreconditionFailed, map[string]string{"error": "replay benchmark approval is required for production promotion"})
@@ -3542,11 +3545,8 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		errorRate := float64(stat.Errors) / float64(stat.Runs)
 		normalFindings := maxInt(0, stat.Findings-stat.HighConfidenceFindings)
 		noveltyScore := float64(stat.HighConfidenceFindings) + float64(normalFindings)*autonomyNoveltyFindingWeight
-		operatorPenalty := 0.0
-		if stat.OperatorRejections > 0 {
-			totalOps := maxInt(1, stat.OperatorApprovals+stat.OperatorRejections)
-			operatorPenalty = float64(stat.OperatorRejections) / float64(totalOps)
-		}
+		totalOps := maxInt(1, stat.OperatorApprovals+stat.OperatorRejections)
+		operatorPenalty := float64(stat.OperatorRejections) / float64(totalOps)
 		if stat.DecisionQualitySamples > 0 {
 			avgQuality := stat.DecisionQualitySum / float64(maxInt(1, stat.DecisionQualitySamples))
 			noveltyScore += avgQuality
@@ -3570,6 +3570,10 @@ func parseOperatorFeedbackAgent(notes string) string {
 	notes = strings.TrimSpace(notes)
 	if notes == "" {
 		return ""
+	}
+	var structured map[string]string
+	if json.Unmarshal([]byte(notes), &structured) == nil {
+		return strings.TrimSpace(structured["agent"])
 	}
 	parts := strings.Split(notes, ";")
 	for _, part := range parts {

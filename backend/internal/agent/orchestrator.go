@@ -9,6 +9,12 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
+const (
+	novelFindingsNormalizationFactor = 3.0
+	timeToSignalPenaltyThresholdMs   = 120000.0
+	timeToSignalPenaltyWeight        = 0.25
+)
+
 // Orchestrator drives a plan→build→run loop using a Planner to decide which
 // agents to schedule next and a Factory to instantiate them on demand.
 //
@@ -216,12 +222,12 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		if roundScoredActions > 0 {
 			roundScore = roundScoreSum / float64(roundScoredActions)
 		}
-		roundScore += clamp01(float64(novelFindings) / 3.0)
+		roundScore += clamp01(float64(novelFindings) / novelFindingsNormalizationFactor)
 		if timeToSignalMs < 0 {
 			timeToSignalMs = roundDurationMs
 		}
 		if timeToSignalMs > 0 {
-			roundScore -= clamp01(float64(timeToSignalMs)/120000.0) * 0.25
+			roundScore -= clamp01(float64(timeToSignalMs)/timeToSignalPenaltyThresholdMs) * timeToSignalPenaltyWeight
 		}
 		roundScore = clamp01(roundScore)
 		if afterCount <= beforeCount {
