@@ -36,6 +36,10 @@ type integrationState struct {
 	SkippedReasons   map[string]int
 }
 
+// Small cooldown to let Nuclei fully tear down child processes and release
+// transient network/socket pressure before launching ZAP Baseline.
+const zapBaselineDelayAfterNuclei = 5 * time.Second
+
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
 //	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
@@ -253,6 +257,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
+	nucleiPhaseRan := false
 	if input.Options.UseNucleiIntegration {
 		targets, skipped := expandTargetsWithScope(input.Target, state, input.Scope)
 		state.TargetsAttempted += len(targets)
@@ -264,8 +269,32 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			emitCmd("nuclei", "-u "+t)
 			findings = append(findings, s.runNuclei(ctx, t)...)
 		}
+		nucleiPhaseRan = true
 	}
 	if input.Options.UseZAPBaselineIntegration {
+		if nucleiPhaseRan && zapBaselineDelayAfterNuclei > 0 {
+			if input.Emit != nil {
+				input.Emit(model.ScanEvent{
+					Type:    model.ScanEventInfo,
+					Message: fmt.Sprintf("Delaying ZAP Baseline start by %s until Nuclei phase has fully finished", zapBaselineDelayAfterNuclei),
+				})
+			}
+			select {
+			case <-ctx.Done():
+				findings = append(findings, model.Finding{
+					ID:             "zap-baseline-skipped-context-ended",
+					Category:       "integration",
+					Severity:       model.SeverityInfo,
+					Title:          "ZAP Baseline skipped after Nuclei because scan context ended",
+					Description:    "The scan context ended during the post-Nuclei delay window, so ZAP Baseline was not started.",
+					Evidence:       "delay=" + zapBaselineDelayAfterNuclei.String(),
+					Recommendation: "Retry the scan with a longer SCAN_TIMEOUT_SECONDS (or a smaller target scope) so the post-Nuclei delay and ZAP Baseline phase can complete.",
+				})
+				findings = append(findings, buildIntegrationCoverageFinding(state))
+				return findings
+			case <-time.After(zapBaselineDelayAfterNuclei):
+			}
+		}
 		emitCmd("zap-baseline.py", "-t "+input.Target)
 		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
 	}
@@ -313,18 +342,6 @@ func expandTargetsWithScope(target string, state *integrationState, scanScope mo
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
-	if !s.cfg.EnableNuclei {
-		return []model.Finding{{
-			ID:             "nuclei-disabled",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "Nuclei integration requested but disabled",
-			Description:    "The job requested Nuclei but ENABLE_NUCLEI_INTEGRATION is false.",
-			Evidence:       "ENABLE_NUCLEI_INTEGRATION=false",
-			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
-		}}
-	}
-
 	if _, err := exec.LookPath(s.cfg.NucleiBinary); err != nil {
 		return []model.Finding{{
 			ID:             "nuclei-binary-missing",
@@ -391,18 +408,6 @@ func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding 
 }
 
 func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Finding {
-	if !s.cfg.EnableZAPBaseline {
-		return []model.Finding{{
-			ID:             "zap-baseline-disabled",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "ZAP Baseline integration requested but disabled",
-			Description:    "The job requested ZAP Baseline but ENABLE_ZAP_BASELINE_INTEGRATION is false.",
-			Evidence:       "ENABLE_ZAP_BASELINE_INTEGRATION=false",
-			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
-		}}
-	}
-
 	if _, err := exec.LookPath(s.cfg.ZAPBaselineBinary); err != nil {
 		return []model.Finding{{
 			ID:             "zap-baseline-binary-missing",

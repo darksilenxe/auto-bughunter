@@ -50,8 +50,6 @@ func main() {
 	}
 
 	scanService := scanner.NewService(scanner.Config{
-		EnableNuclei:       getbool("ENABLE_NUCLEI_INTEGRATION", false),
-		EnableZAPBaseline:  getbool("ENABLE_ZAP_BASELINE_INTEGRATION", false),
 		EnableSubfinder:    getbool("ENABLE_SUBFINDER_INTEGRATION", false),
 		EnableHttpx:        getbool("ENABLE_HTTPX_INTEGRATION", false),
 		EnableNaabu:        getbool("ENABLE_NAABU_INTEGRATION", false),
@@ -90,6 +88,11 @@ func main() {
 		os.Getenv("AI_API_BASE"),
 		os.Getenv("AI_API_KEY"),
 		os.Getenv("AI_MODEL"),
+	)
+	aiClient.ConfigureCodingModel(
+		os.Getenv("AI_CODING_API_BASE"),
+		os.Getenv("AI_CODING_API_KEY"),
+		os.Getenv("AI_CODING_MODEL"),
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),

@@ -21,7 +21,8 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	if c == nil {
 		return nil, true, nil
 	}
-	if !c.shouldCallProvider() {
+	baseURL, apiKey, model := c.planningProvider()
+	if !shouldCallProviderFor(baseURL, apiKey) {
 		return nil, true, nil
 	}
 	if len(availableAgents) == 0 {
@@ -44,7 +45,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	}
 
 	payload := map[string]any{
-		"model": c.Model,
+		"model": model,
 		"messages": []map[string]string{
 			{
 				"role":    "system",
@@ -63,12 +64,12 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	if err != nil {
 		return nil, true, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, true, err
 	}
-	if strings.TrimSpace(c.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
 

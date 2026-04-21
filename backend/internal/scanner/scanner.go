@@ -33,8 +33,6 @@ func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
 func (s *Service) OAST() *oast.Service { return s.oast }
 
 type Config struct {
-	EnableNuclei      bool
-	EnableZAPBaseline bool
 	EnableSubfinder   bool
 	EnableHttpx       bool
 	EnableNaabu       bool
