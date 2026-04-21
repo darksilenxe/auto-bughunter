@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scope"
@@ -53,7 +52,7 @@ func TestLoginBootstrapInitialDelaySkipsWarmupForCustomSteps(t *testing.T) {
 	delay := loginBootstrapInitialDelay(model.ScanAuthProfile{
 		LoginSteps: []model.ScanAuthLoginStep{{Action: "click", Selector: "#accept-cookies"}},
 	})
-	if delay != 0*time.Millisecond {
+	if delay != loginBootstrapNoDelay {
 		t.Fatalf("expected no initial delay for custom login steps, got %s", delay)
 	}
 }

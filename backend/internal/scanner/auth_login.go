@@ -19,6 +19,7 @@ const (
 	loginBootstrapTimeout   = 35 * time.Second
 	loginBootstrapLoadDelay = 1200 * time.Millisecond
 	loginBootstrapPostDelay = 2200 * time.Millisecond
+	loginBootstrapNoDelay   = 0 * time.Millisecond
 )
 
 func hasStandardLoginCredentials(profile model.ScanAuthProfile) bool {
@@ -35,7 +36,7 @@ func hasCustomLoginSteps(profile model.ScanAuthProfile) bool {
 
 func loginBootstrapInitialDelay(profile model.ScanAuthProfile) time.Duration {
 	if hasCustomLoginSteps(profile) {
-		return 0
+		return loginBootstrapNoDelay
 	}
 	return loginBootstrapLoadDelay
 }
