@@ -298,6 +298,9 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 		// Burp active scan runs after any scanning phase.
 		spawned = append(spawned, "burp")
+		if strings.EqualFold(strings.TrimSpace(output.Metadata["aggressive_exploitation"]), "true") {
+			spawned = append(spawned, "metasploit", "auth_bypass", "file_upload")
+		}
 	case "input_validation":
 		if hasManyForms {
 			spawned = append(spawned, "cors_redirect")

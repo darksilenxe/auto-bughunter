@@ -82,6 +82,7 @@ type Exploitability struct {
 
 type ScanRequest struct {
 	Target               string              `json:"target"`
+	WorkspaceID          string              `json:"workspaceId,omitempty"`
 	IdempotencyKey       string              `json:"idempotencyKey,omitempty"`
 	AuthProfile          ScanAuthProfile     `json:"authProfile,omitempty"`
 	AuthProfiles         []RoleAuthProfile   `json:"authProfiles,omitempty"`
@@ -155,6 +156,8 @@ type ScanOptions struct {
 	MaxPerTargetConcurrency   int      `json:"maxPerTargetConcurrency,omitempty"`
 	TargetRateLimitPerMinute  int      `json:"targetRateLimitPerMinute,omitempty"`
 	GlobalScanBudget          int      `json:"globalScanBudget,omitempty"`
+	AutomationMode            string   `json:"automationMode,omitempty"`
+	MinExpectedROIUSD         float64  `json:"minExpectedRoiUsd,omitempty"`
 	DeepScanOnHighSignal      bool     `json:"deepScanOnHighSignal,omitempty"`
 	CrawlMaxPages             int      `json:"crawlMaxPages,omitempty"`
 	SeedRuntimeEndpoints      []string `json:"seedRuntimeEndpoints,omitempty"`
@@ -180,6 +183,18 @@ type ScanOptions struct {
 	// maxAttempts budget and gated by scope.IsURLInScope, so enabling
 	// this does not expand attack surface — only expressiveness.
 	WAFBypass bool `json:"wafBypass,omitempty"`
+	// AggressiveExploitation enables deeper exploit-validation paths by
+	// prioritizing exploitation-focused agents (Metasploit/Burp follow-ups)
+	// earlier in orchestration.
+	AggressiveExploitation bool `json:"aggressiveExploitation,omitempty"`
+	// Daily unattended automation limits (workspace-scoped).
+	DailyScanLimit           int `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int `json:"dailyProbeLimit,omitempty"`
+	// Safety caps applied by automation mode.
+	MaxExploitAttempts       int `json:"maxExploitAttempts,omitempty"`
+	MaxAutomationConcurrency int `json:"maxAutomationConcurrency,omitempty"`
+	MinRescanIntervalMinutes int `json:"minRescanIntervalMinutes,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -194,6 +209,9 @@ type ScanScope struct {
 type ScanJob struct {
 	ID                   string                  `json:"id"`
 	Target               string                  `json:"target"`
+	WorkspaceID          string                  `json:"workspaceId,omitempty"`
+	RequestedBy          string                  `json:"requestedBy,omitempty"`
+	PolicyPack           string                  `json:"policyPack,omitempty"`
 	Status               string                  `json:"status"`
 	StartedAt            time.Time               `json:"startedAt"`
 	CompletedAt          *time.Time              `json:"completedAt,omitempty"`
@@ -215,6 +233,27 @@ type ScanJob struct {
 	ProgramName          string                  `json:"programName,omitempty"`
 	ProgramPolicyVersion string                  `json:"programPolicyVersion,omitempty"`
 	DisallowedTestTypes  []string                `json:"disallowedTestTypes,omitempty"`
+}
+
+type APIKeyRole string
+
+const (
+	APIKeyRoleAdmin   APIKeyRole = "admin"
+	APIKeyRoleTriager APIKeyRole = "triager"
+	APIKeyRoleAnalyst APIKeyRole = "analyst"
+	APIKeyRoleViewer  APIKeyRole = "viewer"
+)
+
+type APIKeyRecord struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	Name        string     `json:"name"`
+	Role        APIKeyRole `json:"role"`
+	KeyPrefix   string     `json:"keyPrefix"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	RotatedAt   *time.Time `json:"rotatedAt,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	Active      bool       `json:"active"`
 }
 
 type AttackGraphData struct {
@@ -298,26 +337,145 @@ type AutomationTicket struct {
 type AutomationEventRequest struct {
 	Type        string          `json:"type"`
 	Target      string          `json:"target"`
+	ProgramName string          `json:"programName,omitempty"`
 	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
 	Options     ScanOptions     `json:"options,omitempty"`
 	Scope       ScanScope       `json:"scope,omitempty"`
 	Assets      []string        `json:"assets,omitempty"`
 }
 
+type AutomationCampaign struct {
+	ID              string          `json:"id"`
+	Target          string          `json:"target"`
+	WorkspaceID     string          `json:"workspaceId,omitempty"`
+	RequestedBy     string          `json:"requestedBy,omitempty"`
+	PolicyPack      string          `json:"policyPack,omitempty"`
+	PolicyVersion   int             `json:"policyVersion,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	ProgramName     string          `json:"programName,omitempty"`
+	IntervalMin     int             `json:"intervalMin"`
+	ScheduleType    string          `json:"scheduleType,omitempty"`
+	ScheduleValue   string          `json:"scheduleValue,omitempty"`
+	RunWindow       string          `json:"runWindow,omitempty"`
+	BlackoutWindows []string        `json:"blackoutWindows,omitempty"`
+	NextRunAt       time.Time       `json:"nextRunAt"`
+	LastRunAt       *time.Time      `json:"lastRunAt,omitempty"`
+	RetryCount      int             `json:"retryCount,omitempty"`
+	MaxAttempts     int             `json:"maxAttempts,omitempty"`
+	NextRetryAt     *time.Time      `json:"nextRetryAt,omitempty"`
+	LastError       string          `json:"lastError,omitempty"`
+	DeadLetter      bool            `json:"deadLetter,omitempty"`
+	QueueState      string          `json:"queueState,omitempty"`
+	LeaseUntil      *time.Time      `json:"leaseUntil,omitempty"`
+	HeartbeatAt     *time.Time      `json:"heartbeatAt,omitempty"`
+	RunIdempotency  string          `json:"runIdempotencyKey,omitempty"`
+	Active          bool            `json:"active"`
+	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
+	Options         ScanOptions     `json:"options,omitempty"`
+	Scope           ScanScope       `json:"scope,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+type AutomationCampaignUpsertRequest struct {
+	ID              string          `json:"id,omitempty"`
+	Target          string          `json:"target"`
+	PolicyPack      string          `json:"policyPack,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	ProgramName     string          `json:"programName,omitempty"`
+	IntervalMin     int             `json:"intervalMin"`
+	ScheduleType    string          `json:"scheduleType,omitempty"`
+	ScheduleValue   string          `json:"scheduleValue,omitempty"`
+	RunWindow       string          `json:"runWindow,omitempty"`
+	BlackoutWindows []string        `json:"blackoutWindows,omitempty"`
+	MaxAttempts     int             `json:"maxAttempts,omitempty"`
+	Active          bool            `json:"active"`
+	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
+	Options         ScanOptions     `json:"options,omitempty"`
+	Scope           ScanScope       `json:"scope,omitempty"`
+}
+
+type AutomationPolicyPack struct {
+	WorkspaceID              string    `json:"workspaceId"`
+	Name                     string    `json:"name"`
+	StrategyVersion          int       `json:"strategyVersion"`
+	CanaryPercent            int       `json:"canaryPercent,omitempty"`
+	AutomationMode           string    `json:"automationMode,omitempty"`
+	MinExpectedROIUSD        float64   `json:"minExpectedRoiUsd,omitempty"`
+	MaxAutomationConcurrency int       `json:"maxAutomationConcurrency,omitempty"`
+	MaxPerTargetConcurrency  int       `json:"maxPerTargetConcurrency,omitempty"`
+	MaxExploitAttempts       int       `json:"maxExploitAttempts,omitempty"`
+	DailyScanLimit           int       `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int       `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int       `json:"dailyProbeLimit,omitempty"`
+	EscalateOnNewHigh        bool      `json:"escalateOnNewHigh,omitempty"`
+	EscalateOnChangedHigh    bool      `json:"escalateOnChangedHigh,omitempty"`
+	UpdatedBy                string    `json:"updatedBy,omitempty"`
+	UpdatedAt                time.Time `json:"updatedAt"`
+}
+
+type AutomationPolicyAuditEvent struct {
+	ID              string    `json:"id"`
+	WorkspaceID     string    `json:"workspaceId"`
+	PolicyPack      string    `json:"policyPack"`
+	StrategyVersion int       `json:"strategyVersion"`
+	Action          string    `json:"action"`
+	ChangedBy       string    `json:"changedBy"`
+	ChangedAt       time.Time `json:"changedAt"`
+	BeforeJSON      string    `json:"beforeJson,omitempty"`
+	AfterJSON       string    `json:"afterJson,omitempty"`
+}
+
+type AutomationMetrics struct {
+	GeneratedAt       time.Time          `json:"generatedAt"`
+	WorkspaceID       string             `json:"workspaceId"`
+	QueueLagSeconds   float64            `json:"queueLagSeconds"`
+	MaxQueueLag       float64            `json:"maxQueueLagSeconds"`
+	RetryRate         float64            `json:"retryRate"`
+	DLQCount          int                `json:"dlqCount"`
+	ToolFailureRate   float64            `json:"toolFailureRate"`
+	ROIByStrategy     map[string]float64 `json:"roiByStrategy,omitempty"`
+	StrategyRunCounts map[string]int     `json:"strategyRunCounts,omitempty"`
+	Alerts            []string           `json:"alerts,omitempty"`
+	Extra             map[string]float64 `json:"extra,omitempty"`
+}
+
+type ProgramROIOverride struct {
+	WorkspaceID       string    `json:"workspaceId"`
+	ProgramName       string    `json:"programName"`
+	MinExpectedROIUSD float64   `json:"minExpectedRoiUsd"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+type WorkspaceDailyUsage struct {
+	WorkspaceID    string    `json:"workspaceId"`
+	Day            time.Time `json:"day"`
+	ScanCount      int       `json:"scanCount"`
+	RuntimeMinutes int       `json:"runtimeMinutes"`
+	ProbeVolume    int       `json:"probeVolume"`
+}
+
 type ExecutiveReport struct {
-	GeneratedAt                 time.Time `json:"generatedAt"`
-	TotalCompletedScans         int       `json:"totalCompletedScans"`
-	NewFindings                 int       `json:"newFindings"`
-	ChangedFindings             int       `json:"changedFindings"`
-	ResolvedFindings            int       `json:"resolvedFindings"`
-	HighOrMediumFindings        int       `json:"highOrMediumFindings"`
-	AcceptedFeedback            int       `json:"acceptedFeedback"`
-	RejectedFeedback            int       `json:"rejectedFeedback"`
-	DuplicateFeedback           int       `json:"duplicateFeedback"`
-	FalsePositiveRate           float64   `json:"falsePositiveRate"`
-	MeanTimeToResolveHours      float64   `json:"meanTimeToResolveHours"`
-	OpenAutomationTickets       int       `json:"openAutomationTickets"`
-	RecentlyResolvedTicketCount int       `json:"recentlyResolvedTicketCount"`
+	GeneratedAt                 time.Time          `json:"generatedAt"`
+	TotalCompletedScans         int                `json:"totalCompletedScans"`
+	NewFindings                 int                `json:"newFindings"`
+	ChangedFindings             int                `json:"changedFindings"`
+	ResolvedFindings            int                `json:"resolvedFindings"`
+	HighOrMediumFindings        int                `json:"highOrMediumFindings"`
+	AcceptedFeedback            int                `json:"acceptedFeedback"`
+	RejectedFeedback            int                `json:"rejectedFeedback"`
+	DuplicateFeedback           int                `json:"duplicateFeedback"`
+	FalsePositiveRate           float64            `json:"falsePositiveRate"`
+	MeanTimeToResolveHours      float64            `json:"meanTimeToResolveHours"`
+	AverageExpectedROIUSD       float64            `json:"averageExpectedRoiUsd"`
+	HighROICompletedScans       int                `json:"highRoiCompletedScans"`
+	AcceptedPayoutPerScanUSD    float64            `json:"acceptedPayoutPerScanUsd"`
+	OpenAutomationTickets       int                `json:"openAutomationTickets"`
+	RecentlyResolvedTicketCount int                `json:"recentlyResolvedTicketCount"`
+	AgentAcceptedRate           map[string]float64 `json:"agentAcceptedRate,omitempty"`
+	AgentPayoutPerScanHour      map[string]float64 `json:"agentPayoutPerScanHour,omitempty"`
+	AgentFalsePositiveRate      map[string]float64 `json:"agentFalsePositiveRate,omitempty"`
+	ROISparkline                []float64          `json:"roiSparkline,omitempty"`
 }
 
 type PersistentScanState struct {
@@ -423,6 +581,9 @@ type DecisionDashboard struct {
 	TopAttackPaths            []string `json:"topAttackPaths,omitempty"`
 	UntestedReasons           []string `json:"untestedReasons,omitempty"`
 	ActionableFindings        int      `json:"actionableFindings"`
+	ExpectedROIUSD            float64  `json:"expectedRoiUsd,omitempty"`
+	ExpectedROIBasis          string   `json:"expectedRoiBasis,omitempty"`
+	MeetsROIGate              bool     `json:"meetsRoiGate,omitempty"`
 	// MITREHeatmap is a deterministic count of findings per MITRE ATT&CK
 	// technique ID, used by the dashboard UI to render a heatmap. Empty
 	// when no findings carry MITRE annotations.

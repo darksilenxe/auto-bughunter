@@ -88,6 +88,17 @@ AI_API_KEY=
 - Frontend: http://localhost:3000
 - Backend health: http://localhost:8080/api/health
 
+## Metasploit RPC customization
+
+The Metasploit agent supports optional RPC module execution when `MSF_RPC_URL`
+and `MSF_RPC_PASSWORD` are set.
+
+- `MSF_RPC_ENABLE_LESS_SAFE_MODULES=true` enables extra high-risk exploit modules.
+- `MSF_RPC_MODULE_TEMPLATE_FILE=/app/backend/templates/metasploit_rpc_modules.template.json`
+  lets you load your own module list template.
+- Use `backend/templates/metasploit_rpc_modules.template.json` as the starter template.
+- Template placeholders are auto-expanded: `{{RHOSTS}}`, `{{RPORT}}`, `{{SSL}}`, `{{TARGETURI}}`.
+
 ## Architecture
 
 The backend container is intentionally slim — it ships only the Go server
@@ -227,9 +238,28 @@ Creates suppression/baseline rules (optional target scope, optional expiry) to h
 
 Queues event-driven scans from CI/CD or asset discovery pipelines (`deploy`, `dependency_change`, `config_change`, `new_asset`).
 
+Supports unattended ROI controls through scan options:
+
+- `automationMode`: `safe` | `autonomous` | `aggressive`
+- `minExpectedRoiUsd`: minimum expected ROI required for automated follow-up actions
+- `dailyScanLimit` / `dailyRuntimeLimitMinutes` / `dailyProbeLimit`: hard daily workspace budgets
+
+### `GET|POST|PUT|DELETE /api/automation/campaigns`
+
+Persistent recurring campaign scheduler for unattended operation.
+
+- `GET /api/automation/campaigns?activeOnly=true` lists campaigns for the caller workspace.
+- `POST/PUT` upserts a campaign (`target`, `intervalMin`, optional auth/options/scope).
+- `POST/PUT` also supports `scheduleType` (`interval|daily|weekly`), `scheduleValue`, `runWindow`, `blackoutWindows`, and `maxAttempts` for safer unattended dispatch.
+- `DELETE /api/automation/campaigns?id=<campaign-id>` deletes a campaign.
+
+### `GET|POST /api/automation/roi-overrides`
+
+Stores per-workspace/per-program ROI overrides used by automation gating.
+
 ### `GET /api/automation/report`
 
-Returns an executive automation report with scan trends, feedback quality metrics, and open automated ticket counts.
+Returns an executive automation report with scan trends, feedback quality metrics, ROI KPIs, and open automated ticket counts.
 
 ### `GET /api/automation/tickets`
 

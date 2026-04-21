@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-export { API_BASE };
+const API_KEY = import.meta.env.VITE_API_KEY || "dev-admin-key";
+const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
+export { API_BASE, API_KEY, WORKSPACE_ID };
 
 const ScanContext = createContext(null);
 
@@ -42,7 +44,7 @@ export function ScanProvider({ children }) {
     if (sseRef.current) sseRef.current.close();
     setLiveEvents([]);
     setScreenshots([]);
-    const es = new EventSource(`${API_BASE}/api/scan/${id}/events`);
+    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?api_key=${encodeURIComponent(API_KEY)}&workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
     es.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
@@ -75,7 +77,9 @@ export function ScanProvider({ children }) {
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 5000));
       try {
-        const res = await fetch(`${API_BASE}/api/scan/${id}`);
+        const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
+          headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        });
         if (!res.ok) continue;
         const data = await res.json();
         setJob(data);
@@ -95,7 +99,7 @@ export function ScanProvider({ children }) {
     try {
       const res = await fetch(`${API_BASE}/api/scan`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -113,7 +117,9 @@ export function ScanProvider({ children }) {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/scans`);
+      const res = await fetch(`${API_BASE}/api/scans?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
       if (res.ok) setScanHistory((await res.json()).scans || []);
     } catch { /* ignore */ }
     setHistoryLoading(false);

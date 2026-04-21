@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -591,6 +592,7 @@ func TestProbeThinkPHPRCE_Vulnerable(t *testing.T) {
 }
 
 func TestProbeExchangeProxyLogon_NotExchange(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -605,6 +607,7 @@ func TestProbeExchangeProxyLogon_NotExchange(t *testing.T) {
 }
 
 func TestProbeExchangeProxyLogon_Vulnerable(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Fingerprinting paths return Exchange indicators.
 		if strings.Contains(r.URL.Path, "/owa") {
@@ -707,6 +710,326 @@ func TestProbeWebAssemblyModuleAbuse_ExploitableUpload(t *testing.T) {
 	}
 }
 
+func TestProbePHPUnitEvalStdinRCE_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("abh_phpunit_probe_5f4dcc3b5aa765d61d8327deb882cf99")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probePHPUnitEvalStdinRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected phpunit eval-stdin finding when marker is reflected")
+	}
+	if findings[0].ID != "msf-phpunit-eval-stdin" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbePHPUnitEvalStdinRCE_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probePHPUnitEvalStdinRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeGrafanaPluginTraversal_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/public/plugins/alertlist/") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("root:x:0:0:root:/root:/bin/bash")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGrafanaPluginTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected grafana traversal finding when passwd content is exposed")
+	}
+	if findings[0].ID != "msf-grafana-plugin-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeGrafanaPluginTraversal_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGrafanaPluginTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeVBulletinWidgetTemplateRCE_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/ajax/render/widget_tabbedcontainer_tab_panel" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("abh_vbulletin_probe_a8d9f16b")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeVBulletinWidgetTemplateRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected vbulletin widget-template finding when marker is reflected")
+	}
+	if findings[0].ID != "msf-vbulletin-widget-template-rce" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeVBulletinWidgetTemplateRCE_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeVBulletinWidgetTemplateRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeF5BIGIPTMUITraversal_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/tmui/login.jsp") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("root:x:0:0:root:/root:/bin/bash")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeF5BIGIPTMUITraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected f5 tmui traversal finding when file content is exposed")
+	}
+	if findings[0].ID != "msf-f5-bigip-tmui-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeF5BIGIPTMUITraversal_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeF5BIGIPTMUITraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbePulseSecureFileDisclosure_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/dana-na/") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("root:x:0:0:root:/root:/bin/bash")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probePulseSecureFileDisclosure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected pulse secure file disclosure finding when file content is exposed")
+	}
+	if findings[0].ID != "msf-pulse-secure-file-disclosure" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbePulseSecureFileDisclosure_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probePulseSecureFileDisclosure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeCiscoASAPathTraversal_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/+CSCOT+/translation-table") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("webvpn portal_inc.lua")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCiscoASAPathTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected cisco asa path traversal finding when marker content is exposed")
+	}
+	if findings[0].ID != "msf-cisco-asa-path-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeCiscoASAPathTraversal_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCiscoASAPathTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeFortinetSSLVPNFileRead_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/remote/fgt_lang") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("sslvpn_websession:user=admin")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeFortinetSSLVPNFileRead(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected fortinet ssl vpn file disclosure finding when session data is exposed")
+	}
+	if findings[0].ID != "msf-fortinet-sslvpn-file-read" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeFortinetSSLVPNFileRead_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeFortinetSSLVPNFileRead(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeDotEnvFileExposure_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.env" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("APP_KEY=base64:example-secret")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeDotEnvFileExposure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected .env exposure finding when sensitive marker is returned")
+	}
+	if findings[0].ID != "msf-dotenv-file-exposure" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeGitConfigExposure_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.git/config" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[core]\nrepositoryformatversion = 0\n")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGitConfigExposure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected git config exposure finding when /.git/config is returned")
+	}
+	if findings[0].ID != "msf-git-config-exposure" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestLoadMSFRPCModuleTemplate_ReplacesPlaceholders(t *testing.T) {
+	tempFile := t.TempDir() + "/modules.json"
+	content := `[
+		{
+			"name":"auxiliary/scanner/http/http_version",
+			"title":"Template module",
+			"options":{"RHOSTS":"{{RHOSTS}}","RPORT":"{{RPORT}}","SSL":"{{SSL}}","TARGETURI":"{{TARGETURI}}"}
+		}
+	]`
+	if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to create template file: %v", err)
+	}
+	mods, err := loadMSFRPCModuleTemplate(tempFile, "example.com", "443", "true")
+	if err != nil {
+		t.Fatalf("loadMSFRPCModuleTemplate returned error: %v", err)
+	}
+	if len(mods) != 1 {
+		t.Fatalf("expected 1 module, got %d", len(mods))
+	}
+	if mods[0].Options["RHOSTS"] != "example.com" || mods[0].Options["RPORT"] != "443" || mods[0].Options["SSL"] != "true" {
+		t.Fatalf("placeholder replacement failed: %+v", mods[0].Options)
+	}
+}
+
 func TestFactory_NativeProbesCount(t *testing.T) {
 	t.Setenv("MSF_RPC_URL", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -719,7 +1042,7 @@ func TestFactory_NativeProbesCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Metadata["native_probes_run"] != "14" {
-		t.Errorf("expected native_probes_run=14, got %q", out.Metadata["native_probes_run"])
+	if out.Metadata["native_probes_run"] != "23" {
+		t.Errorf("expected native_probes_run=23, got %q", out.Metadata["native_probes_run"])
 	}
 }

@@ -15,6 +15,23 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
+func authRequest(method, target string, body *bytes.Reader) *http.Request {
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, target, body)
+	} else {
+		req = httptest.NewRequest(method, target, nil)
+	}
+	ctx := context.WithValue(req.Context(), principalContextKey, principal{
+		KeyID:       "test-key",
+		WorkspaceID: "default",
+		Role:        model.APIKeyRoleAdmin,
+		Name:        "test-admin",
+		SuperAdmin:  true,
+	})
+	return req.WithContext(ctx)
+}
+
 // reportTestRepo is a hand-rolled fake implementation of the Repository
 // interface that returns a single in-memory ScanJob keyed by ID. It only
 // implements the methods invoked by the report handlers; all other methods
@@ -33,8 +50,8 @@ func (r *reportTestRepo) GetJob(_ context.Context, id string) (*model.ScanJob, e
 
 // The remaining Repository methods are stubbed so the type satisfies the
 // interface. Tests that invoke them will fail loudly.
-func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error    { panic("not used") }
-func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error    { panic("not used") }
+func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error { panic("not used") }
+func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error { panic("not used") }
 func (r *reportTestRepo) GetLatestCompletedJobByTarget(context.Context, string, string) (*model.ScanJob, error) {
 	// Returns nil so handler tests that exercise the report context don't
 	// require a previous scan to be present.
@@ -92,6 +109,63 @@ func (r *reportTestRepo) ResolveAutomationTicketsMissingFingerprints(context.Con
 func (r *reportTestRepo) ListOpenAutomationTickets(context.Context, string, int) ([]model.AutomationTicket, error) {
 	panic("not used")
 }
+func (r *reportTestRepo) UpsertAutomationCampaign(context.Context, model.AutomationCampaign) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationCampaigns(context.Context, string, bool, int) ([]model.AutomationCampaign, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListDueAutomationCampaigns(context.Context, time.Time, int) ([]model.AutomationCampaign, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpdateAutomationCampaignRun(context.Context, string, time.Time, time.Time) error {
+	panic("not used")
+}
+func (r *reportTestRepo) DeleteAutomationCampaign(context.Context, string, string) error {
+	panic("not used")
+}
+func (r *reportTestRepo) TryLeaseAutomationCampaign(context.Context, string, time.Time) (bool, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) MarkAutomationCampaignDispatchFailure(context.Context, string, string, time.Time, time.Duration) error {
+	panic("not used")
+}
+func (r *reportTestRepo) HeartbeatAutomationCampaignLease(context.Context, string, time.Time, time.Time) (bool, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ReclaimStaleAutomationCampaignLeases(context.Context, time.Time, int) (int64, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpdateAutomationCampaignQueueState(context.Context, string, string, string, *time.Time) error {
+	panic("not used")
+}
+func (r *reportTestRepo) GetProgramROIOverride(context.Context, string, string) (*model.ProgramROIOverride, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertProgramROIOverride(context.Context, model.ProgramROIOverride) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListProgramROIOverrides(context.Context, string, int) ([]model.ProgramROIOverride, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) GetWorkspaceDailyUsage(context.Context, string, time.Time) (model.WorkspaceDailyUsage, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) GetAutomationPolicyPack(context.Context, string, string) (*model.AutomationPolicyPack, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertAutomationPolicyPack(context.Context, model.AutomationPolicyPack) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationPolicyPacks(context.Context, string, int) ([]model.AutomationPolicyPack, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) AppendAutomationPolicyAudit(context.Context, model.AutomationPolicyAuditEvent) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationPolicyAudit(context.Context, string, string, int) ([]model.AutomationPolicyAuditEvent, error) {
+	panic("not used")
+}
 
 func newReportServer(t *testing.T, jobs map[string]*model.ScanJob) *Server {
 	t.Helper()
@@ -122,7 +196,7 @@ func sampleReportJob() *model.ScanJob {
 
 func TestHandleScanReport_DefaultsToPDF(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 
@@ -150,7 +224,7 @@ func TestHandleScanReport_FormatNegotiation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.format, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?format="+c.format, nil)
+			req := authRequest(http.MethodGet, "/api/report/scan-1?format="+c.format, nil)
 			rec := httptest.NewRecorder()
 			srv.handleScanReport(rec, req)
 			if rec.Code != http.StatusOK {
@@ -168,7 +242,7 @@ func TestHandleScanReport_FormatNegotiation(t *testing.T) {
 
 func TestHandleScanReport_ExecutiveType(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?type=executive&format=md", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1?type=executive&format=md", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusOK {
@@ -181,7 +255,7 @@ func TestHandleScanReport_ExecutiveType(t *testing.T) {
 
 func TestHandleScanReport_NotFound(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/missing", nil)
+	req := authRequest(http.MethodGet, "/api/report/missing", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -191,7 +265,7 @@ func TestHandleScanReport_NotFound(t *testing.T) {
 
 func TestHandleScanReport_SingleFindingMarkdown(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusOK {
@@ -204,7 +278,7 @@ func TestHandleScanReport_SingleFindingMarkdown(t *testing.T) {
 
 func TestHandleScanReport_SingleFindingNotFound(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/finding/missing", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1/finding/missing", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -214,7 +288,7 @@ func TestHandleScanReport_SingleFindingNotFound(t *testing.T) {
 
 func TestHandleScanReport_BugBountyZip(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1/bugbounty.zip", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1/bugbounty.zip", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusOK {
@@ -244,7 +318,7 @@ func TestHandleScanReport_PostWithTemplateOptions(t *testing.T) {
 		CompanyName:    "Posted Co.",
 		Classification: "Internal",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/report/scan-1?format=md", bytes.NewReader(body))
+	req := authRequest(http.MethodPost, "/api/report/scan-1?format=md", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
@@ -261,7 +335,7 @@ func TestHandleScanReport_PostWithTemplateOptions(t *testing.T) {
 
 func TestHandleScanReport_UnsupportedFormat(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/scan-1?format=docx", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1?format=docx", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -271,7 +345,7 @@ func TestHandleScanReport_UnsupportedFormat(t *testing.T) {
 
 func TestHandleScanReport_MissingScanID(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{})
-	req := httptest.NewRequest(http.MethodGet, "/api/report/", nil)
+	req := authRequest(http.MethodGet, "/api/report/", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusBadRequest {

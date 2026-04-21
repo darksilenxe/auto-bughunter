@@ -32,6 +32,7 @@ import (
 	"auto-bughunter/backend/internal/scope"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 )
 
 type AgentConfig struct {
@@ -42,34 +43,48 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService   *scanner.Service
-	aiClient      *ai.Client
-	repo          Repository
-	agentRegistry *agent.Registry
-	agentFactory  *agent.Factory
-	autonomous    bool
-	maxRounds     int
-	proxyServer   *proxy.Server
-	mlService     *ml.Service
-	knowledgeSvc  *knowledge.Client
-	agentLearner  *agentlearner.Client
-	agentConfig   AgentConfig
-	maxPerTarget  int
-	semMu         sync.Mutex
-	targetSem     map[string]chan struct{}
-	globalSem     chan struct{}
-	rateMu        sync.Mutex
-	targetLastRun map[string]time.Time
-	webhookURL    string
-	slackWebhook  string
-	notifyMinConf float64
-	gateHighBlock int
-	gateMedBlock  int
-	scanTimeout   time.Duration
-	eventBus      *EventBus
-	oast          *oast.Service
-	attackGraphDB AttackGraphStore
+	scanService                *scanner.Service
+	aiClient                   *ai.Client
+	repo                       Repository
+	agentRegistry              *agent.Registry
+	agentFactory               *agent.Factory
+	autonomous                 bool
+	maxRounds                  int
+	proxyServer                *proxy.Server
+	mlService                  *ml.Service
+	knowledgeSvc               *knowledge.Client
+	agentLearner               *agentlearner.Client
+	agentConfig                AgentConfig
+	maxPerTarget               int
+	semMu                      sync.Mutex
+	targetSem                  map[string]chan struct{}
+	globalSem                  chan struct{}
+	rateMu                     sync.Mutex
+	targetLastRun              map[string]time.Time
+	webhookURL                 string
+	slackWebhook               string
+	notifyMinConf              float64
+	gateHighBlock              int
+	gateMedBlock               int
+	scanTimeout                time.Duration
+	eventBus                   *EventBus
+	oast                       *oast.Service
+	attackGraphDB              AttackGraphStore
+	apiRateLimiter             *apiRateLimiter
+	defaultMinROI              float64
+	campaignPoll               time.Duration
+	defaultDailyScanLimit      int
+	defaultDailyRuntimeMinutes int
+	defaultDailyProbeLimit     int
 }
+
+const (
+	coverageLowThreshold         = 70
+	coverageLowCrawlBoostPages   = 200
+	highROIMultiplierForDeepScan = 1.5
+	lowROICrawlFloorPages        = 40
+	lowROICrawlCeilingPages      = 120
+)
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
 // Safe to call with nil to disable.
@@ -106,6 +121,25 @@ type Repository interface {
 	UpsertAutomationTicket(ctx context.Context, ticket model.AutomationTicket) error
 	ResolveAutomationTicketsMissingFingerprints(ctx context.Context, target string, fingerprints []string, resolvedAt time.Time) (int64, error)
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
+	UpsertAutomationCampaign(ctx context.Context, campaign model.AutomationCampaign) error
+	ListAutomationCampaigns(ctx context.Context, workspaceID string, activeOnly bool, limit int) ([]model.AutomationCampaign, error)
+	ListDueAutomationCampaigns(ctx context.Context, now time.Time, limit int) ([]model.AutomationCampaign, error)
+	UpdateAutomationCampaignRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error
+	DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error
+	TryLeaseAutomationCampaign(ctx context.Context, id string, leaseUntil time.Time) (bool, error)
+	MarkAutomationCampaignDispatchFailure(ctx context.Context, id, lastError string, now time.Time, backoff time.Duration) error
+	HeartbeatAutomationCampaignLease(ctx context.Context, id string, heartbeatAt, leaseUntil time.Time) (bool, error)
+	ReclaimStaleAutomationCampaignLeases(ctx context.Context, staleBefore time.Time, limit int) (int64, error)
+	UpdateAutomationCampaignQueueState(ctx context.Context, id, queueState, runIdempotencyKey string, heartbeatAt *time.Time) error
+	GetProgramROIOverride(ctx context.Context, workspaceID, programName string) (*model.ProgramROIOverride, error)
+	UpsertProgramROIOverride(ctx context.Context, item model.ProgramROIOverride) error
+	ListProgramROIOverrides(ctx context.Context, workspaceID string, limit int) ([]model.ProgramROIOverride, error)
+	GetWorkspaceDailyUsage(ctx context.Context, workspaceID string, day time.Time) (model.WorkspaceDailyUsage, error)
+	GetAutomationPolicyPack(ctx context.Context, workspaceID, name string) (*model.AutomationPolicyPack, error)
+	UpsertAutomationPolicyPack(ctx context.Context, item model.AutomationPolicyPack) error
+	ListAutomationPolicyPacks(ctx context.Context, workspaceID string, limit int) ([]model.AutomationPolicyPack, error)
+	AppendAutomationPolicyAudit(ctx context.Context, event model.AutomationPolicyAuditEvent) error
+	ListAutomationPolicyAudit(ctx context.Context, workspaceID, policyPack string, limit int) ([]model.AutomationPolicyAuditEvent, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -132,31 +166,39 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if scanTimeout <= 0 {
 		scanTimeout = 10 * time.Minute
 	}
-	return &Server{
-		scanService:   scanService,
-		aiClient:      aiClient,
-		repo:          repo,
-		agentRegistry: reg,
-		agentFactory:  factory,
-		autonomous:    autonomous,
-		maxRounds:     maxRounds,
-		proxyServer:   proxy.NewServer(proxyStore),
-		mlService:     mlService,
-		knowledgeSvc:  knowledgeSvc,
-		agentLearner:  agentLearner,
-		agentConfig:   agentCfg,
-		maxPerTarget:  maxInt(1, maxPerTarget),
-		targetSem:     map[string]chan struct{}{},
-		globalSem:     make(chan struct{}, globalBudget),
-		targetLastRun: map[string]time.Time{},
-		webhookURL:    strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
-		slackWebhook:  strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
-		notifyMinConf: maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
-		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
-		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
-		scanTimeout:   scanTimeout,
-		eventBus:      NewEventBus(),
+	s := &Server{
+		scanService:                scanService,
+		aiClient:                   aiClient,
+		repo:                       repo,
+		agentRegistry:              reg,
+		agentFactory:               factory,
+		autonomous:                 autonomous,
+		maxRounds:                  maxRounds,
+		proxyServer:                proxy.NewServer(proxyStore),
+		mlService:                  mlService,
+		knowledgeSvc:               knowledgeSvc,
+		agentLearner:               agentLearner,
+		agentConfig:                agentCfg,
+		maxPerTarget:               maxInt(1, maxPerTarget),
+		targetSem:                  map[string]chan struct{}{},
+		globalSem:                  make(chan struct{}, globalBudget),
+		targetLastRun:              map[string]time.Time{},
+		webhookURL:                 strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
+		slackWebhook:               strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
+		notifyMinConf:              maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
+		gateHighBlock:              maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
+		gateMedBlock:               maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
+		scanTimeout:                scanTimeout,
+		eventBus:                   NewEventBus(),
+		apiRateLimiter:             newAPIRateLimiter(),
+		defaultMinROI:              maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
+		campaignPoll:               time.Duration(maxInt(15, intFromEnv("AUTOMATION_CAMPAIGN_POLL_SECONDS", 30))) * time.Second,
+		defaultDailyScanLimit:      maxInt(0, intFromEnv("AUTOMATION_DAILY_SCAN_LIMIT", 30)),
+		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
+		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 	}
+	go s.runCampaignScheduler()
+	return s
 }
 
 func (s *Server) Routes() http.Handler {
@@ -179,11 +221,20 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
+	mux.HandleFunc("/api/automation/campaigns", s.handleAutomationCampaigns)
+	mux.HandleFunc("/api/automation/roi-overrides", s.handleAutomationROIOverrides)
+	mux.HandleFunc("/api/automation/policy-packs", s.handleAutomationPolicyPacks)
+	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
+	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
+	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
+	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
 	mux.HandleFunc("/api/oast/tokens", s.handleOASTTokens)
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
-	return withCORS(mux)
+	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
+	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
+	return withCORS(s.authMiddleware(s.rateLimitMiddleware(mux)))
 }
 
 // handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
@@ -236,6 +287,9 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]scanSummary, 0, len(jobs))
 	for _, j := range jobs {
 		if j == nil {
+			continue
+		}
+		if !canAccessWorkspaceForRequest(r.Context(), j.WorkspaceID) {
 			continue
 		}
 		var high int
@@ -297,12 +351,25 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
 		return
 	}
+	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	req.Options = s.applySafetyModePolicy(req.Options)
+	if req.Options.MinExpectedROIUSD < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "minExpectedRoiUsd must be >= 0"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), strings.TrimSpace(req.WorkspaceID), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	req.Options, _ = s.applyAutomationPolicyPack(r.Context(), workspaceID, defaultPolicyPack(), req.Options)
+	idempotencyTarget := workspaceID + "::" + target
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.IdempotencyKey == "" {
 		req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
 	if req.IdempotencyKey != "" {
-		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, target, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
+		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, idempotencyTarget, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
 			writeJSON(w, http.StatusAccepted, map[string]string{"id": existing.ID, "status": existing.Status, "deduplicated": "true"})
 			return
 		}
@@ -313,6 +380,9 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	job := &model.ScanJob{
 		ID:                   jobID,
 		Target:               target,
+		WorkspaceID:          workspaceID,
+		RequestedBy:          requesterFromRequest(r),
+		PolicyPack:           defaultPolicyPack(),
 		Status:               "queued",
 		StartedAt:            now,
 		AuthProfileSummary:   model.SummarizeAuthProfile(req.AuthProfile),
@@ -327,9 +397,12 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IdempotencyKey != "" {
-		_ = s.repo.SaveIdempotencyRecord(r.Context(), req.IdempotencyKey, target, jobID, now)
+		_ = s.repo.SaveIdempotencyRecord(r.Context(), req.IdempotencyKey, idempotencyTarget, jobID, now)
 	}
 	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
+	if req.Options.AggressiveExploitation {
+		s.appendAuditEvent(jobID, "exploitation", "Aggressive exploitation mode enabled for deeper Metasploit/Burp validation")
+	}
 
 	go s.runJob(jobID, target, req.AuthProfile, req.AuthProfiles, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
@@ -359,6 +432,10 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 
 	if job == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
 	if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), id); err == nil && len(verifications) > 0 {
@@ -404,7 +481,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		options.SeedRuntimeEndpoints = mergeActions(options.SeedRuntimeEndpoints, persistedState.KnownRuntimeEndpoints)
 		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
 	}
+	options = s.applySafetyModePolicy(options)
 	options = s.tuneScanOptions(options, persistedState, previousJob)
+	options, disabledForHealth := applyHealthAwareExecutionGating(options)
+	if len(disabledForHealth) > 0 {
+		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
+	}
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -431,10 +513,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	job.Findings = s.applyFeedbackConfidencePrioritization(context.Background(), job.Findings)
 	job.Findings = redactSensitiveFindings(job.Findings)
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
 	job.Findings = s.applySuppressions(target, job.Findings)
+	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
@@ -472,7 +556,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				s.appendAuditEvent(id, "asset-monitoring", fmt.Sprintf("Detected %d new assets", len(newAssets)))
 				if shouldTriggerEventDrivenRescan(options) {
 					s.appendAuditEvent(id, "scheduling", "Triggered event-driven deep rescan from asset change detection")
-					go s.scheduleRescan(target, authProfile, options, scanScope, 5*time.Minute)
+					go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, 5*time.Minute)
 				}
 			}
 		}
@@ -512,7 +596,20 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.ModelRecommendations.SecurityKnowledge = knowledgeCtx
 		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
-	policyGate := s.evaluatePolicyGate(job.Findings)
+	expectedROI, roiBasis := s.estimateExpectedROI(context.Background(), job)
+	minROI := s.effectiveMinROI(context.Background(), job)
+	meetsROIGate := expectedROI >= minROI
+	if job.Dashboard == nil {
+		job.Dashboard = &model.DecisionDashboard{}
+	}
+	job.Dashboard.ExpectedROIUSD = roundTo2(expectedROI)
+	job.Dashboard.ExpectedROIBasis = roiBasis
+	job.Dashboard.MeetsROIGate = meetsROIGate
+	job.NextActions = mergeActions(job.NextActions, []string{
+		fmt.Sprintf("Review ROI gate: expected=$%.2f threshold=$%.2f mode=%s", expectedROI, minROI, normalizeAutomationMode(job.Options.AutomationMode)),
+	})
+	s.appendAuditEvent(id, "roi", fmt.Sprintf("ROI estimate expected=$%.2f threshold=$%.2f meets=%t basis=%s", expectedROI, minROI, meetsROIGate, roiBasis))
+	policyGate := s.evaluatePolicyGate(job.Findings, job.PolicyPack)
 	if strings.EqualFold(policyGate.Status, "blocked") {
 		job.Findings = append(job.Findings, model.Finding{
 			ID:          "policy-gate-blocked-release",
@@ -525,7 +622,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			Sources:     []string{"policy"},
 		})
 	}
-	openTickets, resolvedTickets := s.syncAutomationTickets(target, job.Findings)
+	ticketTarget := target
+	if strings.TrimSpace(job.WorkspaceID) != "" {
+		ticketTarget = job.WorkspaceID + "::" + target
+	}
+	openTickets := 0
+	resolvedTickets := 0
+	if meetsROIGate {
+		openTickets, resolvedTickets = s.syncAutomationTickets(ticketTarget, job.Findings)
+	} else {
+		s.appendAuditEvent(id, "ticketing", "Skipped automation ticket updates because ROI gate did not pass")
+	}
 	if openTickets > 0 || resolvedTickets > 0 {
 		job.Findings = append(job.Findings, model.Finding{
 			ID:          "automation-ticket-lifecycle",
@@ -570,8 +677,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.eventBus.Cleanup(id)
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
-		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
-		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+		if meetsROIGate {
+			s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
+			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+		} else {
+			s.appendAuditEvent(id, "scheduling", "Skipped scheduled rescan because ROI gate did not pass")
+		}
 	}
 }
 
@@ -638,7 +749,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-API-Key,X-Workspace-ID,Idempotency-Key")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -777,6 +888,10 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
 	if err := s.repo.SaveFeedback(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist feedback"})
 		return
@@ -807,6 +922,10 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
 	if err := s.repo.SaveFindingVerification(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
 		return
@@ -834,6 +953,7 @@ func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	req.CreatedBy = requesterFromRequest(r)
 	if err := s.repo.SaveSuppressionRule(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save suppression"})
 		return
@@ -934,16 +1054,32 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Options.DeepScanOnHighSignal = true
 	req.Options.RescanIntervalMinutes = 0
+	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	req.Options = s.applySafetyModePolicy(req.Options)
+	req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	if blocked, reason := s.shouldDeferForDailyBudget(r.Context(), workspaceID, req.Options); blocked {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": reason})
+		return
+	}
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
 	job := &model.ScanJob{
 		ID:                 jobID,
 		Target:             target,
+		WorkspaceID:        workspaceID,
+		RequestedBy:        requesterFromRequest(r),
+		PolicyPack:         defaultPolicyPack(),
 		Status:             "queued",
 		StartedAt:          now,
 		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
 		Options:            req.Options,
 		Scope:              req.Scope,
+		ProgramName:        strings.TrimSpace(req.ProgramName),
 	}
 	if err := s.repo.CreateJob(r.Context(), job); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist automation scan job"})
@@ -955,6 +1091,114 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.runJob(jobID, target, req.AuthProfile, nil, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued", "eventType": req.Type})
+}
+
+func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		activeOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("activeOnly")), "true")
+		items, err := s.repo.ListAutomationCampaigns(r.Context(), workspaceID, activeOnly, 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation campaigns"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		var req model.AutomationCampaignUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		target, _, err := normalizeAndValidateTarget(req.Target)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if req.IntervalMin < 5 || req.IntervalMin > 10080 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "intervalMin must be between 5 and 10080"})
+			return
+		}
+		req.ScheduleType = normalizeScheduleType(req.ScheduleType)
+		if err := validateCampaignSchedule(req.ScheduleType, req.ScheduleValue, req.RunWindow, req.BlackoutWindows); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := validateAuthProfile(req.AuthProfile); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		req.Scope = scope.Normalize(target, req.Scope)
+		if !scope.IsURLInScope(target, req.Scope) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
+			return
+		}
+		now := time.Now().UTC()
+		if strings.TrimSpace(req.ID) == "" {
+			req.ID = uuid.NewString()
+		}
+		if r.Method == http.MethodPost {
+			req.Active = true
+		}
+		req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+		req.Options = s.applySafetyModePolicy(req.Options)
+		req.PolicyPack = normalizePolicyPackName(req.PolicyPack)
+		policyVersion := 0
+		req.Options, policyVersion = s.applyAutomationPolicyPack(r.Context(), workspaceID, req.PolicyPack, req.Options)
+		req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
+		nextRunAt := computeNextCampaignRun(now, req)
+		item := model.AutomationCampaign{
+			ID:              req.ID,
+			Target:          target,
+			WorkspaceID:     workspaceID,
+			RequestedBy:     requesterFromRequest(r),
+			PolicyPack:      req.PolicyPack,
+			PolicyVersion:   policyVersion,
+			Name:            strings.TrimSpace(req.Name),
+			ProgramName:     strings.TrimSpace(req.ProgramName),
+			IntervalMin:     req.IntervalMin,
+			ScheduleType:    req.ScheduleType,
+			ScheduleValue:   strings.TrimSpace(req.ScheduleValue),
+			RunWindow:       strings.TrimSpace(req.RunWindow),
+			BlackoutWindows: req.BlackoutWindows,
+			NextRunAt:       nextRunAt,
+			MaxAttempts:     maxInt(3, req.MaxAttempts),
+			Active:          req.Active,
+			AuthProfile:     req.AuthProfile,
+			Options:         req.Options,
+			Scope:           req.Scope,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if item.PolicyPack == "" {
+			item.PolicyPack = defaultPolicyPack()
+		}
+		if !req.Active {
+			item.NextRunAt = time.Time{}
+		}
+		if err := s.repo.UpsertAutomationCampaign(r.Context(), item); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save automation campaign"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": item.ID, "status": "saved"})
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id query parameter is required"})
+			return
+		}
+		if err := s.repo.DeleteAutomationCampaign(r.Context(), id, workspaceID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete automation campaign"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) {
@@ -971,11 +1215,37 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), "", 1000)
 
 	report := model.ExecutiveReport{
-		GeneratedAt:           time.Now().UTC(),
-		TotalCompletedScans:   len(jobs),
-		OpenAutomationTickets: len(openTickets),
+		GeneratedAt:            time.Now().UTC(),
+		AgentAcceptedRate:      map[string]float64{},
+		AgentPayoutPerScanHour: map[string]float64{},
+		AgentFalsePositiveRate: map[string]float64{},
+		ROISparkline:           []float64{},
 	}
+	agentRuns := map[string]int{}
+	agentScanHours := map[string]float64{}
 	for _, job := range jobs {
+		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+			continue
+		}
+		report.TotalCompletedScans++
+		if job.Dashboard != nil {
+			report.AverageExpectedROIUSD += maxFloat(0, job.Dashboard.ExpectedROIUSD)
+			if job.Dashboard.MeetsROIGate {
+				report.HighROICompletedScans++
+			}
+			report.ROISparkline = append(report.ROISparkline, roundTo2(job.Dashboard.ExpectedROIUSD))
+		}
+		if job.CompletedAt != nil {
+			durationHours := maxFloat(0.05, job.CompletedAt.Sub(job.StartedAt).Hours())
+			for _, run := range job.AgentRuns {
+				name := strings.TrimSpace(run.AgentName)
+				if name == "" {
+					continue
+				}
+				agentRuns[name]++
+				agentScanHours[name] += durationHours
+			}
+		}
 		for _, finding := range job.Findings {
 			switch strings.ToLower(strings.TrimSpace(finding.DriftStatus)) {
 			case "new":
@@ -990,6 +1260,16 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+	ws := workspaceFromRequest(r)
+	if ws == "" {
+		report.OpenAutomationTickets = len(openTickets)
+	} else {
+		for _, ticket := range openTickets {
+			if strings.HasPrefix(ticket.Target, ws+"::") {
+				report.OpenAutomationTickets++
+			}
+		}
+	}
 	for _, item := range feedback {
 		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
 		case "accepted":
@@ -1000,12 +1280,82 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			report.DuplicateFeedback++
 		}
 	}
+	if report.TotalCompletedScans > 0 {
+		report.AverageExpectedROIUSD /= float64(report.TotalCompletedScans)
+	}
+	acceptedPayout := 0.0
+	for _, item := range feedback {
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			acceptedPayout += maxFloat(0, item.PayoutUSD)
+		}
+	}
+	if report.TotalCompletedScans > 0 {
+		report.AcceptedPayoutPerScanUSD = acceptedPayout / float64(report.TotalCompletedScans)
+	}
+	acceptedRate := 0.0
+	if totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback; totalReviewed > 0 {
+		acceptedRate = float64(report.AcceptedFeedback) / float64(totalReviewed)
+	}
 	totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback
 	if totalReviewed > 0 {
 		report.FalsePositiveRate = float64(report.RejectedFeedback+report.DuplicateFeedback) / float64(totalReviewed)
 	}
+	for agentName, runs := range agentRuns {
+		hours := maxFloat(0.1, agentScanHours[agentName])
+		report.AgentAcceptedRate[agentName] = roundTo2(acceptedRate)
+		report.AgentPayoutPerScanHour[agentName] = roundTo2(acceptedPayout / hours)
+		report.AgentFalsePositiveRate[agentName] = roundTo2(report.FalsePositiveRate)
+		if runs == 0 {
+			delete(report.AgentAcceptedRate, agentName)
+			delete(report.AgentPayoutPerScanHour, agentName)
+			delete(report.AgentFalsePositiveRate, agentName)
+		}
+	}
 	_ = openTickets
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleAutomationROIOverrides(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.repo.ListProgramROIOverrides(r.Context(), workspaceID, 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list roi overrides"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		var req struct {
+			ProgramName       string  `json:"programName"`
+			MinExpectedROIUSD float64 `json:"minExpectedRoiUsd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(req.ProgramName) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "programName is required"})
+			return
+		}
+		item := model.ProgramROIOverride{
+			WorkspaceID:       workspaceID,
+			ProgramName:       strings.TrimSpace(req.ProgramName),
+			MinExpectedROIUSD: maxFloat(0, req.MinExpectedROIUSD),
+			UpdatedAt:         time.Now().UTC(),
+		}
+		if err := s.repo.UpsertProgramROIOverride(r.Context(), item); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save roi override"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "saved"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request) {
@@ -1014,15 +1364,367 @@ func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
+	if ws := workspaceFromRequest(r); ws != "" && target != "" {
+		target = ws + "::" + target
+	}
 	tickets, err := s.repo.ListOpenAutomationTickets(r.Context(), target, 200)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation tickets"})
 		return
 	}
+	if ws := workspaceFromRequest(r); ws != "" {
+		filtered := make([]model.AutomationTicket, 0, len(tickets))
+		for _, ticket := range tickets {
+			if strings.HasPrefix(ticket.Target, ws+"::") {
+				ticket.Target = strings.TrimPrefix(ticket.Target, ws+"::")
+				filtered = append(filtered, ticket)
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
+		return
+	}
 	writeJSON(w, http.StatusOK, tickets)
 }
 
-func (s *Server) evaluatePolicyGate(findings []model.Finding) model.PolicyGateResult {
+func normalizePolicyPackName(raw string) string {
+	pack := strings.ToLower(strings.TrimSpace(raw))
+	if pack == "" {
+		return defaultPolicyPack()
+	}
+	return pack
+}
+
+func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, packName string, options model.ScanOptions) (model.ScanOptions, int) {
+	packName = normalizePolicyPackName(packName)
+	pack, err := s.repo.GetAutomationPolicyPack(ctx, firstNonEmpty(workspaceID, "default"), packName)
+	if err != nil || pack == nil {
+		return options, 0
+	}
+	if mode := normalizeAutomationMode(pack.AutomationMode); mode != "" {
+		options.AutomationMode = mode
+	}
+	options.MinExpectedROIUSD = maxFloat(options.MinExpectedROIUSD, pack.MinExpectedROIUSD)
+	if pack.MaxAutomationConcurrency > 0 {
+		if options.MaxAutomationConcurrency <= 0 {
+			options.MaxAutomationConcurrency = pack.MaxAutomationConcurrency
+		} else {
+			options.MaxAutomationConcurrency = minInt(options.MaxAutomationConcurrency, pack.MaxAutomationConcurrency)
+		}
+	}
+	if pack.MaxPerTargetConcurrency > 0 {
+		if options.MaxPerTargetConcurrency <= 0 {
+			options.MaxPerTargetConcurrency = pack.MaxPerTargetConcurrency
+		} else {
+			options.MaxPerTargetConcurrency = minInt(options.MaxPerTargetConcurrency, pack.MaxPerTargetConcurrency)
+		}
+	}
+	if pack.MaxExploitAttempts >= 0 {
+		if options.MaxExploitAttempts <= 0 {
+			options.MaxExploitAttempts = pack.MaxExploitAttempts
+		} else {
+			options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, pack.MaxExploitAttempts)
+		}
+	}
+	if pack.DailyScanLimit > 0 {
+		if options.DailyScanLimit <= 0 {
+			options.DailyScanLimit = pack.DailyScanLimit
+		} else {
+			options.DailyScanLimit = minInt(options.DailyScanLimit, pack.DailyScanLimit)
+		}
+	}
+	if pack.DailyRuntimeLimitMinutes > 0 {
+		if options.DailyRuntimeLimitMinutes <= 0 {
+			options.DailyRuntimeLimitMinutes = pack.DailyRuntimeLimitMinutes
+		} else {
+			options.DailyRuntimeLimitMinutes = minInt(options.DailyRuntimeLimitMinutes, pack.DailyRuntimeLimitMinutes)
+		}
+	}
+	if pack.DailyProbeLimit > 0 {
+		if options.DailyProbeLimit <= 0 {
+			options.DailyProbeLimit = pack.DailyProbeLimit
+		} else {
+			options.DailyProbeLimit = minInt(options.DailyProbeLimit, pack.DailyProbeLimit)
+		}
+	}
+	return options, maxInt(1, pack.StrategyVersion)
+}
+
+func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.repo.ListAutomationPolicyPacks(r.Context(), workspaceID, 200)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list policy packs"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		if !hasRole(r.Context(), model.APIKeyRoleAdmin) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
+			return
+		}
+		var req model.AutomationPolicyPack
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		req.WorkspaceID = workspaceID
+		req.Name = normalizePolicyPackName(req.Name)
+		req.UpdatedBy = requesterFromRequest(r)
+		if req.StrategyVersion <= 0 {
+			req.StrategyVersion = 1
+		}
+		before, _ := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, req.Name)
+		req.UpdatedAt = time.Now().UTC()
+		if err := s.repo.UpsertAutomationPolicyPack(r.Context(), req); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save policy pack"})
+			return
+		}
+		after, _ := json.Marshal(req)
+		beforeJSON := ""
+		if before != nil {
+			if b, err := json.Marshal(before); err == nil {
+				beforeJSON = string(b)
+			}
+		}
+		_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+			ID:              uuid.NewString(),
+			WorkspaceID:     workspaceID,
+			PolicyPack:      req.Name,
+			StrategyVersion: req.StrategyVersion,
+			Action:          "upsert",
+			ChangedBy:       requesterFromRequest(r),
+			ChangedAt:       time.Now().UTC(),
+			BeforeJSON:      beforeJSON,
+			AfterJSON:       string(after),
+		})
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "saved"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAutomationPolicyAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	pack := normalizePolicyPackName(r.URL.Query().Get("policyPack"))
+	if strings.TrimSpace(r.URL.Query().Get("policyPack")) == "" {
+		pack = ""
+	}
+	items, err := s.repo.ListAutomationPolicyAudit(r.Context(), workspaceID, pack, 300)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list policy audit"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	campaigns, err := s.repo.ListAutomationCampaigns(r.Context(), workspaceID, false, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load campaigns"})
+		return
+	}
+	now := time.Now().UTC()
+	lagSum := 0.0
+	lagCount := 0
+	maxLag := 0.0
+	retrying := 0
+	dlq := 0
+	for _, c := range campaigns {
+		if c.DeadLetter {
+			dlq++
+		}
+		if c.RetryCount > 0 {
+			retrying++
+		}
+		dueAt := c.NextRunAt
+		if c.NextRetryAt != nil && !c.NextRetryAt.IsZero() {
+			dueAt = *c.NextRetryAt
+		}
+		if !dueAt.IsZero() && dueAt.Before(now) {
+			lag := now.Sub(dueAt).Seconds()
+			lagSum += lag
+			lagCount++
+			maxLag = maxFloat(maxLag, lag)
+		}
+	}
+	jobs, _ := s.repo.ListCompletedJobs(r.Context(), 1000)
+	strategyROI := map[string]float64{}
+	strategyCounts := map[string]int{}
+	failedRuns := 0
+	totalRuns := 0
+	for _, job := range jobs {
+		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+			continue
+		}
+		strategy := normalizePolicyPackName(job.PolicyPack)
+		if strategy == "" {
+			strategy = "internal"
+		}
+		if job.Dashboard != nil {
+			strategyROI[strategy] += maxFloat(0, job.Dashboard.ExpectedROIUSD)
+		}
+		strategyCounts[strategy]++
+		for _, run := range job.AgentRuns {
+			totalRuns++
+			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
+				failedRuns++
+			}
+		}
+	}
+	for name, total := range strategyCounts {
+		if total > 0 {
+			strategyROI[name] = roundTo2(strategyROI[name] / float64(total))
+		}
+	}
+	avgLag := 0.0
+	if lagCount > 0 {
+		avgLag = lagSum / float64(lagCount)
+	}
+	retryRate := 0.0
+	if len(campaigns) > 0 {
+		retryRate = float64(retrying) / float64(len(campaigns))
+	}
+	toolFailureRate := 0.0
+	if totalRuns > 0 {
+		toolFailureRate = float64(failedRuns) / float64(totalRuns)
+	}
+	alerts := make([]string, 0)
+	if avgLag > float64(maxInt(60, intFromEnv("AUTOMATION_ALERT_QUEUE_LAG_SECONDS", 300))) {
+		alerts = append(alerts, "queue lag exceeded threshold")
+	}
+	if retryRate > floatFromEnv("AUTOMATION_ALERT_RETRY_RATE", 0.35) {
+		alerts = append(alerts, "retry rate exceeded threshold")
+	}
+	if dlq > maxInt(0, intFromEnv("AUTOMATION_ALERT_DLQ_COUNT", 5)) {
+		alerts = append(alerts, "dead-letter queue size exceeded threshold")
+	}
+	if toolFailureRate > floatFromEnv("AUTOMATION_ALERT_TOOL_FAILURE_RATE", 0.25) {
+		alerts = append(alerts, "tool failure rate exceeded threshold")
+	}
+	writeJSON(w, http.StatusOK, model.AutomationMetrics{
+		GeneratedAt:       now,
+		WorkspaceID:       workspaceID,
+		QueueLagSeconds:   roundTo2(avgLag),
+		MaxQueueLag:       roundTo2(maxLag),
+		RetryRate:         roundTo2(retryRate),
+		DLQCount:          dlq,
+		ToolFailureRate:   roundTo2(toolFailureRate),
+		ROIByStrategy:     strategyROI,
+		StrategyRunCounts: strategyCounts,
+		Alerts:            alerts,
+		Extra: map[string]float64{
+			"lagSamples": float64(lagCount),
+			"agentRuns":  float64(totalRuns),
+		},
+	})
+}
+
+func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !hasRole(r.Context(), model.APIKeyRoleAdmin) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	var req struct {
+		PolicyPack     string  `json:"policyPack"`
+		CanaryPercent  int     `json:"canaryPercent"`
+		Rollback       bool    `json:"rollback"`
+		ExpectedMinROI float64 `json:"expectedMinRoiUsd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	packName := normalizePolicyPackName(req.PolicyPack)
+	pack, err := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, packName)
+	if err != nil || pack == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy pack not found"})
+		return
+	}
+	beforeRaw, _ := json.Marshal(pack)
+	next := *pack
+	if req.Rollback {
+		next.CanaryPercent = 0
+	} else {
+		next.StrategyVersion = maxInt(1, next.StrategyVersion+1)
+		next.CanaryPercent = maxInt(0, minInt(100, req.CanaryPercent))
+		if req.ExpectedMinROI > 0 {
+			next.MinExpectedROIUSD = maxFloat(next.MinExpectedROIUSD, req.ExpectedMinROI)
+		}
+	}
+	next.UpdatedBy = requesterFromRequest(r)
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.repo.UpsertAutomationPolicyPack(r.Context(), next); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update policy pack"})
+		return
+	}
+	afterRaw, _ := json.Marshal(next)
+	action := "rebalance"
+	if req.Rollback {
+		action = "rollback"
+	}
+	_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+		ID:              uuid.NewString(),
+		WorkspaceID:     workspaceID,
+		PolicyPack:      packName,
+		StrategyVersion: next.StrategyVersion,
+		Action:          action,
+		ChangedBy:       requesterFromRequest(r),
+		ChangedAt:       time.Now().UTC(),
+		BeforeJSON:      string(beforeRaw),
+		AfterJSON:       string(afterRaw),
+	})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":          "updated",
+		"policyPack":      packName,
+		"strategyVersion": next.StrategyVersion,
+		"canaryPercent":   next.CanaryPercent,
+		"rollback":        req.Rollback,
+	})
+}
+
+func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string) model.PolicyGateResult {
+	highBlock := s.gateHighBlock
+	medBlock := s.gateMedBlock
+	switch strings.ToLower(strings.TrimSpace(policyPack)) {
+	case "regulated":
+		highBlock = 0
+		medBlock = 1
+	case "bugbounty":
+		highBlock = maxInt(1, s.gateHighBlock)
+		medBlock = maxInt(2, s.gateMedBlock)
+	}
 	result := model.PolicyGateResult{
 		Status:      "pass",
 		GeneratedAt: time.Now().UTC(),
@@ -1036,18 +1738,29 @@ func (s *Server) evaluatePolicyGate(findings []model.Finding) model.PolicyGateRe
 			result.MediumCount++
 		}
 	}
-	if result.HighCount >= s.gateHighBlock || result.MediumCount >= s.gateMedBlock {
+	if result.HighCount >= highBlock || result.MediumCount >= medBlock {
 		result.Status = "blocked"
-		result.Reason = fmt.Sprintf("high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", result.HighCount, result.MediumCount, s.gateHighBlock, s.gateMedBlock)
+		result.Reason = fmt.Sprintf("policy_pack=%s high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", strings.TrimSpace(policyPack), result.HighCount, result.MediumCount, highBlock, medBlock)
 	} else {
-		result.Reason = "thresholds satisfied"
+		result.Reason = fmt.Sprintf("policy_pack=%s thresholds satisfied", strings.TrimSpace(policyPack))
 	}
 	return result
 }
 
 func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {
-	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < 70 {
-		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 200)
+	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < coverageLowThreshold {
+		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, coverageLowCrawlBoostPages)
+	}
+	if previous != nil && previous.Dashboard != nil {
+		if previous.Dashboard.MeetsROIGate && previous.Dashboard.ExpectedROIUSD > s.defaultMinROI*highROIMultiplierForDeepScan {
+			options.DeepScanOnHighSignal = true
+			options.UseNucleiIntegration = true
+			options.UseFFUFIntegration = true
+		}
+		if !previous.Dashboard.MeetsROIGate {
+			options.UseSQLMapIntegration = false
+			options.CrawlMaxPages = minInt(maxInt(options.CrawlMaxPages, lowROICrawlFloorPages), lowROICrawlCeilingPages)
+		}
 	}
 	if state != nil && state.SessionInstability > 2 {
 		options.UseNucleiIntegration = false
@@ -1057,12 +1770,402 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 	return options
 }
 
+func normalizeAutomationMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "safe", "aggressive", "autonomous":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "autonomous"
+	}
+}
+
+func normalizeScheduleType(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "daily", "weekly", "cron":
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return "interval"
+	}
+}
+
+func parseScheduleValueAndLocation(raw string) (string, *time.Location, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", time.UTC, nil
+	}
+	if !strings.Contains(value, "|") {
+		return value, time.UTC, nil
+	}
+	parts := strings.SplitN(value, "|", 2)
+	tz := strings.TrimSpace(parts[0])
+	inner := strings.TrimSpace(parts[1])
+	if tz == "" {
+		return inner, time.UTC, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid schedule timezone")
+	}
+	return inner, loc, nil
+}
+
+func validateCampaignSchedule(scheduleType, scheduleValue, runWindow string, blackoutWindows []string) error {
+	inner, _, err := parseScheduleValueAndLocation(scheduleValue)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(runWindow) != "" && !validWindowSpec(runWindow) {
+		return fmt.Errorf("runWindow must use HH:MM-HH:MM format")
+	}
+	for _, win := range blackoutWindows {
+		if strings.TrimSpace(win) != "" && !validWindowSpec(win) {
+			return fmt.Errorf("blackoutWindows must use HH:MM-HH:MM format")
+		}
+	}
+	switch normalizeScheduleType(scheduleType) {
+	case "daily":
+		if _, _, ok := parseClock(inner); !ok {
+			return fmt.Errorf("daily scheduleValue must use HH:MM (optionally TZ|HH:MM)")
+		}
+	case "weekly":
+		raw := strings.Split(inner, "@")
+		if len(raw) != 2 {
+			return fmt.Errorf("weekly scheduleValue must use weekday@HH:MM (optionally TZ|weekday@HH:MM)")
+		}
+		weekday := strings.ToLower(strings.TrimSpace(raw[0]))
+		if weekday != "sun" && weekday != "mon" && weekday != "tue" && weekday != "wed" && weekday != "thu" && weekday != "fri" && weekday != "sat" {
+			return fmt.Errorf("weekly scheduleValue must use sun|mon|tue|wed|thu|fri|sat")
+		}
+		if _, _, ok := parseClock(raw[1]); !ok {
+			return fmt.Errorf("weekly scheduleValue must use weekday@HH:MM")
+		}
+	case "cron":
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		if _, err := parser.Parse(strings.TrimSpace(inner)); err != nil {
+			return fmt.Errorf("cron scheduleValue must be a 5-field cron expression (optionally TZ|expr)")
+		}
+	}
+	return nil
+}
+
+func validWindowSpec(spec string) bool {
+	parts := strings.Split(strings.TrimSpace(spec), "-")
+	if len(parts) != 2 {
+		return false
+	}
+	_, _, okS := parseClock(parts[0])
+	_, _, okE := parseClock(parts[1])
+	return okS && okE
+}
+
+func (s *Server) effectiveMinROI(ctx context.Context, job *model.ScanJob) float64 {
+	if job == nil {
+		return s.defaultMinROI
+	}
+	options := job.Options
+	minROI := s.defaultMinROI
+	if options.MinExpectedROIUSD > 0 {
+		minROI = options.MinExpectedROIUSD
+	}
+	if override, err := s.repo.GetProgramROIOverride(ctx, firstNonEmpty(job.WorkspaceID, "default"), strings.TrimSpace(job.ProgramName)); err == nil && override != nil {
+		minROI = maxFloat(minROI, override.MinExpectedROIUSD)
+	}
+	switch normalizeAutomationMode(options.AutomationMode) {
+	case "safe":
+		minROI = maxFloat(minROI, s.defaultMinROI*1.5)
+	case "aggressive":
+		minROI = maxFloat(0, minROI*0.6)
+	}
+	return minROI
+}
+
+func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOptions {
+	switch normalizeAutomationMode(options.AutomationMode) {
+	case "safe":
+		options.MaxExploitAttempts = 0
+		options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+		options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(60, options.MinRescanIntervalMinutes))
+		options.AggressiveExploitation = false
+	case "aggressive":
+		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 5)
+		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 3)
+		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 4)
+		options.RescanIntervalMinutes = maxInt(15, options.RescanIntervalMinutes)
+	default:
+		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 1)
+		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 2)
+		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 2)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+	}
+	options.DailyScanLimit = maxInt(options.DailyScanLimit, s.defaultDailyScanLimit)
+	options.DailyRuntimeLimitMinutes = maxInt(options.DailyRuntimeLimitMinutes, s.defaultDailyRuntimeMinutes)
+	options.DailyProbeLimit = maxInt(options.DailyProbeLimit, s.defaultDailyProbeLimit)
+	options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 50)
+	return options
+}
+
+func (s *Server) shouldDeferForDailyBudget(ctx context.Context, workspaceID string, options model.ScanOptions) (bool, string) {
+	usage, err := s.repo.GetWorkspaceDailyUsage(ctx, firstNonEmpty(workspaceID, "default"), time.Now().UTC())
+	if err != nil {
+		return false, ""
+	}
+	if options.DailyScanLimit > 0 && usage.ScanCount >= options.DailyScanLimit {
+		return true, fmt.Sprintf("daily scan budget exceeded (%d/%d)", usage.ScanCount, options.DailyScanLimit)
+	}
+	if options.DailyRuntimeLimitMinutes > 0 && usage.RuntimeMinutes >= options.DailyRuntimeLimitMinutes {
+		return true, fmt.Sprintf("daily runtime budget exceeded (%d/%d minutes)", usage.RuntimeMinutes, options.DailyRuntimeLimitMinutes)
+	}
+	if options.DailyProbeLimit > 0 && usage.ProbeVolume >= options.DailyProbeLimit {
+		return true, fmt.Sprintf("daily probe budget exceeded (%d/%d)", usage.ProbeVolume, options.DailyProbeLimit)
+	}
+	return false, ""
+}
+
+func roundTo2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func (s *Server) estimateExpectedROI(ctx context.Context, job *model.ScanJob) (float64, string) {
+	if job == nil {
+		return 0, "no-job"
+	}
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil {
+		feedback = nil
+	}
+	type feedbackAgg struct {
+		total    int
+		accepted int
+		payout   float64
+	}
+	byKey := map[string]feedbackAgg{}
+	globalAccepted := 0
+	globalPayout := 0.0
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := byKey[key]
+		cur.total++
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			cur.accepted++
+			cur.payout += maxFloat(0, item.PayoutUSD)
+			globalAccepted++
+			globalPayout += maxFloat(0, item.PayoutUSD)
+		}
+		byKey[key] = cur
+	}
+	globalAvgPayout := 120.0
+	if globalAccepted > 0 {
+		globalAvgPayout = globalPayout / float64(globalAccepted)
+	}
+	expected := 0.0
+	for _, f := range job.Findings {
+		if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium && f.Severity != model.SeverityLow {
+			continue
+		}
+		severityImpact := 20.0
+		switch f.Severity {
+		case model.SeverityHigh:
+			severityImpact = 550
+		case model.SeverityMedium:
+			severityImpact = 220
+		case model.SeverityLow:
+			severityImpact = 60
+		}
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = 0.6
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		agg := byKey[key]
+		hitRate := 0.35
+		avgPayout := globalAvgPayout
+		if agg.total > 0 {
+			hitRate = float64(agg.accepted+1) / float64(agg.total+2)
+		}
+		if agg.accepted > 0 {
+			avgPayout = agg.payout / float64(agg.accepted)
+		}
+		expected += (severityImpact*0.25 + avgPayout*0.75) * conf * hitRate
+	}
+	return maxFloat(0, roundTo2(expected)), "severity+confidence+historical-payout"
+}
+
+func (s *Server) applyAutoSuppressionHeuristics(ctx context.Context, findings []model.Finding) []model.Finding {
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil || len(feedback) == 0 || len(findings) == 0 {
+		return findings
+	}
+	type agg struct {
+		total    int
+		accepted int
+		payout   float64
+	}
+	signals := map[string]agg{}
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := signals[key]
+		cur.total++
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			cur.accepted++
+			cur.payout += maxFloat(0, item.PayoutUSD)
+		}
+		signals[key] = cur
+	}
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Severity == model.SeverityHigh || f.Severity == model.SeverityMedium {
+			out = append(out, f)
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		agg := signals[key]
+		if agg.total < 3 {
+			out = append(out, f)
+			continue
+		}
+		acceptRate := float64(agg.accepted) / float64(agg.total)
+		avgPayout := 0.0
+		if agg.accepted > 0 {
+			avgPayout = agg.payout / float64(agg.accepted)
+		}
+		if acceptRate < 0.15 && avgPayout < 20 && f.Confidence < 0.85 {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func (s *Server) runCampaignScheduler() {
+	if s.repo == nil || s.campaignPoll <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.campaignPoll)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now().UTC()
+		_, _ = s.repo.ReclaimStaleAutomationCampaignLeases(context.Background(), now.Add(-4*s.campaignPoll), 100)
+		campaigns, err := s.repo.ListDueAutomationCampaigns(context.Background(), now, 25)
+		if err != nil || len(campaigns) == 0 {
+			continue
+		}
+		for _, c := range campaigns {
+			if strings.TrimSpace(c.RunWindow) != "" && !inCampaignWindow(now, c) {
+				nextRun := computeNextCampaignRun(now.Add(15*time.Minute), model.AutomationCampaignUpsertRequest{
+					IntervalMin:     c.IntervalMin,
+					ScheduleType:    c.ScheduleType,
+					ScheduleValue:   c.ScheduleValue,
+					RunWindow:       c.RunWindow,
+					BlackoutWindows: c.BlackoutWindows,
+				})
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				continue
+			}
+			if inCampaignBlackout(now, c) {
+				nextRun := now.Add(30 * time.Minute)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				continue
+			}
+			leaseUntil := now.Add(2 * s.campaignPoll)
+			ok, err := s.repo.TryLeaseAutomationCampaign(context.Background(), c.ID, leaseUntil)
+			if err != nil || !ok {
+				continue
+			}
+			c.Options.AutomationMode = normalizeAutomationMode(c.Options.AutomationMode)
+			c.Options = s.applySafetyModePolicy(c.Options)
+			c.PolicyPack = normalizePolicyPackName(c.PolicyPack)
+			c.Options, c.PolicyVersion = s.applyAutomationPolicyPack(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.PolicyPack, c.Options)
+			c.Options.MinExpectedROIUSD = maxFloat(c.Options.MinExpectedROIUSD, s.defaultMinROI)
+			if blocked, reason := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.Options); blocked {
+				backoff := 30 * time.Minute
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, reason, now, backoff)
+				continue
+			}
+			runDueAt := c.NextRunAt
+			if c.NextRetryAt != nil && !c.NextRetryAt.IsZero() {
+				runDueAt = *c.NextRetryAt
+			}
+			runKey := strings.Join([]string{
+				"campaign",
+				strings.TrimSpace(c.ID),
+				runDueAt.UTC().Format(time.RFC3339Nano),
+			}, ":")
+			idempotencyTarget := strings.Join([]string{
+				firstNonEmpty(c.WorkspaceID, "default"),
+				strings.TrimSpace(c.Target),
+				strings.TrimSpace(c.ID),
+			}, "::")
+			if existing, err := s.repo.GetRecentJobByIdempotencyKey(context.Background(), runKey, idempotencyTarget, now.Add(-7*24*time.Hour)); err == nil && existing != nil {
+				nextRun := resolveCampaignNextRunAfterDispatch(now, c)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				continue
+			}
+			jobID := uuid.NewString()
+			job := &model.ScanJob{
+				ID:                 jobID,
+				Target:             c.Target,
+				WorkspaceID:        firstNonEmpty(c.WorkspaceID, "default"),
+				RequestedBy:        c.RequestedBy,
+				PolicyPack:         c.PolicyPack,
+				Status:             "queued",
+				StartedAt:          now,
+				AuthProfileSummary: model.SummarizeAuthProfile(c.AuthProfile),
+				Options:            c.Options,
+				Scope:              c.Scope,
+				ProgramName:        strings.TrimSpace(c.ProgramName),
+				ProgramPolicyVersion: fmt.Sprintf(
+					"%d",
+					maxInt(1, c.PolicyVersion),
+				),
+			}
+			if err := s.repo.CreateJob(context.Background(), job); err != nil {
+				backoff := campaignRetryBackoff(c.RetryCount)
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, err.Error(), now, backoff)
+				continue
+			}
+			_ = s.repo.SaveIdempotencyRecord(context.Background(), runKey, idempotencyTarget, jobID, now)
+			hbNow := now
+			_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), c.ID, "running", runKey, &hbNow)
+			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
+			go func(campaign model.AutomationCampaign, scanJobID string, idempotencyKey string) {
+				stopHB := make(chan struct{})
+				go func() {
+					beatTicker := time.NewTicker(maxDuration(5*time.Second, s.campaignPoll/2))
+					defer beatTicker.Stop()
+					for {
+						select {
+						case <-stopHB:
+							return
+						case beat := <-beatTicker.C:
+							leaseUntil := beat.Add(2 * s.campaignPoll)
+							ok, _ := s.repo.HeartbeatAutomationCampaignLease(context.Background(), campaign.ID, beat, leaseUntil)
+							if !ok {
+								return
+							}
+						}
+					}
+				}()
+				s.runJob(scanJobID, campaign.Target, campaign.AuthProfile, nil, campaign.Options, campaign.Scope)
+				close(stopHB)
+				nextRun := resolveCampaignNextRunAfterDispatch(time.Now().UTC(), campaign)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), campaign.ID, time.Now().UTC(), nextRun)
+				_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), campaign.ID, "queued", idempotencyKey, nil)
+			}(c, jobID, runKey)
+		}
+	}
+}
+
 func (s *Server) syncAutomationTickets(target string, findings []model.Finding) (int, int) {
 	now := time.Now().UTC()
 	currentFingerprints := make([]string, 0)
 	open := 0
 	for _, f := range findings {
 		if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium {
+			continue
+		}
+		drift := strings.ToLower(strings.TrimSpace(f.DriftStatus))
+		if drift == "resolved" {
 			continue
 		}
 		fp := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
@@ -1074,13 +2177,24 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 		if f.Severity == model.SeverityHigh {
 			sla = now.Add(24 * time.Hour)
 		}
+		if drift == "new" {
+			if f.Severity == model.SeverityHigh {
+				sla = now.Add(12 * time.Hour)
+			} else {
+				sla = now.Add(48 * time.Hour)
+			}
+		}
+		status := "open"
+		if drift == "changed" && f.Severity == model.SeverityHigh {
+			status = "escalated"
+		}
 		ticket := model.AutomationTicket{
 			ID:          uuid.NewString(),
 			Target:      target,
 			Fingerprint: fp,
 			Title:       f.Title,
 			Severity:    f.Severity,
-			Status:      "open",
+			Status:      status,
 			FirstSeenAt: now,
 			LastSeenAt:  now,
 			SLADueAt:    &sla,
@@ -1659,6 +2773,314 @@ func buildIntegrationHealthFinding(outputs []agent.AgentOutput) []model.Finding 
 	}}
 }
 
+func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptions, []string) {
+	required := map[string]bool{
+		"nuclei":       options.UseNucleiIntegration,
+		"zap-baseline": options.UseZAPBaselineIntegration,
+		"subfinder":    options.UseSubfinderIntegration,
+		"httpx":        options.UseHttpxIntegration,
+		"naabu":        options.UseNaabuIntegration,
+		"dnsx":         options.UseDnsxIntegration,
+		"shuffledns":   options.UseShuffleDNSIntegration,
+		"katana":       options.UseKatanaIntegration,
+		"tlsx":         options.UseTlsxIntegration,
+		"cdncheck":     options.UseCdncheckIntegration,
+		"asnmap":       options.UseAsnmapIntegration,
+		"ffuf":         options.UseFFUFIntegration,
+		"gobuster":     options.UseGobusterIntegration,
+	}
+	health := collectToolHealth()
+	disabled := make([]string, 0)
+	for _, item := range health {
+		if !required[item.Name] || item.Installed {
+			continue
+		}
+		switch item.Name {
+		case "nuclei":
+			options.UseNucleiIntegration = false
+		case "zap-baseline":
+			options.UseZAPBaselineIntegration = false
+		case "subfinder":
+			options.UseSubfinderIntegration = false
+		case "httpx":
+			options.UseHttpxIntegration = false
+		case "naabu":
+			options.UseNaabuIntegration = false
+		case "dnsx":
+			options.UseDnsxIntegration = false
+		case "shuffledns":
+			options.UseShuffleDNSIntegration = false
+		case "katana":
+			options.UseKatanaIntegration = false
+		case "tlsx":
+			options.UseTlsxIntegration = false
+		case "cdncheck":
+			options.UseCdncheckIntegration = false
+		case "asnmap":
+			options.UseAsnmapIntegration = false
+		case "ffuf":
+			options.UseFFUFIntegration = false
+		case "gobuster":
+			options.UseGobusterIntegration = false
+		}
+		disabled = append(disabled, item.Name)
+	}
+	sort.Strings(disabled)
+	return options, disabled
+}
+
+func campaignRetryBackoff(retryCount int) time.Duration {
+	steps := maxInt(1, retryCount+1)
+	backoff := time.Duration(steps*steps) * 5 * time.Minute
+	if backoff > 6*time.Hour {
+		return 6 * time.Hour
+	}
+	return backoff
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func automationMisfirePolicy() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_MISFIRE_POLICY"))) {
+	case "catch-up":
+		return "catch-up"
+	default:
+		return "skip"
+	}
+}
+
+func inCampaignWindow(now time.Time, c model.AutomationCampaign) bool {
+	_, loc, err := parseScheduleValueAndLocation(c.ScheduleValue)
+	if err != nil {
+		loc = time.UTC
+	}
+	return inWindowAt(now, c.RunWindow, loc)
+}
+
+func inCampaignBlackout(now time.Time, c model.AutomationCampaign) bool {
+	_, loc, err := parseScheduleValueAndLocation(c.ScheduleValue)
+	if err != nil {
+		loc = time.UTC
+	}
+	return inBlackoutAt(now, c.BlackoutWindows, loc)
+}
+
+func resolveCampaignNextRunAfterDispatch(now time.Time, c model.AutomationCampaign) time.Time {
+	req := model.AutomationCampaignUpsertRequest{
+		IntervalMin:     c.IntervalMin,
+		ScheduleType:    c.ScheduleType,
+		ScheduleValue:   c.ScheduleValue,
+		RunWindow:       c.RunWindow,
+		BlackoutWindows: c.BlackoutWindows,
+	}
+	if automationMisfirePolicy() != "catch-up" {
+		return computeNextCampaignRun(now, req)
+	}
+	anchor := now
+	if !c.NextRunAt.IsZero() {
+		anchor = c.NextRunAt
+	}
+	next := computeNextCampaignRun(anchor, req)
+	cutoff := now.Add(7 * 24 * time.Hour)
+	for i := 0; i < 512 && !next.After(now); i++ {
+		if next.After(cutoff) {
+			return computeNextCampaignRun(now, req)
+		}
+		anchor = next
+		next = computeNextCampaignRun(anchor, req)
+	}
+	return next
+}
+
+func parseClock(value string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	h, errH := strconv.Atoi(parts[0])
+	m, errM := strconv.Atoi(parts[1])
+	if errH != nil || errM != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0, false
+	}
+	return h, m, true
+}
+
+func inWindowAt(now time.Time, spec string, loc *time.Location) bool {
+	if loc == nil {
+		loc = time.UTC
+	}
+	parts := strings.Split(strings.TrimSpace(spec), "-")
+	if len(parts) != 2 {
+		return false
+	}
+	sh, sm, okS := parseClock(parts[0])
+	eh, em, okE := parseClock(parts[1])
+	if !okS || !okE {
+		return false
+	}
+	localNow := now.In(loc)
+	start := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), sh, sm, 0, 0, loc)
+	end := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), eh, em, 0, 0, loc)
+	if end.Before(start) {
+		return localNow.After(start) || localNow.Before(end)
+	}
+	return (localNow.Equal(start) || localNow.After(start)) && localNow.Before(end)
+}
+
+func inWindowUTC(now time.Time, spec string) bool {
+	return inWindowAt(now, spec, time.UTC)
+}
+
+func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
+	for _, win := range windows {
+		if strings.TrimSpace(win) == "" {
+			continue
+		}
+		if inWindowAt(now, win, loc) {
+			return true
+		}
+	}
+	return false
+}
+
+func inBlackout(now time.Time, windows []string) bool {
+	return inBlackoutAt(now, windows, time.UTC)
+}
+
+func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertRequest) time.Time {
+	base := now.UTC()
+	scheduleValue, loc, err := parseScheduleValueAndLocation(req.ScheduleValue)
+	if err != nil {
+		scheduleValue = strings.TrimSpace(req.ScheduleValue)
+		loc = time.UTC
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	switch normalizeScheduleType(req.ScheduleType) {
+	case "daily":
+		h, m, ok := parseClock(scheduleValue)
+		if !ok {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		localBase := base.In(loc)
+		nextLocal := time.Date(localBase.Year(), localBase.Month(), localBase.Day(), h, m, 0, 0, loc)
+		if !nextLocal.After(localBase) {
+			nextLocal = nextLocal.Add(24 * time.Hour)
+		}
+		next := nextLocal.In(time.UTC)
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
+			next = next.Add(24 * time.Hour)
+		}
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
+			next = next.Add(30 * time.Minute)
+		}
+		return next
+	case "weekly":
+		raw := strings.Split(strings.TrimSpace(scheduleValue), "@")
+		if len(raw) != 2 {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		weekdayMap := map[string]time.Weekday{"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday, "thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday}
+		weekday, okDay := weekdayMap[strings.ToLower(strings.TrimSpace(raw[0]))]
+		if !okDay {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		h, m, ok := parseClock(raw[1])
+		if !ok {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		localBase := base.In(loc)
+		nextLocal := time.Date(localBase.Year(), localBase.Month(), localBase.Day(), h, m, 0, 0, loc)
+		for nextLocal.Weekday() != weekday || !nextLocal.After(localBase) {
+			nextLocal = nextLocal.Add(24 * time.Hour)
+		}
+		next := nextLocal.In(time.UTC)
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
+			next = next.Add(24 * time.Hour)
+		}
+		return next
+	case "cron":
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		parsed, err := parser.Parse(strings.TrimSpace(scheduleValue))
+		if err != nil {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		next := parsed.Next(base.In(loc)).In(time.UTC)
+		for i := 0; i < 2048; i++ {
+			if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
+				next = parsed.Next(next.In(loc)).In(time.UTC)
+				continue
+			}
+			if inBlackoutAt(next, req.BlackoutWindows, loc) {
+				next = parsed.Next(next.In(loc)).In(time.UTC)
+				continue
+			}
+			break
+		}
+		return next
+	default:
+		next := base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
+			next = next.Add(15 * time.Minute)
+		}
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
+			next = next.Add(30 * time.Minute)
+		}
+		return next
+	}
+}
+
+func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, findings []model.Finding) []model.Finding {
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil || len(feedback) == 0 {
+		return findings
+	}
+	type stats struct {
+		total     int
+		accepted  int
+		rejected  int
+		duplicate int
+	}
+	byKey := map[string]stats{}
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := byKey[key]
+		cur.total++
+		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
+		case "accepted":
+			cur.accepted++
+		case "rejected":
+			cur.rejected++
+		case "duplicate":
+			cur.duplicate++
+		}
+		byKey[key] = cur
+	}
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = defaultConfidenceForSeverity(f.Severity)
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		s := byKey[key]
+		if s.total >= 3 {
+			acceptRate := float64(s.accepted) / float64(s.total)
+			noiseRate := float64(s.rejected+s.duplicate) / float64(s.total)
+			conf = conf * (0.8 + acceptRate*0.5) * (1 - noiseRate*0.35)
+		}
+		f.Confidence = maxFloat(0.05, minFloat(0.99, conf))
+		out = append(out, f)
+	}
+	return out
+}
+
 func (s *Server) persistScanState(target string, findings []model.Finding) {
 	state := model.PersistentScanState{
 		Target:        target,
@@ -2229,16 +3651,23 @@ func mergeActions(existing, extra []string) []string {
 	return out
 }
 
-func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {
+func (s *Server) scheduleRescan(target, workspaceID, requestedBy string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	<-timer.C
+	options = s.applySafetyModePolicy(options)
+	if blocked, _ := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(workspaceID, "default"), options); blocked {
+		return
+	}
 
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
 	job := &model.ScanJob{
 		ID:                 jobID,
 		Target:             target,
+		WorkspaceID:        workspaceID,
+		RequestedBy:        requestedBy,
+		PolicyPack:         defaultPolicyPack(),
 		Status:             "queued",
 		StartedAt:          now,
 		AuthProfileSummary: model.SummarizeAuthProfile(authProfile),
@@ -2254,6 +3683,13 @@ func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

