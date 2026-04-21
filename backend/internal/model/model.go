@@ -349,6 +349,8 @@ type AutomationCampaign struct {
 	Target          string          `json:"target"`
 	WorkspaceID     string          `json:"workspaceId,omitempty"`
 	RequestedBy     string          `json:"requestedBy,omitempty"`
+	PolicyPack      string          `json:"policyPack,omitempty"`
+	PolicyVersion   int             `json:"policyVersion,omitempty"`
 	Name            string          `json:"name,omitempty"`
 	ProgramName     string          `json:"programName,omitempty"`
 	IntervalMin     int             `json:"intervalMin"`
@@ -363,7 +365,10 @@ type AutomationCampaign struct {
 	NextRetryAt     *time.Time      `json:"nextRetryAt,omitempty"`
 	LastError       string          `json:"lastError,omitempty"`
 	DeadLetter      bool            `json:"deadLetter,omitempty"`
+	QueueState      string          `json:"queueState,omitempty"`
 	LeaseUntil      *time.Time      `json:"leaseUntil,omitempty"`
+	HeartbeatAt     *time.Time      `json:"heartbeatAt,omitempty"`
+	RunIdempotency  string          `json:"runIdempotencyKey,omitempty"`
 	Active          bool            `json:"active"`
 	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
 	Options         ScanOptions     `json:"options,omitempty"`
@@ -375,6 +380,7 @@ type AutomationCampaign struct {
 type AutomationCampaignUpsertRequest struct {
 	ID              string          `json:"id,omitempty"`
 	Target          string          `json:"target"`
+	PolicyPack      string          `json:"policyPack,omitempty"`
 	Name            string          `json:"name,omitempty"`
 	ProgramName     string          `json:"programName,omitempty"`
 	IntervalMin     int             `json:"intervalMin"`
@@ -387,6 +393,51 @@ type AutomationCampaignUpsertRequest struct {
 	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
 	Options         ScanOptions     `json:"options,omitempty"`
 	Scope           ScanScope       `json:"scope,omitempty"`
+}
+
+type AutomationPolicyPack struct {
+	WorkspaceID              string    `json:"workspaceId"`
+	Name                     string    `json:"name"`
+	StrategyVersion          int       `json:"strategyVersion"`
+	CanaryPercent            int       `json:"canaryPercent,omitempty"`
+	AutomationMode           string    `json:"automationMode,omitempty"`
+	MinExpectedROIUSD        float64   `json:"minExpectedRoiUsd,omitempty"`
+	MaxAutomationConcurrency int       `json:"maxAutomationConcurrency,omitempty"`
+	MaxPerTargetConcurrency  int       `json:"maxPerTargetConcurrency,omitempty"`
+	MaxExploitAttempts       int       `json:"maxExploitAttempts,omitempty"`
+	DailyScanLimit           int       `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int       `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int       `json:"dailyProbeLimit,omitempty"`
+	EscalateOnNewHigh        bool      `json:"escalateOnNewHigh,omitempty"`
+	EscalateOnChangedHigh    bool      `json:"escalateOnChangedHigh,omitempty"`
+	UpdatedBy                string    `json:"updatedBy,omitempty"`
+	UpdatedAt                time.Time `json:"updatedAt"`
+}
+
+type AutomationPolicyAuditEvent struct {
+	ID              string    `json:"id"`
+	WorkspaceID     string    `json:"workspaceId"`
+	PolicyPack      string    `json:"policyPack"`
+	StrategyVersion int       `json:"strategyVersion"`
+	Action          string    `json:"action"`
+	ChangedBy       string    `json:"changedBy"`
+	ChangedAt       time.Time `json:"changedAt"`
+	BeforeJSON      string    `json:"beforeJson,omitempty"`
+	AfterJSON       string    `json:"afterJson,omitempty"`
+}
+
+type AutomationMetrics struct {
+	GeneratedAt       time.Time          `json:"generatedAt"`
+	WorkspaceID       string             `json:"workspaceId"`
+	QueueLagSeconds   float64            `json:"queueLagSeconds"`
+	MaxQueueLag       float64            `json:"maxQueueLagSeconds"`
+	RetryRate         float64            `json:"retryRate"`
+	DLQCount          int                `json:"dlqCount"`
+	ToolFailureRate   float64            `json:"toolFailureRate"`
+	ROIByStrategy     map[string]float64 `json:"roiByStrategy,omitempty"`
+	StrategyRunCounts map[string]int     `json:"strategyRunCounts,omitempty"`
+	Alerts            []string           `json:"alerts,omitempty"`
+	Extra             map[string]float64 `json:"extra,omitempty"`
 }
 
 type ProgramROIOverride struct {

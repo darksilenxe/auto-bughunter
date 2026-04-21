@@ -130,6 +130,15 @@ func (r *reportTestRepo) TryLeaseAutomationCampaign(context.Context, string, tim
 func (r *reportTestRepo) MarkAutomationCampaignDispatchFailure(context.Context, string, string, time.Time, time.Duration) error {
 	panic("not used")
 }
+func (r *reportTestRepo) HeartbeatAutomationCampaignLease(context.Context, string, time.Time, time.Time) (bool, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ReclaimStaleAutomationCampaignLeases(context.Context, time.Time, int) (int64, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpdateAutomationCampaignQueueState(context.Context, string, string, string, *time.Time) error {
+	panic("not used")
+}
 func (r *reportTestRepo) GetProgramROIOverride(context.Context, string, string) (*model.ProgramROIOverride, error) {
 	panic("not used")
 }
@@ -140,6 +149,21 @@ func (r *reportTestRepo) ListProgramROIOverrides(context.Context, string, int) (
 	panic("not used")
 }
 func (r *reportTestRepo) GetWorkspaceDailyUsage(context.Context, string, time.Time) (model.WorkspaceDailyUsage, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) GetAutomationPolicyPack(context.Context, string, string) (*model.AutomationPolicyPack, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertAutomationPolicyPack(context.Context, model.AutomationPolicyPack) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationPolicyPacks(context.Context, string, int) ([]model.AutomationPolicyPack, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) AppendAutomationPolicyAudit(context.Context, model.AutomationPolicyAuditEvent) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationPolicyAudit(context.Context, string, string, int) ([]model.AutomationPolicyAuditEvent, error) {
 	panic("not used")
 }
 

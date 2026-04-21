@@ -128,10 +128,18 @@ type Repository interface {
 	DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error
 	TryLeaseAutomationCampaign(ctx context.Context, id string, leaseUntil time.Time) (bool, error)
 	MarkAutomationCampaignDispatchFailure(ctx context.Context, id, lastError string, now time.Time, backoff time.Duration) error
+	HeartbeatAutomationCampaignLease(ctx context.Context, id string, heartbeatAt, leaseUntil time.Time) (bool, error)
+	ReclaimStaleAutomationCampaignLeases(ctx context.Context, staleBefore time.Time, limit int) (int64, error)
+	UpdateAutomationCampaignQueueState(ctx context.Context, id, queueState, runIdempotencyKey string, heartbeatAt *time.Time) error
 	GetProgramROIOverride(ctx context.Context, workspaceID, programName string) (*model.ProgramROIOverride, error)
 	UpsertProgramROIOverride(ctx context.Context, item model.ProgramROIOverride) error
 	ListProgramROIOverrides(ctx context.Context, workspaceID string, limit int) ([]model.ProgramROIOverride, error)
 	GetWorkspaceDailyUsage(ctx context.Context, workspaceID string, day time.Time) (model.WorkspaceDailyUsage, error)
+	GetAutomationPolicyPack(ctx context.Context, workspaceID, name string) (*model.AutomationPolicyPack, error)
+	UpsertAutomationPolicyPack(ctx context.Context, item model.AutomationPolicyPack) error
+	ListAutomationPolicyPacks(ctx context.Context, workspaceID string, limit int) ([]model.AutomationPolicyPack, error)
+	AppendAutomationPolicyAudit(ctx context.Context, event model.AutomationPolicyAuditEvent) error
+	ListAutomationPolicyAudit(ctx context.Context, workspaceID, policyPack string, limit int) ([]model.AutomationPolicyAuditEvent, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -215,6 +223,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/automation/campaigns", s.handleAutomationCampaigns)
 	mux.HandleFunc("/api/automation/roi-overrides", s.handleAutomationROIOverrides)
+	mux.HandleFunc("/api/automation/policy-packs", s.handleAutomationPolicyPacks)
+	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
+	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
+	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
@@ -350,6 +362,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
 		return
 	}
+	req.Options, _ = s.applyAutomationPolicyPack(r.Context(), workspaceID, defaultPolicyPack(), req.Options)
 	idempotencyTarget := workspaceID + "::" + target
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.IdempotencyKey == "" {
@@ -1133,6 +1146,9 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 		}
 		req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
 		req.Options = s.applySafetyModePolicy(req.Options)
+		req.PolicyPack = normalizePolicyPackName(req.PolicyPack)
+		policyVersion := 0
+		req.Options, policyVersion = s.applyAutomationPolicyPack(r.Context(), workspaceID, req.PolicyPack, req.Options)
 		req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
 		nextRunAt := computeNextCampaignRun(now, req)
 		item := model.AutomationCampaign{
@@ -1140,6 +1156,8 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 			Target:          target,
 			WorkspaceID:     workspaceID,
 			RequestedBy:     requesterFromRequest(r),
+			PolicyPack:      req.PolicyPack,
+			PolicyVersion:   policyVersion,
 			Name:            strings.TrimSpace(req.Name),
 			ProgramName:     strings.TrimSpace(req.ProgramName),
 			IntervalMin:     req.IntervalMin,
@@ -1155,6 +1173,9 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 			Scope:           req.Scope,
 			CreatedAt:       now,
 			UpdatedAt:       now,
+		}
+		if item.PolicyPack == "" {
+			item.PolicyPack = defaultPolicyPack()
 		}
 		if !req.Active {
 			item.NextRunAt = time.Time{}
@@ -1363,6 +1384,334 @@ func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, tickets)
+}
+
+func normalizePolicyPackName(raw string) string {
+	pack := strings.ToLower(strings.TrimSpace(raw))
+	if pack == "" {
+		return defaultPolicyPack()
+	}
+	return pack
+}
+
+func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, packName string, options model.ScanOptions) (model.ScanOptions, int) {
+	packName = normalizePolicyPackName(packName)
+	pack, err := s.repo.GetAutomationPolicyPack(ctx, firstNonEmpty(workspaceID, "default"), packName)
+	if err != nil || pack == nil {
+		return options, 0
+	}
+	if mode := normalizeAutomationMode(pack.AutomationMode); mode != "" {
+		options.AutomationMode = mode
+	}
+	options.MinExpectedROIUSD = maxFloat(options.MinExpectedROIUSD, pack.MinExpectedROIUSD)
+	if pack.MaxAutomationConcurrency > 0 {
+		if options.MaxAutomationConcurrency <= 0 {
+			options.MaxAutomationConcurrency = pack.MaxAutomationConcurrency
+		} else {
+			options.MaxAutomationConcurrency = minInt(options.MaxAutomationConcurrency, pack.MaxAutomationConcurrency)
+		}
+	}
+	if pack.MaxPerTargetConcurrency > 0 {
+		if options.MaxPerTargetConcurrency <= 0 {
+			options.MaxPerTargetConcurrency = pack.MaxPerTargetConcurrency
+		} else {
+			options.MaxPerTargetConcurrency = minInt(options.MaxPerTargetConcurrency, pack.MaxPerTargetConcurrency)
+		}
+	}
+	if pack.MaxExploitAttempts >= 0 {
+		if options.MaxExploitAttempts <= 0 {
+			options.MaxExploitAttempts = pack.MaxExploitAttempts
+		} else {
+			options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, pack.MaxExploitAttempts)
+		}
+	}
+	if pack.DailyScanLimit > 0 {
+		if options.DailyScanLimit <= 0 {
+			options.DailyScanLimit = pack.DailyScanLimit
+		} else {
+			options.DailyScanLimit = minInt(options.DailyScanLimit, pack.DailyScanLimit)
+		}
+	}
+	if pack.DailyRuntimeLimitMinutes > 0 {
+		if options.DailyRuntimeLimitMinutes <= 0 {
+			options.DailyRuntimeLimitMinutes = pack.DailyRuntimeLimitMinutes
+		} else {
+			options.DailyRuntimeLimitMinutes = minInt(options.DailyRuntimeLimitMinutes, pack.DailyRuntimeLimitMinutes)
+		}
+	}
+	if pack.DailyProbeLimit > 0 {
+		if options.DailyProbeLimit <= 0 {
+			options.DailyProbeLimit = pack.DailyProbeLimit
+		} else {
+			options.DailyProbeLimit = minInt(options.DailyProbeLimit, pack.DailyProbeLimit)
+		}
+	}
+	return options, maxInt(1, pack.StrategyVersion)
+}
+
+func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.repo.ListAutomationPolicyPacks(r.Context(), workspaceID, 200)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list policy packs"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		if !hasRole(r.Context(), model.APIKeyRoleAdmin) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
+			return
+		}
+		var req model.AutomationPolicyPack
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		req.WorkspaceID = workspaceID
+		req.Name = normalizePolicyPackName(req.Name)
+		req.UpdatedBy = requesterFromRequest(r)
+		if req.StrategyVersion <= 0 {
+			req.StrategyVersion = 1
+		}
+		before, _ := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, req.Name)
+		req.UpdatedAt = time.Now().UTC()
+		if err := s.repo.UpsertAutomationPolicyPack(r.Context(), req); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save policy pack"})
+			return
+		}
+		after, _ := json.Marshal(req)
+		beforeJSON := ""
+		if before != nil {
+			if b, err := json.Marshal(before); err == nil {
+				beforeJSON = string(b)
+			}
+		}
+		_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+			ID:              uuid.NewString(),
+			WorkspaceID:     workspaceID,
+			PolicyPack:      req.Name,
+			StrategyVersion: req.StrategyVersion,
+			Action:          "upsert",
+			ChangedBy:       requesterFromRequest(r),
+			ChangedAt:       time.Now().UTC(),
+			BeforeJSON:      beforeJSON,
+			AfterJSON:       string(after),
+		})
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "saved"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAutomationPolicyAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	pack := normalizePolicyPackName(r.URL.Query().Get("policyPack"))
+	if strings.TrimSpace(r.URL.Query().Get("policyPack")) == "" {
+		pack = ""
+	}
+	items, err := s.repo.ListAutomationPolicyAudit(r.Context(), workspaceID, pack, 300)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list policy audit"})
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	campaigns, err := s.repo.ListAutomationCampaigns(r.Context(), workspaceID, false, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load campaigns"})
+		return
+	}
+	now := time.Now().UTC()
+	lagSum := 0.0
+	lagCount := 0
+	maxLag := 0.0
+	retrying := 0
+	dlq := 0
+	for _, c := range campaigns {
+		if c.DeadLetter {
+			dlq++
+		}
+		if c.RetryCount > 0 {
+			retrying++
+		}
+		dueAt := c.NextRunAt
+		if c.NextRetryAt != nil && !c.NextRetryAt.IsZero() {
+			dueAt = *c.NextRetryAt
+		}
+		if !dueAt.IsZero() && dueAt.Before(now) {
+			lag := now.Sub(dueAt).Seconds()
+			lagSum += lag
+			lagCount++
+			maxLag = maxFloat(maxLag, lag)
+		}
+	}
+	jobs, _ := s.repo.ListCompletedJobs(r.Context(), 1000)
+	strategyROI := map[string]float64{}
+	strategyCounts := map[string]int{}
+	failedRuns := 0
+	totalRuns := 0
+	for _, job := range jobs {
+		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+			continue
+		}
+		strategy := normalizePolicyPackName(job.PolicyPack)
+		if strategy == "" {
+			strategy = "internal"
+		}
+		if job.Dashboard != nil {
+			strategyROI[strategy] += maxFloat(0, job.Dashboard.ExpectedROIUSD)
+		}
+		strategyCounts[strategy]++
+		for _, run := range job.AgentRuns {
+			totalRuns++
+			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
+				failedRuns++
+			}
+		}
+	}
+	for name, total := range strategyCounts {
+		if total > 0 {
+			strategyROI[name] = roundTo2(strategyROI[name] / float64(total))
+		}
+	}
+	avgLag := 0.0
+	if lagCount > 0 {
+		avgLag = lagSum / float64(lagCount)
+	}
+	retryRate := 0.0
+	if len(campaigns) > 0 {
+		retryRate = float64(retrying) / float64(len(campaigns))
+	}
+	toolFailureRate := 0.0
+	if totalRuns > 0 {
+		toolFailureRate = float64(failedRuns) / float64(totalRuns)
+	}
+	alerts := make([]string, 0)
+	if avgLag > float64(maxInt(60, intFromEnv("AUTOMATION_ALERT_QUEUE_LAG_SECONDS", 300))) {
+		alerts = append(alerts, "queue lag exceeded threshold")
+	}
+	if retryRate > floatFromEnv("AUTOMATION_ALERT_RETRY_RATE", 0.35) {
+		alerts = append(alerts, "retry rate exceeded threshold")
+	}
+	if dlq > maxInt(0, intFromEnv("AUTOMATION_ALERT_DLQ_COUNT", 5)) {
+		alerts = append(alerts, "dead-letter queue size exceeded threshold")
+	}
+	if toolFailureRate > floatFromEnv("AUTOMATION_ALERT_TOOL_FAILURE_RATE", 0.25) {
+		alerts = append(alerts, "tool failure rate exceeded threshold")
+	}
+	writeJSON(w, http.StatusOK, model.AutomationMetrics{
+		GeneratedAt:       now,
+		WorkspaceID:       workspaceID,
+		QueueLagSeconds:   roundTo2(avgLag),
+		MaxQueueLag:       roundTo2(maxLag),
+		RetryRate:         roundTo2(retryRate),
+		DLQCount:          dlq,
+		ToolFailureRate:   roundTo2(toolFailureRate),
+		ROIByStrategy:     strategyROI,
+		StrategyRunCounts: strategyCounts,
+		Alerts:            alerts,
+		Extra: map[string]float64{
+			"lagSamples": float64(lagCount),
+			"agentRuns":  float64(totalRuns),
+		},
+	})
+}
+
+func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if !hasRole(r.Context(), model.APIKeyRoleAdmin) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	var req struct {
+		PolicyPack     string  `json:"policyPack"`
+		CanaryPercent  int     `json:"canaryPercent"`
+		Rollback       bool    `json:"rollback"`
+		ExpectedMinROI float64 `json:"expectedMinRoiUsd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	packName := normalizePolicyPackName(req.PolicyPack)
+	pack, err := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, packName)
+	if err != nil || pack == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy pack not found"})
+		return
+	}
+	beforeRaw, _ := json.Marshal(pack)
+	next := *pack
+	if req.Rollback {
+		next.CanaryPercent = 0
+	} else {
+		next.StrategyVersion = maxInt(1, next.StrategyVersion+1)
+		next.CanaryPercent = maxInt(0, minInt(100, req.CanaryPercent))
+		if req.ExpectedMinROI > 0 {
+			next.MinExpectedROIUSD = maxFloat(next.MinExpectedROIUSD, req.ExpectedMinROI)
+		}
+	}
+	next.UpdatedBy = requesterFromRequest(r)
+	next.UpdatedAt = time.Now().UTC()
+	if err := s.repo.UpsertAutomationPolicyPack(r.Context(), next); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update policy pack"})
+		return
+	}
+	afterRaw, _ := json.Marshal(next)
+	action := "rebalance"
+	if req.Rollback {
+		action = "rollback"
+	}
+	_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+		ID:              uuid.NewString(),
+		WorkspaceID:     workspaceID,
+		PolicyPack:      packName,
+		StrategyVersion: next.StrategyVersion,
+		Action:          action,
+		ChangedBy:       requesterFromRequest(r),
+		ChangedAt:       time.Now().UTC(),
+		BeforeJSON:      string(beforeRaw),
+		AfterJSON:       string(afterRaw),
+	})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":          "updated",
+		"policyPack":      packName,
+		"strategyVersion": next.StrategyVersion,
+		"canaryPercent":   next.CanaryPercent,
+		"rollback":        req.Rollback,
+	})
 }
 
 func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string) model.PolicyGateResult {
@@ -1696,6 +2045,7 @@ func (s *Server) runCampaignScheduler() {
 	defer ticker.Stop()
 	for range ticker.C {
 		now := time.Now().UTC()
+		_, _ = s.repo.ReclaimStaleAutomationCampaignLeases(context.Background(), now.Add(-4*s.campaignPoll), 100)
 		campaigns, err := s.repo.ListDueAutomationCampaigns(context.Background(), now, 25)
 		if err != nil || len(campaigns) == 0 {
 			continue
@@ -1724,10 +2074,31 @@ func (s *Server) runCampaignScheduler() {
 			}
 			c.Options.AutomationMode = normalizeAutomationMode(c.Options.AutomationMode)
 			c.Options = s.applySafetyModePolicy(c.Options)
+			c.PolicyPack = normalizePolicyPackName(c.PolicyPack)
+			c.Options, c.PolicyVersion = s.applyAutomationPolicyPack(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.PolicyPack, c.Options)
 			c.Options.MinExpectedROIUSD = maxFloat(c.Options.MinExpectedROIUSD, s.defaultMinROI)
 			if blocked, reason := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.Options); blocked {
 				backoff := 30 * time.Minute
 				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, reason, now, backoff)
+				continue
+			}
+			runDueAt := c.NextRunAt
+			if c.NextRetryAt != nil && !c.NextRetryAt.IsZero() {
+				runDueAt = *c.NextRetryAt
+			}
+			runKey := strings.Join([]string{
+				"campaign",
+				strings.TrimSpace(c.ID),
+				runDueAt.UTC().Format(time.RFC3339Nano),
+			}, ":")
+			idempotencyTarget := strings.Join([]string{
+				firstNonEmpty(c.WorkspaceID, "default"),
+				strings.TrimSpace(c.Target),
+				strings.TrimSpace(c.ID),
+			}, "::")
+			if existing, err := s.repo.GetRecentJobByIdempotencyKey(context.Background(), runKey, idempotencyTarget, now.Add(-7*24*time.Hour)); err == nil && existing != nil {
+				nextRun := resolveCampaignNextRunAfterDispatch(now, c)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
 				continue
 			}
 			jobID := uuid.NewString()
@@ -1736,23 +2107,51 @@ func (s *Server) runCampaignScheduler() {
 				Target:             c.Target,
 				WorkspaceID:        firstNonEmpty(c.WorkspaceID, "default"),
 				RequestedBy:        c.RequestedBy,
-				PolicyPack:         defaultPolicyPack(),
+				PolicyPack:         c.PolicyPack,
 				Status:             "queued",
 				StartedAt:          now,
 				AuthProfileSummary: model.SummarizeAuthProfile(c.AuthProfile),
 				Options:            c.Options,
 				Scope:              c.Scope,
 				ProgramName:        strings.TrimSpace(c.ProgramName),
+				ProgramPolicyVersion: fmt.Sprintf(
+					"%d",
+					maxInt(1, c.PolicyVersion),
+				),
 			}
 			if err := s.repo.CreateJob(context.Background(), job); err != nil {
 				backoff := campaignRetryBackoff(c.RetryCount)
 				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, err.Error(), now, backoff)
 				continue
 			}
-			nextRun := resolveCampaignNextRunAfterDispatch(now, c)
-			_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+			_ = s.repo.SaveIdempotencyRecord(context.Background(), runKey, idempotencyTarget, jobID, now)
+			hbNow := now
+			_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), c.ID, "running", runKey, &hbNow)
 			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
-			go s.runJob(jobID, c.Target, c.AuthProfile, nil, c.Options, c.Scope)
+			go func(campaign model.AutomationCampaign, scanJobID string, idempotencyKey string) {
+				stopHB := make(chan struct{})
+				go func() {
+					beatTicker := time.NewTicker(maxDuration(5*time.Second, s.campaignPoll/2))
+					defer beatTicker.Stop()
+					for {
+						select {
+						case <-stopHB:
+							return
+						case beat := <-beatTicker.C:
+							leaseUntil := beat.Add(2 * s.campaignPoll)
+							ok, _ := s.repo.HeartbeatAutomationCampaignLease(context.Background(), campaign.ID, beat, leaseUntil)
+							if !ok {
+								return
+							}
+						}
+					}
+				}()
+				s.runJob(scanJobID, campaign.Target, campaign.AuthProfile, nil, campaign.Options, campaign.Scope)
+				close(stopHB)
+				nextRun := resolveCampaignNextRunAfterDispatch(time.Now().UTC(), campaign)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), campaign.ID, time.Now().UTC(), nextRun)
+				_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), campaign.ID, "queued", idempotencyKey, nil)
+			}(c, jobID, runKey)
 		}
 	}
 }
@@ -2437,6 +2836,13 @@ func campaignRetryBackoff(retryCount int) time.Duration {
 		return 6 * time.Hour
 	}
 	return backoff
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func automationMisfirePolicy() string {

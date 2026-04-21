@@ -90,3 +90,21 @@ func TestAutomationMisfirePolicy_DefaultAndCatchUp(t *testing.T) {
 		t.Fatalf("expected catch-up misfire policy, got %s", got)
 	}
 }
+
+func TestNormalizePolicyPackName(t *testing.T) {
+	if got := normalizePolicyPackName("  "); got != "internal" {
+		t.Fatalf("expected default policy pack internal, got %s", got)
+	}
+	if got := normalizePolicyPackName("  CUSTOM-Pack "); got != "custom-pack" {
+		t.Fatalf("expected normalized policy pack custom-pack, got %s", got)
+	}
+}
+
+func TestMaxDuration(t *testing.T) {
+	if got := maxDuration(5*time.Second, 2*time.Second); got != 5*time.Second {
+		t.Fatalf("expected 5s, got %s", got)
+	}
+	if got := maxDuration(1*time.Second, 3*time.Second); got != 3*time.Second {
+		t.Fatalf("expected 3s, got %s", got)
+	}
+}

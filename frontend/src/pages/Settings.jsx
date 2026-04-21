@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
 
 const EMPTY_PROGRAM = {
@@ -34,6 +34,29 @@ export default function Settings() {
   const [feedStatus, setFeedStatus] = useState("");
   const [datasetPreview, setDatasetPreview] = useState([]);
   const [datasetError, setDatasetError] = useState("");
+  const [policyPacks, setPolicyPacks] = useState([]);
+  const [policyAudit, setPolicyAudit] = useState([]);
+  const [policyForm, setPolicyForm] = useState({
+    name: "internal",
+    strategyVersion: 1,
+    canaryPercent: 0,
+    automationMode: "autonomous",
+    minExpectedRoiUsd: 75,
+    maxAutomationConcurrency: 2,
+    maxPerTargetConcurrency: 2,
+    maxExploitAttempts: 1,
+    dailyScanLimit: 30,
+    dailyRuntimeLimitMinutes: 240,
+    dailyProbeLimit: 5000,
+    escalateOnNewHigh: true,
+    escalateOnChangedHigh: true,
+  });
+  const [policyStatus, setPolicyStatus] = useState("");
+
+  useEffect(() => {
+    loadPolicyPacks();
+    loadPolicyAudit();
+  }, []);
 
   function openNew() {
     setForm(EMPTY_PROGRAM);
@@ -116,6 +139,56 @@ export default function Settings() {
       setDatasetPreview(Array.isArray(data) ? data : (data.items || []));
     } catch (err) {
       setDatasetError(err.message || "Failed to load dataset preview.");
+    }
+  }
+
+  async function loadPolicyPacks() {
+    try {
+      const res = await fetch(`${API_BASE}/api/automation/policy-packs`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (res.ok) setPolicyPacks(Array.isArray(data) ? data : []);
+    } catch {
+      // noop
+    }
+  }
+
+  async function loadPolicyAudit() {
+    try {
+      const res = await fetch(`${API_BASE}/api/automation/policy-audit`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (res.ok) setPolicyAudit(Array.isArray(data) ? data : []);
+    } catch {
+      // noop
+    }
+  }
+
+  async function savePolicyPack(e) {
+    e.preventDefault();
+    setPolicyStatus("");
+    try {
+      const res = await fetch(`${API_BASE}/api/automation/policy-packs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": API_KEY,
+          "X-Workspace-ID": WORKSPACE_ID,
+        },
+        body: JSON.stringify(policyForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPolicyStatus(data.error || "Failed to save policy pack.");
+        return;
+      }
+      setPolicyStatus("Policy pack saved.");
+      await loadPolicyPacks();
+      await loadPolicyAudit();
+    } catch (err) {
+      setPolicyStatus(err.message || "Failed to save policy pack.");
     }
   }
 
@@ -284,6 +357,35 @@ export default function Settings() {
           <button type="submit">Submit enrichment feedback</button>
         </form>
         {feedStatus && <p className="meta">{feedStatus}</p>}
+      </section>
+
+      <section className="card">
+        <h2>Automation Policy Governance</h2>
+        <p className="meta">Manage per-workspace automation policy packs and audit changes.</p>
+        <form onSubmit={savePolicyPack}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
+            <label>Pack name
+              <input value={policyForm.name} onChange={(e) => setPolicyForm((p) => ({ ...p, name: e.target.value }))} />
+            </label>
+            <label>Strategy version
+              <input type="number" value={policyForm.strategyVersion} onChange={(e) => setPolicyForm((p) => ({ ...p, strategyVersion: Number(e.target.value || 1) }))} />
+            </label>
+            <label>Canary percent
+              <input type="number" value={policyForm.canaryPercent} onChange={(e) => setPolicyForm((p) => ({ ...p, canaryPercent: Number(e.target.value || 0) }))} />
+            </label>
+            <label>Automation mode
+              <select value={policyForm.automationMode} onChange={(e) => setPolicyForm((p) => ({ ...p, automationMode: e.target.value }))}>
+                <option value="safe">safe</option>
+                <option value="autonomous">autonomous</option>
+                <option value="aggressive">aggressive</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit">Save policy pack</button>
+        </form>
+        {policyStatus && <p className="meta">{policyStatus}</p>}
+        {policyPacks.length > 0 && <pre className="summary">{JSON.stringify(policyPacks, null, 2)}</pre>}
+        {policyAudit.length > 0 && <pre className="summary">{JSON.stringify(policyAudit.slice(0, 10), null, 2)}</pre>}
       </section>
     </div>
   );
