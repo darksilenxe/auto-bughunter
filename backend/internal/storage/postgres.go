@@ -1490,10 +1490,14 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 			return nil, fmt.Errorf("scan automation campaign row: %w", err)
 		}
 		if len(approvalRaw) > 0 {
-			_ = json.Unmarshal(approvalRaw, &item.AuthorizationApproval)
+			if err := json.Unmarshal(approvalRaw, &item.AuthorizationApproval); err != nil {
+				return nil, fmt.Errorf("unmarshal automation campaign authorization approval: %w", err)
+			}
 		}
 		if len(evidenceRaw) > 0 {
-			_ = json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence)
+			if err := json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence); err != nil {
+				return nil, fmt.Errorf("unmarshal automation campaign authorization evidence: %w", err)
+			}
 		}
 		if len(authRaw) > 0 {
 			_ = json.Unmarshal(authRaw, &item.AuthProfile)
@@ -1540,10 +1544,14 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 			return nil, fmt.Errorf("scan due automation campaign row: %w", err)
 		}
 		if len(approvalRaw) > 0 {
-			_ = json.Unmarshal(approvalRaw, &item.AuthorizationApproval)
+			if err := json.Unmarshal(approvalRaw, &item.AuthorizationApproval); err != nil {
+				return nil, fmt.Errorf("unmarshal due automation campaign authorization approval: %w", err)
+			}
 		}
 		if len(evidenceRaw) > 0 {
-			_ = json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence)
+			if err := json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence); err != nil {
+				return nil, fmt.Errorf("unmarshal due automation campaign authorization evidence: %w", err)
+			}
 		}
 		if len(authRaw) > 0 {
 			_ = json.Unmarshal(authRaw, &item.AuthProfile)

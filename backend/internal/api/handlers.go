@@ -87,6 +87,9 @@ const (
 	highROIMultiplierForDeepScan = 1.5
 	lowROICrawlFloorPages        = 40
 	lowROICrawlCeilingPages      = 120
+	// campaignApprovalClockSkewTolerance allows small client/server clock drift
+	// when validating approval timestamps on signed campaign authorizations.
+	campaignApprovalClockSkewTolerance = 5 * time.Minute
 	// High-confidence findings are already filtered by confidence/severity and
 	// therefore counted as full novelty units while all findings contribute a
 	// smaller background signal.
@@ -2363,8 +2366,8 @@ func validateCampaignAuthorization(req model.AutomationCampaignUpsertRequest, no
 	if approval.ApprovedAt.IsZero() {
 		return fmt.Errorf("authorizationApproval.approvedAt is required")
 	}
-	if approval.ApprovedAt.After(now.Add(5 * time.Minute)) {
-		return fmt.Errorf("authorizationApproval.approvedAt cannot be in the future")
+	if approval.ApprovedAt.After(now.Add(campaignApprovalClockSkewTolerance)) {
+		return fmt.Errorf("authorizationApproval.approvedAt cannot be more than %d minutes in the future", int(campaignApprovalClockSkewTolerance.Minutes()))
 	}
 	if len(evidence) == 0 {
 		return fmt.Errorf("authorizationEvidence must include at least one record")
@@ -2438,7 +2441,17 @@ func campaignAuthorizationDigest(c model.AutomationCampaign) string {
 	}
 	raw, err := json.Marshal(canonical)
 	if err != nil {
-		return ""
+		fallback := []byte(fmt.Sprintf("%s|%s|%s|%s|%d|%s|%s",
+			canonical.CampaignID,
+			canonical.WorkspaceID,
+			canonical.Target,
+			canonical.PolicyPack,
+			canonical.PolicyVersion,
+			strings.TrimSpace(canonical.AuthorizationApproval.Signature),
+			strings.TrimSpace(canonical.AuthorizationApproval.ApprovedBy),
+		))
+		sum := sha256.Sum256(fallback)
+		return hex.EncodeToString(sum[:])
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -2448,13 +2461,11 @@ func isSHA256Hex(raw string) bool {
 	if len(raw) != 64 {
 		return false
 	}
-	for _, c := range raw {
-		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
-			continue
-		}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
 		return false
 	}
-	return true
+	return len(decoded) == sha256.Size
 }
 
 func validWindowSpec(spec string) bool {
