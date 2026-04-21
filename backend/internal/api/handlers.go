@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net/http"
 	"net/url"
@@ -1491,6 +1492,7 @@ func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, pac
 	if mode := normalizeAutomationMode(pack.AutomationMode); mode != "" {
 		options.AutomationMode = mode
 	}
+	options.AutonomyCanaryPercent = maxInt(0, minInt(100, pack.CanaryPercent))
 	options.MinExpectedROIUSD = maxFloat(options.MinExpectedROIUSD, pack.MinExpectedROIUSD)
 	if pack.MaxAutomationConcurrency > 0 {
 		if options.MaxAutomationConcurrency <= 0 {
@@ -1582,6 +1584,11 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 	if governance.RolloutControl.CanaryPercentByStage != nil {
 		if p, ok := governance.RolloutControl.CanaryPercentByStage[stage]; ok {
 			p = maxInt(0, minInt(100, p))
+			if options.AutonomyCanaryPercent <= 0 {
+				options.AutonomyCanaryPercent = p
+			} else {
+				options.AutonomyCanaryPercent = minInt(options.AutonomyCanaryPercent, p)
+			}
 			if p == 0 {
 				options.MaxAutomationConcurrency = 1
 				options.AutonomyExplorationBudgetPercent = 0
@@ -1895,6 +1902,34 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !passed {
+			if pack.GovernanceProfile.RolloutControl.AutoRollbackOnKPIRegression && pack.CanaryPercent > 0 {
+				beforeRaw, _ := json.Marshal(pack)
+				next := *pack
+				next.CanaryPercent = 0
+				next.UpdatedBy = requesterFromRequest(r)
+				next.UpdatedAt = time.Now().UTC()
+				if err := s.repo.UpsertAutomationPolicyPack(r.Context(), next); err == nil {
+					afterRaw, _ := json.Marshal(next)
+					_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+						ID:              uuid.NewString(),
+						WorkspaceID:     workspaceID,
+						PolicyPack:      packName,
+						StrategyVersion: next.StrategyVersion,
+						Action:          "auto-rollback-kpi",
+						ChangedBy:       requesterFromRequest(r),
+						ChangedAt:       time.Now().UTC(),
+						BeforeJSON:      string(beforeRaw),
+						AfterJSON:       string(afterRaw),
+					})
+					writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+						"error":           "replay benchmark did not meet minimum KPI delta score",
+						"delta":           fmt.Sprintf("%.3f", delta),
+						"rollbackApplied": true,
+						"canaryPercent":   0,
+					})
+					return
+				}
+			}
 			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
 				"error": "replay benchmark did not meet minimum KPI delta score",
 				"delta": fmt.Sprintf("%.3f", delta),
@@ -2051,7 +2086,7 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 
 func normalizeAutomationMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "safe", "aggressive", "autonomous":
+	case "safe", "aggressive", "autonomous", "canary":
 		return strings.ToLower(strings.TrimSpace(mode))
 	default:
 		return "autonomous"
@@ -2173,6 +2208,12 @@ func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOpti
 		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 3)
 		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 4)
 		options.RescanIntervalMinutes = maxInt(15, options.RescanIntervalMinutes)
+	case "canary":
+		options.MaxExploitAttempts = minInt(maxInt(options.MaxExploitAttempts, 1), 1)
+		options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+		options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+		options.AggressiveExploitation = false
 	default:
 		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 1)
 		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 2)
@@ -2734,6 +2775,9 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	if plannerLock == "ai" {
 		useAI = s.aiClient != nil
 	}
+	if normalizeAutomationMode(input.Options.AutomationMode) == "canary" {
+		useAI = useAI && shouldEnableCanaryAutonomy(input.Target, input.Options.AutonomyCanaryPercent)
+	}
 	if useAI {
 		aiPlanner := agent.NewAIPlanner(s.aiClient, available, fallback)
 		if input.Options.AutonomyExplorationBudgetPercent > 0 {
@@ -2756,6 +2800,24 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		return s.agentRegistry.RunAll(ctx, input)
 	}
 	return outputs, findings, err
+}
+
+func shouldEnableCanaryAutonomy(target string, canaryPercent int) bool {
+	canaryPercent = maxInt(0, minInt(100, canaryPercent))
+	if canaryPercent <= 0 {
+		return false
+	}
+	if canaryPercent >= 100 {
+		return true
+	}
+	key := strings.ToLower(strings.TrimSpace(target))
+	if key == "" {
+		key = "default"
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	bucket := int(h.Sum32()%100) + 1
+	return bucket <= canaryPercent
 }
 
 func allAgentRunsFailed(outputs []agent.AgentOutput) bool {

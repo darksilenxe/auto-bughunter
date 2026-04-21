@@ -181,3 +181,37 @@ func TestAllAgentRunsFailed(t *testing.T) {
 		t.Fatal("expected completed run to return false")
 	}
 }
+
+func TestNormalizeAutomationMode_AcceptsCanary(t *testing.T) {
+	if got := normalizeAutomationMode("canary"); got != "canary" {
+		t.Fatalf("expected canary automation mode, got %s", got)
+	}
+}
+
+func TestShouldEnableCanaryAutonomy_BoundsAndDeterministic(t *testing.T) {
+	if shouldEnableCanaryAutonomy("https://example.com", 0) {
+		t.Fatal("expected 0% canary to disable autonomy")
+	}
+	if !shouldEnableCanaryAutonomy("https://example.com", 100) {
+		t.Fatal("expected 100% canary to enable autonomy")
+	}
+	a := shouldEnableCanaryAutonomy("https://example.com", 25)
+	b := shouldEnableCanaryAutonomy("https://example.com", 25)
+	if a != b {
+		t.Fatal("expected canary autonomy selection to be deterministic per target")
+	}
+}
+
+func TestApplyGovernancePolicy_CapsAutonomyCanaryPercentByStage(t *testing.T) {
+	t.Setenv("AUTOMATION_ENV_STAGE", "staging")
+	got := applyGovernancePolicy(model.ScanOptions{
+		AutonomyCanaryPercent: 60,
+	}, model.AutonomyGovernanceProfile{
+		RolloutControl: model.AutonomyRolloutControl{
+			CanaryPercentByStage: map[string]int{"staging": 10},
+		},
+	})
+	if got.AutonomyCanaryPercent != 10 {
+		t.Fatalf("expected stage canary percent cap to be applied, got %d", got.AutonomyCanaryPercent)
+	}
+}
