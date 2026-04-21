@@ -13,6 +13,8 @@ const (
 	novelFindingsNormalizationFactor = 3.0
 	timeToSignalPenaltyThresholdMs   = 120000.0
 	timeToSignalPenaltyWeight        = 0.25
+	defaultCostWeight                = 0.25
+	highSignalCostWeightCap          = 0.08
 )
 
 // Orchestrator drives a plan→build→run loop using a Planner to decide which
@@ -48,7 +50,7 @@ func NewOrchestrator(planner Planner, factory *Factory, maxRounds int) *Orchestr
 		MaxConsecutiveFailureRounds: 2,
 		MinMarginalScore:            0,
 		MaxRoundCostUnits:           0,
-		CostWeight:                  0.25,
+		CostWeight:                  defaultCostWeight,
 	}
 }
 
@@ -243,13 +245,13 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			excess := float64(roundCostUnits-o.MaxRoundCostUnits) / float64(o.MaxRoundCostUnits)
 			weight := o.CostWeight
 			if weight <= 0 {
-				weight = 0.25
+				weight = defaultCostWeight
 			}
 			// Guardrail: when high-signal findings are present, apply only a small
 			// cost penalty so risk/safety signal cannot be silently down-prioritized.
 			if roundHighSignal > 0 {
-				if weight > 0.08 {
-					weight = 0.08
+				if weight > highSignalCostWeightCap {
+					weight = highSignalCostWeightCap
 				}
 			}
 			roundScore -= clamp01(excess) * weight

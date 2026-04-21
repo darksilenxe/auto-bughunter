@@ -498,7 +498,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if len(disabledForHealth) > 0 {
 		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
 	}
-	if options.AutonomyEmergencyStop || len(options.AutonomyForceRunAgents) > 0 || len(options.AutonomySuppressAgents) > 0 || strings.TrimSpace(options.AutonomyPlannerLock) != "" || options.AutonomyFallbackRerun {
+	if hasOperatorOverrides(options) {
 		s.appendAuditEvent(id, "override", fmt.Sprintf("Operator overrides applied emergencyStop=%t plannerLock=%s force=%s suppress=%s fallbackRerun=%t",
 			options.AutonomyEmergencyStop,
 			strings.TrimSpace(options.AutonomyPlannerLock),
@@ -719,6 +719,14 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			s.appendAuditEvent(id, "scheduling", "Skipped scheduled rescan because ROI gate did not pass")
 		}
 	}
+}
+
+func hasOperatorOverrides(options model.ScanOptions) bool {
+	return options.AutonomyEmergencyStop ||
+		len(options.AutonomyForceRunAgents) > 0 ||
+		len(options.AutonomySuppressAgents) > 0 ||
+		strings.TrimSpace(options.AutonomyPlannerLock) != "" ||
+		options.AutonomyFallbackRerun
 }
 
 func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
