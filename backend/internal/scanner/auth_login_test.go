@@ -33,3 +33,10 @@ func TestBootstrapStandardAuthProfileRejectsIncompleteCredentials(t *testing.T) 
 		t.Fatalf("expected incomplete credentials finding, got %q", findings[0].Title)
 	}
 }
+
+func TestResolveLoginStepValueReplacesCredentialPlaceholders(t *testing.T) {
+	got := resolveLoginStepValue("user={{username}}&pass={{password}}", "alice@example.com", "s3cr3t")
+	if got != "user=alice@example.com&pass=s3cr3t" {
+		t.Fatalf("unexpected resolved value: %q", got)
+	}
+}

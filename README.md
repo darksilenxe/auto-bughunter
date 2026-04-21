@@ -177,6 +177,12 @@ Body:
     "loginUrl": "https://example.com/login",
     "username": "user@example.com",
     "password": "secret",
+    "loginSteps": [
+      {"action": "fill", "selector": "#email", "value": "{{username}}"},
+      {"action": "fill", "selector": "#password", "value": "{{password}}"},
+      {"action": "click", "selector": "button[type='submit']"},
+      {"action": "wait", "waitMillis": 1200}
+    ],
     "headers": {"Authorization": "Bearer ..."},
     "cookies": {"sessionid": "..."},
     "userAgent": "Mozilla/5.0",

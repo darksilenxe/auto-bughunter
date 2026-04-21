@@ -29,6 +29,10 @@ func hasCompleteStandardLoginCredentials(profile model.ScanAuthProfile) bool {
 	return strings.TrimSpace(profile.Username) != "" && strings.TrimSpace(profile.Password) != ""
 }
 
+func hasCustomLoginSteps(profile model.ScanAuthProfile) bool {
+	return len(profile.LoginSteps) > 0
+}
+
 func candidateLoginURLs(target string, profile model.ScanAuthProfile, scanScope model.ScanScope) []string {
 	base, err := url.Parse(target)
 	if err != nil {
@@ -136,14 +140,30 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 
 	for _, loginURL := range candidateLoginURLs(target, profile, scanScope) {
 		var submit loginFormSubmitResult
-		var currentURL string
 		if err := chromedp.Run(ctx,
 			chromedp.Navigate(loginURL),
 			chromedp.Sleep(loginBootstrapLoadDelay),
-			chromedp.Evaluate(buildLoginBootstrapScript(profile.Username, profile.Password), &submit),
+		); err != nil {
+			continue
+		}
+		if hasCustomLoginSteps(profile) {
+			stepResult, err := runCustomLoginSteps(ctx, profile)
+			if err != nil || !stepResult.OK {
+				continue
+			}
+			submit = stepResult
+		} else {
+			if err := chromedp.Run(ctx,
+				chromedp.Evaluate(buildLoginBootstrapScript(profile.Username, profile.Password), &submit),
+			); err != nil || !submit.OK {
+				continue
+			}
+		}
+		var currentURL string
+		if err := chromedp.Run(ctx,
 			chromedp.Sleep(loginBootstrapPostDelay),
 			chromedp.Location(&currentURL),
-		); err != nil || !submit.OK {
+		); err != nil {
 			continue
 		}
 
@@ -244,6 +264,72 @@ func buildLoginBootstrapScript(username, password string) string {
   }
   return { ok: true, reason: 'submitted', action: candidate.form.action || window.location.href };
 })()`, userJSON, passJSON)
+}
+
+func runCustomLoginSteps(ctx context.Context, profile model.ScanAuthProfile) (loginFormSubmitResult, error) {
+	for idx, step := range profile.LoginSteps {
+		action := strings.ToLower(strings.TrimSpace(step.Action))
+		switch action {
+		case "fill":
+			var result loginFormSubmitResult
+			if err := chromedp.Run(ctx, chromedp.Evaluate(buildFillStepScript(step, profile.Username, profile.Password), &result)); err != nil {
+				return loginFormSubmitResult{}, err
+			}
+			if !result.OK && !step.Optional {
+				return result, nil
+			}
+		case "click":
+			var result loginFormSubmitResult
+			if err := chromedp.Run(ctx, chromedp.Evaluate(buildClickStepScript(step), &result)); err != nil {
+				return loginFormSubmitResult{}, err
+			}
+			if !result.OK && !step.Optional {
+				return result, nil
+			}
+		case "wait":
+			if step.WaitMillis > 0 {
+				if err := chromedp.Run(ctx, chromedp.Sleep(time.Duration(step.WaitMillis)*time.Millisecond)); err != nil {
+					return loginFormSubmitResult{}, err
+				}
+			}
+		default:
+			return loginFormSubmitResult{OK: false, Reason: fmt.Sprintf("unsupported-step-%d", idx)}, nil
+		}
+	}
+	return loginFormSubmitResult{OK: true, Reason: "custom-login-steps-complete", Action: "custom-login-steps"}, nil
+}
+
+func buildFillStepScript(step model.ScanAuthLoginStep, username, password string) string {
+	selectorJSON, _ := json.Marshal(step.Selector)
+	valueJSON, _ := json.Marshal(resolveLoginStepValue(step.Value, username, password))
+	return fmt.Sprintf(`(() => {
+  const selector = %s;
+  const value = %s;
+  const el = document.querySelector(selector);
+  if (!el) return { ok: false, reason: 'selector-not-found', action: selector };
+  el.focus();
+  el.value = value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, reason: 'filled', action: selector };
+})()`, selectorJSON, valueJSON)
+}
+
+func buildClickStepScript(step model.ScanAuthLoginStep) string {
+	selectorJSON, _ := json.Marshal(step.Selector)
+	return fmt.Sprintf(`(() => {
+  const selector = %s;
+  const el = document.querySelector(selector);
+  if (!el) return { ok: false, reason: 'selector-not-found', action: selector };
+  el.click();
+  return { ok: true, reason: 'clicked', action: selector };
+})()`, selectorJSON)
+}
+
+func resolveLoginStepValue(value, username, password string) string {
+	resolved := strings.ReplaceAll(value, "{{username}}", username)
+	resolved = strings.ReplaceAll(resolved, "{{password}}", password)
+	return resolved
 }
 
 func seedBrowserCookies(ctx context.Context, target string, cookies map[string]string) error {
