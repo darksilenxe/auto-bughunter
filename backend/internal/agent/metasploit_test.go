@@ -887,6 +887,78 @@ func TestProbePulseSecureFileDisclosure_NotDetected(t *testing.T) {
 	}
 }
 
+func TestProbeCiscoASAPathTraversal_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/+CSCOT+/translation-table") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("webvpn portal_inc.lua")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCiscoASAPathTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected cisco asa path traversal finding when marker content is exposed")
+	}
+	if findings[0].ID != "msf-cisco-asa-path-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeCiscoASAPathTraversal_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeCiscoASAPathTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeFortinetSSLVPNFileRead_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/remote/fgt_lang") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("sslvpn_websession:user=admin")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeFortinetSSLVPNFileRead(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected fortinet ssl vpn file disclosure finding when session data is exposed")
+	}
+	if findings[0].ID != "msf-fortinet-sslvpn-file-read" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeFortinetSSLVPNFileRead_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeFortinetSSLVPNFileRead(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
 func TestFactory_NativeProbesCount(t *testing.T) {
 	t.Setenv("MSF_RPC_URL", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -899,7 +971,7 @@ func TestFactory_NativeProbesCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Metadata["native_probes_run"] != "19" {
-		t.Errorf("expected native_probes_run=19, got %q", out.Metadata["native_probes_run"])
+	if out.Metadata["native_probes_run"] != "21" {
+		t.Errorf("expected native_probes_run=21, got %q", out.Metadata["native_probes_run"])
 	}
 }

