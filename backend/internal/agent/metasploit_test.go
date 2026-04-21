@@ -741,6 +741,74 @@ func TestProbePHPUnitEvalStdinRCE_NotDetected(t *testing.T) {
 	}
 }
 
+func TestProbeGrafanaPluginTraversal_Detected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/public/plugins/alertlist/") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("root:x:0:0:root:/root:/bin/bash")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGrafanaPluginTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected grafana traversal finding when passwd content is exposed")
+	}
+	if findings[0].ID != "msf-grafana-plugin-traversal" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeGrafanaPluginTraversal_NotDetected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGrafanaPluginTraversal(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
+func TestProbeVBulletinWidgetTemplateRCE_Detected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/ajax/render/widget_tabbedcontainer_tab_panel" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("abh_vbulletin_probe_a8d9f16b")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeVBulletinWidgetTemplateRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected vbulletin widget-template finding when marker is reflected")
+	}
+	if findings[0].ID != "msf-vbulletin-widget-template-rce" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeVBulletinWidgetTemplateRCE_NotDetected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeVBulletinWidgetTemplateRCE(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) > 0 {
+		t.Fatalf("expected no findings for non-vulnerable target, got %d", len(findings))
+	}
+}
+
 func TestFactory_NativeProbesCount(t *testing.T) {
 	t.Setenv("MSF_RPC_URL", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -753,7 +821,7 @@ func TestFactory_NativeProbesCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Metadata["native_probes_run"] != "15" {
-		t.Errorf("expected native_probes_run=15, got %q", out.Metadata["native_probes_run"])
+	if out.Metadata["native_probes_run"] != "17" {
+		t.Errorf("expected native_probes_run=17, got %q", out.Metadata["native_probes_run"])
 	}
 }
