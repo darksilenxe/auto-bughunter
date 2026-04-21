@@ -496,6 +496,15 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if len(disabledForHealth) > 0 {
 		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
 	}
+	if options.AutonomyEmergencyStop || len(options.AutonomyForceRunAgents) > 0 || len(options.AutonomySuppressAgents) > 0 || strings.TrimSpace(options.AutonomyPlannerLock) != "" || options.AutonomyFallbackRerun {
+		s.appendAuditEvent(id, "override", fmt.Sprintf("Operator overrides applied emergencyStop=%t plannerLock=%s force=%s suppress=%s fallbackRerun=%t",
+			options.AutonomyEmergencyStop,
+			strings.TrimSpace(options.AutonomyPlannerLock),
+			strings.Join(limitStrings(options.AutonomyForceRunAgents, 8), ","),
+			strings.Join(limitStrings(options.AutonomySuppressAgents, 8), ","),
+			options.AutonomyFallbackRerun,
+		))
+	}
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -1455,7 +1464,88 @@ func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, pac
 			options.DailyProbeLimit = minInt(options.DailyProbeLimit, pack.DailyProbeLimit)
 		}
 	}
+	options = applyGovernancePolicy(options, pack.GovernanceProfile)
 	return options, maxInt(1, pack.StrategyVersion)
+}
+
+func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyGovernanceProfile) model.ScanOptions {
+	if governance.FailureHandling.MaxNoNoveltyRounds > 0 {
+		options.AutonomyMaxNoNoveltyRounds = governance.FailureHandling.MaxNoNoveltyRounds
+	}
+	if governance.FailureHandling.MaxConsecutiveFailureRounds > 0 {
+		options.AutonomyMaxConsecutiveFailRounds = governance.FailureHandling.MaxConsecutiveFailureRounds
+	}
+	if governance.FailureHandling.BackoffMillis > 0 {
+		options.BackoffMillis = maxInt(options.BackoffMillis, governance.FailureHandling.BackoffMillis)
+	}
+	if governance.FailureHandling.AutoRetryOnFailure {
+		options.AutonomyFallbackRerun = true
+	}
+	if governance.OperatorOverride.AllowEmergencyStop && governance.OperatorOverride.RequireAuditLogging {
+		// Policy supports audited emergency stops; default remains false until
+		// an explicit operator trigger sets it on a request.
+		options.AutonomyEmergencyStop = options.AutonomyEmergencyStop && governance.OperatorOverride.AllowEmergencyStop
+	}
+	if governance.RolloutControl.CanaryPercentByStage != nil {
+		stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+		if stage == "" {
+			stage = "dev"
+		}
+		if p, ok := governance.RolloutControl.CanaryPercentByStage[stage]; ok {
+			p = maxInt(0, minInt(100, p))
+			if p == 0 {
+				options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+			}
+		}
+	}
+	return options
+}
+
+func validateGovernanceProfile(profile model.AutonomyGovernanceProfile) error {
+	for env, c := range profile.SuccessCriteria {
+		if strings.TrimSpace(env) == "" {
+			return errors.New("successCriteria environment key is required")
+		}
+		if c.NovelFindingsRateMin < 0 || c.NovelFindingsRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].novelFindingsRateMin must be between 0 and 1", env)
+		}
+		if c.FalsePositiveRateMax < 0 || c.FalsePositiveRateMax > 1 {
+			return fmt.Errorf("successCriteria[%s].falsePositiveRateMax must be between 0 and 1", env)
+		}
+		if c.DuplicateSuppressionRateMin < 0 || c.DuplicateSuppressionRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].duplicateSuppressionRateMin must be between 0 and 1", env)
+		}
+		if c.FailureRecoveryRateMin < 0 || c.FailureRecoveryRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].failureRecoveryRateMin must be between 0 and 1", env)
+		}
+		if c.ScanDurationCapMinutes < 0 {
+			return fmt.Errorf("successCriteria[%s].scanDurationCapMinutes must be >= 0", env)
+		}
+	}
+	if profile.RiskMatrix.RetryLimit < 0 {
+		return errors.New("riskMatrix.retryLimit must be >= 0")
+	}
+	if profile.FailureHandling.BackoffMillis < 0 ||
+		profile.FailureHandling.MaxNoNoveltyRounds < 0 ||
+		profile.FailureHandling.MaxConsecutiveFailureRounds < 0 ||
+		profile.FailureHandling.PauseForOperatorAfterFailures < 0 {
+		return errors.New("failureHandling numeric values must be >= 0")
+	}
+	if profile.MemoryPolicy.RetentionDays < 0 {
+		return errors.New("memoryPolicy.retentionDays must be >= 0")
+	}
+	if profile.EvaluationGate.MinKPIDeltaScore < 0 {
+		return errors.New("evaluationGate.minKpiDeltaScore must be >= 0")
+	}
+	for stage, pct := range profile.RolloutControl.CanaryPercentByStage {
+		if strings.TrimSpace(stage) == "" {
+			return errors.New("rolloutControl.canaryPercentByStage stage key is required")
+		}
+		if pct < 0 || pct > 100 {
+			return fmt.Errorf("rolloutControl.canaryPercentByStage[%s] must be between 0 and 100", stage)
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
@@ -1487,6 +1577,10 @@ func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Requ
 		req.UpdatedBy = requesterFromRequest(r)
 		if req.StrategyVersion <= 0 {
 			req.StrategyVersion = 1
+		}
+		if err := validateGovernanceProfile(req.GovernanceProfile); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
 		}
 		before, _ := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, req.Name)
 		req.UpdatedAt = time.Now().UTC()
@@ -1681,13 +1775,28 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy pack not found"})
 		return
 	}
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	if stage == "" {
+		stage = "dev"
+	}
+	if stage == "prod" &&
+		pack.GovernanceProfile.EvaluationGate.PromoteToProdOnlyIfPass &&
+		pack.GovernanceProfile.EvaluationGate.RequireReplayBenchmark &&
+		!strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Replay-Benchmark-Pass")), "true") {
+		writeJSON(w, http.StatusPreconditionFailed, map[string]string{"error": "replay benchmark approval is required for production promotion"})
+		return
+	}
 	beforeRaw, _ := json.Marshal(pack)
 	next := *pack
 	if req.Rollback {
 		next.CanaryPercent = 0
 	} else {
 		next.StrategyVersion = maxInt(1, next.StrategyVersion+1)
-		next.CanaryPercent = maxInt(0, minInt(100, req.CanaryPercent))
+		nextCanary := maxInt(0, minInt(100, req.CanaryPercent))
+		if stageCanary, ok := next.GovernanceProfile.RolloutControl.CanaryPercentByStage[stage]; ok {
+			nextCanary = minInt(nextCanary, maxInt(0, minInt(100, stageCanary)))
+		}
+		next.CanaryPercent = nextCanary
 		if req.ExpectedMinROI > 0 {
 			next.MinExpectedROIUSD = maxFloat(next.MinExpectedROIUSD, req.ExpectedMinROI)
 		}
@@ -2439,6 +2548,9 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 // the findings observed so far. Otherwise it falls back to the static
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
+	if input.Options.AutonomyEmergencyStop {
+		return nil, nil, errors.New("autonomy emergency stop is enabled")
+	}
 	if s.agentFactory == nil {
 		return s.agentRegistry.RunAll(ctx, input)
 	}
@@ -2446,11 +2558,41 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	staticOrder := s.agentRegistry.Order()
 	fallback := agent.NewStaticPlanner(staticOrder)
 	var planner agent.Planner = fallback
-	if s.autonomous && s.aiClient != nil {
+	plannerLock := strings.ToLower(strings.TrimSpace(input.Options.AutonomyPlannerLock))
+	useAI := s.autonomous && s.aiClient != nil
+	if plannerLock == "static" || plannerLock == "fallback" {
+		useAI = false
+	}
+	if plannerLock == "ai" {
+		useAI = s.aiClient != nil
+	}
+	if useAI {
 		planner = agent.NewAIPlanner(s.aiClient, available, fallback)
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
-	return orchestrator.Run(ctx, input)
+	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
+		orchestrator.MaxNoNoveltyRounds = input.Options.AutonomyMaxNoNoveltyRounds
+	}
+	if input.Options.AutonomyMaxConsecutiveFailRounds > 0 {
+		orchestrator.MaxConsecutiveFailureRounds = input.Options.AutonomyMaxConsecutiveFailRounds
+	}
+	outputs, findings, err := orchestrator.Run(ctx, input)
+	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
+		return s.agentRegistry.RunAll(ctx, input)
+	}
+	return outputs, findings, err
+}
+
+func allAgentRunsFailed(outputs []agent.AgentOutput) bool {
+	if len(outputs) == 0 {
+		return false
+	}
+	for _, out := range outputs {
+		if strings.EqualFold(strings.TrimSpace(out.Status), "completed") && !out.TimedOut && strings.TrimSpace(out.Error) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func buildRoleDiffFindings(baseline []model.Finding, perRole map[string][]model.Finding) []model.Finding {
@@ -3127,6 +3269,16 @@ func (s *Server) persistScanState(target string, findings []model.Finding, outpu
 }
 
 func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput) model.AutonomyMemory {
+	retentionDays := intFromEnv("AUTONOMY_MEMORY_RETENTION_DAYS", 30)
+	if retentionDays > 0 && !memory.LastRunAt.IsZero() {
+		expiry := memory.LastRunAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
+		if time.Now().UTC().After(expiry) {
+			memory.PreferredAgents = nil
+			memory.SuppressedAgents = nil
+			memory.LastAgentSequence = nil
+			memory.AgentStats = map[string]model.AutonomyAgentStat{}
+		}
+	}
 	if memory.AgentStats == nil {
 		memory.AgentStats = map[string]model.AutonomyAgentStat{}
 	}
@@ -3182,6 +3334,7 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	sort.Strings(suppressed)
 	memory.PreferredAgents = limitStrings(preferred, 8)
 	memory.SuppressedAgents = limitStrings(suppressed, 8)
+	memory.RetentionAppliedAt = time.Now().UTC()
 	return memory
 }
 

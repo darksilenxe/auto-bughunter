@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -106,5 +107,56 @@ func TestMaxDuration(t *testing.T) {
 	}
 	if got := maxDuration(1*time.Second, 3*time.Second); got != 3*time.Second {
 		t.Fatalf("expected 3s, got %s", got)
+	}
+}
+
+func TestValidateGovernanceProfile_RejectsInvalidThresholds(t *testing.T) {
+	err := validateGovernanceProfile(model.AutonomyGovernanceProfile{
+		SuccessCriteria: map[string]model.AutonomySuccessCriteria{
+			"prod": {FalsePositiveRateMax: 1.2},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected governance profile validation error")
+	}
+}
+
+func TestApplyGovernancePolicy_MapsFailureHandlingAndCanaryStage(t *testing.T) {
+	t.Setenv("AUTOMATION_ENV_STAGE", "staging")
+	options := model.ScanOptions{}
+	got := applyGovernancePolicy(options, model.AutonomyGovernanceProfile{
+		FailureHandling: model.AutonomyFailureHandlingPolicy{
+			MaxNoNoveltyRounds:          4,
+			MaxConsecutiveFailureRounds: 3,
+			BackoffMillis:               700,
+			AutoRetryOnFailure:          true,
+		},
+		RolloutControl: model.AutonomyRolloutControl{
+			CanaryPercentByStage: map[string]int{"staging": 0},
+		},
+	})
+	if got.AutonomyMaxNoNoveltyRounds != 4 || got.AutonomyMaxConsecutiveFailRounds != 3 {
+		t.Fatalf("expected failure thresholds to be applied, got %+v", got)
+	}
+	if got.BackoffMillis != 700 {
+		t.Fatalf("expected backoff millis 700, got %d", got.BackoffMillis)
+	}
+	if !got.AutonomyFallbackRerun {
+		t.Fatal("expected fallback rerun to be enabled")
+	}
+	if got.MaxAutomationConcurrency != 1 {
+		t.Fatalf("expected max automation concurrency to be capped to 1 on 0%% canary, got %d", got.MaxAutomationConcurrency)
+	}
+}
+
+func TestAllAgentRunsFailed(t *testing.T) {
+	if allAgentRunsFailed(nil) {
+		t.Fatal("empty outputs should not be treated as all failed")
+	}
+	if !allAgentRunsFailed([]agent.AgentOutput{{Status: "error"}, {Status: "error", TimedOut: true}}) {
+		t.Fatal("expected all failed outputs to return true")
+	}
+	if allAgentRunsFailed([]agent.AgentOutput{{Status: "completed"}}) {
+		t.Fatal("expected completed run to return false")
 	}
 }

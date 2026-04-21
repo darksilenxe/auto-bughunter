@@ -51,6 +51,21 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 	allFindings := make([]model.Finding, 0)
 	noNoveltyRounds := 0
 	consecutiveFailureRounds := 0
+	completed := map[string]bool{}
+	forcePending := make(map[string]bool, len(input.Options.AutonomyForceRunAgents))
+	for _, name := range input.Options.AutonomyForceRunAgents {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			forcePending[name] = true
+		}
+	}
+	suppressed := make(map[string]bool, len(input.Options.AutonomySuppressAgents))
+	for _, name := range input.Options.AutonomySuppressAgents {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			suppressed[name] = true
+		}
+	}
 
 	for round := 0; round < o.MaxRounds; round++ {
 		select {
@@ -72,8 +87,37 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			return outputs, combineFindingsWithDedup(allFindings), err
 		}
 		if decision.IsDone || len(decision.Agents) == 0 {
+			if len(forcePending) > 0 {
+				extras := make([]AgentSpec, 0, len(forcePending))
+				for name := range forcePending {
+					if suppressed[name] || completed[name] {
+						delete(forcePending, name)
+						continue
+					}
+					extras = append(extras, AgentSpec{Name: name, Reason: "operator-force-run"})
+					delete(forcePending, name)
+				}
+				if len(extras) > 0 {
+					decision.Agents = extras
+					decision.IsDone = false
+				}
+			}
+		}
+		if decision.IsDone || len(decision.Agents) == 0 {
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
+		filtered := make([]AgentSpec, 0, len(decision.Agents))
+		for _, spec := range decision.Agents {
+			name := strings.TrimSpace(spec.Name)
+			if name == "" || suppressed[name] || completed[name] {
+				continue
+			}
+			filtered = append(filtered, spec)
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+		decision.Agents = filtered
 		beforeCount := len(combineFindingsWithDedup(allFindings))
 		roundFailures := 0
 
@@ -148,6 +192,8 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			}
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
+			completed[output.AgentName] = true
+			delete(forcePending, output.AgentName)
 		}
 
 		afterCount := len(combineFindingsWithDedup(allFindings))
