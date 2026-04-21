@@ -15,8 +15,15 @@ const EMPTY_PROGRAM = {
 const DEFAULT_AI_CONFIG = {
   summaryModel: "phi3:mini",
   triageModel: "phi3:mini",
+  plannerModel: "phi3:mini",
   temperature: "0.2",
+  plannerTemperature: "0.1",
   maxTokens: "1200",
+  topP: "1.0",
+  summarySystemPrompt: "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only.",
+  summaryUserPromptTemplate: "Target: {{target}}\\nFindings JSON: {{findings}}\\nKnowledge Context JSON: {{knowledge}}\\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.",
+  plannerSystemPrompt: "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON.",
+  plannerInstructionTemplate: "Pick zero or more agents to run next from the available_agents list. You may repeat agents from history when new findings warrant it. Set done=true once additional agents are unlikely to surface new value. Reply with strict JSON only: {\"agents\":[{\"name\":string,\"reason\":string}],\"done\":bool}",
 };
 
 export default function Settings() {
@@ -25,11 +32,13 @@ export default function Settings() {
   const [form, setForm] = useState(EMPTY_PROGRAM);
   const [aiConfig, setAIConfig] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("ai_model_preferences") || JSON.stringify(DEFAULT_AI_CONFIG));
+      const stored = JSON.parse(localStorage.getItem("ai_model_preferences") || "{}");
+      return { ...DEFAULT_AI_CONFIG, ...(stored || {}) };
     } catch {
       return DEFAULT_AI_CONFIG;
     }
   });
+  const [aiConfigStatus, setAIConfigStatus] = useState("");
   const [feedForm, setFeedForm] = useState({ scanId: "", findingId: "", outcome: "accepted", notes: "", payoutUsd: "" });
   const [feedStatus, setFeedStatus] = useState("");
   const [datasetPreview, setDatasetPreview] = useState([]);
@@ -87,6 +96,13 @@ export default function Settings() {
 
   function saveAIConfig() {
     localStorage.setItem("ai_model_preferences", JSON.stringify(aiConfig));
+    setAIConfigStatus("Saved local AI preferences.");
+  }
+
+  function resetAIConfig() {
+    setAIConfig(DEFAULT_AI_CONFIG);
+    localStorage.setItem("ai_model_preferences", JSON.stringify(DEFAULT_AI_CONFIG));
+    setAIConfigStatus("Reset to defaults.");
   }
 
   async function submitEnrichmentFeedback(e) {
@@ -310,18 +326,59 @@ export default function Settings() {
           <label>Triage model
             <input value={aiConfig.triageModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, triageModel: e.target.value }))} />
           </label>
+          <label>Planner model
+            <input value={aiConfig.plannerModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, plannerModel: e.target.value }))} />
+          </label>
           <label>Temperature
             <input value={aiConfig.temperature || ""} onChange={(e) => setAIConfig((p) => ({ ...p, temperature: e.target.value }))} />
+          </label>
+          <label>Planner temperature
+            <input value={aiConfig.plannerTemperature || ""} onChange={(e) => setAIConfig((p) => ({ ...p, plannerTemperature: e.target.value }))} />
           </label>
           <label>Max tokens
             <input value={aiConfig.maxTokens || ""} onChange={(e) => setAIConfig((p) => ({ ...p, maxTokens: e.target.value }))} />
           </label>
+          <label>Top P
+            <input value={aiConfig.topP || ""} onChange={(e) => setAIConfig((p) => ({ ...p, topP: e.target.value }))} />
+          </label>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.6rem", marginTop: "0.75rem" }}>
+          <label>Summary system prompt
+            <textarea
+              rows={3}
+              value={aiConfig.summarySystemPrompt || ""}
+              onChange={(e) => setAIConfig((p) => ({ ...p, summarySystemPrompt: e.target.value }))}
+            />
+          </label>
+          <label>Summary user prompt template
+            <textarea
+              rows={5}
+              value={aiConfig.summaryUserPromptTemplate || ""}
+              onChange={(e) => setAIConfig((p) => ({ ...p, summaryUserPromptTemplate: e.target.value }))}
+            />
+          </label>
+          <label>Planner system prompt
+            <textarea
+              rows={3}
+              value={aiConfig.plannerSystemPrompt || ""}
+              onChange={(e) => setAIConfig((p) => ({ ...p, plannerSystemPrompt: e.target.value }))}
+            />
+          </label>
+          <label>Planner instruction template
+            <textarea
+              rows={4}
+              value={aiConfig.plannerInstructionTemplate || ""}
+              onChange={(e) => setAIConfig((p) => ({ ...p, plannerInstructionTemplate: e.target.value }))}
+            />
+          </label>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
           <button type="button" onClick={saveAIConfig}>Save local AI preferences</button>
+          <button type="button" onClick={resetAIConfig}>Reset AI defaults</button>
           <button type="button" onClick={loadDatasetPreview}>Load enrichment dataset preview</button>
         </div>
         <p className="meta">These preferences are saved locally in your browser for operator workflows.</p>
+        {aiConfigStatus && <p className="meta">{aiConfigStatus}</p>}
         {datasetError && <p className="error">{datasetError}</p>}
         {datasetPreview.length > 0 && <pre className="summary">{JSON.stringify(datasetPreview, null, 2)}</pre>}
       </section>
