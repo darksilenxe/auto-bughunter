@@ -25,6 +25,23 @@ Make Auto Bughunter the most trusted and effective platform for **authorized aut
 - Analyst override rate
 - Repeat-user retention
 
+## Current Status Snapshot
+
+The platform already has meaningful groundwork in place (automation policy packs/audit APIs, campaign scheduling with retries/queue state, confidence-driven triage, autonomous orchestration, and webhook/slack notifications).  
+This roadmap now focuses on finishing the remaining productization and enterprise-hardening work.
+
+## What’s Left to Finish (Cross-Wave)
+
+- Product-level KPI instrumentation and dashboards exposed in-product.
+- End-to-end proof-of-authorization UX with immutable export bundle.
+- Complete finding lifecycle UX/workflows across verification, suppression/acceptance, and remediation ownership.
+- Stronger high-severity validation gates (strict exploitability/corroboration requirements by default policy).
+- Full explainability surfaces in UI/reporting for agent choice and ranking outcomes.
+- Bug bounty submission acceleration (template packs, dedupe intelligence, payout learning loop).
+- First-party work-management integrations beyond generic webhooks.
+- Executive decision intelligence reporting and compliance evidence ownership flow.
+- Public benchmark suite + CI regression gates + release scorecards as a continuous moat.
+
 ---
 
 ## Wave 1 — Trust + Quality Foundations
@@ -53,6 +70,14 @@ Focus areas: governance, authorization proof, auditability, and false-positive r
 - All findings have lifecycle state transitions and state-change audit entries.
 - High-severity findings require explicit corroboration metadata.
 - Strict mode can be enabled per workspace/program and measurably lowers noisy output.
+
+### Remaining implementation checklist
+
+- [ ] Add signed approval capture + immutable authorization evidence export package.
+- [ ] Enforce explicit risk budgets per default profile in UI and API validation.
+- [ ] Complete lifecycle state machine and ownership transitions in operator UX.
+- [ ] Gate high-severity publication on corroboration + exploitability requirements by policy.
+- [ ] Add strict-reporting toggles with measurable false-positive reduction telemetry.
 
 ---
 
@@ -84,6 +109,16 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - Every prioritized finding includes machine-readable ranking rationale.
 - Submission artifacts are generated with reproducibility evidence by default.
 - Feedback loop changes prioritization behavior with measurable trend improvement.
+
+### Remaining implementation checklist
+
+- [ ] Add runtime policy-aware model/prompt tuning profiles with audit traces.
+- [ ] Ship planner offline replay harness with baseline comparison output.
+- [ ] Add per-target adaptive strategy policy using historical drift and ROI signals.
+- [ ] Surface “why agent ran” and “why ranked high” in UI and report exports.
+- [ ] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
+- [ ] Add duplicate detection against prior submissions/scans with similarity thresholds.
+- [ ] Close payout-feedback loop into prioritization scoring by program profile.
 
 ---
 
@@ -119,6 +154,18 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
 - SLOs are defined, measured, and reported for scan queueing/orchestration.
 - Regression gates block releases on quality/safety drift.
 - Release scorecards are published and comparable across releases.
+
+### Remaining implementation checklist
+
+- [ ] Implement first-party Jira and Linear connectors with policy-aware routing.
+- [ ] Expand automation trigger/scheduling UX and CI/CD ergonomics.
+- [ ] Add capability drift alerts and fallback strategy recommendations in product.
+- [ ] Add import/export for policy packs, scan profiles, and report templates.
+- [ ] Ship trend dashboards and executive risk-delta summary views.
+- [ ] Strengthen compliance evidence linking and remediation ownership tracking.
+- [ ] Define and publish orchestration/queueing SLOs with alerting.
+- [ ] Add guided onboarding + first-success wizard tied to Juice Shop harness.
+- [ ] Publish benchmark suite, CI regression gates, release scorecards, and capability matrix.
 
 ---
 
