@@ -105,6 +105,16 @@ const (
 // Safe to call with nil to disable.
 func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
 
+// SetProxyServer replaces the API server's intercepting proxy with an
+// externally-built one (e.g. configured with a CA for HTTPS interception).
+// Safe to call with nil to leave the default proxy in place.
+func (s *Server) SetProxyServer(p *proxy.Server) {
+	if p == nil {
+		return
+	}
+	s.proxyServer = p
+}
+
 // SetAttackGraphStore attaches an optional graph database-backed attack graph store.
 func (s *Server) SetAttackGraphStore(store AttackGraphStore) { s.attackGraphDB = store }
 
@@ -226,6 +236,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
+	mux.HandleFunc("/api/proxy/settings", s.handleProxySettings)
+	mux.HandleFunc("/api/proxy/ca-certificate", s.handleProxyCACertificate)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
