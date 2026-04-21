@@ -749,7 +749,6 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
           onPointerLeave={onSVGPointerUp}
           style={{
             background: "rgba(0,0,0,0.5)",
-            minWidth: "680px",
             borderLeft: "1px solid rgba(124,58,237,0.2)",
             borderRight: "1px solid rgba(124,58,237,0.2)",
             cursor: dragState.current ? "grabbing" : "default",

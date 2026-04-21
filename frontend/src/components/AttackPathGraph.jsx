@@ -69,7 +69,14 @@ function arrowPath(x1, y1, x2, y2) {
   return `M ${x1 + ux * r} ${y1 + uy * r} L ${x2 - ux * r} ${y2 - uy * r}`;
 }
 
-export default function AttackPathGraph({ events }) {
+function normalizeAgentName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+export default function AttackPathGraph({ events = [], job = null }) {
   const [nodeOffsets, setNodeOffsets] = useState({});
   const dragState = useRef(null);   // { id, startX, startY, origDx, origDy }
   const didDrag   = useRef(false);
@@ -121,19 +128,38 @@ export default function AttackPathGraph({ events }) {
   const dynamicEdges = []; // edges for spawned agents
 
   for (const evt of events) {
+    const agentName = normalizeAgentName(evt.agentName);
+    if (!agentName) continue;
     if (evt.type === "agent_start") {
-      nodeStates[evt.agentName] = "running";
+      nodeStates[agentName] = "running";
     } else if (evt.type === "agent_complete") {
-      nodeStates[evt.agentName] = "complete";
+      nodeStates[agentName] = "complete";
     } else if (evt.type === "agent_spawned") {
-      if (!nodeStates[evt.agentName]) {
-        nodeStates[evt.agentName] = "spawned";
+      if (!nodeStates[agentName]) {
+        nodeStates[agentName] = "spawned";
       }
       // Try to extract which agent triggered the spawn from the message.
       const match = evt.message && evt.message.match(/from "([^"]+)"/);
       if (match) {
-        dynamicEdges.push([match[1], evt.agentName]);
+        dynamicEdges.push([normalizeAgentName(match[1]), agentName]);
       }
+    }
+  }
+
+  for (const run of job?.agentRuns || []) {
+    const agentName = normalizeAgentName(run.agentName);
+    if (!agentName) continue;
+    const status = String(run.status || "").trim().toLowerCase();
+    if (status === "error" || status === "failed" || run.timedOut) {
+      nodeStates[agentName] = "failed";
+      continue;
+    }
+    if (status === "running" || status === "in_progress") {
+      nodeStates[agentName] = "running";
+      continue;
+    }
+    if (status === "completed" || status === "complete" || status === "success") {
+      nodeStates[agentName] = "complete";
     }
   }
 
@@ -164,7 +190,7 @@ export default function AttackPathGraph({ events }) {
         onPointerMove={onSVGPointerMove}
         onPointerUp={onSVGPointerUp}
         onPointerLeave={onSVGPointerUp}
-        style={{ background: "rgba(0,0,0,0.35)", borderRadius: "10px", minWidth: "600px" }}
+        style={{ background: "rgba(0,0,0,0.35)", borderRadius: "10px" }}
       >
         <defs>
           <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
@@ -251,7 +277,7 @@ export default function AttackPathGraph({ events }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "6px 4px", fontSize: "0.72rem" }}>
         <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
           {Object.entries(STATE_COLOR).map(([state, c]) => (
-            <span key={state} style={{ display: "flex", alignItems: "center", gap: "5px", color: "rgba(0,0,0,0.8)" }}>
+            <span key={state} style={{ display: "flex", alignItems: "center", gap: "5px", color: "rgba(255,255,255,0.8)" }}>
               <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: c.stroke }} />
               {state}
             </span>

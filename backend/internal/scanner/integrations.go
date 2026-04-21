@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -345,19 +346,30 @@ func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	if err != nil {
+	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
+		return []model.Finding{{
+			ID:             "nuclei-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Nuclei integration timed out",
+			Description:    "Nuclei did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+	lines := countNonEmptyLines(stdout.String())
+	if err != nil && lines == 0 {
 		return []model.Finding{{
 			ID:             "nuclei-execution-error",
 			Category:       "integration",
 			Severity:       model.SeverityLow,
 			Title:          "Nuclei integration failed",
 			Description:    "Nuclei did not complete successfully.",
-			Evidence:       strings.TrimSpace(stderr.String()),
+			Evidence:       strings.TrimSpace(stderr.String() + "\n" + stdout.String()),
 			Recommendation: "Validate nuclei templates/network access and rerun.",
 		}}
 	}
 
-	lines := countNonEmptyLines(stdout.String())
 	severity := model.SeverityInfo
 	title := "Nuclei integration found no reported issues"
 	if lines > 0 {
@@ -412,22 +424,39 @@ func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Fin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	if err != nil {
+	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
+		return []model.Finding{{
+			ID:             "zap-baseline-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ZAP Baseline integration timed out",
+			Description:    "ZAP Baseline did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+	outText := stdout.String()
+	upperOut := strings.ToUpper(outText)
+	warns := strings.Count(upperOut, "WARN-")
+	fails := strings.Count(upperOut, "FAIL-")
+	if err != nil && warns == 0 && fails == 0 && strings.TrimSpace(outText) == "" {
 		return []model.Finding{{
 			ID:             "zap-baseline-execution-error",
 			Category:       "integration",
 			Severity:       model.SeverityLow,
 			Title:          "ZAP Baseline integration failed",
 			Description:    "ZAP Baseline did not complete successfully.",
-			Evidence:       strings.TrimSpace(stderr.String()),
+			Evidence:       strings.TrimSpace(stderr.String() + "\n" + outText),
 			Recommendation: "Validate ZAP runtime dependencies and rerun.",
 		}}
 	}
 
-	warns := strings.Count(strings.ToUpper(stdout.String()), "WARN")
 	severity := model.SeverityInfo
 	title := "ZAP Baseline integration found no warning markers"
-	if warns > 0 {
+	if fails > 0 {
+		severity = model.SeverityHigh
+		title = "ZAP Baseline integration reported fail markers"
+	} else if warns > 0 {
 		severity = model.SeverityMedium
 		title = "ZAP Baseline integration reported warning markers"
 	}
@@ -438,7 +467,7 @@ func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Fin
 		Severity:       severity,
 		Title:          title,
 		Description:    "Optional OWASP ZAP Baseline integration executed in passive mode.",
-		Evidence:       "warnMarkers=" + strconv.Itoa(warns),
+		Evidence:       "failMarkers=" + strconv.Itoa(fails) + ", warnMarkers=" + strconv.Itoa(warns),
 		Recommendation: "Review full ZAP baseline report and verify findings before remediation.",
 	}}
 }
