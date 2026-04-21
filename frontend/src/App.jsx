@@ -9,9 +9,9 @@ import Settings from "./pages/Settings";
 
 export default function App() {
   return (
-    <div style={{ minHeight: "100vh" }}>
+    <div className="app-shell">
       <Sidebar />
-      <main style={{ paddingLeft: "0" }}>
+      <main className="app-main">
         <Routes>
           <Route path="/"             element={<Dashboard />} />
           <Route path="/attack-graph" element={<AttackGraph />} />

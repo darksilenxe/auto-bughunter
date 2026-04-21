@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useScan } from "../context/ScanContext";
+import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
 
 const EMPTY_PROGRAM = {
   name: "",
@@ -16,6 +16,17 @@ export default function Settings() {
   const { programs, savePrograms } = useScan();
   const [editing, setEditing] = useState(null); // null | index | "new"
   const [form, setForm] = useState(EMPTY_PROGRAM);
+  const [aiConfig, setAIConfig] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ai_model_preferences") || "{\"summaryModel\":\"phi3:mini\",\"triageModel\":\"phi3:mini\",\"temperature\":\"0.2\",\"maxTokens\":\"1200\"}");
+    } catch {
+      return { summaryModel: "phi3:mini", triageModel: "phi3:mini", temperature: "0.2", maxTokens: "1200" };
+    }
+  });
+  const [feedForm, setFeedForm] = useState({ scanId: "", findingId: "", outcome: "accepted", notes: "", payoutUsd: "" });
+  const [feedStatus, setFeedStatus] = useState("");
+  const [datasetPreview, setDatasetPreview] = useState([]);
+  const [datasetError, setDatasetError] = useState("");
 
   function openNew() {
     setForm(EMPTY_PROGRAM);
@@ -42,6 +53,63 @@ export default function Settings() {
       savePrograms(next);
     }
     setEditing(null);
+  }
+
+  function saveAIConfig() {
+    localStorage.setItem("ai_model_preferences", JSON.stringify(aiConfig));
+  }
+
+  async function submitEnrichmentFeedback(e) {
+    e.preventDefault();
+    setFeedStatus("");
+    const payload = {
+      scanId: feedForm.scanId.trim(),
+      findingId: feedForm.findingId.trim(),
+      outcome: feedForm.outcome,
+      notes: feedForm.notes.trim(),
+      payoutUsd: feedForm.payoutUsd ? Number(feedForm.payoutUsd) : 0,
+    };
+    if (!payload.scanId || !payload.findingId) {
+      setFeedStatus("scanId and findingId are required.");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": API_KEY,
+          "X-Workspace-ID": WORKSPACE_ID,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFeedStatus(data.error || "Failed to submit enrichment feedback.");
+        return;
+      }
+      setFeedStatus(`Recorded feedback ${data.id}.`);
+      setFeedForm((prev) => ({ ...prev, notes: "", payoutUsd: "" }));
+    } catch (err) {
+      setFeedStatus(err.message || "Failed to submit enrichment feedback.");
+    }
+  }
+
+  async function loadDatasetPreview() {
+    setDatasetError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/ml/engagements?limit=5`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDatasetError(data.error || "Failed to load dataset preview.");
+        return;
+      }
+      setDatasetPreview(Array.isArray(data) ? data : (data.items || []));
+    } catch (err) {
+      setDatasetError(err.message || "Failed to load dataset preview.");
+    }
   }
 
   function field(key, label, type = "text", rows) {
@@ -155,6 +223,60 @@ export default function Settings() {
           The neural agent learner (<code>agents</code> service) learns from each completed scan and automatically
           improves agent spawn decisions over time.
         </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "0.75rem" }}>
+          <label>Summary model
+            <input value={aiConfig.summaryModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, summaryModel: e.target.value }))} />
+          </label>
+          <label>Triage model
+            <input value={aiConfig.triageModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, triageModel: e.target.value }))} />
+          </label>
+          <label>Temperature
+            <input value={aiConfig.temperature || ""} onChange={(e) => setAIConfig((p) => ({ ...p, temperature: e.target.value }))} />
+          </label>
+          <label>Max tokens
+            <input value={aiConfig.maxTokens || ""} onChange={(e) => setAIConfig((p) => ({ ...p, maxTokens: e.target.value }))} />
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+          <button type="button" onClick={saveAIConfig}>Save local AI preferences</button>
+          <button type="button" onClick={loadDatasetPreview}>Load enrichment dataset preview</button>
+        </div>
+        <p className="meta">These preferences are saved locally in your browser for operator workflows.</p>
+        {datasetError && <p className="error">{datasetError}</p>}
+        {datasetPreview.length > 0 && <pre className="summary">{JSON.stringify(datasetPreview, null, 2)}</pre>}
+      </section>
+
+      <section className="card">
+        <h2>AI Enrichment Data Feed</h2>
+        <p className="meta">
+          Feed analyst outcomes into the enrichment loop by posting finding feedback labels.
+        </p>
+        <form onSubmit={submitEnrichmentFeedback}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
+            <label>Scan ID
+              <input value={feedForm.scanId} onChange={(e) => setFeedForm((p) => ({ ...p, scanId: e.target.value }))} />
+            </label>
+            <label>Finding ID
+              <input value={feedForm.findingId} onChange={(e) => setFeedForm((p) => ({ ...p, findingId: e.target.value }))} />
+            </label>
+            <label>Outcome
+              <select value={feedForm.outcome} onChange={(e) => setFeedForm((p) => ({ ...p, outcome: e.target.value }))}>
+                <option value="accepted">accepted</option>
+                <option value="rejected">rejected</option>
+                <option value="duplicate">duplicate</option>
+                <option value="informative">informative</option>
+              </select>
+            </label>
+            <label>Payout USD
+              <input value={feedForm.payoutUsd} onChange={(e) => setFeedForm((p) => ({ ...p, payoutUsd: e.target.value }))} />
+            </label>
+          </div>
+          <label>Analyst Notes
+            <textarea rows={3} value={feedForm.notes} onChange={(e) => setFeedForm((p) => ({ ...p, notes: e.target.value }))} />
+          </label>
+          <button type="submit">Submit enrichment feedback</button>
+        </form>
+        {feedStatus && <p className="meta">{feedStatus}</p>}
       </section>
     </div>
   );

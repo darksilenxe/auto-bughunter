@@ -10,7 +10,7 @@ func TestEvaluatePolicyGateBlocksOnThresholds(t *testing.T) {
 	s := &Server{gateHighBlock: 1, gateMedBlock: 3}
 	result := s.evaluatePolicyGate([]model.Finding{
 		{Title: "Critical auth bypass", Severity: model.SeverityHigh},
-	})
+	}, "internal")
 	if result.Status != "blocked" {
 		t.Fatalf("expected blocked gate status, got %s", result.Status)
 	}

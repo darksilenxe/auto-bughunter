@@ -1,11 +1,14 @@
 package storage
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"encoding/hex"
 	"os"
 	"regexp"
 	"strconv"
@@ -14,6 +17,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -106,10 +110,10 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO scans (
-			id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
+			id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-	`, job.ID, job.Target, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+	`, job.ID, job.Target, job.WorkspaceID, job.RequestedBy, job.PolicyPack, job.Status, job.StartedAt, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON)
 	if err != nil {
 		return fmt.Errorf("insert scan: %w", err)
 	}
@@ -176,9 +180,12 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			automated_report = $15,
 			program_name = $16,
 			program_policy_version = $17,
-			disallowed_test_types = $18
+			disallowed_test_types = $18,
+			workspace_id = $19,
+			requested_by = $20,
+			policy_pack = $21
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON, job.WorkspaceID, job.RequestedBy, job.PolicyPack)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
@@ -194,7 +201,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
+		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE id = $1
 	`, id)
@@ -213,6 +220,9 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
+		&job.WorkspaceID,
+		&job.RequestedBy,
+		&job.PolicyPack,
 		&job.Status,
 		&job.StartedAt,
 		&job.CompletedAt,
@@ -288,6 +298,9 @@ func (p *Postgres) migrate(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS scans (
 			id TEXT PRIMARY KEY,
 			target TEXT NOT NULL,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			requested_by TEXT NOT NULL DEFAULT '',
+			policy_pack TEXT NOT NULL DEFAULT 'internal',
 			status TEXT NOT NULL,
 			started_at TIMESTAMPTZ NOT NULL,
 			completed_at TIMESTAMPTZ NULL,
@@ -340,6 +353,15 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS disallowed_test_types JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.disallowed_test_types column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS workspace_id TEXT NOT NULL DEFAULT 'default'`); err != nil {
+		return fmt.Errorf("migrate scans.workspace_id column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS requested_by TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate scans.requested_by column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS policy_pack TEXT NOT NULL DEFAULT 'internal'`); err != nil {
+		return fmt.Errorf("migrate scans.policy_pack column: %w", err)
 	}
 	if _, err := p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_assets (
@@ -471,12 +493,29 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_tickets table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			role TEXT NOT NULL,
+			key_hash TEXT NOT NULL UNIQUE,
+			key_prefix TEXT NOT NULL,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			rotated_at TIMESTAMPTZ NULL,
+			revoked_at TIMESTAMPTZ NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate api_keys table: %w", err)
+	}
 	return nil
 }
 
 func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
+		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE target = $1 AND status = 'completed' AND id <> $2
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -488,6 +527,9 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	if err := row.Scan(
 		&job.ID,
 		&job.Target,
+		&job.WorkspaceID,
+		&job.RequestedBy,
+		&job.PolicyPack,
 		&job.Status,
 		&job.StartedAt,
 		&job.CompletedAt,
@@ -566,7 +608,7 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 		limit = 1000
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, target, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
+		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE status = 'completed'
 		ORDER BY completed_at DESC NULLS LAST, started_at DESC
@@ -584,6 +626,9 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 		if err := rows.Scan(
 			&job.ID,
 			&job.Target,
+			&job.WorkspaceID,
+			&job.RequestedBy,
+			&job.PolicyPack,
 			&job.Status,
 			&job.StartedAt,
 			&job.CompletedAt,
@@ -1135,6 +1180,160 @@ func (p *Postgres) ListOpenAutomationTickets(ctx context.Context, target string,
 		out = append(out, ticket)
 	}
 	return out, rows.Err()
+}
+
+func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, role model.APIKeyRole) (*model.APIKeyRecord, string, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "unnamed"
+	}
+	role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(string(role))))
+	if role == "" {
+		role = model.APIKeyRoleViewer
+	}
+	raw, err := generateRawAPIKey()
+	if err != nil {
+		return nil, "", err
+	}
+	now := time.Now().UTC()
+	rec := &model.APIKeyRecord{
+		ID:          uuid.NewString(),
+		WorkspaceID: workspaceID,
+		Name:        name,
+		Role:        role,
+		KeyPrefix:   apiKeyPrefix(raw),
+		CreatedAt:   now,
+		Active:      true,
+	}
+	_, err = p.db.ExecContext(ctx, `
+		INSERT INTO api_keys (id, workspace_id, name, role, key_hash, key_prefix, active, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)
+	`, rec.ID, rec.WorkspaceID, rec.Name, string(rec.Role), hashAPIKey(raw), rec.KeyPrefix, rec.CreatedAt)
+	if err != nil {
+		return nil, "", fmt.Errorf("insert api key: %w", err)
+	}
+	return rec, raw, nil
+}
+
+func (p *Postgres) ListAPIKeys(ctx context.Context, workspaceID string) ([]model.APIKeyRecord, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
+		FROM api_keys
+		WHERE workspace_id = $1
+		ORDER BY created_at DESC
+	`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list api keys: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.APIKeyRecord, 0)
+	for rows.Next() {
+		var rec model.APIKeyRecord
+		var role string
+		if err := rows.Scan(&rec.ID, &rec.WorkspaceID, &rec.Name, &role, &rec.KeyPrefix, &rec.CreatedAt, &rec.RotatedAt, &rec.RevokedAt, &rec.Active); err != nil {
+			return nil, fmt.Errorf("scan api key row: %w", err)
+		}
+		rec.Role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(role)))
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, string, error) {
+	raw, err := generateRawAPIKey()
+	if err != nil {
+		return nil, "", err
+	}
+	now := time.Now().UTC()
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE api_keys
+		SET key_hash = $2, key_prefix = $3, rotated_at = $4, revoked_at = NULL, active = TRUE
+		WHERE id = $1
+	`, strings.TrimSpace(id), hashAPIKey(raw), apiKeyPrefix(raw), now)
+	if err != nil {
+		return nil, "", fmt.Errorf("rotate api key: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return nil, "", sql.ErrNoRows
+	}
+	rec, err := p.getAPIKeyByID(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	return rec, raw, nil
+}
+
+func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE api_keys
+		SET active = FALSE, revoked_at = NOW()
+		WHERE id = $1
+	`, strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("revoke api key: %w", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (p *Postgres) AuthenticateAPIKey(ctx context.Context, rawKey string) (*model.APIKeyRecord, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
+		FROM api_keys
+		WHERE key_hash = $1 AND active = TRUE
+	`, hashAPIKey(strings.TrimSpace(rawKey)))
+	var rec model.APIKeyRecord
+	var role string
+	if err := row.Scan(&rec.ID, &rec.WorkspaceID, &rec.Name, &role, &rec.KeyPrefix, &rec.CreatedAt, &rec.RotatedAt, &rec.RevokedAt, &rec.Active); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sql.ErrNoRows
+		}
+		return nil, fmt.Errorf("authenticate api key: %w", err)
+	}
+	rec.Role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(role)))
+	return &rec, nil
+}
+
+func (p *Postgres) getAPIKeyByID(ctx context.Context, id string) (*model.APIKeyRecord, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
+		FROM api_keys WHERE id = $1
+	`, strings.TrimSpace(id))
+	var rec model.APIKeyRecord
+	var role string
+	if err := row.Scan(&rec.ID, &rec.WorkspaceID, &rec.Name, &role, &rec.KeyPrefix, &rec.CreatedAt, &rec.RotatedAt, &rec.RevokedAt, &rec.Active); err != nil {
+		return nil, err
+	}
+	rec.Role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(role)))
+	return &rec, nil
+}
+
+func generateRawAPIKey() (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "abh_" + hex.EncodeToString(buf), nil
+}
+
+func hashAPIKey(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func apiKeyPrefix(raw string) string {
+	if len(raw) <= 12 {
+		return raw
+	}
+	return raw[:12]
 }
 
 func redactHeaders(headers map[string]string) map[string]string {

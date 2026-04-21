@@ -274,6 +274,10 @@ func (s *Server) loadJobOrRespond(w http.ResponseWriter, r *http.Request, scanID
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
 		return nil, false
 	}
+	if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return nil, false
+	}
 	return job, true
 }
 

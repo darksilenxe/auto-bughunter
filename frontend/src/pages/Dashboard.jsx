@@ -26,6 +26,9 @@ export default function Dashboard() {
   const [useAttackPath, setUseAttackPath] = useState(false);
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(false);
   const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState("default");
+  const [policyPack, setPolicyPack] = useState("internal");
+  const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
 
   function handleBurpImport(cfg) {
     if (cfg.target)       setTarget(cfg.target);
@@ -57,6 +60,8 @@ export default function Dashboard() {
 
     startScan({
       target,
+      workspaceId,
+      programPolicyVersion: policyPack,
       authProfile: {
         headers, cookies,
         userAgent: userAgent || undefined,
@@ -73,6 +78,7 @@ export default function Dashboard() {
         useAttackPathAgent: useAttackPath,
         useFalsePositiveReview,
         useRemediationPlanner,
+        aggressiveExploitation,
       },
       scope: {
         includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
@@ -108,6 +114,18 @@ export default function Dashboard() {
             <input value={target} onChange={(e) => setTarget(e.target.value)}
               placeholder="https://example.com" required />
           </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+            <label>Workspace ID
+              <input value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} placeholder="default" />
+            </label>
+            <label>Policy Pack
+              <select value={policyPack} onChange={(e) => setPolicyPack(e.target.value)}>
+                <option value="internal">internal</option>
+                <option value="bugbounty">bugbounty</option>
+                <option value="regulated">regulated</option>
+              </select>
+            </label>
+          </div>
           <label>
             Auth Headers (JSON)
             <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
@@ -203,6 +221,10 @@ export default function Dashboard() {
             <label className="check">
               <input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />
               Remediation Planner
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />
+              Aggressive Exploitation Mode (Metasploit/Burp priority)
             </label>
           </div>
           <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>

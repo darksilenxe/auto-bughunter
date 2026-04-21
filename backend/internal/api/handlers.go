@@ -69,6 +69,7 @@ type Server struct {
 	eventBus      *EventBus
 	oast          *oast.Service
 	attackGraphDB AttackGraphStore
+	apiRateLimiter *apiRateLimiter
 }
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -156,6 +157,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:   scanTimeout,
 		eventBus:      NewEventBus(),
+		apiRateLimiter: newAPIRateLimiter(),
 	}
 }
 
@@ -181,9 +183,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
+	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
 	mux.HandleFunc("/api/oast/tokens", s.handleOASTTokens)
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
-	return withCORS(mux)
+	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
+	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
+	return withCORS(s.authMiddleware(s.rateLimitMiddleware(mux)))
 }
 
 // handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
@@ -236,6 +241,9 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]scanSummary, 0, len(jobs))
 	for _, j := range jobs {
 		if j == nil {
+			continue
+		}
+		if !canAccessWorkspace(r.Context(), j.WorkspaceID) {
 			continue
 		}
 		var high int
@@ -297,12 +305,18 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
 		return
 	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), strings.TrimSpace(req.WorkspaceID), "default")
+	if !canAccessWorkspace(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	idempotencyTarget := workspaceID + "::" + target
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.IdempotencyKey == "" {
 		req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
 	if req.IdempotencyKey != "" {
-		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, target, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
+		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, idempotencyTarget, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
 			writeJSON(w, http.StatusAccepted, map[string]string{"id": existing.ID, "status": existing.Status, "deduplicated": "true"})
 			return
 		}
@@ -313,6 +327,9 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	job := &model.ScanJob{
 		ID:                   jobID,
 		Target:               target,
+		WorkspaceID:          workspaceID,
+		RequestedBy:          requesterFromRequest(r),
+		PolicyPack:           defaultPolicyPack(),
 		Status:               "queued",
 		StartedAt:            now,
 		AuthProfileSummary:   model.SummarizeAuthProfile(req.AuthProfile),
@@ -327,9 +344,12 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IdempotencyKey != "" {
-		_ = s.repo.SaveIdempotencyRecord(r.Context(), req.IdempotencyKey, target, jobID, now)
+		_ = s.repo.SaveIdempotencyRecord(r.Context(), req.IdempotencyKey, idempotencyTarget, jobID, now)
 	}
 	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
+	if req.Options.AggressiveExploitation {
+		s.appendAuditEvent(jobID, "exploitation", "Aggressive exploitation mode enabled for deeper Metasploit/Burp validation")
+	}
 
 	go s.runJob(jobID, target, req.AuthProfile, req.AuthProfiles, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
@@ -359,6 +379,10 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 
 	if job == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
 	if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), id); err == nil && len(verifications) > 0 {
@@ -472,7 +496,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				s.appendAuditEvent(id, "asset-monitoring", fmt.Sprintf("Detected %d new assets", len(newAssets)))
 				if shouldTriggerEventDrivenRescan(options) {
 					s.appendAuditEvent(id, "scheduling", "Triggered event-driven deep rescan from asset change detection")
-					go s.scheduleRescan(target, authProfile, options, scanScope, 5*time.Minute)
+					go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, 5*time.Minute)
 				}
 			}
 		}
@@ -512,7 +536,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.ModelRecommendations.SecurityKnowledge = knowledgeCtx
 		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
-	policyGate := s.evaluatePolicyGate(job.Findings)
+	policyGate := s.evaluatePolicyGate(job.Findings, job.PolicyPack)
 	if strings.EqualFold(policyGate.Status, "blocked") {
 		job.Findings = append(job.Findings, model.Finding{
 			ID:          "policy-gate-blocked-release",
@@ -525,7 +549,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			Sources:     []string{"policy"},
 		})
 	}
-	openTickets, resolvedTickets := s.syncAutomationTickets(target, job.Findings)
+	ticketTarget := target
+	if strings.TrimSpace(job.WorkspaceID) != "" {
+		ticketTarget = job.WorkspaceID + "::" + target
+	}
+	openTickets, resolvedTickets := s.syncAutomationTickets(ticketTarget, job.Findings)
 	if openTickets > 0 || resolvedTickets > 0 {
 		job.Findings = append(job.Findings, model.Finding{
 			ID:          "automation-ticket-lifecycle",
@@ -571,7 +599,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
 		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
-		go s.scheduleRescan(target, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+		go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
 	}
 }
 
@@ -638,7 +666,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization,X-API-Key,X-Workspace-ID,Idempotency-Key")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -777,6 +805,10 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
 	if err := s.repo.SaveFeedback(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist feedback"})
 		return
@@ -807,6 +839,10 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
 	if err := s.repo.SaveFindingVerification(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
 		return
@@ -834,6 +870,7 @@ func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
+	req.CreatedBy = requesterFromRequest(r)
 	if err := s.repo.SaveSuppressionRule(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save suppression"})
 		return
@@ -934,11 +971,19 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Options.DeepScanOnHighSignal = true
 	req.Options.RescanIntervalMinutes = 0
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspace(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
 	job := &model.ScanJob{
 		ID:                 jobID,
 		Target:             target,
+		WorkspaceID:        workspaceID,
+		RequestedBy:        requesterFromRequest(r),
+		PolicyPack:         defaultPolicyPack(),
 		Status:             "queued",
 		StartedAt:          now,
 		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
@@ -972,10 +1017,12 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 
 	report := model.ExecutiveReport{
 		GeneratedAt:           time.Now().UTC(),
-		TotalCompletedScans:   len(jobs),
-		OpenAutomationTickets: len(openTickets),
 	}
 	for _, job := range jobs {
+		if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+			continue
+		}
+		report.TotalCompletedScans++
 		for _, finding := range job.Findings {
 			switch strings.ToLower(strings.TrimSpace(finding.DriftStatus)) {
 			case "new":
@@ -987,6 +1034,16 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			}
 			if finding.Severity == model.SeverityHigh || finding.Severity == model.SeverityMedium {
 				report.HighOrMediumFindings++
+			}
+		}
+	}
+	ws := workspaceFromRequest(r)
+	if ws == "" {
+		report.OpenAutomationTickets = len(openTickets)
+	} else {
+		for _, ticket := range openTickets {
+			if strings.HasPrefix(ticket.Target, ws+"::") {
+				report.OpenAutomationTickets++
 			}
 		}
 	}
@@ -1014,15 +1071,39 @@ func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	target := strings.TrimSpace(r.URL.Query().Get("target"))
+	if ws := workspaceFromRequest(r); ws != "" && target != "" {
+		target = ws + "::" + target
+	}
 	tickets, err := s.repo.ListOpenAutomationTickets(r.Context(), target, 200)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation tickets"})
 		return
 	}
+	if ws := workspaceFromRequest(r); ws != "" {
+		filtered := make([]model.AutomationTicket, 0, len(tickets))
+		for _, ticket := range tickets {
+			if strings.HasPrefix(ticket.Target, ws+"::") {
+				ticket.Target = strings.TrimPrefix(ticket.Target, ws+"::")
+				filtered = append(filtered, ticket)
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
+		return
+	}
 	writeJSON(w, http.StatusOK, tickets)
 }
 
-func (s *Server) evaluatePolicyGate(findings []model.Finding) model.PolicyGateResult {
+func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string) model.PolicyGateResult {
+	highBlock := s.gateHighBlock
+	medBlock := s.gateMedBlock
+	switch strings.ToLower(strings.TrimSpace(policyPack)) {
+	case "regulated":
+		highBlock = 0
+		medBlock = 1
+	case "bugbounty":
+		highBlock = maxInt(1, s.gateHighBlock)
+		medBlock = maxInt(2, s.gateMedBlock)
+	}
 	result := model.PolicyGateResult{
 		Status:      "pass",
 		GeneratedAt: time.Now().UTC(),
@@ -1036,11 +1117,11 @@ func (s *Server) evaluatePolicyGate(findings []model.Finding) model.PolicyGateRe
 			result.MediumCount++
 		}
 	}
-	if result.HighCount >= s.gateHighBlock || result.MediumCount >= s.gateMedBlock {
+	if result.HighCount >= highBlock || result.MediumCount >= medBlock {
 		result.Status = "blocked"
-		result.Reason = fmt.Sprintf("high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", result.HighCount, result.MediumCount, s.gateHighBlock, s.gateMedBlock)
+		result.Reason = fmt.Sprintf("policy_pack=%s high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", strings.TrimSpace(policyPack), result.HighCount, result.MediumCount, highBlock, medBlock)
 	} else {
-		result.Reason = "thresholds satisfied"
+		result.Reason = fmt.Sprintf("policy_pack=%s thresholds satisfied", strings.TrimSpace(policyPack))
 	}
 	return result
 }
@@ -2229,7 +2310,7 @@ func mergeActions(existing, extra []string) []string {
 	return out
 }
 
-func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {
+func (s *Server) scheduleRescan(target, workspaceID, requestedBy string, authProfile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, delay time.Duration) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	<-timer.C
@@ -2239,6 +2320,9 @@ func (s *Server) scheduleRescan(target string, authProfile model.ScanAuthProfile
 	job := &model.ScanJob{
 		ID:                 jobID,
 		Target:             target,
+		WorkspaceID:        workspaceID,
+		RequestedBy:        requestedBy,
+		PolicyPack:         defaultPolicyPack(),
 		Status:             "queued",
 		StartedAt:          now,
 		AuthProfileSummary: model.SummarizeAuthProfile(authProfile),

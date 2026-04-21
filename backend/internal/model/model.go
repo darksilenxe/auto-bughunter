@@ -82,6 +82,7 @@ type Exploitability struct {
 
 type ScanRequest struct {
 	Target               string              `json:"target"`
+	WorkspaceID          string              `json:"workspaceId,omitempty"`
 	IdempotencyKey       string              `json:"idempotencyKey,omitempty"`
 	AuthProfile          ScanAuthProfile     `json:"authProfile,omitempty"`
 	AuthProfiles         []RoleAuthProfile   `json:"authProfiles,omitempty"`
@@ -180,6 +181,10 @@ type ScanOptions struct {
 	// maxAttempts budget and gated by scope.IsURLInScope, so enabling
 	// this does not expand attack surface — only expressiveness.
 	WAFBypass bool `json:"wafBypass,omitempty"`
+	// AggressiveExploitation enables deeper exploit-validation paths by
+	// prioritizing exploitation-focused agents (Metasploit/Burp follow-ups)
+	// earlier in orchestration.
+	AggressiveExploitation bool `json:"aggressiveExploitation,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -194,6 +199,9 @@ type ScanScope struct {
 type ScanJob struct {
 	ID                   string                  `json:"id"`
 	Target               string                  `json:"target"`
+	WorkspaceID          string                  `json:"workspaceId,omitempty"`
+	RequestedBy          string                  `json:"requestedBy,omitempty"`
+	PolicyPack           string                  `json:"policyPack,omitempty"`
 	Status               string                  `json:"status"`
 	StartedAt            time.Time               `json:"startedAt"`
 	CompletedAt          *time.Time              `json:"completedAt,omitempty"`
@@ -215,6 +223,27 @@ type ScanJob struct {
 	ProgramName          string                  `json:"programName,omitempty"`
 	ProgramPolicyVersion string                  `json:"programPolicyVersion,omitempty"`
 	DisallowedTestTypes  []string                `json:"disallowedTestTypes,omitempty"`
+}
+
+type APIKeyRole string
+
+const (
+	APIKeyRoleAdmin   APIKeyRole = "admin"
+	APIKeyRoleTriager APIKeyRole = "triager"
+	APIKeyRoleAnalyst APIKeyRole = "analyst"
+	APIKeyRoleViewer  APIKeyRole = "viewer"
+)
+
+type APIKeyRecord struct {
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspaceId"`
+	Name        string     `json:"name"`
+	Role        APIKeyRole `json:"role"`
+	KeyPrefix   string     `json:"keyPrefix"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	RotatedAt   *time.Time `json:"rotatedAt,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	Active      bool       `json:"active"`
 }
 
 type AttackGraphData struct {

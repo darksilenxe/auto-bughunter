@@ -105,6 +105,9 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	} else {
 		output.Metadata["auth_mode"] = "unauthenticated"
 	}
+	if input.Options.AggressiveExploitation {
+		output.Metadata["aggressive_exploitation"] = "true"
+	}
 	output.DebugNotes = "Built-in security checks executed."
 	return output, nil
 }
