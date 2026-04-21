@@ -463,6 +463,8 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scan_states table: %w", err)
 	}
+	// Backward-compatible migration for deployments where scan_states already
+	// exists from older versions without autonomy_memory.
 	_, err = p.db.ExecContext(ctx, `
 		ALTER TABLE scan_states
 		ADD COLUMN IF NOT EXISTS autonomy_memory JSONB NOT NULL DEFAULT '{}'::jsonb

@@ -87,6 +87,12 @@ type AIPlanner struct {
 	MaxAgentsPerRound int
 }
 
+const (
+	minRunsBeforeAdaptiveBlock  = 2
+	minRunsForHighErrorBlock    = 3
+	highErrorRateBlockThreshold = 0.66
+)
+
 // NewAIPlanner constructs an AIPlanner. availableAgents should list every
 // agent name the factory can build; fallback is required.
 func NewAIPlanner(caller AIPlanCaller, availableAgents []string, fallback *StaticPlanner) *AIPlanner {
@@ -195,7 +201,12 @@ type agentRunStats struct {
 
 func computeAgentRunStats(history []AgentOutput) map[string]agentRunStats {
 	stats := map[string]agentRunStats{}
-	seen := map[string]struct{}{}
+	type findingKey struct {
+		Category string
+		Title    string
+		Evidence string
+	}
+	seen := map[findingKey]struct{}{}
 	for _, h := range history {
 		name := strings.TrimSpace(h.AgentName)
 		if name == "" {
@@ -211,7 +222,7 @@ func computeAgentRunStats(history []AgentOutput) map[string]agentRunStats {
 		}
 		cur.Findings += len(h.Findings)
 		for _, f := range h.Findings {
-			key := f.Category + ":" + f.Title + ":" + f.Evidence
+			key := findingKey{Category: f.Category, Title: f.Title, Evidence: f.Evidence}
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -232,7 +243,7 @@ func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMem
 		}
 	}
 	for name, st := range stats {
-		if st.Runs < 2 {
+		if st.Runs < minRunsBeforeAdaptiveBlock {
 			continue
 		}
 		errorRate := float64(st.Errors) / float64(st.Runs)
@@ -240,11 +251,20 @@ func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMem
 			blocked[name] = true
 			continue
 		}
-		if st.Runs >= 3 && errorRate >= 0.66 && st.NovelFindings == 0 {
+		if shouldBlockForHighErrorRate(st, errorRate) {
 			blocked[name] = true
 		}
 	}
 	return blocked
+}
+
+// shouldBlockForHighErrorRate suppresses an agent only when repeated runs show
+// mostly failures and no novelty, which indicates the agent is currently
+// expensive noise rather than a useful follow-up.
+func shouldBlockForHighErrorRate(st agentRunStats, errorRate float64) bool {
+	return st.Runs >= minRunsForHighErrorBlock &&
+		errorRate >= highErrorRateBlockThreshold &&
+		st.NovelFindings == 0
 }
 
 func isUrgentReason(reason string) bool {

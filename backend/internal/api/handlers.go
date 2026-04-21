@@ -84,6 +84,15 @@ const (
 	highROIMultiplierForDeepScan = 1.5
 	lowROICrawlFloorPages        = 40
 	lowROICrawlCeilingPages      = 120
+	// High-confidence findings are already filtered by confidence/severity and
+	// therefore counted as full novelty units while all findings contribute a
+	// smaller background signal.
+	autonomyNoveltyFindingWeight = 0.2
+	autonomyPreferredMinScore    = 2.0
+	autonomyPreferredMaxErrRate  = 0.5
+	autonomySuppressMinRuns      = 3
+	autonomySuppressErrRate      = 0.66
+	autonomySuppressTimeouts     = 2
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -3160,11 +3169,12 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 			continue
 		}
 		errorRate := float64(stat.Errors) / float64(stat.Runs)
-		noveltyScore := float64(stat.HighConfidenceFindings) + float64(stat.Findings)*0.2
-		if noveltyScore >= 2 && errorRate < 0.5 {
+		normalFindings := maxInt(0, stat.Findings-stat.HighConfidenceFindings)
+		noveltyScore := float64(stat.HighConfidenceFindings) + float64(normalFindings)*autonomyNoveltyFindingWeight
+		if noveltyScore >= autonomyPreferredMinScore && errorRate < autonomyPreferredMaxErrRate {
 			preferred = append(preferred, name)
 		}
-		if stat.Runs >= 3 && (stat.Findings == 0 || errorRate >= 0.66 || stat.Timeouts >= 2) {
+		if stat.Runs >= autonomySuppressMinRuns && (stat.Findings == 0 || errorRate >= autonomySuppressErrRate || stat.Timeouts >= autonomySuppressTimeouts) {
 			suppressed = append(suppressed, name)
 		}
 	}

@@ -156,7 +156,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		} else {
 			noNoveltyRounds = 0
 		}
-		if roundFailures >= len(decision.Agents) {
+		if roundFailures == len(decision.Agents) {
 			consecutiveFailureRounds++
 		} else {
 			consecutiveFailureRounds = 0
