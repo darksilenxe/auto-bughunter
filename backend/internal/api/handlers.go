@@ -238,6 +238,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
 	mux.HandleFunc("/api/proxy/settings", s.handleProxySettings)
 	mux.HandleFunc("/api/proxy/ca-certificate", s.handleProxyCACertificate)
+	mux.HandleFunc("/api/proxy/intruder", s.handleProxyIntruder)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
