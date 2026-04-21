@@ -897,8 +897,10 @@ func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, targe
 
 	for _, p := range paths {
 		probeURL := base + p
-		if err := validateMetasploitProbeTarget(probeURL); err != nil {
-			continue
+		if !envFlagTrue("ABH_ALLOW_LOCAL_TARGETS") {
+			if err := safety.ValidateOutboundURL(probeURL); err != nil {
+				continue
+			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
@@ -1320,8 +1322,10 @@ func probeGitConfigExposure(ctx context.Context, client *http.Client, target str
 	u.RawQuery = ""
 	base := strings.TrimRight(u.String(), "/")
 	probeURL := base + "/.git/config"
-	if err := validateMetasploitProbeTarget(probeURL); err != nil {
-		return nil
+	if !envFlagTrue("ABH_ALLOW_LOCAL_TARGETS") {
+		if err := safety.ValidateOutboundURL(probeURL); err != nil {
+			return nil
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
@@ -1596,6 +1600,10 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
 		},
 	}
+	// lessSafeModules are opt-in exploit modules that may have side effects
+	// (service instability, data mutation, or payload execution attempts).
+	// They are disabled by default and only enabled when
+	// MSF_RPC_ENABLE_LESS_SAFE_MODULES is explicitly true.
 	lessSafeModules := []struct {
 		name    string
 		options map[string]string
@@ -1690,11 +1698,11 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 	// Always logout to clean up the RPC session.
 	_ = msfLogout(ctx, client, rpcURL, token)
 
-	note := fmt.Sprintf("msfrpc: ran %d modules against %s:%s (less_safe=%t custom_loaded=%d)", ranModules, rhost, rport, allowLessSafe, customLoaded)
+	moduleExecutionNote := fmt.Sprintf("msfrpc: ran %d modules against %s:%s (less_safe=%t custom_loaded=%d)", ranModules, rhost, rport, allowLessSafe, customLoaded)
 	if customLoadErr != "" {
-		note += " template_error=" + customLoadErr
+		moduleExecutionNote += " template_error=" + customLoadErr
 	}
-	return findings, note
+	return findings, moduleExecutionNote
 }
 
 // msfAuth authenticates to msfrpcd and returns a session token.
