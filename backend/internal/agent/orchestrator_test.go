@@ -104,8 +104,8 @@ func TestOrchestratorEmitsLifecycleEvents(t *testing.T) {
 		"agent_start:b",
 		"agent_complete:b",
 	}
-	if len(got) < len(want) {
-		t.Fatalf("expected at least %d events, got %d (%v)", len(want), len(got), got)
+	if len(got) != len(want) {
+		t.Fatalf("expected %d events, got %d (%v)", len(want), len(got), got)
 	}
 	for i, expected := range want {
 		if got[i] != expected {

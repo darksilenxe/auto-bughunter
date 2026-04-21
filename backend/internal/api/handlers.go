@@ -749,10 +749,10 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewDynamicCommandAgent(true))
 	reg.Register(agent.NewToolBuilderAgent(true))
 
-	mlTriageEnabled := s.agentConfig.EnableMLTriageAgent && options.UseMLTriageAgent
-	attackPathEnabled := s.agentConfig.EnableAttackPathAgent && options.UseAttackPathAgent
-	falsePositiveEnabled := s.agentConfig.EnableFalsePositiveAgent && options.UseFalsePositiveReview
-	remediationEnabled := s.agentConfig.EnableRemediationAgent && options.UseRemediationPlanner
+	mlTriageEnabled := options.UseMLTriageAgent
+	attackPathEnabled := options.UseAttackPathAgent
+	falsePositiveEnabled := options.UseFalsePositiveReview
+	remediationEnabled := options.UseRemediationPlanner
 
 	reg.Register(agent.NewMLTriageAgent(s.mlService, mlTriageEnabled))
 	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
