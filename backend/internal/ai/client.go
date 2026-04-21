@@ -16,6 +16,10 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	// Optional larger coding-focused model for orchestration/planning calls.
+	CodingBaseURL string
+	CodingAPIKey  string
+	CodingModel   string
 	HTTP    *http.Client
 }
 
@@ -32,6 +36,32 @@ func NewClient(baseURL, apiKey, model string) *Client {
 		Model:   model,
 		HTTP:    &http.Client{Timeout: 20 * time.Second},
 	}
+}
+
+func (c *Client) ConfigureCodingModel(baseURL, apiKey, model string) {
+	if c == nil {
+		return
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		c.CodingBaseURL = ""
+		c.CodingAPIKey = ""
+		c.CodingModel = ""
+		return
+	}
+
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = c.BaseURL
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		apiKey = c.APIKey
+	}
+
+	c.CodingBaseURL = strings.TrimRight(baseURL, "/")
+	c.CodingAPIKey = apiKey
+	c.CodingModel = model
 }
 
 func (c *Client) Summarize(ctx context.Context, target string, findings []model.Finding) string {
@@ -106,10 +136,28 @@ func mustJSON(v any) string {
 }
 
 func (c *Client) shouldCallProvider() bool {
+	return shouldCallProviderFor(c.BaseURL, c.APIKey)
+}
+
+func (c *Client) planningProvider() (baseURL, apiKey, model string) {
+	baseURL = c.BaseURL
+	apiKey = c.APIKey
+	model = c.Model
+
+	if strings.TrimSpace(c.CodingModel) == "" {
+		return baseURL, apiKey, model
+	}
+	if shouldCallProviderFor(c.CodingBaseURL, c.CodingAPIKey) {
+		return c.CodingBaseURL, c.CodingAPIKey, c.CodingModel
+	}
+	return baseURL, apiKey, model
+}
+
+func shouldCallProviderFor(baseURL, apiKey string) bool {
 	// Keep OpenAI default behavior: require an API key.
 	const defaultOpenAIBase = "https://api.openai.com/v1"
-	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(c.BaseURL)), "/")
-	if strings.TrimSpace(c.APIKey) != "" {
+	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(baseURL)), "/")
+	if strings.TrimSpace(apiKey) != "" {
 		return true
 	}
 	return base != strings.ToLower(defaultOpenAIBase)

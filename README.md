@@ -83,6 +83,11 @@ Then set in `.env`:
 AI_API_BASE=http://ollama:11434/v1
 AI_MODEL=llama3.1:8b
 AI_API_KEY=
+# Optional larger coding-focused model used by the orchestration planner
+AI_CODING_MODEL=deepseek-coder:33b
+# Optional overrides (defaults to AI_API_BASE / AI_API_KEY when omitted)
+AI_CODING_API_BASE=
+AI_CODING_API_KEY=
 ```
 
 4. Open:
@@ -438,6 +443,7 @@ docker compose \
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
+- Set `AI_CODING_MODEL` to route AI orchestration/planning calls to a larger coding-focused model while keeping summaries on `AI_MODEL`.
 - ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
