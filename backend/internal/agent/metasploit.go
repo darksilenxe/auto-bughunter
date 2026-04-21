@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 )
 
@@ -803,6 +804,9 @@ func probeWebAssemblyModuleAbuse(ctx context.Context, client *http.Client, targe
 // probePHPUnitEvalStdinRCE probes exposed PHPUnit eval-stdin endpoint
 // (CVE-2017-9841) with a deterministic harmless echo marker.
 func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil
@@ -867,6 +871,9 @@ func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target s
 // probeGrafanaPluginTraversal checks for Grafana plugin path traversal exposure
 // (CVE-2021-43798) via known plugin asset traversal paths.
 func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil
@@ -922,6 +929,9 @@ func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, targe
 // probeVBulletinWidgetTemplateRCE probes vBulletin widget template rendering
 // endpoint (CVE-2019-16759) with a harmless marker echo payload.
 func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil
@@ -974,6 +984,13 @@ func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, t
 		}}
 	}
 	return nil
+}
+
+func validateMetasploitProbeTarget(target string) error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ABH_ALLOW_LOCAL_TARGETS")), "true") {
+		return nil
+	}
+	return safety.ValidateOutboundURL(target)
 }
 
 // ── Metasploit RPC ────────────────────────────────────────────────────────────

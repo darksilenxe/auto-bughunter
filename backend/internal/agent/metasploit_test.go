@@ -708,6 +708,7 @@ func TestProbeWebAssemblyModuleAbuse_ExploitableUpload(t *testing.T) {
 }
 
 func TestProbePHPUnitEvalStdinRCE_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php" {
 			w.WriteHeader(http.StatusOK)
@@ -729,6 +730,7 @@ func TestProbePHPUnitEvalStdinRCE_Detected(t *testing.T) {
 }
 
 func TestProbePHPUnitEvalStdinRCE_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -742,6 +744,7 @@ func TestProbePHPUnitEvalStdinRCE_NotDetected(t *testing.T) {
 }
 
 func TestProbeGrafanaPluginTraversal_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/public/plugins/alertlist/") {
 			w.WriteHeader(http.StatusOK)
@@ -763,6 +766,7 @@ func TestProbeGrafanaPluginTraversal_Detected(t *testing.T) {
 }
 
 func TestProbeGrafanaPluginTraversal_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -776,6 +780,7 @@ func TestProbeGrafanaPluginTraversal_NotDetected(t *testing.T) {
 }
 
 func TestProbeVBulletinWidgetTemplateRCE_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/ajax/render/widget_tabbedcontainer_tab_panel" {
 			w.WriteHeader(http.StatusOK)
@@ -797,6 +802,7 @@ func TestProbeVBulletinWidgetTemplateRCE_Detected(t *testing.T) {
 }
 
 func TestProbeVBulletinWidgetTemplateRCE_NotDetected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
