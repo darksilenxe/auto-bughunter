@@ -40,6 +40,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("metasploit", func() Agent { return NewMetasploitAgent(true) })
 	f.Register("burp", func() Agent { return NewBurpAgent(true) })
 	f.Register("wordlist", func() Agent { return NewWordlistAgent(true) })
+	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true) })
 	f.Register("analysis", func() Agent { return NewAnalysisAgent(true) })
 	f.Register("ml_triage", func() Agent { return NewMLTriageAgent(mlService, true) })
 	f.Register("attack_path", func() Agent { return NewAttackPathAgent(mlService, true) })

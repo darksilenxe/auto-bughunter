@@ -90,9 +90,9 @@ func main() {
 		os.Getenv("AI_MODEL"),
 	)
 	aiClient.ConfigureCodingModel(
-		os.Getenv("AI_CODING_API_BASE"),
-		os.Getenv("AI_CODING_API_KEY"),
-		os.Getenv("AI_CODING_MODEL"),
+		getenv("AI_CODING_API_BASE", ""),
+		getenv("AI_CODING_API_KEY", ""),
+		getenv("AI_CODING_MODEL", "codellama"),
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),

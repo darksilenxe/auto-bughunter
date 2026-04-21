@@ -15,7 +15,7 @@ const EMPTY_PROGRAM = {
 const DEFAULT_AI_CONFIG = {
   summaryModel: "phi3:mini",
   triageModel: "phi3:mini",
-  plannerModel: "phi3:mini",
+  plannerModel: "codellama",
   temperature: "0.2",
   plannerTemperature: "0.1",
   maxTokens: "1200",
@@ -326,7 +326,7 @@ export default function Settings() {
       <section className="card">
         <h2>Local AI Configuration</h2>
         <p className="meta">
-          The system uses a local Ollama instance (<code>phi3:mini</code> by default) for AI summaries and triage.
+          The system uses local Ollama models (<code>phi3:mini</code> by default for summaries/triage, with <code>codellama</code> for planner/coding assistance).
           No external API key is required. The model is downloaded automatically on first start.
         </p>
         <p className="meta">

@@ -84,10 +84,12 @@ AI_API_BASE=http://ollama:11434/v1
 AI_MODEL=llama3.1:8b
 AI_API_KEY=
 # Optional larger coding-focused model used by the orchestration planner
-AI_CODING_MODEL=deepseek-coder:33b
+AI_CODING_MODEL=codellama
 # Optional overrides (defaults to AI_API_BASE / AI_API_KEY when omitted)
 AI_CODING_API_BASE=
 AI_CODING_API_KEY=
+# Optional second local Ollama model pre-pulled on startup
+OLLAMA_SECONDARY_MODEL=codellama
 ```
 
 4. Open:
