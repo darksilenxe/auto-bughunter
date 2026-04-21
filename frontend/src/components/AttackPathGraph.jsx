@@ -163,6 +163,17 @@ export default function AttackPathGraph({ events = [], job = null }) {
     }
   }
 
+  // Some autonomous plans may execute downstream ML stages without emitting an
+  // explicit ml_triage lifecycle event; infer it so the pipeline remains
+  // visually continuous for operators.
+  if (nodeStates.ml_triage === undefined) {
+    const downstreamActive = ["attack_path", "false_positive_review", "remediation_planner"]
+      .some((name) => ["running", "complete", "failed"].includes(nodeStates[name]));
+    if (downstreamActive) {
+      nodeStates.ml_triage = job?.status === "running" ? "running" : "complete";
+    }
+  }
+
   // Build a mutable layout copy so we never mutate the module-level const.
   const layout = { ...LAYOUT };
   let dynamicY = 360;
