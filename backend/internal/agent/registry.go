@@ -31,9 +31,12 @@ type AgentInput struct {
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
 	Scope       model.ScanScope
-	Previous    AgentOutput
-	History     []AgentOutput
-	AllFindings []model.Finding
+	// AutonomyMemory persists target/workspace execution learnings that can
+	// guide scheduling decisions in future runs.
+	AutonomyMemory model.AutonomyMemory
+	Previous       AgentOutput
+	History        []AgentOutput
+	AllFindings    []model.Finding
 	// Emit is an optional callback for publishing live scan events to the event bus.
 	// Agents should use the package-level Emit helper to call it safely.
 	Emit Emitter
@@ -129,7 +132,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 
 	for i := 0; i < len(queue); i++ {
 		name := queue[i]
-		ag := r.agents[name]
+		ag := r.Get(name)
 		if ag == nil || !ag.Enabled() {
 			continue
 		}
@@ -213,7 +216,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 
 		candidates := r.orchestrate(ctx, ag.Name(), output, cumulativeFindings)
 		for _, spawned := range candidates {
-			if !seen[spawned] && !queuedSet[spawned] && r.agents[spawned] != nil {
+			if !seen[spawned] && !queuedSet[spawned] && r.Get(spawned) != nil {
 				queue = append(queue, spawned)
 				queuedSet[spawned] = true
 				Emit(input.Emit, model.ScanEvent{

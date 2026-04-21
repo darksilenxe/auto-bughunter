@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"strings"
+
+	"auto-bughunter/backend/internal/model"
 )
 
 // AgentSpec describes a single agent the planner has decided to run next.
@@ -79,9 +81,9 @@ type AIPlanCaller interface {
 // the supplied StaticPlanner when the provider is unavailable, returns an
 // error, or yields no actionable agents.
 type AIPlanner struct {
-	Caller          AIPlanCaller
-	AvailableAgents []string
-	Fallback        *StaticPlanner
+	Caller            AIPlanCaller
+	AvailableAgents   []string
+	Fallback          *StaticPlanner
 	MaxAgentsPerRound int
 }
 
@@ -128,11 +130,16 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	}
 
 	historySummary := make([]map[string]string, 0, len(history))
+	stats := computeAgentRunStats(history)
 	for _, h := range history {
 		historySummary = append(historySummary, map[string]string{
-			"agent":    h.AgentName,
-			"status":   h.Status,
-			"findings": itoa(len(h.Findings)),
+			"agent":      h.AgentName,
+			"status":     h.Status,
+			"findings":   itoa(len(h.Findings)),
+			"errors":     itoa(stats[h.AgentName].Errors),
+			"runs":       itoa(stats[h.AgentName].Runs),
+			"novelty":    itoa(stats[h.AgentName].NovelFindings),
+			"durationMs": itoa(int(h.DurationMs)),
 		})
 	}
 
@@ -148,6 +155,7 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	for _, name := range p.AvailableAgents {
 		available[name] = struct{}{}
 	}
+	blocked := buildBlockedAgents(stats, input.AutonomyMemory)
 
 	agents := make([]AgentSpec, 0, len(specs))
 	for _, s := range specs {
@@ -156,6 +164,9 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 			continue
 		}
 		if _, ok := available[name]; !ok {
+			continue
+		}
+		if blocked[name] && !isUrgentReason(s["reason"]) {
 			continue
 		}
 		agents = append(agents, AgentSpec{Name: name, Reason: strings.TrimSpace(s["reason"])})
@@ -172,6 +183,80 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	}
 
 	return PlannerDecision{Agents: agents, IsDone: done, Notes: "ai-planned"}, nil
+}
+
+type agentRunStats struct {
+	Runs          int
+	Errors        int
+	Timeouts      int
+	Findings      int
+	NovelFindings int
+}
+
+func computeAgentRunStats(history []AgentOutput) map[string]agentRunStats {
+	stats := map[string]agentRunStats{}
+	seen := map[string]struct{}{}
+	for _, h := range history {
+		name := strings.TrimSpace(h.AgentName)
+		if name == "" {
+			continue
+		}
+		cur := stats[name]
+		cur.Runs++
+		if h.Status == "error" || strings.TrimSpace(h.Error) != "" {
+			cur.Errors++
+		}
+		if h.TimedOut {
+			cur.Timeouts++
+		}
+		cur.Findings += len(h.Findings)
+		for _, f := range h.Findings {
+			key := f.Category + ":" + f.Title + ":" + f.Evidence
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			cur.NovelFindings++
+		}
+		stats[name] = cur
+	}
+	return stats
+}
+
+func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMemory) map[string]bool {
+	blocked := map[string]bool{}
+	for _, name := range memory.SuppressedAgents {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			blocked[name] = true
+		}
+	}
+	for name, st := range stats {
+		if st.Runs < 2 {
+			continue
+		}
+		errorRate := float64(st.Errors) / float64(st.Runs)
+		if st.Findings == 0 && (st.Errors > 0 || st.Timeouts > 0) {
+			blocked[name] = true
+			continue
+		}
+		if st.Runs >= 3 && errorRate >= 0.66 && st.NovelFindings == 0 {
+			blocked[name] = true
+		}
+	}
+	return blocked
+}
+
+func isUrgentReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	if reason == "" {
+		return false
+	}
+	return strings.Contains(reason, "critical") ||
+		strings.Contains(reason, "high") ||
+		strings.Contains(reason, "rce") ||
+		strings.Contains(reason, "exploit") ||
+		strings.Contains(reason, "auth")
 }
 
 func itoa(n int) string {

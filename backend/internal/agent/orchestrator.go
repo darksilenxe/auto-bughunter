@@ -16,9 +16,11 @@ import (
 // dynamically spawn agents in response to discoveries (e.g. running a second
 // scanning pass after recon reveals a new attack surface).
 type Orchestrator struct {
-	Planner   Planner
-	Factory   *Factory
-	MaxRounds int
+	Planner                     Planner
+	Factory                     *Factory
+	MaxRounds                   int
+	MaxNoNoveltyRounds          int
+	MaxConsecutiveFailureRounds int
 }
 
 // NewOrchestrator constructs an Orchestrator. maxRounds bounds the number of
@@ -29,7 +31,13 @@ func NewOrchestrator(planner Planner, factory *Factory, maxRounds int) *Orchestr
 	if maxRounds <= 0 {
 		maxRounds = 10
 	}
-	return &Orchestrator{Planner: planner, Factory: factory, MaxRounds: maxRounds}
+	return &Orchestrator{
+		Planner:                     planner,
+		Factory:                     factory,
+		MaxRounds:                   maxRounds,
+		MaxNoNoveltyRounds:          2,
+		MaxConsecutiveFailureRounds: 2,
+	}
 }
 
 // Run executes the autonomous loop and returns the per-agent outputs together
@@ -41,6 +49,8 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 
 	outputs := make([]AgentOutput, 0)
 	allFindings := make([]model.Finding, 0)
+	noNoveltyRounds := 0
+	consecutiveFailureRounds := 0
 
 	for round := 0; round < o.MaxRounds; round++ {
 		select {
@@ -64,6 +74,8 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		if decision.IsDone || len(decision.Agents) == 0 {
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
+		beforeCount := len(combineFindingsWithDedup(allFindings))
+		roundFailures := 0
 
 		for _, spec := range decision.Agents {
 			select {
@@ -106,6 +118,9 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				output.Error = runErr.Error()
 				output.TimedOut = strings.Contains(strings.ToLower(runErr.Error()), "deadline exceeded")
 			}
+			if output.Status == "error" || output.TimedOut {
+				roundFailures++
+			}
 			if output.AgentName == "" {
 				output.AgentName = agent.Name()
 			}
@@ -133,6 +148,24 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			}
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
+		}
+
+		afterCount := len(combineFindingsWithDedup(allFindings))
+		if afterCount <= beforeCount {
+			noNoveltyRounds++
+		} else {
+			noNoveltyRounds = 0
+		}
+		if roundFailures >= len(decision.Agents) {
+			consecutiveFailureRounds++
+		} else {
+			consecutiveFailureRounds = 0
+		}
+		if o.MaxNoNoveltyRounds > 0 && noNoveltyRounds >= o.MaxNoNoveltyRounds {
+			return outputs, combineFindingsWithDedup(allFindings), nil
+		}
+		if o.MaxConsecutiveFailureRounds > 0 && consecutiveFailureRounds >= o.MaxConsecutiveFailureRounds {
+			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
 	}
 

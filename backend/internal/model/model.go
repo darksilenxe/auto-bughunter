@@ -479,10 +479,28 @@ type ExecutiveReport struct {
 }
 
 type PersistentScanState struct {
-	Target                string    `json:"target"`
-	LastUpdatedAt         time.Time `json:"lastUpdatedAt"`
-	SessionInstability    int       `json:"sessionInstability"`
-	KnownRuntimeEndpoints []string  `json:"knownRuntimeEndpoints,omitempty"`
+	Target                string         `json:"target"`
+	LastUpdatedAt         time.Time      `json:"lastUpdatedAt"`
+	SessionInstability    int            `json:"sessionInstability"`
+	KnownRuntimeEndpoints []string       `json:"knownRuntimeEndpoints,omitempty"`
+	AutonomyMemory        AutonomyMemory `json:"autonomyMemory,omitempty"`
+}
+
+type AutonomyMemory struct {
+	PreferredAgents   []string                     `json:"preferredAgents,omitempty"`
+	SuppressedAgents  []string                     `json:"suppressedAgents,omitempty"`
+	LastAgentSequence []string                     `json:"lastAgentSequence,omitempty"`
+	AgentStats        map[string]AutonomyAgentStat `json:"agentStats,omitempty"`
+	LastRunAt         time.Time                    `json:"lastRunAt,omitempty"`
+}
+
+type AutonomyAgentStat struct {
+	Runs                   int     `json:"runs,omitempty"`
+	Errors                 int     `json:"errors,omitempty"`
+	Timeouts               int     `json:"timeouts,omitempty"`
+	Findings               int     `json:"findings,omitempty"`
+	HighConfidenceFindings int     `json:"highConfidenceFindings,omitempty"`
+	YieldPerMinute         float64 `json:"yieldPerMinute,omitempty"`
 }
 
 type ModelRecommendations struct {

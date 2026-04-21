@@ -49,3 +49,40 @@ func containsAgentName(items []string, want string) bool {
 	}
 	return false
 }
+
+type registryTestAgent struct {
+	name     string
+	enabled  bool
+	findings []model.Finding
+}
+
+func (a *registryTestAgent) Name() string  { return a.name }
+func (a *registryTestAgent) Enabled() bool { return a.enabled }
+func (a *registryTestAgent) Run(context.Context, AgentInput) (AgentOutput, error) {
+	return AgentOutput{AgentName: a.name, Findings: append([]model.Finding(nil), a.findings...)}, nil
+}
+
+func TestRunAllSpawnsFactoryOnlyAgents(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&registryTestAgent{
+		name:    "scanning",
+		enabled: true,
+		findings: []model.Finding{
+			{Category: "ssrf", Severity: model.SeverityMedium, Title: "SSRF indicator", Evidence: "param=fetch"},
+		},
+	})
+	r.RegisterFactory(newTestFactory(map[string]Agent{
+		"ssrf": &registryTestAgent{name: "ssrf", enabled: true},
+	}))
+
+	outputs, _, err := r.RunAll(context.Background(), AgentInput{Target: "https://example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected scanning + spawned ssrf outputs, got %d", len(outputs))
+	}
+	if outputs[1].AgentName != "ssrf" {
+		t.Fatalf("expected spawned ssrf agent via factory, got %+v", outputs[1])
+	}
+}

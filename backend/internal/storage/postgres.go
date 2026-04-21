@@ -456,11 +456,19 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			target TEXT PRIMARY KEY,
 			last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			session_instability INTEGER NOT NULL DEFAULT 0,
-			known_runtime_endpoints JSONB NOT NULL DEFAULT '[]'::jsonb
+			known_runtime_endpoints JSONB NOT NULL DEFAULT '[]'::jsonb,
+			autonomy_memory JSONB NOT NULL DEFAULT '{}'::jsonb
 		)
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate scan_states table: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		ALTER TABLE scan_states
+		ADD COLUMN IF NOT EXISTS autonomy_memory JSONB NOT NULL DEFAULT '{}'::jsonb
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_states.autonomy_memory column: %w", err)
 	}
 	_, err = p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_idempotency (
@@ -1158,13 +1166,14 @@ func (p *Postgres) ListActiveSuppressionRules(ctx context.Context, target string
 
 func (p *Postgres) GetScanState(ctx context.Context, target string) (*model.PersistentScanState, error) {
 	row := p.db.QueryRowContext(ctx, `
-		SELECT target, last_updated_at, session_instability, known_runtime_endpoints
+		SELECT target, last_updated_at, session_instability, known_runtime_endpoints, autonomy_memory
 		FROM scan_states
 		WHERE target = $1
 	`, target)
 	var state model.PersistentScanState
 	var endpointsRaw []byte
-	if err := row.Scan(&state.Target, &state.LastUpdatedAt, &state.SessionInstability, &endpointsRaw); err != nil {
+	var autonomyRaw []byte
+	if err := row.Scan(&state.Target, &state.LastUpdatedAt, &state.SessionInstability, &endpointsRaw, &autonomyRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1172,6 +1181,9 @@ func (p *Postgres) GetScanState(ctx context.Context, target string) (*model.Pers
 	}
 	if len(endpointsRaw) > 0 {
 		_ = json.Unmarshal(endpointsRaw, &state.KnownRuntimeEndpoints)
+	}
+	if len(autonomyRaw) > 0 {
+		_ = json.Unmarshal(autonomyRaw, &state.AutonomyMemory)
 	}
 	return &state, nil
 }
@@ -1181,14 +1193,19 @@ func (p *Postgres) UpsertScanState(ctx context.Context, state model.PersistentSc
 	if err != nil {
 		return err
 	}
+	autonomyJSON, err := json.Marshal(state.AutonomyMemory)
+	if err != nil {
+		return err
+	}
 	_, err = p.db.ExecContext(ctx, `
-		INSERT INTO scan_states (target, last_updated_at, session_instability, known_runtime_endpoints)
-		VALUES ($1,$2,$3,$4)
+		INSERT INTO scan_states (target, last_updated_at, session_instability, known_runtime_endpoints, autonomy_memory)
+		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (target) DO UPDATE
 		SET last_updated_at = EXCLUDED.last_updated_at,
 			session_instability = EXCLUDED.session_instability,
-			known_runtime_endpoints = EXCLUDED.known_runtime_endpoints
-	`, state.Target, state.LastUpdatedAt, state.SessionInstability, endpointsJSON)
+			known_runtime_endpoints = EXCLUDED.known_runtime_endpoints,
+			autonomy_memory = EXCLUDED.autonomy_memory
+	`, state.Target, state.LastUpdatedAt, state.SessionInstability, endpointsJSON, autonomyJSON)
 	if err != nil {
 		return fmt.Errorf("upsert scan state: %w", err)
 	}

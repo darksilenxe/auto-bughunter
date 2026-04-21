@@ -495,7 +495,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, emit)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
@@ -646,7 +646,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		})
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
-	s.persistScanState(target, job.Findings)
+	s.persistScanState(target, job.Findings, outputs)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -2377,15 +2377,20 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
-	input := agent.AgentInput{
-		Target:      target,
-		AuthProfile: authProfile,
-		Options:     options,
-		Scope:       scanScope,
-		Emit:        emit,
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, persistedState *model.PersistentScanState, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
+	autonomyMemory := model.AutonomyMemory{}
+	if persistedState != nil {
+		autonomyMemory = persistedState.AutonomyMemory
 	}
-	outputs, findings, err := s.newRegistry(options).RunAll(ctx, input)
+	input := agent.AgentInput{
+		Target:         target,
+		AuthProfile:    authProfile,
+		Options:        options,
+		Scope:          scanScope,
+		AutonomyMemory: autonomyMemory,
+		Emit:           emit,
+	}
+	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -2397,7 +2402,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.newRegistry(options).RunAll(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.runAgents(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue
@@ -2425,14 +2430,14 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 // the findings observed so far. Otherwise it falls back to the static
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
-	if !s.autonomous || s.agentFactory == nil {
+	if s.agentFactory == nil {
 		return s.agentRegistry.RunAll(ctx, input)
 	}
 	available := s.agentFactory.Names()
 	staticOrder := s.agentRegistry.Order()
 	fallback := agent.NewStaticPlanner(staticOrder)
 	var planner agent.Planner = fallback
-	if s.aiClient != nil {
+	if s.autonomous && s.aiClient != nil {
 		planner = agent.NewAIPlanner(s.aiClient, available, fallback)
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
@@ -3081,10 +3086,16 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 	return out
 }
 
-func (s *Server) persistScanState(target string, findings []model.Finding) {
+func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput) {
+	prev, _ := s.repo.GetScanState(context.Background(), target)
 	state := model.PersistentScanState{
 		Target:        target,
 		LastUpdatedAt: time.Now().UTC(),
+	}
+	if prev != nil {
+		state.SessionInstability = prev.SessionInstability
+		state.KnownRuntimeEndpoints = append([]string(nil), prev.KnownRuntimeEndpoints...)
+		state.AutonomyMemory = prev.AutonomyMemory
 	}
 	refs := make([]string, 0)
 	for _, f := range findings {
@@ -3101,8 +3112,67 @@ func (s *Server) persistScanState(target string, findings []model.Finding) {
 		}
 	}
 	sort.Strings(refs)
-	state.KnownRuntimeEndpoints = limitStrings(mergeActions(nil, refs), 25)
+	state.KnownRuntimeEndpoints = limitStrings(mergeActions(state.KnownRuntimeEndpoints, refs), 25)
+	state.AutonomyMemory = mergeAutonomyMemory(state.AutonomyMemory, outputs)
 	_ = s.repo.UpsertScanState(context.Background(), state)
+}
+
+func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput) model.AutonomyMemory {
+	if memory.AgentStats == nil {
+		memory.AgentStats = map[string]model.AutonomyAgentStat{}
+	}
+	sequence := make([]string, 0, len(outputs))
+	for _, out := range outputs {
+		name := strings.TrimSpace(out.AgentName)
+		if name == "" {
+			continue
+		}
+		sequence = append(sequence, name)
+		stat := memory.AgentStats[name]
+		stat.Runs++
+		if out.Status == "error" || strings.TrimSpace(out.Error) != "" {
+			stat.Errors++
+		}
+		if out.TimedOut {
+			stat.Timeouts++
+		}
+		stat.Findings += len(out.Findings)
+		for _, f := range out.Findings {
+			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh {
+				stat.HighConfidenceFindings++
+			}
+		}
+		if out.DurationMs > 0 {
+			minutes := float64(out.DurationMs) / 60000.0
+			if minutes > 0 {
+				stat.YieldPerMinute = maxFloat(stat.YieldPerMinute, float64(len(out.Findings))/minutes)
+			}
+		}
+		memory.AgentStats[name] = stat
+	}
+	memory.LastAgentSequence = limitStrings(sequence, 20)
+	memory.LastRunAt = time.Now().UTC()
+
+	preferred := make([]string, 0)
+	suppressed := make([]string, 0)
+	for name, stat := range memory.AgentStats {
+		if stat.Runs == 0 {
+			continue
+		}
+		errorRate := float64(stat.Errors) / float64(stat.Runs)
+		noveltyScore := float64(stat.HighConfidenceFindings) + float64(stat.Findings)*0.2
+		if noveltyScore >= 2 && errorRate < 0.5 {
+			preferred = append(preferred, name)
+		}
+		if stat.Runs >= 3 && (stat.Findings == 0 || errorRate >= 0.66 || stat.Timeouts >= 2) {
+			suppressed = append(suppressed, name)
+		}
+	}
+	sort.Strings(preferred)
+	sort.Strings(suppressed)
+	memory.PreferredAgents = limitStrings(preferred, 8)
+	memory.SuppressedAgents = limitStrings(suppressed, 8)
+	return memory
 }
 
 func (s *Server) notifyFindings(job *model.ScanJob) {
