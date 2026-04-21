@@ -8,11 +8,87 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/report"
 )
+
+// applyStrictReportingFilter filters job.Findings down to those whose
+// Confidence meets the configured floor when StrictReporting is enabled.
+// The mutation is local — callers receive a copy of the job with the
+// filtered findings and a "strictMode.suppressed" annotation in
+// AdditionalContext so report renderers can surface the reduction in noise.
+// Query-string overrides (?strict=true&minConfidence=0.85) take precedence
+// over the values stored on job.Options so operators can experiment without
+// mutating persisted scan options.
+func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.ScanJob, int, float64, bool) {
+	if job == nil {
+		return job, 0, 0, false
+	}
+	strict := job.Options.StrictReporting
+	threshold := job.Options.MinReportConfidence
+	if r != nil {
+		q := r.URL.Query()
+		if raw := strings.TrimSpace(q.Get("strict")); raw != "" {
+			switch strings.ToLower(raw) {
+			case "1", "true", "yes", "on":
+				strict = true
+			case "0", "false", "no", "off":
+				strict = false
+			}
+		}
+		if raw := strings.TrimSpace(q.Get("minConfidence")); raw != "" {
+			if v, err := strconv.ParseFloat(raw, 64); err == nil {
+				threshold = v
+			}
+		}
+	}
+	if !strict {
+		return job, 0, threshold, false
+	}
+	if threshold <= 0 {
+		threshold = 0.75
+	}
+	if threshold > 1 {
+		threshold = 1
+	}
+	clone := *job
+	filtered := make([]model.Finding, 0, len(job.Findings))
+	suppressed := 0
+	for _, f := range job.Findings {
+		// Always retain governance/operations sentinels and high-severity
+		// findings that have already been verified, even if their nominal
+		// confidence is low — strict mode is meant to suppress noisy
+		// uncorroborated low-confidence chatter, not authoritative signal.
+		if isStrictReportingExempt(f) {
+			filtered = append(filtered, f)
+			continue
+		}
+		if f.Confidence >= threshold {
+			filtered = append(filtered, f)
+			continue
+		}
+		suppressed++
+	}
+	clone.Findings = filtered
+	return &clone, suppressed, threshold, true
+}
+
+func isStrictReportingExempt(f model.Finding) bool {
+	switch strings.ToLower(strings.TrimSpace(f.Category)) {
+	case "governance", "operations":
+		return true
+	}
+	if f.Exploitability != nil {
+		switch strings.ToLower(strings.TrimSpace(f.Exploitability.VerifiedStatus)) {
+		case "verified", "confirmed":
+			return true
+		}
+	}
+	return false
+}
 
 // handleScanReport multiplexes all `/api/report/...` requests onto the
 // appropriate concrete handler based on the URL suffix.
@@ -70,6 +146,13 @@ func (s *Server) serveMainReport(w http.ResponseWriter, r *http.Request, scanID 
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+
+	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r)
+	if strictApplied {
+		w.Header().Set("X-Strict-Reporting", "true")
+		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))
+		w.Header().Set("X-Strict-Reporting-Suppressed", fmt.Sprintf("%d", suppressed))
 	}
 
 	ctx := s.buildReportContext(r, job)
@@ -249,6 +332,12 @@ func (s *Server) serveBugBountyZip(w http.ResponseWriter, r *http.Request, scanI
 	job, ok := s.loadJobOrRespond(w, r, scanID)
 	if !ok {
 		return
+	}
+	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r)
+	if strictApplied {
+		w.Header().Set("X-Strict-Reporting", "true")
+		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))
+		w.Header().Set("X-Strict-Reporting-Suppressed", fmt.Sprintf("%d", suppressed))
 	}
 	zipBytes, err := report.RenderBugBountyZip(job)
 	if err != nil {

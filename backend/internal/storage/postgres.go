@@ -435,6 +435,14 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate finding_verifications table: %w", err)
 	}
+	// Additive migration: add owner column for finding lifecycle ownership
+	// transitions. Older deployments may not have this column.
+	_, err = p.db.ExecContext(ctx, `
+		ALTER TABLE finding_verifications ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT ''
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate finding_verifications.owner column: %w", err)
+	}
 	_, err = p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS suppression_rules (
 			id TEXT PRIMARY KEY,
@@ -1119,9 +1127,9 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 
 func (p *Postgres) SaveFindingVerification(ctx context.Context, verification model.FindingVerification) error {
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO finding_verifications (id, scan_id, finding_id, status, notes, verified_by, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
-	`, verification.ID, verification.ScanID, verification.FindingID, verification.Status, verification.Notes, verification.VerifiedBy, verification.CreatedAt)
+		INSERT INTO finding_verifications (id, scan_id, finding_id, status, notes, verified_by, owner, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+	`, verification.ID, verification.ScanID, verification.FindingID, verification.Status, verification.Notes, verification.VerifiedBy, verification.Owner, verification.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert finding verification: %w", err)
 	}
@@ -1130,7 +1138,7 @@ func (p *Postgres) SaveFindingVerification(ctx context.Context, verification mod
 
 func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID string) (map[string]model.FindingVerification, error) {
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT DISTINCT ON (finding_id) id, scan_id, finding_id, status, notes, verified_by, created_at
+		SELECT DISTINCT ON (finding_id) id, scan_id, finding_id, status, notes, verified_by, owner, created_at
 		FROM finding_verifications
 		WHERE scan_id = $1
 		ORDER BY finding_id, created_at DESC
@@ -1142,7 +1150,7 @@ func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID str
 	out := map[string]model.FindingVerification{}
 	for rows.Next() {
 		var v model.FindingVerification
-		if err := rows.Scan(&v.ID, &v.ScanID, &v.FindingID, &v.Status, &v.Notes, &v.VerifiedBy, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ScanID, &v.FindingID, &v.Status, &v.Notes, &v.VerifiedBy, &v.Owner, &v.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan finding verification row: %w", err)
 		}
 		out[v.FindingID] = v

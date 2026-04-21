@@ -220,6 +220,14 @@ type ScanOptions struct {
 	AutonomyTenantTier               string   `json:"autonomyTenantTier,omitempty"`
 	AutonomyMaxRoundCostUnits        int      `json:"autonomyMaxRoundCostUnits,omitempty"`
 	AutonomyCostWeight               float64  `json:"autonomyCostWeight,omitempty"`
+	// StrictReporting filters low-confidence findings out of generated
+	// reports (and the JSON scan view) so noisy output can be measurably
+	// reduced per workspace/program. MinReportConfidence is the floor
+	// applied when strict reporting is enabled (0.0 = disabled, 1.0 = only
+	// fully corroborated findings). When zero, a workspace default of
+	// 0.75 is applied.
+	StrictReporting     bool    `json:"strictReporting,omitempty"`
+	MinReportConfidence float64 `json:"minReportConfidence,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -319,10 +327,22 @@ type FindingVerification struct {
 	ScanID     string    `json:"scanId"`
 	FindingID  string    `json:"findingId"`
 	Status     string    `json:"status"`
+	Owner      string    `json:"owner,omitempty"`
 	Notes      string    `json:"notes,omitempty"`
 	VerifiedBy string    `json:"verifiedBy,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
+
+// FindingLifecycleStates lists the canonical lifecycle state machine for
+// findings. Transitions are validated by api.isAllowedFindingTransition.
+//
+//	new -> verified | rejected | suppressed
+//	verified -> accepted | suppressed | remediated
+//	rejected -> verified                        (re-open)
+//	accepted -> remediated | suppressed
+//	suppressed -> verified                       (re-open)
+//	remediated -> verified                       (regression detected)
+var FindingLifecycleStates = []string{"new", "verified", "rejected", "accepted", "suppressed", "remediated"}
 
 type SuppressionRule struct {
 	ID        string     `json:"id"`
@@ -337,12 +357,13 @@ type SuppressionRule struct {
 }
 
 type PolicyGateResult struct {
-	Status          string    `json:"status"`
-	Reason          string    `json:"reason,omitempty"`
-	BlockedFindings []string  `json:"blockedFindings,omitempty"`
-	HighCount       int       `json:"highCount"`
-	MediumCount     int       `json:"mediumCount"`
-	GeneratedAt     time.Time `json:"generatedAt"`
+	Status                     string    `json:"status"`
+	Reason                     string    `json:"reason,omitempty"`
+	BlockedFindings            []string  `json:"blockedFindings,omitempty"`
+	UncorroboratedHighFindings []string  `json:"uncorroboratedHighFindings,omitempty"`
+	HighCount                  int       `json:"highCount"`
+	MediumCount                int       `json:"mediumCount"`
+	GeneratedAt                time.Time `json:"generatedAt"`
 }
 
 type AutomationTicket struct {
@@ -576,7 +597,17 @@ type AutomationMetrics struct {
 	Alerts                []string           `json:"alerts,omitempty"`
 	CanaryPercentByPolicy map[string]int     `json:"canaryPercentByPolicy,omitempty"`
 	RollbackEventsRecent  int                `json:"rollbackEventsRecent,omitempty"`
-	Extra                 map[string]float64 `json:"extra,omitempty"`
+	// FalsePositiveRate is the fraction of operator-verified findings that
+	// were marked "rejected" (or "suppressed") versus the total number of
+	// verified findings across recent jobs in the workspace. It is the
+	// ground-truth measurement used to track strict-mode false-positive
+	// reduction.
+	FalsePositiveRate            float64 `json:"falsePositiveRate"`
+	VerifiedFindingsSampled      int     `json:"verifiedFindingsSampled,omitempty"`
+	StrictReportingSuppressed    int     `json:"strictReportingSuppressed,omitempty"`
+	StrictReportingScansSampled  int     `json:"strictReportingScansSampled,omitempty"`
+	StrictReportingSuppressRate  float64 `json:"strictReportingSuppressRate,omitempty"`
+	Extra                        map[string]float64 `json:"extra,omitempty"`
 }
 
 type ProgramROIOverride struct {
