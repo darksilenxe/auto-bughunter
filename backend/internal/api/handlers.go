@@ -2480,7 +2480,11 @@ func resolveCampaignNextRunAfterDispatch(now time.Time, c model.AutomationCampai
 		anchor = c.NextRunAt
 	}
 	next := computeNextCampaignRun(anchor, req)
+	cutoff := now.Add(7 * 24 * time.Hour)
 	for i := 0; i < 512 && !next.After(now); i++ {
+		if next.After(cutoff) {
+			return computeNextCampaignRun(now, req)
+		}
 		anchor = next
 		next = computeNextCampaignRun(anchor, req)
 	}

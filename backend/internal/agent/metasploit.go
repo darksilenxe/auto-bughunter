@@ -897,10 +897,8 @@ func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, targe
 
 	for _, p := range paths {
 		probeURL := base + p
-		if !envFlagTrue("ABH_ALLOW_LOCAL_TARGETS") {
-			if err := safety.ValidateOutboundURL(probeURL); err != nil {
-				continue
-			}
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
