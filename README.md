@@ -266,7 +266,17 @@ Persistent recurring campaign scheduler for unattended operation.
 - `GET /api/automation/campaigns?activeOnly=true` lists campaigns for the caller workspace.
 - `POST/PUT` upserts a campaign (`target`, `intervalMin`, optional auth/options/scope).
 - `POST/PUT` also supports `scheduleType` (`interval|daily|weekly`), `scheduleValue`, `runWindow`, `blackoutWindows`, and `maxAttempts` for safer unattended dispatch.
+- Active campaign upserts require `authorizationApproval` (`approvedBy`, `approverRole`, `approvedAt`, `signature`) plus at least one `authorizationEvidence` record (`type`, `label`, `uri` and/or `sha256`).
 - `DELETE /api/automation/campaigns?id=<campaign-id>` deletes a campaign.
+
+### `GET /api/automation/campaign-authorization-export?id=<campaign-id>`
+
+Returns an immutable authorization evidence bundle for a campaign, including:
+
+- signed approval metadata
+- normalized evidence records
+- `authorizationDigest` (stable SHA-256 digest over campaign authorization payload)
+- `exportHash` (SHA-256 digest of the exported bundle)
 
 ### `GET|POST /api/automation/roi-overrides`
 
