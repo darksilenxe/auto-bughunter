@@ -1,0 +1,26 @@
+[
+  {
+    "name": "auxiliary/scanner/http/apache_normalize_path",
+    "title": "Example safe scanner module",
+    "cve": "CVE-2021-41773",
+    "lessSafe": false,
+    "options": {
+      "RHOSTS": "{{RHOSTS}}",
+      "RPORT": "{{RPORT}}",
+      "SSL": "{{SSL}}",
+      "TARGETURI": "{{TARGETURI}}"
+    }
+  },
+  {
+    "name": "exploit/multi/http/struts2_content_type_ognl",
+    "title": "Example less-safe module (only runs when MSF_RPC_ENABLE_LESS_SAFE_MODULES=true)",
+    "cve": "CVE-2017-5638",
+    "lessSafe": true,
+    "options": {
+      "RHOSTS": "{{RHOSTS}}",
+      "RPORT": "{{RPORT}}",
+      "SSL": "{{SSL}}",
+      "TARGETURI": "/"
+    }
+  }
+]

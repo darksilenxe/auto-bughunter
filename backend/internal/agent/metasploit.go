@@ -39,7 +39,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 21
+const metasploitNativeProbeCount = 23
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -94,6 +94,8 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeCiscoASAPathTraversal(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeFortinetSSLVPNFileRead(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeDotEnvFileExposure(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeGitConfigExposure(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -1256,6 +1258,105 @@ func probeFortinetSSLVPNFileRead(ctx context.Context, client *http.Client, targe
 	return nil
 }
 
+// probeDotEnvFileExposure checks for accidental disclosure of environment files.
+func probeDotEnvFileExposure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{"/.env", "/app/.env", "/config/.env"}
+
+	for _, p := range paths {
+		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyStr := strings.ToLower(string(body))
+		if resp.StatusCode == http.StatusOK &&
+			(strings.Contains(bodyStr, "app_key=") ||
+				strings.Contains(bodyStr, "database_url=") ||
+				strings.Contains(bodyStr, "aws_secret_access_key")) {
+			return []model.Finding{{
+				ID:          "msf-dotenv-file-exposure",
+				Category:    "information_disclosure",
+				Severity:    model.SeverityHigh,
+				Title:       "Exposed .env file detected",
+				Description: "The application appears to expose an environment file containing sensitive runtime configuration and credentials.",
+				Evidence:    fmt.Sprintf("path=%s status=%d sensitive_markers_detected=true", p, resp.StatusCode),
+				Recommendation: "Block public access to .env files at the web server layer, rotate exposed credentials, and store secrets in a dedicated secrets manager.",
+				AffectedURL:   probeURL,
+				OWASPCategory: "OWASP A01:2021 - Broken Access Control",
+				CWE:           "CWE-200",
+				References: []string{
+					"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probeGitConfigExposure checks whether .git/config is web-accessible.
+func probeGitConfigExposure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	probeURL := base + "/.git/config"
+	if err := validateMetasploitProbeTarget(probeURL); err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	scanner.ApplyAuthProfile(req, profile)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	resp.Body.Close()
+	bodyStr := strings.ToLower(string(body))
+	if resp.StatusCode == http.StatusOK &&
+		strings.Contains(bodyStr, "[core]") &&
+		strings.Contains(bodyStr, "repositoryformatversion") {
+		return []model.Finding{{
+			ID:          "msf-git-config-exposure",
+			Category:    "information_disclosure",
+			Severity:    model.SeverityHigh,
+			Title:       "Exposed Git repository metadata (.git/config)",
+			Description: "The target exposes repository metadata via /.git/config, indicating source-control directory disclosure that can lead to full source code leakage.",
+			Evidence:    fmt.Sprintf("path=/.git/config status=%d git_markers_detected=true", resp.StatusCode),
+			Recommendation: "Deny access to /.git and related SCM metadata paths at the web server/proxy layer, then rotate any secrets that may have been exposed in repository history.",
+			AffectedURL:   probeURL,
+			OWASPCategory: "OWASP A01:2021 - Broken Access Control",
+			CWE:           "CWE-200",
+			References: []string{
+				"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
+			},
+		}}
+	}
+	return nil
+}
+
 func validateMetasploitProbeTarget(target string) error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ABH_ALLOW_LOCAL_TARGETS")), "true") {
 		return nil
@@ -1272,6 +1373,57 @@ type msfRPCResponse struct {
 	Error   bool                   `json:"error"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data"`
+}
+
+type msfRPCModuleTemplate struct {
+	Name     string            `json:"name"`
+	Title    string            `json:"title"`
+	CVE      string            `json:"cve,omitempty"`
+	LessSafe bool              `json:"lessSafe,omitempty"`
+	Options  map[string]string `json:"options"`
+}
+
+func envFlagTrue(key string) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func loadMSFRPCModuleTemplate(path, rhost, rport, ssl string) ([]msfRPCModuleTemplate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var modules []msfRPCModuleTemplate
+	if err := json.Unmarshal(raw, &modules); err != nil {
+		return nil, err
+	}
+	replacer := strings.NewReplacer(
+		"{{RHOSTS}}", rhost,
+		"{{RPORT}}", rport,
+		"{{SSL}}", ssl,
+		"{{TARGETURI}}", "/",
+	)
+	for i := range modules {
+		if modules[i].Options == nil {
+			modules[i].Options = map[string]string{}
+		}
+		if _, ok := modules[i].Options["RHOSTS"]; !ok {
+			modules[i].Options["RHOSTS"] = "{{RHOSTS}}"
+		}
+		if _, ok := modules[i].Options["RPORT"]; !ok {
+			modules[i].Options["RPORT"] = "{{RPORT}}"
+		}
+		if _, ok := modules[i].Options["SSL"]; !ok {
+			modules[i].Options["SSL"] = "{{SSL}}"
+		}
+		for k, v := range modules[i].Options {
+			modules[i].Options[k] = replacer.Replace(v)
+		}
+		if modules[i].Title == "" {
+			modules[i].Title = modules[i].Name
+		}
+	}
+	return modules, nil
 }
 
 // runMSFRPCModules authenticates to msfrpcd, runs a curated set of web
@@ -1305,6 +1457,10 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 	if u.Scheme == "https" {
 		ssl = "true"
 	}
+	allowLessSafe := envFlagTrue("MSF_RPC_ENABLE_LESS_SAFE_MODULES")
+	templatePath := strings.TrimSpace(os.Getenv("MSF_RPC_MODULE_TEMPLATE_FILE"))
+	customLoaded := 0
+	customLoadErr := ""
 
 	// ── 3. Module set — web auxiliary modules that are safe to run ─────────
 	modules := []struct {
@@ -1421,6 +1577,73 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			cve:     "CVE-2018-13379",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
 		},
+		{
+			name:    "auxiliary/scanner/http/http_version",
+			title:   "HTTP Version & Banner Fingerprinting",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/options",
+			title:   "HTTP OPTIONS Method Exposure",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/scanner/http/dir_scanner",
+			title:   "Common Sensitive Path Discovery",
+			cve:     "",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+	}
+	lessSafeModules := []struct {
+		name    string
+		options map[string]string
+		title   string
+		cve     string
+	}{
+		{
+			name:    "exploit/multi/http/struts2_content_type_ognl",
+			title:   "Apache Struts2 Content-Type OGNL RCE (CVE-2017-5638)",
+			cve:     "CVE-2017-5638",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "exploit/multi/http/apache_ofbiz_deserialization",
+			title:   "Apache OFBiz Deserialization RCE (CVE-2020-9496)",
+			cve:     "CVE-2020-9496",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+	}
+	if allowLessSafe {
+		modules = append(modules, lessSafeModules...)
+	}
+	if templatePath != "" {
+		customModules, err := loadMSFRPCModuleTemplate(templatePath, rhost, rport, ssl)
+		if err != nil {
+			customLoadErr = err.Error()
+		} else {
+			for _, mod := range customModules {
+				if mod.Name == "" {
+					continue
+				}
+				if mod.LessSafe && !allowLessSafe {
+					continue
+				}
+				modules = append(modules, struct {
+					name    string
+					options map[string]string
+					title   string
+					cve     string
+				}{
+					name:    mod.Name,
+					options: mod.Options,
+					title:   mod.Title,
+					cve:     mod.CVE,
+				})
+				customLoaded++
+			}
+		}
 	}
 
 	findings := make([]model.Finding, 0)
@@ -1467,7 +1690,10 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 	// Always logout to clean up the RPC session.
 	_ = msfLogout(ctx, client, rpcURL, token)
 
-	note := fmt.Sprintf("msfrpc: ran %d modules against %s:%s", ranModules, rhost, rport)
+	note := fmt.Sprintf("msfrpc: ran %d modules against %s:%s (less_safe=%t custom_loaded=%d)", ranModules, rhost, rport, allowLessSafe, customLoaded)
+	if customLoadErr != "" {
+		note += " template_error=" + customLoadErr
+	}
 	return findings, note
 }
 

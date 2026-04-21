@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -959,6 +960,74 @@ func TestProbeFortinetSSLVPNFileRead_NotDetected(t *testing.T) {
 	}
 }
 
+func TestProbeDotEnvFileExposure_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.env" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("APP_KEY=base64:example-secret")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeDotEnvFileExposure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected .env exposure finding when sensitive marker is returned")
+	}
+	if findings[0].ID != "msf-dotenv-file-exposure" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestProbeGitConfigExposure_Detected(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.git/config" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[core]\nrepositoryformatversion = 0\n")) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	findings := probeGitConfigExposure(context.Background(), client, srv.URL, model.ScanAuthProfile{})
+	if len(findings) == 0 {
+		t.Fatal("expected git config exposure finding when /.git/config is returned")
+	}
+	if findings[0].ID != "msf-git-config-exposure" {
+		t.Errorf("unexpected finding ID: %s", findings[0].ID)
+	}
+}
+
+func TestLoadMSFRPCModuleTemplate_ReplacesPlaceholders(t *testing.T) {
+	tempFile := t.TempDir() + "/modules.json"
+	content := `[
+		{
+			"name":"auxiliary/scanner/http/http_version",
+			"title":"Template module",
+			"options":{"RHOSTS":"{{RHOSTS}}","RPORT":"{{RPORT}}","SSL":"{{SSL}}","TARGETURI":"{{TARGETURI}}"}
+		}
+	]`
+	if err := os.WriteFile(tempFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("failed to create template file: %v", err)
+	}
+	mods, err := loadMSFRPCModuleTemplate(tempFile, "example.com", "443", "true")
+	if err != nil {
+		t.Fatalf("loadMSFRPCModuleTemplate returned error: %v", err)
+	}
+	if len(mods) != 1 {
+		t.Fatalf("expected 1 module, got %d", len(mods))
+	}
+	if mods[0].Options["RHOSTS"] != "example.com" || mods[0].Options["RPORT"] != "443" || mods[0].Options["SSL"] != "true" {
+		t.Fatalf("placeholder replacement failed: %+v", mods[0].Options)
+	}
+}
+
 func TestFactory_NativeProbesCount(t *testing.T) {
 	t.Setenv("MSF_RPC_URL", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -971,7 +1040,7 @@ func TestFactory_NativeProbesCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if out.Metadata["native_probes_run"] != "21" {
-		t.Errorf("expected native_probes_run=21, got %q", out.Metadata["native_probes_run"])
+	if out.Metadata["native_probes_run"] != "23" {
+		t.Errorf("expected native_probes_run=23, got %q", out.Metadata["native_probes_run"])
 	}
 }

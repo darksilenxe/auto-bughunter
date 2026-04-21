@@ -88,6 +88,17 @@ AI_API_KEY=
 - Frontend: http://localhost:3000
 - Backend health: http://localhost:8080/api/health
 
+## Metasploit RPC customization
+
+The Metasploit agent supports optional RPC module execution when `MSF_RPC_URL`
+and `MSF_RPC_PASSWORD` are set.
+
+- `MSF_RPC_ENABLE_LESS_SAFE_MODULES=true` enables extra high-risk exploit modules.
+- `MSF_RPC_MODULE_TEMPLATE_FILE=/app/backend/templates/metasploit_rpc_modules.template.json`
+  lets you load your own module list template.
+- Use `backend/templates/metasploit_rpc_modules.template.json` as the starter template.
+- Template placeholders are auto-expanded: `{{RHOSTS}}`, `{{RPORT}}`, `{{SSL}}`, `{{TARGETURI}}`.
+
 ## Architecture
 
 The backend container is intentionally slim — it ships only the Go server
