@@ -850,13 +850,13 @@ func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target s
 
 		if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
 			return []model.Finding{{
-				ID:          "msf-phpunit-eval-stdin",
-				Category:    "remote_code_execution",
-				Severity:    model.SeverityHigh,
-				Title:       "PHPUnit eval-stdin.php RCE indicator (CVE-2017-9841)",
-				Description: "The publicly reachable PHPUnit eval-stdin endpoint executed supplied input and returned a deterministic marker. This behavior is consistent with unauthenticated remote code execution exposure.",
-				Evidence:    fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", ep, resp.StatusCode),
-				Recommendation: "Remove development dependencies (vendor/phpunit) from production builds, deny public access to /vendor paths, and rotate secrets that may have been exposed.",
+				ID:              "msf-phpunit-eval-stdin",
+				Category:        "remote_code_execution",
+				Severity:        model.SeverityHigh,
+				Title:           "PHPUnit eval-stdin.php RCE indicator (CVE-2017-9841)",
+				Description:     "The publicly reachable PHPUnit eval-stdin endpoint executed supplied input and returned a deterministic marker. This behavior is consistent with unauthenticated remote code execution exposure.",
+				Evidence:        fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", ep, resp.StatusCode),
+				Recommendation:  "Remove development dependencies (vendor/phpunit) from production builds, deny public access to /vendor paths, and rotate secrets that may have been exposed.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A06:2021 - Vulnerable and Outdated Components",
 				CWE:             "CWE-94",
@@ -917,13 +917,13 @@ func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, targe
 
 		if resp.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(body)), "root:x:0:0:") {
 			return []model.Finding{{
-				ID:          "msf-grafana-plugin-traversal",
-				Category:    "path_traversal",
-				Severity:    model.SeverityHigh,
-				Title:       "Grafana plugin path traversal indicator (CVE-2021-43798)",
-				Description: "Grafana's plugin asset endpoint returned /etc/passwd content through directory traversal sequences, indicating a path traversal vulnerability that can expose sensitive files.",
-				Evidence:    fmt.Sprintf("path=%s status=%d passwd_signature=true", p, resp.StatusCode),
-				Recommendation: "Upgrade Grafana to a patched release and restrict access to public plugin asset routes. Apply upstream mitigations and verify no sensitive files are accessible via traversal.",
+				ID:              "msf-grafana-plugin-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Grafana plugin path traversal indicator (CVE-2021-43798)",
+				Description:     "Grafana's plugin asset endpoint returned /etc/passwd content through directory traversal sequences, indicating a path traversal vulnerability that can expose sensitive files.",
+				Evidence:        fmt.Sprintf("path=%s status=%d passwd_signature=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade Grafana to a patched release and restrict access to public plugin asset routes. Apply upstream mitigations and verify no sensitive files are accessible via traversal.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
 				CWE:             "CWE-22",
@@ -981,13 +981,13 @@ func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, t
 
 	if resp.StatusCode == http.StatusOK && strings.Contains(bodyLower, strings.ToLower(marker)) {
 		return []model.Finding{{
-			ID:          "msf-vbulletin-widget-template-rce",
-			Category:    "remote_code_execution",
-			Severity:    model.SeverityHigh,
-			Title:       "vBulletin widget template RCE indicator (CVE-2019-16759)",
-			Description: "The vBulletin widget rendering endpoint executed supplied template code and returned a deterministic marker, indicating remote code execution exposure.",
-			Evidence:    fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", endpoint, resp.StatusCode),
-			Recommendation: "Upgrade vBulletin to a fixed version immediately, disable vulnerable AJAX widget rendering paths, and restrict unauthenticated access to administrative/template features.",
+			ID:              "msf-vbulletin-widget-template-rce",
+			Category:        "remote_code_execution",
+			Severity:        model.SeverityHigh,
+			Title:           "vBulletin widget template RCE indicator (CVE-2019-16759)",
+			Description:     "The vBulletin widget rendering endpoint executed supplied template code and returned a deterministic marker, indicating remote code execution exposure.",
+			Evidence:        fmt.Sprintf("endpoint=%s status=%d marker_reflected=true", endpoint, resp.StatusCode),
+			Recommendation:  "Upgrade vBulletin to a fixed version immediately, disable vulnerable AJAX widget rendering paths, and restrict unauthenticated access to administrative/template features.",
 			AffectedURL:     endpoint,
 			OWASPCategory:   "OWASP A03:2021 - Injection",
 			CWE:             "CWE-94",
@@ -1043,13 +1043,13 @@ func probeF5BIGIPTMUITraversal(ctx context.Context, client *http.Client, target 
 		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
 		if resp.StatusCode == http.StatusOK && leakDetected {
 			return []model.Finding{{
-				ID:          "msf-f5-bigip-tmui-traversal",
-				Category:    "path_traversal",
-				Severity:    model.SeverityHigh,
-				Title:       "F5 BIG-IP TMUI file read indicator (CVE-2020-5902)",
-				Description: "The BIG-IP TMUI fileRead endpoint returned local file content via a traversal sequence, indicating CVE-2020-5902 exposure that can lead to configuration theft and potential remote code execution.",
-				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
-				Recommendation: "Upgrade BIG-IP to a patched release and restrict management interface access to trusted networks only. Apply vendor mitigation guidance for TMUI exposure immediately.",
+				ID:              "msf-f5-bigip-tmui-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "F5 BIG-IP TMUI file read indicator (CVE-2020-5902)",
+				Description:     "The BIG-IP TMUI fileRead endpoint returned local file content via a traversal sequence, indicating CVE-2020-5902 exposure that can lead to configuration theft and potential remote code execution.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade BIG-IP to a patched release and restrict management interface access to trusted networks only. Apply vendor mitigation guidance for TMUI exposure immediately.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
 				CWE:             "CWE-22",
@@ -1106,13 +1106,13 @@ func probePulseSecureFileDisclosure(ctx context.Context, client *http.Client, ta
 		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
 		if resp.StatusCode == http.StatusOK && leakDetected {
 			return []model.Finding{{
-				ID:          "msf-pulse-secure-file-disclosure",
-				Category:    "path_traversal",
-				Severity:    model.SeverityHigh,
-				Title:       "Pulse Secure arbitrary file read indicator (CVE-2019-11510)",
-				Description: "The Pulse Secure appliance exposed local file content through a traversal path under /dana-na, indicating CVE-2019-11510 and possible credential/session theft risk.",
-				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
-				Recommendation: "Apply Ivanti/Pulse Secure patches immediately and rotate VPN credentials and session material that may have been exposed.",
+				ID:              "msf-pulse-secure-file-disclosure",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Pulse Secure arbitrary file read indicator (CVE-2019-11510)",
+				Description:     "The Pulse Secure appliance exposed local file content through a traversal path under /dana-na, indicating CVE-2019-11510 and possible credential/session theft risk.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Apply Ivanti/Pulse Secure patches immediately and rotate VPN credentials and session material that may have been exposed.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
 				CWE:             "CWE-22",
@@ -1172,13 +1172,13 @@ func probeCiscoASAPathTraversal(ctx context.Context, client *http.Client, target
 			strings.Contains(bodyLower, "root:x:0:0:")
 		if resp.StatusCode == http.StatusOK && leakDetected {
 			return []model.Finding{{
-				ID:          "msf-cisco-asa-path-traversal",
-				Category:    "path_traversal",
-				Severity:    model.SeverityHigh,
-				Title:       "Cisco ASA clientless VPN path traversal indicator (CVE-2020-3452)",
-				Description: "The Cisco ASA translation-table endpoint returned sensitive local resource content, indicating CVE-2020-3452 exposure in clientless SSL VPN components.",
-				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
-				Recommendation: "Upgrade Cisco ASA/FTD to a fixed version and disable or restrict clientless SSL VPN access from untrusted networks.",
+				ID:              "msf-cisco-asa-path-traversal",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Cisco ASA clientless VPN path traversal indicator (CVE-2020-3452)",
+				Description:     "The Cisco ASA translation-table endpoint returned sensitive local resource content, indicating CVE-2020-3452 exposure in clientless SSL VPN components.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Upgrade Cisco ASA/FTD to a fixed version and disable or restrict clientless SSL VPN access from untrusted networks.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
 				CWE:             "CWE-22",
@@ -1237,13 +1237,13 @@ func probeFortinetSSLVPNFileRead(ctx context.Context, client *http.Client, targe
 			strings.Contains(bodyLower, "root:x:0:0:")
 		if resp.StatusCode == http.StatusOK && leakDetected {
 			return []model.Finding{{
-				ID:          "msf-fortinet-sslvpn-file-read",
-				Category:    "path_traversal",
-				Severity:    model.SeverityHigh,
-				Title:       "Fortinet SSL VPN file disclosure indicator (CVE-2018-13379)",
-				Description: "The Fortinet SSL VPN language endpoint returned sensitive file/session content through traversal, indicating CVE-2018-13379 exposure.",
-				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
-				Recommendation: "Patch FortiOS immediately and rotate VPN credentials/session material potentially exposed by the vulnerability.",
+				ID:              "msf-fortinet-sslvpn-file-read",
+				Category:        "path_traversal",
+				Severity:        model.SeverityHigh,
+				Title:           "Fortinet SSL VPN file disclosure indicator (CVE-2018-13379)",
+				Description:     "The Fortinet SSL VPN language endpoint returned sensitive file/session content through traversal, indicating CVE-2018-13379 exposure.",
+				Evidence:        fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation:  "Patch FortiOS immediately and rotate VPN credentials/session material potentially exposed by the vulnerability.",
 				AffectedURL:     probeURL,
 				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
 				CWE:             "CWE-22",
@@ -1293,16 +1293,16 @@ func probeDotEnvFileExposure(ctx context.Context, client *http.Client, target st
 				strings.Contains(bodyStr, "database_url=") ||
 				strings.Contains(bodyStr, "aws_secret_access_key")) {
 			return []model.Finding{{
-				ID:          "msf-dotenv-file-exposure",
-				Category:    "information_disclosure",
-				Severity:    model.SeverityHigh,
-				Title:       "Exposed .env file detected",
-				Description: "The application appears to expose an environment file containing sensitive runtime configuration and credentials.",
-				Evidence:    fmt.Sprintf("path=%s status=%d sensitive_markers_detected=true", p, resp.StatusCode),
+				ID:             "msf-dotenv-file-exposure",
+				Category:       "information_disclosure",
+				Severity:       model.SeverityHigh,
+				Title:          "Exposed .env file detected",
+				Description:    "The application appears to expose an environment file containing sensitive runtime configuration and credentials.",
+				Evidence:       fmt.Sprintf("path=%s status=%d sensitive_markers_detected=true", p, resp.StatusCode),
 				Recommendation: "Block public access to .env files at the web server layer, rotate exposed credentials, and store secrets in a dedicated secrets manager.",
-				AffectedURL:   probeURL,
-				OWASPCategory: "OWASP A01:2021 - Broken Access Control",
-				CWE:           "CWE-200",
+				AffectedURL:    probeURL,
+				OWASPCategory:  "OWASP A01:2021 - Broken Access Control",
+				CWE:            "CWE-200",
 				References: []string{
 					"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
 				},
@@ -1343,16 +1343,16 @@ func probeGitConfigExposure(ctx context.Context, client *http.Client, target str
 		strings.Contains(bodyStr, "[core]") &&
 		strings.Contains(bodyStr, "repositoryformatversion") {
 		return []model.Finding{{
-			ID:          "msf-git-config-exposure",
-			Category:    "information_disclosure",
-			Severity:    model.SeverityHigh,
-			Title:       "Exposed Git repository metadata (.git/config)",
-			Description: "The target exposes repository metadata via /.git/config, indicating source-control directory disclosure that can lead to full source code leakage.",
-			Evidence:    fmt.Sprintf("path=/.git/config status=%d git_markers_detected=true", resp.StatusCode),
+			ID:             "msf-git-config-exposure",
+			Category:       "information_disclosure",
+			Severity:       model.SeverityHigh,
+			Title:          "Exposed Git repository metadata (.git/config)",
+			Description:    "The target exposes repository metadata via /.git/config, indicating source-control directory disclosure that can lead to full source code leakage.",
+			Evidence:       fmt.Sprintf("path=/.git/config status=%d git_markers_detected=true", resp.StatusCode),
 			Recommendation: "Deny access to /.git and related SCM metadata paths at the web server/proxy layer, then rotate any secrets that may have been exposed in repository history.",
-			AffectedURL:   probeURL,
-			OWASPCategory: "OWASP A01:2021 - Broken Access Control",
-			CWE:           "CWE-200",
+			AffectedURL:    probeURL,
+			OWASPCategory:  "OWASP A01:2021 - Broken Access Control",
+			CWE:            "CWE-200",
 			References: []string{
 				"https://owasp.org/Top10/A01_2021-Broken_Access_Control/",
 			},
@@ -2181,16 +2181,30 @@ func probeThinkPHPRCE(ctx context.Context, client *http.Client, target string, p
 // X-OWA-Version response header which is unique to Exchange, and probe the
 // known SSRF endpoint with a crafted cookie to detect the vulnerability.
 func probeExchangeProxyLogon(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+
 	// Step 1: fingerprint — look for Exchange-specific headers/body content.
 	fingerprintPaths := []string{
 		"/owa/", "/ews/exchange.asmx", "/autodiscover/autodiscover.xml",
 		"/Microsoft-Server-ActiveSync",
 	}
 
-	base := strings.TrimRight(target, "/")
 	isExchange := false
 	for _, fp := range fingerprintPaths {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+fp, nil)
+		probeURL := base + fp
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
 		}
@@ -2228,6 +2242,9 @@ func probeExchangeProxyLogon(ctx context.Context, client *http.Client, target st
 	// X-AnonResource-Backend cookie. A vulnerable server will issue an
 	// SSRF request and may return an Exchange-specific error or redirect.
 	ssrfURL := base + "/ecp/proxyLogon.ecp"
+	if err := validateMetasploitProbeTarget(ssrfURL); err != nil {
+		return nil
+	}
 	ssrfCookie := "X-AnonResource=true; X-AnonResource-Backend=localhost/ecp/default.flt?~3;" +
 		" X-BEResource=localhost/owa/auth/logon.aspx?~3;"
 

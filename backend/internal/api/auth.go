@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -277,14 +278,7 @@ func normalizeAPIKeyRole(raw string) model.APIKeyRole {
 }
 
 func subtleConstantTimeEq(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var out byte
-	for i := 0; i < len(a); i++ {
-		out |= a[i] ^ b[i]
-	}
-	return out == 0
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func firstNonEmpty(values ...string) string {

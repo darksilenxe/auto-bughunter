@@ -592,6 +592,7 @@ func TestProbeThinkPHPRCE_Vulnerable(t *testing.T) {
 }
 
 func TestProbeExchangeProxyLogon_NotExchange(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -606,6 +607,7 @@ func TestProbeExchangeProxyLogon_NotExchange(t *testing.T) {
 }
 
 func TestProbeExchangeProxyLogon_Vulnerable(t *testing.T) {
+	t.Setenv("ABH_ALLOW_LOCAL_TARGETS", "true")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Fingerprinting paths return Exchange indicators.
 		if strings.Contains(r.URL.Path, "/owa") {

@@ -32,6 +32,7 @@ import (
 	"auto-bughunter/backend/internal/scope"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 )
 
 type AgentConfig struct {
@@ -1110,6 +1111,10 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		req.ScheduleType = normalizeScheduleType(req.ScheduleType)
+		if err := validateCampaignSchedule(req.ScheduleType, req.ScheduleValue, req.RunWindow, req.BlackoutWindows); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		if err := validateAuthProfile(req.AuthProfile); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1427,11 +1432,81 @@ func normalizeAutomationMode(mode string) string {
 
 func normalizeScheduleType(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "daily", "weekly":
+	case "daily", "weekly", "cron":
 		return strings.ToLower(strings.TrimSpace(kind))
 	default:
 		return "interval"
 	}
+}
+
+func parseScheduleValueAndLocation(raw string) (string, *time.Location, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", time.UTC, nil
+	}
+	if !strings.Contains(value, "|") {
+		return value, time.UTC, nil
+	}
+	parts := strings.SplitN(value, "|", 2)
+	tz := strings.TrimSpace(parts[0])
+	inner := strings.TrimSpace(parts[1])
+	if tz == "" {
+		return inner, time.UTC, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid schedule timezone")
+	}
+	return inner, loc, nil
+}
+
+func validateCampaignSchedule(scheduleType, scheduleValue, runWindow string, blackoutWindows []string) error {
+	inner, _, err := parseScheduleValueAndLocation(scheduleValue)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(runWindow) != "" && !validWindowSpec(runWindow) {
+		return fmt.Errorf("runWindow must use HH:MM-HH:MM format")
+	}
+	for _, win := range blackoutWindows {
+		if strings.TrimSpace(win) != "" && !validWindowSpec(win) {
+			return fmt.Errorf("blackoutWindows must use HH:MM-HH:MM format")
+		}
+	}
+	switch normalizeScheduleType(scheduleType) {
+	case "daily":
+		if _, _, ok := parseClock(inner); !ok {
+			return fmt.Errorf("daily scheduleValue must use HH:MM (optionally TZ|HH:MM)")
+		}
+	case "weekly":
+		raw := strings.Split(inner, "@")
+		if len(raw) != 2 {
+			return fmt.Errorf("weekly scheduleValue must use weekday@HH:MM (optionally TZ|weekday@HH:MM)")
+		}
+		weekday := strings.ToLower(strings.TrimSpace(raw[0]))
+		if weekday != "sun" && weekday != "mon" && weekday != "tue" && weekday != "wed" && weekday != "thu" && weekday != "fri" && weekday != "sat" {
+			return fmt.Errorf("weekly scheduleValue must use sun|mon|tue|wed|thu|fri|sat")
+		}
+		if _, _, ok := parseClock(raw[1]); !ok {
+			return fmt.Errorf("weekly scheduleValue must use weekday@HH:MM")
+		}
+	case "cron":
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		if _, err := parser.Parse(strings.TrimSpace(inner)); err != nil {
+			return fmt.Errorf("cron scheduleValue must be a 5-field cron expression (optionally TZ|expr)")
+		}
+	}
+	return nil
+}
+
+func validWindowSpec(spec string) bool {
+	parts := strings.Split(strings.TrimSpace(spec), "-")
+	if len(parts) != 2 {
+		return false
+	}
+	_, _, okS := parseClock(parts[0])
+	_, _, okE := parseClock(parts[1])
+	return okS && okE
 }
 
 func (s *Server) effectiveMinROI(ctx context.Context, job *model.ScanJob) float64 {
@@ -1626,7 +1701,7 @@ func (s *Server) runCampaignScheduler() {
 			continue
 		}
 		for _, c := range campaigns {
-			if strings.TrimSpace(c.RunWindow) != "" && !inWindowUTC(now, c.RunWindow) {
+			if strings.TrimSpace(c.RunWindow) != "" && !inCampaignWindow(now, c) {
 				nextRun := computeNextCampaignRun(now.Add(15*time.Minute), model.AutomationCampaignUpsertRequest{
 					IntervalMin:     c.IntervalMin,
 					ScheduleType:    c.ScheduleType,
@@ -1637,7 +1712,7 @@ func (s *Server) runCampaignScheduler() {
 				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
 				continue
 			}
-			if inBlackout(now, c.BlackoutWindows) {
+			if inCampaignBlackout(now, c) {
 				nextRun := now.Add(30 * time.Minute)
 				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
 				continue
@@ -1674,13 +1749,7 @@ func (s *Server) runCampaignScheduler() {
 				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, err.Error(), now, backoff)
 				continue
 			}
-			nextRun := computeNextCampaignRun(now, model.AutomationCampaignUpsertRequest{
-				IntervalMin:     c.IntervalMin,
-				ScheduleType:    c.ScheduleType,
-				ScheduleValue:   c.ScheduleValue,
-				RunWindow:       c.RunWindow,
-				BlackoutWindows: c.BlackoutWindows,
-			})
+			nextRun := resolveCampaignNextRunAfterDispatch(now, c)
 			_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
 			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
 			go s.runJob(jobID, c.Target, c.AuthProfile, nil, c.Options, c.Scope)
@@ -2370,6 +2439,54 @@ func campaignRetryBackoff(retryCount int) time.Duration {
 	return backoff
 }
 
+func automationMisfirePolicy() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_MISFIRE_POLICY"))) {
+	case "catch-up":
+		return "catch-up"
+	default:
+		return "skip"
+	}
+}
+
+func inCampaignWindow(now time.Time, c model.AutomationCampaign) bool {
+	_, loc, err := parseScheduleValueAndLocation(c.ScheduleValue)
+	if err != nil {
+		loc = time.UTC
+	}
+	return inWindowAt(now, c.RunWindow, loc)
+}
+
+func inCampaignBlackout(now time.Time, c model.AutomationCampaign) bool {
+	_, loc, err := parseScheduleValueAndLocation(c.ScheduleValue)
+	if err != nil {
+		loc = time.UTC
+	}
+	return inBlackoutAt(now, c.BlackoutWindows, loc)
+}
+
+func resolveCampaignNextRunAfterDispatch(now time.Time, c model.AutomationCampaign) time.Time {
+	req := model.AutomationCampaignUpsertRequest{
+		IntervalMin:     c.IntervalMin,
+		ScheduleType:    c.ScheduleType,
+		ScheduleValue:   c.ScheduleValue,
+		RunWindow:       c.RunWindow,
+		BlackoutWindows: c.BlackoutWindows,
+	}
+	if automationMisfirePolicy() != "catch-up" {
+		return computeNextCampaignRun(now, req)
+	}
+	anchor := now
+	if !c.NextRunAt.IsZero() {
+		anchor = c.NextRunAt
+	}
+	next := computeNextCampaignRun(anchor, req)
+	for i := 0; i < 512 && !next.After(now); i++ {
+		anchor = next
+		next = computeNextCampaignRun(anchor, req)
+	}
+	return next
+}
+
 func parseClock(value string) (int, int, bool) {
 	parts := strings.Split(strings.TrimSpace(value), ":")
 	if len(parts) != 2 {
@@ -2383,7 +2500,10 @@ func parseClock(value string) (int, int, bool) {
 	return h, m, true
 }
 
-func inWindowUTC(now time.Time, spec string) bool {
+func inWindowAt(now time.Time, spec string, loc *time.Location) bool {
+	if loc == nil {
+		loc = time.UTC
+	}
 	parts := strings.Split(strings.TrimSpace(spec), "-")
 	if len(parts) != 2 {
 		return false
@@ -2393,47 +2513,66 @@ func inWindowUTC(now time.Time, spec string) bool {
 	if !okS || !okE {
 		return false
 	}
-	start := now.UTC().Truncate(24 * time.Hour).Add(time.Duration(sh)*time.Hour + time.Duration(sm)*time.Minute)
-	end := now.UTC().Truncate(24 * time.Hour).Add(time.Duration(eh)*time.Hour + time.Duration(em)*time.Minute)
+	localNow := now.In(loc)
+	start := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), sh, sm, 0, 0, loc)
+	end := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), eh, em, 0, 0, loc)
 	if end.Before(start) {
-		return now.After(start) || now.Before(end)
+		return localNow.After(start) || localNow.Before(end)
 	}
-	return (now.Equal(start) || now.After(start)) && now.Before(end)
+	return (localNow.Equal(start) || localNow.After(start)) && localNow.Before(end)
 }
 
-func inBlackout(now time.Time, windows []string) bool {
+func inWindowUTC(now time.Time, spec string) bool {
+	return inWindowAt(now, spec, time.UTC)
+}
+
+func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
 	for _, win := range windows {
 		if strings.TrimSpace(win) == "" {
 			continue
 		}
-		if inWindowUTC(now, win) {
+		if inWindowAt(now, win, loc) {
 			return true
 		}
 	}
 	return false
 }
 
+func inBlackout(now time.Time, windows []string) bool {
+	return inBlackoutAt(now, windows, time.UTC)
+}
+
 func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertRequest) time.Time {
 	base := now.UTC()
+	scheduleValue, loc, err := parseScheduleValueAndLocation(req.ScheduleValue)
+	if err != nil {
+		scheduleValue = strings.TrimSpace(req.ScheduleValue)
+		loc = time.UTC
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
 	switch normalizeScheduleType(req.ScheduleType) {
 	case "daily":
-		h, m, ok := parseClock(req.ScheduleValue)
+		h, m, ok := parseClock(scheduleValue)
 		if !ok {
 			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
 		}
-		next := time.Date(base.Year(), base.Month(), base.Day(), h, m, 0, 0, time.UTC)
-		if !next.After(base) {
+		localBase := base.In(loc)
+		nextLocal := time.Date(localBase.Year(), localBase.Month(), localBase.Day(), h, m, 0, 0, loc)
+		if !nextLocal.After(localBase) {
+			nextLocal = nextLocal.Add(24 * time.Hour)
+		}
+		next := nextLocal.In(time.UTC)
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
 			next = next.Add(24 * time.Hour)
 		}
-		if strings.TrimSpace(req.RunWindow) != "" && !inWindowUTC(next, req.RunWindow) {
-			next = next.Add(24 * time.Hour)
-		}
-		for inBlackout(next, req.BlackoutWindows) {
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
 			next = next.Add(30 * time.Minute)
 		}
 		return next
 	case "weekly":
-		raw := strings.Split(strings.TrimSpace(req.ScheduleValue), "@")
+		raw := strings.Split(strings.TrimSpace(scheduleValue), "@")
 		if len(raw) != 2 {
 			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
 		}
@@ -2446,20 +2585,41 @@ func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertReq
 		if !ok {
 			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
 		}
-		next := time.Date(base.Year(), base.Month(), base.Day(), h, m, 0, 0, time.UTC)
-		for next.Weekday() != weekday || !next.After(base) {
+		localBase := base.In(loc)
+		nextLocal := time.Date(localBase.Year(), localBase.Month(), localBase.Day(), h, m, 0, 0, loc)
+		for nextLocal.Weekday() != weekday || !nextLocal.After(localBase) {
+			nextLocal = nextLocal.Add(24 * time.Hour)
+		}
+		next := nextLocal.In(time.UTC)
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
 			next = next.Add(24 * time.Hour)
 		}
-		for inBlackout(next, req.BlackoutWindows) {
-			next = next.Add(24 * time.Hour)
+		return next
+	case "cron":
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		parsed, err := parser.Parse(strings.TrimSpace(scheduleValue))
+		if err != nil {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		next := parsed.Next(base.In(loc)).In(time.UTC)
+		for i := 0; i < 2048; i++ {
+			if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
+				next = parsed.Next(next.In(loc)).In(time.UTC)
+				continue
+			}
+			if inBlackoutAt(next, req.BlackoutWindows, loc) {
+				next = parsed.Next(next.In(loc)).In(time.UTC)
+				continue
+			}
+			break
 		}
 		return next
 	default:
 		next := base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
-		if strings.TrimSpace(req.RunWindow) != "" && !inWindowUTC(next, req.RunWindow) {
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowAt(next, req.RunWindow, loc) {
 			next = next.Add(15 * time.Minute)
 		}
-		for inBlackout(next, req.BlackoutWindows) {
+		for i := 0; i < 1024 && inBlackoutAt(next, req.BlackoutWindows, loc); i++ {
 			next = next.Add(30 * time.Minute)
 		}
 		return next
