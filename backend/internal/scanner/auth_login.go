@@ -33,6 +33,13 @@ func hasCustomLoginSteps(profile model.ScanAuthProfile) bool {
 	return len(profile.LoginSteps) > 0
 }
 
+func loginBootstrapInitialDelay(profile model.ScanAuthProfile) time.Duration {
+	if hasCustomLoginSteps(profile) {
+		return 0
+	}
+	return loginBootstrapLoadDelay
+}
+
 func candidateLoginURLs(target string, profile model.ScanAuthProfile, scanScope model.ScanScope) []string {
 	base, err := url.Parse(target)
 	if err != nil {
@@ -140,10 +147,13 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 
 	for _, loginURL := range candidateLoginURLs(target, profile, scanScope) {
 		var submit loginFormSubmitResult
-		if err := chromedp.Run(ctx,
+		navigateActions := []chromedp.Action{
 			chromedp.Navigate(loginURL),
-			chromedp.Sleep(loginBootstrapLoadDelay),
-		); err != nil {
+		}
+		if delay := loginBootstrapInitialDelay(profile); delay > 0 {
+			navigateActions = append(navigateActions, chromedp.Sleep(delay))
+		}
+		if err := chromedp.Run(ctx, navigateActions...); err != nil {
 			continue
 		}
 		if hasCustomLoginSteps(profile) {

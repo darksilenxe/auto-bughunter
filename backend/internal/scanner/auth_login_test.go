@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scope"
@@ -38,5 +39,21 @@ func TestResolveLoginStepValueReplacesCredentialPlaceholders(t *testing.T) {
 	got := resolveLoginStepValue("user={{username}}&pass={{password}}", "alice@example.com", "s3cr3t")
 	if got != "user=alice@example.com&pass=s3cr3t" {
 		t.Fatalf("unexpected resolved value: %q", got)
+	}
+}
+
+func TestLoginBootstrapInitialDelayUsesDefaultForLegacyFlow(t *testing.T) {
+	delay := loginBootstrapInitialDelay(model.ScanAuthProfile{})
+	if delay != loginBootstrapLoadDelay {
+		t.Fatalf("expected default load delay %s, got %s", loginBootstrapLoadDelay, delay)
+	}
+}
+
+func TestLoginBootstrapInitialDelaySkipsWarmupForCustomSteps(t *testing.T) {
+	delay := loginBootstrapInitialDelay(model.ScanAuthProfile{
+		LoginSteps: []model.ScanAuthLoginStep{{Action: "click", Selector: "#accept-cookies"}},
+	})
+	if delay != 0*time.Millisecond {
+		t.Fatalf("expected no initial delay for custom login steps, got %s", delay)
 	}
 }
