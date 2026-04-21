@@ -2929,6 +2929,31 @@ func validateAuthProfile(profile model.ScanAuthProfile) error {
 	if strings.TrimSpace(profile.LoginURL) != "" && !hasUsername {
 		return errors.New("authProfile loginUrl requires username and password")
 	}
+	if len(profile.LoginSteps) > 0 && !hasUsername {
+		return errors.New("authProfile loginSteps require username and password")
+	}
+	for idx, step := range profile.LoginSteps {
+		action := strings.ToLower(strings.TrimSpace(step.Action))
+		switch action {
+		case "fill":
+			if strings.TrimSpace(step.Selector) == "" {
+				return fmt.Errorf("authProfile loginSteps[%d] fill requires selector", idx)
+			}
+			if strings.TrimSpace(step.Value) == "" {
+				return fmt.Errorf("authProfile loginSteps[%d] fill requires value", idx)
+			}
+		case "click":
+			if strings.TrimSpace(step.Selector) == "" {
+				return fmt.Errorf("authProfile loginSteps[%d] click requires selector", idx)
+			}
+		case "wait":
+			if step.WaitMillis <= 0 {
+				return fmt.Errorf("authProfile loginSteps[%d] wait requires waitMillis > 0", idx)
+			}
+		default:
+			return fmt.Errorf("authProfile loginSteps[%d] has unsupported action %q", idx, step.Action)
+		}
+	}
 	return nil
 }
 

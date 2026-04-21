@@ -97,14 +97,23 @@ type ScanRequest struct {
 }
 
 type ScanAuthProfile struct {
-	Headers           map[string]string `json:"headers,omitempty"`
-	Cookies           map[string]string `json:"cookies,omitempty"`
-	UserAgent         string            `json:"userAgent,omitempty"`
-	BasicAuthUsername string            `json:"basicAuthUsername,omitempty"`
-	BasicAuthPassword string            `json:"basicAuthPassword,omitempty"`
-	LoginURL          string            `json:"loginUrl,omitempty"`
-	Username          string            `json:"username,omitempty"`
-	Password          string            `json:"password,omitempty"`
+	Headers           map[string]string   `json:"headers,omitempty"`
+	Cookies           map[string]string   `json:"cookies,omitempty"`
+	UserAgent         string              `json:"userAgent,omitempty"`
+	BasicAuthUsername string              `json:"basicAuthUsername,omitempty"`
+	BasicAuthPassword string              `json:"basicAuthPassword,omitempty"`
+	LoginURL          string              `json:"loginUrl,omitempty"`
+	Username          string              `json:"username,omitempty"`
+	Password          string              `json:"password,omitempty"`
+	LoginSteps        []ScanAuthLoginStep `json:"loginSteps,omitempty"`
+}
+
+type ScanAuthLoginStep struct {
+	Action     string `json:"action"`
+	Selector   string `json:"selector,omitempty"`
+	Value      string `json:"value,omitempty"`
+	WaitMillis int    `json:"waitMillis,omitempty"`
+	Optional   bool   `json:"optional,omitempty"`
 }
 
 type RoleAuthProfile struct {
