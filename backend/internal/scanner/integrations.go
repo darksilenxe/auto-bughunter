@@ -36,6 +36,8 @@ type integrationState struct {
 	SkippedReasons   map[string]int
 }
 
+// Small cooldown to let Nuclei fully tear down child processes and release
+// transient network/socket pressure before launching ZAP Baseline.
 const zapBaselineDelayAfterNuclei = 5 * time.Second
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
@@ -280,7 +282,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			select {
 			case <-ctx.Done():
 				findings = append(findings, model.Finding{
-					ID:             "zap-baseline-skipped-after-nuclei-cancelled",
+					ID:             "zap-baseline-skipped-context-ended",
 					Category:       "integration",
 					Severity:       model.SeverityInfo,
 					Title:          "ZAP Baseline skipped after Nuclei because scan context ended",
