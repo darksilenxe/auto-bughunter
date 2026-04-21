@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -89,12 +90,22 @@ func runOneIntruder(
 		subHeaders.Set(k, strings.ReplaceAll(v, marker, payload))
 	}
 
-	if err := safety.ValidateOutboundURL(subURL); err != nil {
+	// SSRF guard: payload-substituted URLs are user-controlled, so they
+	// must pass the same outbound safety policy as every other proxy
+	// request (blocks loopback, link-local, private, and metadata IPs,
+	// and rejects non-http(s) schemes). Parse first so the validated
+	// URL is what the transport actually dials.
+	parsed, err := url.Parse(subURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		res.Error = "invalid request URL after payload substitution"
+		return res
+	}
+	if err := safety.ValidateOutboundURL(parsed.String()); err != nil {
 		res.Error = "blocked by outbound safety policy"
 		return res
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, subURL, bytes.NewReader([]byte(subBody)))
+	req, err := http.NewRequestWithContext(ctx, method, parsed.String(), bytes.NewReader([]byte(subBody)))
 	if err != nil {
 		res.Error = "build request: " + err.Error()
 		return res

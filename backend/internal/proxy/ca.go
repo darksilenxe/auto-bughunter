@@ -310,7 +310,7 @@ func randomSerial() (*big.Int, error) {
 }
 
 func hexColons(in []byte) string {
-	const hex = "0123456789abcdef"
+	const hexDigits = "0123456789abcdef"
 	if len(in) == 0 {
 		return ""
 	}
@@ -319,7 +319,7 @@ func hexColons(in []byte) string {
 		if i > 0 {
 			buf = append(buf, ':')
 		}
-		buf = append(buf, hex[b>>4], hex[b&0x0f])
+		buf = append(buf, hexDigits[b>>4], hexDigits[b&0x0f])
 	}
 	return string(buf)
 }
