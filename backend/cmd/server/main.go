@@ -171,14 +171,41 @@ func main() {
 
 	// Start the intercepting proxy listener if enabled.
 	if getbool("ENABLE_PROXY", false) {
-		proxyHandler := proxy.NewServer(repo)
+		// Optional self-signed CA bootstrap. When PROXY_CA_CERT_FILE +
+		// PROXY_CA_KEY_FILE are set, HTTPS CONNECT tunnels are
+		// intercepted ("MITM") and full request/response bodies are
+		// captured. With PROXY_CA_AUTOGENERATE=true the CA is created
+		// on first boot if the files don't exist.
+		var ca *proxy.CA
+		caCert := strings.TrimSpace(os.Getenv("PROXY_CA_CERT_FILE"))
+		caKey := strings.TrimSpace(os.Getenv("PROXY_CA_KEY_FILE"))
+		if caCert != "" && caKey != "" {
+			loaded, err := proxy.LoadOrGenerateCA(proxy.CAOptions{
+				CertFile:     caCert,
+				KeyFile:      caKey,
+				AutoGenerate: getbool("PROXY_CA_AUTOGENERATE", false),
+				CommonName:   getenv("PROXY_CA_COMMON_NAME", ""),
+			})
+			if err != nil {
+				log.Printf("proxy CA bootstrap failed: %v — HTTPS interception disabled", err)
+			} else if loaded != nil {
+				ca = loaded
+				log.Printf("proxy CA loaded (fingerprint %s, expires %s)", ca.Fingerprint(), ca.NotAfter().UTC().Format(time.RFC3339))
+			}
+		}
+		proxyHandler := proxy.NewServerWithCA(repo, ca)
+		server.SetProxyServer(proxyHandler)
 		proxyHttpServer := &http.Server{
 			Addr:              ":" + proxyPort,
 			Handler:           proxyHandler,
 			ReadHeaderTimeout: 30 * time.Second,
 		}
 		go func() {
-			log.Printf("intercepting proxy listening on :%s — configure your browser/tool to use localhost:%s as HTTP proxy", proxyPort, proxyPort)
+			mode := "transparent (HTTPS bodies not captured)"
+			if ca != nil {
+				mode = "TLS-intercepting (install CA via /api/proxy/ca-certificate)"
+			}
+			log.Printf("intercepting proxy listening on :%s — %s — configure your browser to use localhost:%s as HTTP proxy", proxyPort, mode, proxyPort)
 			if err := proxyHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("proxy server error: %v", err)
 			}

@@ -546,6 +546,9 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			lease_until TIMESTAMPTZ NULL,
 			heartbeat_at TIMESTAMPTZ NULL,
 			run_idempotency_key TEXT NOT NULL DEFAULT '',
+			authorization_approval JSONB NOT NULL DEFAULT '{}'::jsonb,
+			authorization_evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+			authorization_digest TEXT NOT NULL DEFAULT '',
 			active BOOLEAN NOT NULL DEFAULT TRUE,
 			auth_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
 			options JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -604,6 +607,15 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_idempotency_key TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.run_idempotency_key column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_approval JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.authorization_approval column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_evidence JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.authorization_evidence column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_digest TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.authorization_digest column: %w", err)
 	}
 	_, err = p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_program_roi_overrides (
@@ -1348,6 +1360,14 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 	if err != nil {
 		return fmt.Errorf("marshal campaign auth profile: %w", err)
 	}
+	approvalJSON, err := json.Marshal(campaign.AuthorizationApproval)
+	if err != nil {
+		return fmt.Errorf("marshal campaign authorization approval: %w", err)
+	}
+	evidenceJSON, err := json.Marshal(campaign.AuthorizationEvidence)
+	if err != nil {
+		return fmt.Errorf("marshal campaign authorization evidence: %w", err)
+	}
 	optionsJSON, err := json.Marshal(campaign.Options)
 	if err != nil {
 		return fmt.Errorf("marshal campaign options: %w", err)
@@ -1396,15 +1416,18 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 	}
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO automation_campaigns (
-			id, target, workspace_id, requested_by, policy_pack, policy_version, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
+			id, target, workspace_id, requested_by, policy_pack, policy_version, authorization_approval, authorization_evidence, authorization_digest, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
 		ON CONFLICT (id) DO UPDATE
 		SET target = EXCLUDED.target,
 			workspace_id = EXCLUDED.workspace_id,
 			requested_by = EXCLUDED.requested_by,
 			policy_pack = EXCLUDED.policy_pack,
 			policy_version = EXCLUDED.policy_version,
+			authorization_approval = EXCLUDED.authorization_approval,
+			authorization_evidence = EXCLUDED.authorization_evidence,
+			authorization_digest = EXCLUDED.authorization_digest,
 			name = EXCLUDED.name,
 			program_name = EXCLUDED.program_name,
 			interval_min = EXCLUDED.interval_min,
@@ -1428,7 +1451,7 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 			options = EXCLUDED.options,
 			scope = EXCLUDED.scope,
 			updated_at = EXCLUDED.updated_at
-	`, campaign.ID, campaign.Target, campaign.WorkspaceID, campaign.RequestedBy, policyPack, policyVersion, campaign.Name, campaign.ProgramName, campaign.IntervalMin, campaign.ScheduleType, campaign.ScheduleValue, campaign.RunWindow, blackoutJSON, nextRunAt, campaign.LastRunAt, campaign.RetryCount, campaign.MaxAttempts, nextRetryAt, campaign.LastError, campaign.DeadLetter, queueState, leaseUntil, heartbeatAt, strings.TrimSpace(campaign.RunIdempotency), campaign.Active, authJSON, optionsJSON, scopeJSON, campaign.CreatedAt, campaign.UpdatedAt)
+	`, campaign.ID, campaign.Target, campaign.WorkspaceID, campaign.RequestedBy, policyPack, policyVersion, approvalJSON, evidenceJSON, strings.TrimSpace(campaign.AuthorizationDigest), campaign.Name, campaign.ProgramName, campaign.IntervalMin, campaign.ScheduleType, campaign.ScheduleValue, campaign.RunWindow, blackoutJSON, nextRunAt, campaign.LastRunAt, campaign.RetryCount, campaign.MaxAttempts, nextRetryAt, campaign.LastError, campaign.DeadLetter, queueState, leaseUntil, heartbeatAt, strings.TrimSpace(campaign.RunIdempotency), campaign.Active, authJSON, optionsJSON, scopeJSON, campaign.CreatedAt, campaign.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert automation campaign: %w", err)
 	}
@@ -1444,7 +1467,7 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 		workspaceID = "default"
 	}
 	query := `
-		SELECT id, target, workspace_id, requested_by, policy_pack, policy_version, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
+		SELECT id, target, workspace_id, requested_by, policy_pack, policy_version, authorization_approval, authorization_evidence, authorization_digest, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
 		FROM automation_campaigns
 		WHERE workspace_id = $1
 	`
@@ -1462,9 +1485,19 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 	out := make([]model.AutomationCampaign, 0)
 	for rows.Next() {
 		var item model.AutomationCampaign
-		var authRaw, optionsRaw, scopeRaw, blackoutRaw []byte
-		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.PolicyPack, &item.PolicyVersion, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.QueueState, &item.LeaseUntil, &item.HeartbeatAt, &item.RunIdempotency, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var authRaw, approvalRaw, evidenceRaw, optionsRaw, scopeRaw, blackoutRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.PolicyPack, &item.PolicyVersion, &approvalRaw, &evidenceRaw, &item.AuthorizationDigest, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.QueueState, &item.LeaseUntil, &item.HeartbeatAt, &item.RunIdempotency, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan automation campaign row: %w", err)
+		}
+		if len(approvalRaw) > 0 {
+			if err := json.Unmarshal(approvalRaw, &item.AuthorizationApproval); err != nil {
+				return nil, fmt.Errorf("unmarshal automation campaign authorization approval: %w", err)
+			}
+		}
+		if len(evidenceRaw) > 0 {
+			if err := json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence); err != nil {
+				return nil, fmt.Errorf("unmarshal automation campaign authorization evidence: %w", err)
+			}
 		}
 		if len(authRaw) > 0 {
 			_ = json.Unmarshal(authRaw, &item.AuthProfile)
@@ -1488,7 +1521,7 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 		limit = 50
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, target, workspace_id, requested_by, policy_pack, policy_version, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
+		SELECT id, target, workspace_id, requested_by, policy_pack, policy_version, authorization_approval, authorization_evidence, authorization_digest, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
 		FROM automation_campaigns
 		WHERE active = TRUE
 			AND dead_letter = FALSE
@@ -1506,9 +1539,19 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 	out := make([]model.AutomationCampaign, 0)
 	for rows.Next() {
 		var item model.AutomationCampaign
-		var authRaw, optionsRaw, scopeRaw, blackoutRaw []byte
-		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.PolicyPack, &item.PolicyVersion, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.QueueState, &item.LeaseUntil, &item.HeartbeatAt, &item.RunIdempotency, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var authRaw, approvalRaw, evidenceRaw, optionsRaw, scopeRaw, blackoutRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.PolicyPack, &item.PolicyVersion, &approvalRaw, &evidenceRaw, &item.AuthorizationDigest, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.QueueState, &item.LeaseUntil, &item.HeartbeatAt, &item.RunIdempotency, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan due automation campaign row: %w", err)
+		}
+		if len(approvalRaw) > 0 {
+			if err := json.Unmarshal(approvalRaw, &item.AuthorizationApproval); err != nil {
+				return nil, fmt.Errorf("unmarshal due automation campaign authorization approval: %w", err)
+			}
+		}
+		if len(evidenceRaw) > 0 {
+			if err := json.Unmarshal(evidenceRaw, &item.AuthorizationEvidence); err != nil {
+				return nil, fmt.Errorf("unmarshal due automation campaign authorization evidence: %w", err)
+			}
 		}
 		if len(authRaw) > 0 {
 			_ = json.Unmarshal(authRaw, &item.AuthProfile)

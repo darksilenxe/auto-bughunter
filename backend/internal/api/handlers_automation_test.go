@@ -82,6 +82,74 @@ func TestValidateCampaignSchedule_StrictValidation(t *testing.T) {
 	}
 }
 
+func TestValidateCampaignAuthorization_RequiresSignedApprovalOnActiveCampaign(t *testing.T) {
+	err := validateCampaignAuthorization(model.AutomationCampaignUpsertRequest{
+		Active: true,
+		AuthorizationApproval: model.AuthorizationApproval{
+			ApprovedBy:   "analyst@example.com",
+			ApproverRole: "security-lead",
+		},
+		AuthorizationEvidence: []model.AuthorizationEvidence{
+			{Type: "program_scope", Label: "scope page", URI: "https://program.example/scope"},
+		},
+	}, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("expected signature validation error, got %v", err)
+	}
+}
+
+func TestValidateCampaignAuthorization_AcceptsSignedApprovalEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	err := validateCampaignAuthorization(model.AutomationCampaignUpsertRequest{
+		Active: true,
+		AuthorizationApproval: model.AuthorizationApproval{
+			ApprovedBy:   "analyst@example.com",
+			ApproverRole: "security-lead",
+			Signature:    "signed-attestation",
+			ApprovedAt:   now,
+		},
+		AuthorizationEvidence: []model.AuthorizationEvidence{
+			{
+				Type:   "program_scope",
+				Label:  "scope page",
+				URI:    "https://program.example/scope",
+				SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+		},
+	}, now)
+	if err != nil {
+		t.Fatalf("expected valid authorization payload, got %v", err)
+	}
+}
+
+func TestCampaignAuthorizationDigest_DeterministicAcrossEvidenceOrder(t *testing.T) {
+	base := model.AutomationCampaign{
+		ID:            "cmp-1",
+		WorkspaceID:   "default",
+		Target:        "https://example.com",
+		PolicyPack:    "internal",
+		PolicyVersion: 1,
+		AuthorizationApproval: model.AuthorizationApproval{
+			ApprovedBy:   "analyst@example.com",
+			ApproverRole: "security-lead",
+			Signature:    "signed-attestation",
+			ApprovedAt:   time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC),
+		},
+		AuthorizationEvidence: []model.AuthorizationEvidence{
+			{Type: "email", Label: "approval-email", URI: "https://mail.example/1"},
+			{Type: "program_scope", Label: "scope-page", URI: "https://program.example/scope"},
+		},
+	}
+	reordered := base
+	reordered.AuthorizationEvidence = []model.AuthorizationEvidence{
+		base.AuthorizationEvidence[1],
+		base.AuthorizationEvidence[0],
+	}
+	if campaignAuthorizationDigest(base) != campaignAuthorizationDigest(reordered) {
+		t.Fatal("expected digest to be deterministic regardless of evidence order")
+	}
+}
+
 func TestAutomationMisfirePolicy_DefaultAndCatchUp(t *testing.T) {
 	t.Setenv("AUTOMATION_MISFIRE_POLICY", "")
 	if got := automationMisfirePolicy(); got != "skip" {

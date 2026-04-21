@@ -15,8 +15,11 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -49,13 +52,23 @@ type Store interface {
 type Server struct {
 	store     Store
 	transport *http.Transport
+	ca        *CA
 	mu        sync.Mutex
 }
 
 // NewServer creates a new intercepting proxy backed by the provided Store.
 func NewServer(store Store) *Server {
+	return NewServerWithCA(store, nil)
+}
+
+// NewServerWithCA creates a new intercepting proxy backed by the provided
+// Store. When ca is non-nil, HTTPS CONNECT tunnels are intercepted ("MITM")
+// so request and response bodies can be captured. When ca is nil, CONNECT
+// tunnels are passed through transparently.
+func NewServerWithCA(store Store, ca *CA) *Server {
 	return &Server{
 		store: store,
+		ca:    ca,
 		transport: &http.Transport{
 			DialContext: (&net.Dialer{
 				Timeout:   15 * time.Second,
@@ -68,6 +81,13 @@ func NewServer(store Store) *Server {
 		},
 	}
 }
+
+// CA returns the configured certificate authority, or nil when HTTPS
+// interception is disabled.
+func (s *Server) CA() *CA { return s.ca }
+
+// MITMEnabled reports whether HTTPS CONNECT tunnels are intercepted.
+func (s *Server) MITMEnabled() bool { return s != nil && s.ca != nil }
 
 // Store returns the underlying persistence store.
 func (s *Server) Store() Store {
@@ -201,6 +221,19 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
+	// HTTPS interception ("MITM") path: terminate the client's TLS
+	// using a leaf certificate signed by our CA, then forward decrypted
+	// requests/responses through handleHTTP so they get captured fully.
+	if s.ca != nil {
+		if err := s.handleTunnelMITM(clientConn, host, destConn); err != nil {
+			s.captureMITMError(host, err)
+		}
+		return
+	}
+
+	// Pass-through tunnel path (no CA configured).
+	defer destConn.Close()
+
 	// Record the tunnel (no body content available without MitM).
 	captured := &model.ProxyRequest{
 		ID:         uuid.NewString(),
@@ -214,7 +247,7 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		ResponseStatus:  http.StatusOK,
 		ResponseHeaders: map[string]string{},
 		ResponseBody:    "(HTTPS tunnel — body not captured without MitM CA certificate)",
-		Notes:           "HTTPS CONNECT tunnel established. To inspect body, configure a CA certificate for TLS interception.",
+		Notes:           "HTTPS CONNECT tunnel established. Configure PROXY_CA_CERT_FILE/PROXY_CA_KEY_FILE to enable TLS interception.",
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -234,6 +267,176 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(clientConn, destConn)
 	}()
 	wg.Wait()
+}
+
+// handleTunnelMITM intercepts an HTTPS CONNECT tunnel: it terminates the
+// client's TLS using a leaf certificate signed by the configured CA, dials
+// the upstream over real TLS, and proxies decrypted HTTP requests/responses
+// while capturing the full request and response bodies.
+//
+// destConn is the already-established TCP connection to the upstream host
+// (left un-TLS'd intentionally so we can dial TLS on top of it).
+func (s *Server) handleTunnelMITM(clientConn net.Conn, host string, destConn net.Conn) error {
+	// Drop the upstream TCP connection — we'll redial it as a TLS client
+	// when the first decrypted request arrives, so SNI/ALPN match the
+	// client request.
+	_ = destConn.Close()
+
+	hostname, _, err := net.SplitHostPort(host)
+	if err != nil {
+		hostname = host
+	}
+	leaf, err := s.ca.LeafCertificate(hostname)
+	if err != nil {
+		return fmt.Errorf("mint leaf certificate for %s: %w", hostname, err)
+	}
+	tlsConn := tls.Server(clientConn, &tls.Config{
+		Certificates: []tls.Certificate{*leaf},
+		MinVersion:   tls.VersionTLS12,
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		return fmt.Errorf("client TLS handshake: %w", err)
+	}
+	defer tlsConn.Close()
+
+	clientReader := bufio.NewReader(tlsConn)
+	for {
+		_ = tlsConn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		req, err := http.ReadRequest(clientReader)
+		if err != nil {
+			if err == io.EOF || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("read decrypted request: %w", err)
+		}
+
+		// Reconstruct absolute URL from Host + RequestURI.
+		req.URL.Scheme = "https"
+		if req.URL.Host == "" {
+			req.URL.Host = req.Host
+			if req.URL.Host == "" {
+				req.URL.Host = host
+			}
+		}
+
+		if err := s.proxyDecryptedRequest(tlsConn, req); err != nil {
+			return err
+		}
+
+		if req.Close || req.Header.Get("Connection") == "close" {
+			return nil
+		}
+	}
+}
+
+// proxyDecryptedRequest sends a decrypted request to its real upstream over
+// TLS, captures the request/response pair, and writes the response back to
+// the client over the existing TLS connection.
+func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) error {
+	defer func() {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+	}()
+
+	if err := safety.ValidateOutboundURL(req.URL.String()); err != nil {
+		writeProxyError(clientTLS, http.StatusForbidden, "blocked by outbound safety policy")
+		return nil
+	}
+
+	// Capture request body.
+	var reqBodyBytes []byte
+	if req.Body != nil {
+		reqBodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, maxCaptureBody))
+	}
+
+	outReq, err := http.NewRequest(req.Method, req.URL.String(), bytes.NewReader(reqBodyBytes))
+	if err != nil {
+		writeProxyError(clientTLS, http.StatusInternalServerError, "failed to build request: "+err.Error())
+		return nil
+	}
+	copyHeaders(outReq.Header, req.Header)
+	outReq.Header.Del("Proxy-Connection")
+	outReq.Header.Del("Proxy-Authorization")
+
+	resp, err := s.transport.RoundTrip(outReq)
+	if err != nil {
+		writeProxyError(clientTLS, http.StatusBadGateway, "upstream error: "+err.Error())
+		s.captureError(req, reqBodyBytes, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxCaptureBody))
+
+	// Write the response back to the client over the same TLS connection.
+	out := &http.Response{
+		Status:     resp.Status,
+		StatusCode: resp.StatusCode,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     resp.Header.Clone(),
+		Body:       io.NopCloser(bytes.NewReader(respBodyBytes)),
+		Request:    req,
+	}
+	out.Header.Del("Transfer-Encoding")
+	out.ContentLength = int64(len(respBodyBytes))
+	if err := out.Write(clientTLS); err != nil {
+		return fmt.Errorf("write decrypted response: %w", err)
+	}
+
+	captured := &model.ProxyRequest{
+		ID:              uuid.NewString(),
+		CapturedAt:      time.Now().UTC(),
+		Method:          req.Method,
+		URL:             req.URL.String(),
+		RequestHeaders:  flattenHeaders(req.Header),
+		RequestBody:     string(reqBodyBytes),
+		ResponseStatus:  resp.StatusCode,
+		ResponseHeaders: flattenHeaders(resp.Header),
+		ResponseBody:    string(respBodyBytes),
+		Notes:           "captured via TLS interception",
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.store.SaveProxyRequest(ctx, captured)
+	}()
+	return nil
+}
+
+func writeProxyError(w net.Conn, status int, msg string) {
+	resp := &http.Response{
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		StatusCode: status,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}},
+		Body:       io.NopCloser(strings.NewReader(msg + "\n")),
+	}
+	resp.ContentLength = int64(len(msg) + 1)
+	_ = resp.Write(w)
+}
+
+// captureMITMError persists a synthetic record describing a TLS interception
+// failure so operators can debug bad CA installs without reading server logs.
+func (s *Server) captureMITMError(host string, err error) {
+	captured := &model.ProxyRequest{
+		ID:              uuid.NewString(),
+		CapturedAt:      time.Now().UTC(),
+		Method:          "CONNECT",
+		URL:             "https://" + host,
+		RequestHeaders:  map[string]string{"Host": host},
+		ResponseStatus:  0,
+		ResponseHeaders: map[string]string{},
+		ResponseBody:    "tls interception failed: " + err.Error(),
+		Notes:           "Install the proxy CA certificate (Settings → Proxy → Download CA) and restart the browser.",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.store.SaveProxyRequest(ctx, captured)
 }
 
 // captureError stores a failed request with the error as the response body.

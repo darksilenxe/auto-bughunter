@@ -266,7 +266,17 @@ Persistent recurring campaign scheduler for unattended operation.
 - `GET /api/automation/campaigns?activeOnly=true` lists campaigns for the caller workspace.
 - `POST/PUT` upserts a campaign (`target`, `intervalMin`, optional auth/options/scope).
 - `POST/PUT` also supports `scheduleType` (`interval|daily|weekly`), `scheduleValue`, `runWindow`, `blackoutWindows`, and `maxAttempts` for safer unattended dispatch.
+- Active campaign upserts require `authorizationApproval` (`approvedBy`, `approverRole`, `approvedAt`, `signature`) plus at least one `authorizationEvidence` record (`type`, `label`, `uri` and/or `sha256`).
 - `DELETE /api/automation/campaigns?id=<campaign-id>` deletes a campaign.
+
+### `GET /api/automation/campaign-authorization-export?id=<campaign-id>`
+
+Returns an immutable authorization evidence bundle for a campaign, including:
+
+- signed approval metadata
+- normalized evidence records
+- `authorizationDigest` (stable SHA-256 digest over campaign authorization payload)
+- `exportHash` (SHA-256 digest of the exported bundle)
 
 ### `GET|POST /api/automation/roi-overrides`
 
@@ -460,6 +470,7 @@ docker compose \
 - Scan scope supports host wildcard patterns (`*.example.com`) and out-of-scope path prefixes.
 - Scan creation and scanner execution enforce per-scan scope (target, integration expansion, and wordlist probes).
 - Proxy replay supports optional per-request scope validation via `scope` on `POST /api/proxy/replay`.
+- Burp-style proxy suite (HTTP History · Repeater · Intruder) is available in the frontend at `/proxy` when `ENABLE_PROXY=true`. The intercepting listener (default `:8081`) captures plain HTTP fully and HTTPS via optional TLS interception when a CA is configured. Set `PROXY_CA_CERT_FILE`, `PROXY_CA_KEY_FILE`, and `PROXY_CA_AUTOGENERATE=true` to have the backend self-sign a CA on first boot; download it from `GET /api/proxy/ca-certificate` (or the Configure Browser tab) and install in your browser/OS trust store. The Intruder fuzzer is exposed via `POST /api/proxy/intruder` and substitutes a marker (default `§`) in the URL/headers/body for each payload (capped at 200 per attack).
 - When a previous completed scan exists for the same target, the job includes a monitoring finding summarizing newly observed issues.
 - Optional automatic rescans can be scheduled per target with `options.rescanIntervalMinutes`.
 - Program scope profiles can be merged into per-scan scope automatically with `programScopeProfile`.

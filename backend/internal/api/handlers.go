@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +87,9 @@ const (
 	highROIMultiplierForDeepScan = 1.5
 	lowROICrawlFloorPages        = 40
 	lowROICrawlCeilingPages      = 120
+	// campaignApprovalClockSkewTolerance allows small client/server clock drift
+	// when validating approval timestamps on signed campaign authorizations.
+	campaignApprovalClockSkewTolerance = 5 * time.Minute
 	// High-confidence findings are already filtered by confidence/severity and
 	// therefore counted as full novelty units while all findings contribute a
 	// smaller background signal.
@@ -99,6 +104,16 @@ const (
 // SetOAST attaches an OAST service so its admin endpoints become active.
 // Safe to call with nil to disable.
 func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
+
+// SetProxyServer replaces the API server's intercepting proxy with an
+// externally-built one (e.g. configured with a CA for HTTPS interception).
+// Safe to call with nil to leave the default proxy in place.
+func (s *Server) SetProxyServer(p *proxy.Server) {
+	if p == nil {
+		return
+	}
+	s.proxyServer = p
+}
 
 // SetAttackGraphStore attaches an optional graph database-backed attack graph store.
 func (s *Server) SetAttackGraphStore(store AttackGraphStore) { s.attackGraphDB = store }
@@ -221,6 +236,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
 	mux.HandleFunc("/api/proxy/replay", s.handleProxyReplay)
+	mux.HandleFunc("/api/proxy/settings", s.handleProxySettings)
+	mux.HandleFunc("/api/proxy/ca-certificate", s.handleProxyCACertificate)
+	mux.HandleFunc("/api/proxy/intruder", s.handleProxyIntruder)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
@@ -232,6 +250,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/automation/campaigns", s.handleAutomationCampaigns)
+	mux.HandleFunc("/api/automation/campaign-authorization-export", s.handleAutomationCampaignAuthorizationExport)
 	mux.HandleFunc("/api/automation/roi-overrides", s.handleAutomationROIOverrides)
 	mux.HandleFunc("/api/automation/policy-packs", s.handleAutomationPolicyPacks)
 	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
@@ -1259,36 +1278,44 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 		req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
 		req.Options = s.applySafetyModePolicy(req.Options)
 		req.PolicyPack = normalizePolicyPackName(req.PolicyPack)
+		req.AuthorizationEvidence = normalizeAuthorizationEvidence(req.AuthorizationEvidence)
+		if err := validateCampaignAuthorization(req, now); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		policyVersion := 0
 		req.Options, policyVersion = s.applyAutomationPolicyPack(r.Context(), workspaceID, req.PolicyPack, req.Options)
 		req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
 		nextRunAt := computeNextCampaignRun(now, req)
 		item := model.AutomationCampaign{
-			ID:              req.ID,
-			Target:          target,
-			WorkspaceID:     workspaceID,
-			RequestedBy:     requesterFromRequest(r),
-			PolicyPack:      req.PolicyPack,
-			PolicyVersion:   policyVersion,
-			Name:            strings.TrimSpace(req.Name),
-			ProgramName:     strings.TrimSpace(req.ProgramName),
-			IntervalMin:     req.IntervalMin,
-			ScheduleType:    req.ScheduleType,
-			ScheduleValue:   strings.TrimSpace(req.ScheduleValue),
-			RunWindow:       strings.TrimSpace(req.RunWindow),
-			BlackoutWindows: req.BlackoutWindows,
-			NextRunAt:       nextRunAt,
-			MaxAttempts:     maxInt(3, req.MaxAttempts),
-			Active:          req.Active,
-			AuthProfile:     req.AuthProfile,
-			Options:         req.Options,
-			Scope:           req.Scope,
-			CreatedAt:       now,
-			UpdatedAt:       now,
+			ID:                    req.ID,
+			Target:                target,
+			WorkspaceID:           workspaceID,
+			RequestedBy:           requesterFromRequest(r),
+			PolicyPack:            req.PolicyPack,
+			PolicyVersion:         policyVersion,
+			AuthorizationApproval: req.AuthorizationApproval,
+			AuthorizationEvidence: req.AuthorizationEvidence,
+			Name:                  strings.TrimSpace(req.Name),
+			ProgramName:           strings.TrimSpace(req.ProgramName),
+			IntervalMin:           req.IntervalMin,
+			ScheduleType:          req.ScheduleType,
+			ScheduleValue:         strings.TrimSpace(req.ScheduleValue),
+			RunWindow:             strings.TrimSpace(req.RunWindow),
+			BlackoutWindows:       req.BlackoutWindows,
+			NextRunAt:             nextRunAt,
+			MaxAttempts:           maxInt(3, req.MaxAttempts),
+			Active:                req.Active,
+			AuthProfile:           req.AuthProfile,
+			Options:               req.Options,
+			Scope:                 req.Scope,
+			CreatedAt:             now,
+			UpdatedAt:             now,
 		}
 		if item.PolicyPack == "" {
 			item.PolicyPack = defaultPolicyPack()
 		}
+		item.AuthorizationDigest = campaignAuthorizationDigest(item)
 		if !req.Active {
 			item.NextRunAt = time.Time{}
 		}
@@ -1311,6 +1338,61 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (s *Server) handleAutomationCampaignAuthorizationExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	campaignID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if campaignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id query parameter is required"})
+		return
+	}
+	items, err := s.repo.ListAutomationCampaigns(r.Context(), workspaceID, false, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation campaigns"})
+		return
+	}
+	var campaign *model.AutomationCampaign
+	for i := range items {
+		if strings.TrimSpace(items[i].ID) == campaignID {
+			campaign = &items[i]
+			break
+		}
+	}
+	if campaign == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "campaign not found"})
+		return
+	}
+	evidence := normalizeAuthorizationEvidence(campaign.AuthorizationEvidence)
+	exportedAt := time.Now().UTC()
+	payload := map[string]any{
+		"schemaVersion":         "authorization-evidence.v1",
+		"campaignId":            campaign.ID,
+		"workspaceId":           campaign.WorkspaceID,
+		"target":                campaign.Target,
+		"policyPack":            campaign.PolicyPack,
+		"policyVersion":         campaign.PolicyVersion,
+		"authorizationApproval": campaign.AuthorizationApproval,
+		"authorizationEvidence": evidence,
+		"authorizationDigest":   firstNonEmpty(strings.TrimSpace(campaign.AuthorizationDigest), campaignAuthorizationDigest(*campaign)),
+		"exportedAt":            exportedAt,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate authorization export"})
+		return
+	}
+	sum := sha256.Sum256(raw)
+	payload["exportHash"] = hex.EncodeToString(sum[:])
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) {
@@ -2277,6 +2359,126 @@ func validateCampaignSchedule(scheduleType, scheduleValue, runWindow string, bla
 		}
 	}
 	return nil
+}
+
+func validateCampaignAuthorization(req model.AutomationCampaignUpsertRequest, now time.Time) error {
+	approval := req.AuthorizationApproval
+	evidence := normalizeAuthorizationEvidence(req.AuthorizationEvidence)
+	if !req.Active && strings.TrimSpace(approval.Signature) == "" && len(evidence) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(approval.ApprovedBy) == "" {
+		return fmt.Errorf("authorizationApproval.approvedBy is required")
+	}
+	if strings.TrimSpace(approval.ApproverRole) == "" {
+		return fmt.Errorf("authorizationApproval.approverRole is required")
+	}
+	if strings.TrimSpace(approval.Signature) == "" {
+		return fmt.Errorf("authorizationApproval.signature is required")
+	}
+	if approval.ApprovedAt.IsZero() {
+		return fmt.Errorf("authorizationApproval.approvedAt is required")
+	}
+	if approval.ApprovedAt.After(now.Add(campaignApprovalClockSkewTolerance)) {
+		return fmt.Errorf("authorizationApproval.approvedAt cannot be more than %d minutes in the future", int(campaignApprovalClockSkewTolerance.Minutes()))
+	}
+	if len(evidence) == 0 {
+		return fmt.Errorf("authorizationEvidence must include at least one record")
+	}
+	for i := range evidence {
+		ev := evidence[i]
+		if strings.TrimSpace(ev.Type) == "" {
+			return fmt.Errorf("authorizationEvidence[%d].type is required", i)
+		}
+		if strings.TrimSpace(ev.Label) == "" {
+			return fmt.Errorf("authorizationEvidence[%d].label is required", i)
+		}
+		if strings.TrimSpace(ev.URI) == "" && strings.TrimSpace(ev.SHA256) == "" {
+			return fmt.Errorf("authorizationEvidence[%d] requires uri or sha256", i)
+		}
+		if sum := strings.TrimSpace(ev.SHA256); sum != "" && !isSHA256Hex(sum) {
+			return fmt.Errorf("authorizationEvidence[%d].sha256 must be a 64-char hex digest", i)
+		}
+	}
+	return nil
+}
+
+func normalizeAuthorizationEvidence(in []model.AuthorizationEvidence) []model.AuthorizationEvidence {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]model.AuthorizationEvidence, 0, len(in))
+	for _, ev := range in {
+		ev.Type = strings.ToLower(strings.TrimSpace(ev.Type))
+		ev.Label = strings.TrimSpace(ev.Label)
+		ev.URI = strings.TrimSpace(ev.URI)
+		ev.Description = strings.TrimSpace(ev.Description)
+		ev.SHA256 = strings.ToLower(strings.TrimSpace(ev.SHA256))
+		if ev.Type == "" && ev.Label == "" && ev.URI == "" && ev.SHA256 == "" && ev.Description == "" {
+			continue
+		}
+		out = append(out, ev)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
+		}
+		if out[i].URI != out[j].URI {
+			return out[i].URI < out[j].URI
+		}
+		return out[i].SHA256 < out[j].SHA256
+	})
+	return out
+}
+
+func campaignAuthorizationDigest(c model.AutomationCampaign) string {
+	canonical := struct {
+		CampaignID            string                        `json:"campaignId"`
+		WorkspaceID           string                        `json:"workspaceId"`
+		Target                string                        `json:"target"`
+		PolicyPack            string                        `json:"policyPack"`
+		PolicyVersion         int                           `json:"policyVersion"`
+		AuthorizationApproval model.AuthorizationApproval   `json:"authorizationApproval"`
+		AuthorizationEvidence []model.AuthorizationEvidence `json:"authorizationEvidence"`
+	}{
+		CampaignID:            strings.TrimSpace(c.ID),
+		WorkspaceID:           strings.TrimSpace(c.WorkspaceID),
+		Target:                strings.TrimSpace(c.Target),
+		PolicyPack:            strings.TrimSpace(c.PolicyPack),
+		PolicyVersion:         c.PolicyVersion,
+		AuthorizationApproval: c.AuthorizationApproval,
+		AuthorizationEvidence: normalizeAuthorizationEvidence(c.AuthorizationEvidence),
+	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		fallback := []byte(fmt.Sprintf("%s|%s|%s|%s|%d|%s|%s",
+			canonical.CampaignID,
+			canonical.WorkspaceID,
+			canonical.Target,
+			canonical.PolicyPack,
+			canonical.PolicyVersion,
+			strings.TrimSpace(canonical.AuthorizationApproval.Signature),
+			strings.TrimSpace(canonical.AuthorizationApproval.ApprovedBy),
+		))
+		sum := sha256.Sum256(fallback)
+		return hex.EncodeToString(sum[:])
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func isSHA256Hex(raw string) bool {
+	if len(raw) != 64 {
+		return false
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return false
+	}
+	return len(decoded) == sha256.Size
 }
 
 func validWindowSpec(spec string) bool {

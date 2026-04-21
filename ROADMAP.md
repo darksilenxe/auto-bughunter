@@ -73,7 +73,7 @@ Focus areas: governance, authorization proof, auditability, and false-positive r
 
 ### Remaining implementation checklist
 
-- [ ] Add signed approval capture + immutable authorization evidence export package.
+- [x] Add signed approval capture + immutable authorization evidence export package.
 - [ ] Enforce explicit risk budgets per default profile in UI and API validation.
 - [ ] Complete lifecycle state machine and ownership transitions in operator UX.
 - [ ] Gate high-severity publication on corroboration + exploitability requirements by policy.
