@@ -404,42 +404,42 @@ type AutomationCampaignUpsertRequest struct {
 }
 
 type AutomationPolicyPack struct {
-	WorkspaceID              string    `json:"workspaceId"`
-	Name                     string    `json:"name"`
-	StrategyVersion          int       `json:"strategyVersion"`
-	CanaryPercent            int       `json:"canaryPercent,omitempty"`
-	AutomationMode           string    `json:"automationMode,omitempty"`
-	MinExpectedROIUSD        float64   `json:"minExpectedRoiUsd,omitempty"`
-	MaxAutomationConcurrency int       `json:"maxAutomationConcurrency,omitempty"`
-	MaxPerTargetConcurrency  int       `json:"maxPerTargetConcurrency,omitempty"`
-	MaxExploitAttempts       int       `json:"maxExploitAttempts,omitempty"`
-	DailyScanLimit           int       `json:"dailyScanLimit,omitempty"`
-	DailyRuntimeLimitMinutes int       `json:"dailyRuntimeLimitMinutes,omitempty"`
-	DailyProbeLimit          int       `json:"dailyProbeLimit,omitempty"`
-	EscalateOnNewHigh        bool      `json:"escalateOnNewHigh,omitempty"`
-	EscalateOnChangedHigh    bool      `json:"escalateOnChangedHigh,omitempty"`
+	WorkspaceID              string                    `json:"workspaceId"`
+	Name                     string                    `json:"name"`
+	StrategyVersion          int                       `json:"strategyVersion"`
+	CanaryPercent            int                       `json:"canaryPercent,omitempty"`
+	AutomationMode           string                    `json:"automationMode,omitempty"`
+	MinExpectedROIUSD        float64                   `json:"minExpectedRoiUsd,omitempty"`
+	MaxAutomationConcurrency int                       `json:"maxAutomationConcurrency,omitempty"`
+	MaxPerTargetConcurrency  int                       `json:"maxPerTargetConcurrency,omitempty"`
+	MaxExploitAttempts       int                       `json:"maxExploitAttempts,omitempty"`
+	DailyScanLimit           int                       `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int                       `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int                       `json:"dailyProbeLimit,omitempty"`
+	EscalateOnNewHigh        bool                      `json:"escalateOnNewHigh,omitempty"`
+	EscalateOnChangedHigh    bool                      `json:"escalateOnChangedHigh,omitempty"`
 	GovernanceProfile        AutonomyGovernanceProfile `json:"governanceProfile,omitempty"`
-	UpdatedBy                string    `json:"updatedBy,omitempty"`
-	UpdatedAt                time.Time `json:"updatedAt"`
+	UpdatedBy                string                    `json:"updatedBy,omitempty"`
+	UpdatedAt                time.Time                 `json:"updatedAt"`
 }
 
 type AutonomyGovernanceProfile struct {
-	SuccessCriteria  map[string]AutonomySuccessCriteria `json:"successCriteria,omitempty"`
-	RiskMatrix       AutonomyRiskMatrix                 `json:"riskMatrix,omitempty"`
-	FailureHandling  AutonomyFailureHandlingPolicy      `json:"failureHandling,omitempty"`
-	MemoryPolicy     AutonomyMemoryPolicy               `json:"memoryPolicy,omitempty"`
-	EvaluationGate   AutonomyEvaluationGate             `json:"evaluationGate,omitempty"`
-	RolloutControl   AutonomyRolloutControl             `json:"rolloutControl,omitempty"`
-	OperatorOverride AutonomyOperatorOverridePolicy     `json:"operatorOverride,omitempty"`
-	GovernanceCadence AutonomyGovernanceCadence        `json:"governanceCadence,omitempty"`
+	SuccessCriteria   map[string]AutonomySuccessCriteria `json:"successCriteria,omitempty"`
+	RiskMatrix        AutonomyRiskMatrix                 `json:"riskMatrix,omitempty"`
+	FailureHandling   AutonomyFailureHandlingPolicy      `json:"failureHandling,omitempty"`
+	MemoryPolicy      AutonomyMemoryPolicy               `json:"memoryPolicy,omitempty"`
+	EvaluationGate    AutonomyEvaluationGate             `json:"evaluationGate,omitempty"`
+	RolloutControl    AutonomyRolloutControl             `json:"rolloutControl,omitempty"`
+	OperatorOverride  AutonomyOperatorOverridePolicy     `json:"operatorOverride,omitempty"`
+	GovernanceCadence AutonomyGovernanceCadence          `json:"governanceCadence,omitempty"`
 }
 
 type AutonomySuccessCriteria struct {
-	NovelFindingsRateMin       float64 `json:"novelFindingsRateMin,omitempty"`
-	FalsePositiveRateMax       float64 `json:"falsePositiveRateMax,omitempty"`
+	NovelFindingsRateMin        float64 `json:"novelFindingsRateMin,omitempty"`
+	FalsePositiveRateMax        float64 `json:"falsePositiveRateMax,omitempty"`
 	DuplicateSuppressionRateMin float64 `json:"duplicateSuppressionRateMin,omitempty"`
-	FailureRecoveryRateMin     float64 `json:"failureRecoveryRateMin,omitempty"`
-	ScanDurationCapMinutes     int     `json:"scanDurationCapMinutes,omitempty"`
+	FailureRecoveryRateMin      float64 `json:"failureRecoveryRateMin,omitempty"`
+	ScanDurationCapMinutes      int     `json:"scanDurationCapMinutes,omitempty"`
 }
 
 type AutonomyRiskMatrix struct {
@@ -452,13 +452,13 @@ type AutonomyRiskMatrix struct {
 }
 
 type AutonomyFailureHandlingPolicy struct {
-	BackoffMillis                  int    `json:"backoffMillis,omitempty"`
-	FallbackPlanner                string `json:"fallbackPlanner,omitempty"`
-	SuppressionCooldownRounds      int    `json:"suppressionCooldownRounds,omitempty"`
-	MaxNoNoveltyRounds             int    `json:"maxNoNoveltyRounds,omitempty"`
-	MaxConsecutiveFailureRounds    int    `json:"maxConsecutiveFailureRounds,omitempty"`
-	AutoRetryOnFailure             bool   `json:"autoRetryOnFailure,omitempty"`
-	PauseForOperatorAfterFailures  int    `json:"pauseForOperatorAfterFailures,omitempty"`
+	BackoffMillis                 int    `json:"backoffMillis,omitempty"`
+	FallbackPlanner               string `json:"fallbackPlanner,omitempty"`
+	SuppressionCooldownRounds     int    `json:"suppressionCooldownRounds,omitempty"`
+	MaxNoNoveltyRounds            int    `json:"maxNoNoveltyRounds,omitempty"`
+	MaxConsecutiveFailureRounds   int    `json:"maxConsecutiveFailureRounds,omitempty"`
+	AutoRetryOnFailure            bool   `json:"autoRetryOnFailure,omitempty"`
+	PauseForOperatorAfterFailures int    `json:"pauseForOperatorAfterFailures,omitempty"`
 }
 
 type AutonomyMemoryPolicy struct {
@@ -468,30 +468,30 @@ type AutonomyMemoryPolicy struct {
 }
 
 type AutonomyEvaluationGate struct {
-	RequireReplayBenchmark bool    `json:"requireReplayBenchmark,omitempty"`
-	MinKPIDeltaScore       float64 `json:"minKpiDeltaScore,omitempty"`
-	PromoteToProdOnlyIfPass bool   `json:"promoteToProdOnlyIfPass,omitempty"`
+	RequireReplayBenchmark  bool    `json:"requireReplayBenchmark,omitempty"`
+	MinKPIDeltaScore        float64 `json:"minKpiDeltaScore,omitempty"`
+	PromoteToProdOnlyIfPass bool    `json:"promoteToProdOnlyIfPass,omitempty"`
 }
 
 type AutonomyRolloutControl struct {
-	CanaryPercentByStage map[string]int `json:"canaryPercentByStage,omitempty"`
-	PromotionStages      []string       `json:"promotionStages,omitempty"`
-	AutoRollbackOnErrorSpike bool       `json:"autoRollbackOnErrorSpike,omitempty"`
-	AutoRollbackOnSafetyViolation bool  `json:"autoRollbackOnSafetyViolation,omitempty"`
-	AutoRollbackOnKPIRegression bool    `json:"autoRollbackOnKpiRegression,omitempty"`
+	CanaryPercentByStage          map[string]int `json:"canaryPercentByStage,omitempty"`
+	PromotionStages               []string       `json:"promotionStages,omitempty"`
+	AutoRollbackOnErrorSpike      bool           `json:"autoRollbackOnErrorSpike,omitempty"`
+	AutoRollbackOnSafetyViolation bool           `json:"autoRollbackOnSafetyViolation,omitempty"`
+	AutoRollbackOnKPIRegression   bool           `json:"autoRollbackOnKpiRegression,omitempty"`
 }
 
 type AutonomyOperatorOverridePolicy struct {
-	AllowForceRun        bool `json:"allowForceRun,omitempty"`
-	AllowSuppress        bool `json:"allowSuppress,omitempty"`
-	AllowPlannerLock     bool `json:"allowPlannerLock,omitempty"`
-	AllowEmergencyStop   bool `json:"allowEmergencyStop,omitempty"`
-	AllowFallbackRerun   bool `json:"allowFallbackRerun,omitempty"`
-	RequireAuditLogging  bool `json:"requireAuditLogging,omitempty"`
+	AllowForceRun       bool `json:"allowForceRun,omitempty"`
+	AllowSuppress       bool `json:"allowSuppress,omitempty"`
+	AllowPlannerLock    bool `json:"allowPlannerLock,omitempty"`
+	AllowEmergencyStop  bool `json:"allowEmergencyStop,omitempty"`
+	AllowFallbackRerun  bool `json:"allowFallbackRerun,omitempty"`
+	RequireAuditLogging bool `json:"requireAuditLogging,omitempty"`
 }
 
 type AutonomyGovernanceCadence struct {
-	WeeklyReviewEnabled    bool `json:"weeklyReviewEnabled,omitempty"`
+	WeeklyReviewEnabled     bool `json:"weeklyReviewEnabled,omitempty"`
 	MonthlyRebalanceEnabled bool `json:"monthlyRebalanceEnabled,omitempty"`
 }
 
@@ -568,12 +568,12 @@ type PersistentScanState struct {
 }
 
 type AutonomyMemory struct {
-	PreferredAgents   []string                     `json:"preferredAgents,omitempty"`
-	SuppressedAgents  []string                     `json:"suppressedAgents,omitempty"`
-	LastAgentSequence []string                     `json:"lastAgentSequence,omitempty"`
-	AgentStats        map[string]AutonomyAgentStat `json:"agentStats,omitempty"`
-	LastRunAt         time.Time                    `json:"lastRunAt,omitempty"`
-	RetentionAppliedAt time.Time                   `json:"retentionAppliedAt,omitempty"`
+	PreferredAgents    []string                     `json:"preferredAgents,omitempty"`
+	SuppressedAgents   []string                     `json:"suppressedAgents,omitempty"`
+	LastAgentSequence  []string                     `json:"lastAgentSequence,omitempty"`
+	AgentStats         map[string]AutonomyAgentStat `json:"agentStats,omitempty"`
+	LastRunAt          time.Time                    `json:"lastRunAt,omitempty"`
+	RetentionAppliedAt time.Time                    `json:"retentionAppliedAt,omitempty"`
 }
 
 type AutonomyAgentStat struct {

@@ -1845,7 +1845,7 @@ func (p *Postgres) UpsertAutomationPolicyPack(ctx context.Context, item model.Au
 	if err != nil {
 		return fmt.Errorf("marshal governance profile: %w", err)
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO automation_policy_packs (
 			workspace_id, name, strategy_version, canary_percent, automation_mode, min_expected_roi_usd,
 			max_automation_concurrency, max_per_target_concurrency, max_exploit_attempts,
