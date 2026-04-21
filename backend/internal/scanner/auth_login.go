@@ -272,7 +272,11 @@ func runCustomLoginSteps(ctx context.Context, profile model.ScanAuthProfile) (lo
 		switch action {
 		case "fill":
 			var result loginFormSubmitResult
-			if err := chromedp.Run(ctx, chromedp.Evaluate(buildFillStepScript(step, profile.Username, profile.Password), &result)); err != nil {
+			script, err := buildFillStepScript(step, profile.Username, profile.Password)
+			if err != nil {
+				return loginFormSubmitResult{}, err
+			}
+			if err := chromedp.Run(ctx, chromedp.Evaluate(script, &result)); err != nil {
 				return loginFormSubmitResult{}, err
 			}
 			if !result.OK && !step.Optional {
@@ -280,7 +284,11 @@ func runCustomLoginSteps(ctx context.Context, profile model.ScanAuthProfile) (lo
 			}
 		case "click":
 			var result loginFormSubmitResult
-			if err := chromedp.Run(ctx, chromedp.Evaluate(buildClickStepScript(step), &result)); err != nil {
+			script, err := buildClickStepScript(step)
+			if err != nil {
+				return loginFormSubmitResult{}, err
+			}
+			if err := chromedp.Run(ctx, chromedp.Evaluate(script, &result)); err != nil {
 				return loginFormSubmitResult{}, err
 			}
 			if !result.OK && !step.Optional {
@@ -293,15 +301,21 @@ func runCustomLoginSteps(ctx context.Context, profile model.ScanAuthProfile) (lo
 				}
 			}
 		default:
-			return loginFormSubmitResult{OK: false, Reason: fmt.Sprintf("unsupported-step-%d", idx)}, nil
+			return loginFormSubmitResult{OK: false, Reason: fmt.Sprintf("unsupported-action-%s-step-%d", action, idx)}, nil
 		}
 	}
 	return loginFormSubmitResult{OK: true, Reason: "custom-login-steps-complete", Action: "custom-login-steps"}, nil
 }
 
-func buildFillStepScript(step model.ScanAuthLoginStep, username, password string) string {
-	selectorJSON, _ := json.Marshal(step.Selector)
-	valueJSON, _ := json.Marshal(resolveLoginStepValue(step.Value, username, password))
+func buildFillStepScript(step model.ScanAuthLoginStep, username, password string) (string, error) {
+	selectorJSON, err := json.Marshal(step.Selector)
+	if err != nil {
+		return "", err
+	}
+	valueJSON, err := json.Marshal(resolveLoginStepValue(step.Value, username, password))
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(`(() => {
   const selector = %s;
   const value = %s;
@@ -312,18 +326,21 @@ func buildFillStepScript(step model.ScanAuthLoginStep, username, password string
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return { ok: true, reason: 'filled', action: selector };
-})()`, selectorJSON, valueJSON)
+})()`, selectorJSON, valueJSON), nil
 }
 
-func buildClickStepScript(step model.ScanAuthLoginStep) string {
-	selectorJSON, _ := json.Marshal(step.Selector)
+func buildClickStepScript(step model.ScanAuthLoginStep) (string, error) {
+	selectorJSON, err := json.Marshal(step.Selector)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(`(() => {
   const selector = %s;
   const el = document.querySelector(selector);
   if (!el) return { ok: false, reason: 'selector-not-found', action: selector };
   el.click();
   return { ok: true, reason: 'clicked', action: selector };
-})()`, selectorJSON)
+})()`, selectorJSON), nil
 }
 
 func resolveLoginStepValue(value, username, password string) string {
