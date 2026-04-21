@@ -11,7 +11,7 @@ export default function AttackGraph() {
   const isRunning = job?.status === "running" || loading;
 
   return (
-    <div className="page">
+    <div className="page" style={{ maxWidth: "none" }}>
       <header>
         <h1>⛓ Attack Graph</h1>
         <p>Live attack chain and agent pipeline visualisation</p>
@@ -69,7 +69,7 @@ export default function AttackGraph() {
           )}
           {activeGraphTab === "pipeline" && (
             <div style={{ padding: "12px" }}>
-              <AttackPathGraph events={liveEvents} />
+              <AttackPathGraph events={liveEvents} job={job} />
             </div>
           )}
         </section>
