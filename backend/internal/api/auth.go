@@ -3,9 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -237,12 +234,19 @@ func hasRole(ctx context.Context, allowed ...model.APIKeyRole) bool {
 func canAccessWorkspace(ctx context.Context, workspaceID string) bool {
 	p, ok := principalFromContext(ctx)
 	if !ok {
-		return true
+		return false
 	}
 	if p.SuperAdmin {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(p.WorkspaceID), strings.TrimSpace(workspaceID))
+}
+
+func canAccessWorkspaceForRequest(ctx context.Context, workspaceID string) bool {
+	if _, ok := principalFromContext(ctx); !ok {
+		return false
+	}
+	return canAccessWorkspace(ctx, workspaceID)
 }
 
 func extractAPIKey(r *http.Request) string {
@@ -270,26 +274,6 @@ func normalizeAPIKeyRole(raw string) model.APIKeyRole {
 	default:
 		return model.APIKeyRoleViewer
 	}
-}
-
-func generateRawAPIKey() (string, error) {
-	buf := make([]byte, 24)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return "abh_" + hex.EncodeToString(buf), nil
-}
-
-func hashAPIKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
-}
-
-func apiKeyPrefix(raw string) string {
-	if len(raw) <= 12 {
-		return raw
-	}
-	return raw[:12]
 }
 
 func subtleConstantTimeEq(a, b string) bool {

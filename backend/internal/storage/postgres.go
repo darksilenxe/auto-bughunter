@@ -1,14 +1,13 @@
 package storage
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"encoding/hex"
 	"os"
 	"regexp"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Postgres struct {
@@ -1209,10 +1209,14 @@ func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, r
 		CreatedAt:   now,
 		Active:      true,
 	}
+	hashed, err := hashAPIKey(raw)
+	if err != nil {
+		return nil, "", err
+	}
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO api_keys (id, workspace_id, name, role, key_hash, key_prefix, active, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)
-	`, rec.ID, rec.WorkspaceID, rec.Name, string(rec.Role), hashAPIKey(raw), rec.KeyPrefix, rec.CreatedAt)
+	`, rec.ID, rec.WorkspaceID, rec.Name, string(rec.Role), hashed, rec.KeyPrefix, rec.CreatedAt)
 	if err != nil {
 		return nil, "", fmt.Errorf("insert api key: %w", err)
 	}
@@ -1249,12 +1253,16 @@ func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRe
 	if err != nil {
 		return nil, "", err
 	}
+	hashed, err := hashAPIKey(raw)
+	if err != nil {
+		return nil, "", err
+	}
 	now := time.Now().UTC()
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE api_keys
 		SET key_hash = $2, key_prefix = $3, rotated_at = $4, revoked_at = NULL, active = TRUE
 		WHERE id = $1
-	`, strings.TrimSpace(id), hashAPIKey(raw), apiKeyPrefix(raw), now)
+	`, strings.TrimSpace(id), hashed, apiKeyPrefix(raw), now)
 	if err != nil {
 		return nil, "", fmt.Errorf("rotate api key: %w", err)
 	}
@@ -1285,21 +1293,28 @@ func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
 }
 
 func (p *Postgres) AuthenticateAPIKey(ctx context.Context, rawKey string) (*model.APIKeyRecord, error) {
-	row := p.db.QueryRowContext(ctx, `
-		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active, key_hash
 		FROM api_keys
-		WHERE key_hash = $1 AND active = TRUE
-	`, hashAPIKey(strings.TrimSpace(rawKey)))
-	var rec model.APIKeyRecord
-	var role string
-	if err := row.Scan(&rec.ID, &rec.WorkspaceID, &rec.Name, &role, &rec.KeyPrefix, &rec.CreatedAt, &rec.RotatedAt, &rec.RevokedAt, &rec.Active); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, sql.ErrNoRows
-		}
+		WHERE active = TRUE
+	`)
+	if err != nil {
 		return nil, fmt.Errorf("authenticate api key: %w", err)
 	}
-	rec.Role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(role)))
-	return &rec, nil
+	defer rows.Close()
+	candidate := strings.TrimSpace(rawKey)
+	for rows.Next() {
+		var rec model.APIKeyRecord
+		var role, hashed string
+		if err := rows.Scan(&rec.ID, &rec.WorkspaceID, &rec.Name, &role, &rec.KeyPrefix, &rec.CreatedAt, &rec.RotatedAt, &rec.RevokedAt, &rec.Active, &hashed); err != nil {
+			return nil, fmt.Errorf("authenticate api key row: %w", err)
+		}
+		if bcrypt.CompareHashAndPassword([]byte(hashed), []byte(candidate)) == nil {
+			rec.Role = model.APIKeyRole(strings.ToLower(strings.TrimSpace(role)))
+			return &rec, nil
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (p *Postgres) getAPIKeyByID(ctx context.Context, id string) (*model.APIKeyRecord, error) {
@@ -1324,9 +1339,12 @@ func generateRawAPIKey() (string, error) {
 	return "abh_" + hex.EncodeToString(buf), nil
 }
 
-func hashAPIKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+func hashAPIKey(raw string) (string, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(strings.TrimSpace(raw)), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashed), nil
 }
 
 func apiKeyPrefix(raw string) string {

@@ -26,7 +26,7 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		workspaceID := firstNonEmpty(workspaceFromHeader(r), workspaceFromRequest(r), "default")
+		workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
 		if !canAccessWorkspace(r.Context(), workspaceID) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
 			return

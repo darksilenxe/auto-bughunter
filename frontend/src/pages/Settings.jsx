@@ -12,15 +12,22 @@ const EMPTY_PROGRAM = {
   notes: "",
 };
 
+const DEFAULT_AI_CONFIG = {
+  summaryModel: "phi3:mini",
+  triageModel: "phi3:mini",
+  temperature: "0.2",
+  maxTokens: "1200",
+};
+
 export default function Settings() {
   const { programs, savePrograms } = useScan();
   const [editing, setEditing] = useState(null); // null | index | "new"
   const [form, setForm] = useState(EMPTY_PROGRAM);
   const [aiConfig, setAIConfig] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("ai_model_preferences") || "{\"summaryModel\":\"phi3:mini\",\"triageModel\":\"phi3:mini\",\"temperature\":\"0.2\",\"maxTokens\":\"1200\"}");
+      return JSON.parse(localStorage.getItem("ai_model_preferences") || JSON.stringify(DEFAULT_AI_CONFIG));
     } catch {
-      return { summaryModel: "phi3:mini", triageModel: "phi3:mini", temperature: "0.2", maxTokens: "1200" };
+      return DEFAULT_AI_CONFIG;
     }
   });
   const [feedForm, setFeedForm] = useState({ scanId: "", findingId: "", outcome: "accepted", notes: "", payoutUsd: "" });

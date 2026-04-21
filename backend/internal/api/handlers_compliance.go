@@ -23,7 +23,7 @@ func (s *Server) handleComplianceEvidence(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
 		return
 	}
-	if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}

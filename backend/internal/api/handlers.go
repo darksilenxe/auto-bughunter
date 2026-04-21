@@ -42,33 +42,33 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService   *scanner.Service
-	aiClient      *ai.Client
-	repo          Repository
-	agentRegistry *agent.Registry
-	agentFactory  *agent.Factory
-	autonomous    bool
-	maxRounds     int
-	proxyServer   *proxy.Server
-	mlService     *ml.Service
-	knowledgeSvc  *knowledge.Client
-	agentLearner  *agentlearner.Client
-	agentConfig   AgentConfig
-	maxPerTarget  int
-	semMu         sync.Mutex
-	targetSem     map[string]chan struct{}
-	globalSem     chan struct{}
-	rateMu        sync.Mutex
-	targetLastRun map[string]time.Time
-	webhookURL    string
-	slackWebhook  string
-	notifyMinConf float64
-	gateHighBlock int
-	gateMedBlock  int
-	scanTimeout   time.Duration
-	eventBus      *EventBus
-	oast          *oast.Service
-	attackGraphDB AttackGraphStore
+	scanService    *scanner.Service
+	aiClient       *ai.Client
+	repo           Repository
+	agentRegistry  *agent.Registry
+	agentFactory   *agent.Factory
+	autonomous     bool
+	maxRounds      int
+	proxyServer    *proxy.Server
+	mlService      *ml.Service
+	knowledgeSvc   *knowledge.Client
+	agentLearner   *agentlearner.Client
+	agentConfig    AgentConfig
+	maxPerTarget   int
+	semMu          sync.Mutex
+	targetSem      map[string]chan struct{}
+	globalSem      chan struct{}
+	rateMu         sync.Mutex
+	targetLastRun  map[string]time.Time
+	webhookURL     string
+	slackWebhook   string
+	notifyMinConf  float64
+	gateHighBlock  int
+	gateMedBlock   int
+	scanTimeout    time.Duration
+	eventBus       *EventBus
+	oast           *oast.Service
+	attackGraphDB  AttackGraphStore
 	apiRateLimiter *apiRateLimiter
 }
 
@@ -134,29 +134,29 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		scanTimeout = 10 * time.Minute
 	}
 	return &Server{
-		scanService:   scanService,
-		aiClient:      aiClient,
-		repo:          repo,
-		agentRegistry: reg,
-		agentFactory:  factory,
-		autonomous:    autonomous,
-		maxRounds:     maxRounds,
-		proxyServer:   proxy.NewServer(proxyStore),
-		mlService:     mlService,
-		knowledgeSvc:  knowledgeSvc,
-		agentLearner:  agentLearner,
-		agentConfig:   agentCfg,
-		maxPerTarget:  maxInt(1, maxPerTarget),
-		targetSem:     map[string]chan struct{}{},
-		globalSem:     make(chan struct{}, globalBudget),
-		targetLastRun: map[string]time.Time{},
-		webhookURL:    strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
-		slackWebhook:  strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
-		notifyMinConf: maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
-		gateHighBlock: maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
-		gateMedBlock:  maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
-		scanTimeout:   scanTimeout,
-		eventBus:      NewEventBus(),
+		scanService:    scanService,
+		aiClient:       aiClient,
+		repo:           repo,
+		agentRegistry:  reg,
+		agentFactory:   factory,
+		autonomous:     autonomous,
+		maxRounds:      maxRounds,
+		proxyServer:    proxy.NewServer(proxyStore),
+		mlService:      mlService,
+		knowledgeSvc:   knowledgeSvc,
+		agentLearner:   agentLearner,
+		agentConfig:    agentCfg,
+		maxPerTarget:   maxInt(1, maxPerTarget),
+		targetSem:      map[string]chan struct{}{},
+		globalSem:      make(chan struct{}, globalBudget),
+		targetLastRun:  map[string]time.Time{},
+		webhookURL:     strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
+		slackWebhook:   strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
+		notifyMinConf:  maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
+		gateHighBlock:  maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
+		gateMedBlock:   maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
+		scanTimeout:    scanTimeout,
+		eventBus:       NewEventBus(),
 		apiRateLimiter: newAPIRateLimiter(),
 	}
 }
@@ -243,7 +243,7 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 		if j == nil {
 			continue
 		}
-		if !canAccessWorkspace(r.Context(), j.WorkspaceID) {
+		if !canAccessWorkspaceForRequest(r.Context(), j.WorkspaceID) {
 			continue
 		}
 		var high int
@@ -306,7 +306,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), strings.TrimSpace(req.WorkspaceID), "default")
-	if !canAccessWorkspace(r.Context(), workspaceID) {
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
 		return
 	}
@@ -381,7 +381,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
 		return
 	}
-	if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -805,7 +805,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
-	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -839,7 +839,7 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	}
 	req.ID = uuid.NewString()
 	req.CreatedAt = time.Now().UTC()
-	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -972,7 +972,7 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	req.Options.DeepScanOnHighSignal = true
 	req.Options.RescanIntervalMinutes = 0
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
-	if !canAccessWorkspace(r.Context(), workspaceID) {
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
 		return
 	}
@@ -1016,10 +1016,10 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), "", 1000)
 
 	report := model.ExecutiveReport{
-		GeneratedAt:           time.Now().UTC(),
+		GeneratedAt: time.Now().UTC(),
 	}
 	for _, job := range jobs {
-		if !canAccessWorkspace(r.Context(), job.WorkspaceID) {
+		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 			continue
 		}
 		report.TotalCompletedScans++
