@@ -167,10 +167,14 @@ export default function AttackPathGraph({ events = [], job = null }) {
   // explicit ml_triage lifecycle event; infer it so the pipeline remains
   // visually continuous for operators.
   if (nodeStates.ml_triage === undefined) {
-    const downstreamActive = ["attack_path", "false_positive_review", "remediation_planner"]
-      .some((name) => ["running", "complete", "failed"].includes(nodeStates[name]));
+    const downstreamStates = ["attack_path", "false_positive_review", "remediation_planner"]
+      .map((name) => nodeStates[name])
+      .filter(Boolean);
+    const downstreamActive = downstreamStates.some((state) => ["running", "complete", "failed"].includes(state));
     if (downstreamActive) {
-      nodeStates.ml_triage = job?.status === "running" ? "running" : "complete";
+      nodeStates.ml_triage = downstreamStates.includes("failed")
+        ? "failed"
+        : (job?.status === "running" ? "running" : "complete");
     }
   }
 
