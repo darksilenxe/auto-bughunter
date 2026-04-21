@@ -363,6 +363,20 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 	}
 
+	// Global adaptive autonomy rules.
+	if hasHigh {
+		spawned = append(spawned, "attack_path")
+	}
+	if hasAuthIssue {
+		spawned = append(spawned, "auth_bypass")
+	}
+	if hasSSRFIndicator {
+		spawned = append(spawned, "ssrf")
+	}
+	if hasRCEIndicator {
+		spawned = append(spawned, "metasploit")
+	}
+
 	// Neural learner recommendations (augment static rules).
 	if r.spawner != nil {
 		learned := r.spawner.Recommend(ctx, completedAgent, allFindings, 3, 0.65)

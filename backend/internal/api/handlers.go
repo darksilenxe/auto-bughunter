@@ -3159,6 +3159,9 @@ func sendWebhookJSON(target string, payload any) {
 	if target == "" {
 		return
 	}
+	if err := safety.ValidateOutboundURL(target); err != nil {
+		return
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -3168,7 +3171,18 @@ func sendWebhookJSON(target string, payload any) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(redirReq *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			if err := safety.ValidateOutboundURL(redirReq.URL.String()); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return
