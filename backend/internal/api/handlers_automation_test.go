@@ -125,14 +125,26 @@ func TestApplyGovernancePolicy_MapsFailureHandlingAndCanaryStage(t *testing.T) {
 	t.Setenv("AUTOMATION_ENV_STAGE", "staging")
 	options := model.ScanOptions{}
 	got := applyGovernancePolicy(options, model.AutonomyGovernanceProfile{
+		SuccessCriteria: map[string]model.AutonomySuccessCriteria{
+			"staging": {
+				NovelFindingsRateMin: 0.4,
+				FalsePositiveRateMax: 0.2,
+			},
+		},
 		FailureHandling: model.AutonomyFailureHandlingPolicy{
 			MaxNoNoveltyRounds:          4,
 			MaxConsecutiveFailureRounds: 3,
 			BackoffMillis:               700,
 			AutoRetryOnFailure:          true,
 		},
+		MemoryPolicy: model.AutonomyMemoryPolicy{
+			RetentionDays: 45,
+		},
 		RolloutControl: model.AutonomyRolloutControl{
 			CanaryPercentByStage: map[string]int{"staging": 0},
+		},
+		OperatorOverride: model.AutonomyOperatorOverridePolicy{
+			AllowFallbackRerun: true,
 		},
 	})
 	if got.AutonomyMaxNoNoveltyRounds != 4 || got.AutonomyMaxConsecutiveFailRounds != 3 {
@@ -146,6 +158,15 @@ func TestApplyGovernancePolicy_MapsFailureHandlingAndCanaryStage(t *testing.T) {
 	}
 	if got.MaxAutomationConcurrency != 1 {
 		t.Fatalf("expected max automation concurrency to be capped to 1 on 0%% canary, got %d", got.MaxAutomationConcurrency)
+	}
+	if got.AutonomyMemoryRetentionDays != 45 {
+		t.Fatalf("expected memory retention days to be mapped, got %d", got.AutonomyMemoryRetentionDays)
+	}
+	if got.AutonomyMinMarginalScore <= 0 {
+		t.Fatalf("expected autonomy marginal score threshold to be set, got %f", got.AutonomyMinMarginalScore)
+	}
+	if got.AutonomyExplorationBudgetPercent != 0 {
+		t.Fatalf("expected exploration budget disabled on 0%% canary, got %d", got.AutonomyExplorationBudgetPercent)
 	}
 }
 

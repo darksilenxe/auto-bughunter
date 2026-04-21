@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,13 +58,16 @@ type SpawnResponse struct {
 
 // LearnRequest is sent to the agents service after a scan completes.
 type LearnRequest struct {
-	ScanID        string           `json:"scanId"`
-	AgentSequence []string         `json:"agentSequence"`
-	Findings      []findingPayload `json:"findings"`
-	HighCount     int              `json:"highCount"`
-	MediumCount   int              `json:"mediumCount"`
-	LowCount      int              `json:"lowCount"`
-	DurationMs    int64            `json:"durationMs"`
+	ScanID               string           `json:"scanId"`
+	AgentSequence        []string         `json:"agentSequence"`
+	Findings             []findingPayload `json:"findings"`
+	HighCount            int              `json:"highCount"`
+	MediumCount          int              `json:"mediumCount"`
+	LowCount             int              `json:"lowCount"`
+	DurationMs           int64            `json:"durationMs"`
+	DecisionQualityScore float64          `json:"decisionQualityScore,omitempty"`
+	FalsePositiveProxy   float64          `json:"falsePositiveProxy,omitempty"`
+	TimeToSignalMs       int64            `json:"timeToSignalMs,omitempty"`
 }
 
 type findingPayload struct {
@@ -93,19 +97,23 @@ func (c *Client) Recommend(ctx context.Context, sourceAgent string, findings []m
 }
 
 // Learn calls the agents service to update Q-values from a completed scan.
-func (c *Client) Learn(ctx context.Context, scanID string, agentSequence []string, findings []model.Finding, durationMs int64) {
+func (c *Client) Learn(ctx context.Context, scanID string, agentSequence []string, findings []model.Finding, durationMs int64, runs []model.AgentRunTelemetry) {
 	if c == nil {
 		return
 	}
 	high, medium, low := countBySeverity(findings)
+	decisionScore, falsePositiveProxy, timeToSignalMs := summarizeAutonomyRunQuality(findings, runs, durationMs)
 	req := LearnRequest{
-		ScanID:        scanID,
-		AgentSequence: agentSequence,
-		Findings:      toPayload(findings),
-		HighCount:     high,
-		MediumCount:   medium,
-		LowCount:      low,
-		DurationMs:    durationMs,
+		ScanID:               scanID,
+		AgentSequence:        agentSequence,
+		Findings:             toPayload(findings),
+		HighCount:            high,
+		MediumCount:          medium,
+		LowCount:             low,
+		DurationMs:           durationMs,
+		DecisionQualityScore: decisionScore,
+		FalsePositiveProxy:   falsePositiveProxy,
+		TimeToSignalMs:       timeToSignalMs,
 	}
 	// Fire-and-forget: learning is non-critical and should not block the scan.
 	go func() {
@@ -113,6 +121,64 @@ func (c *Client) Learn(ctx context.Context, scanID string, agentSequence []strin
 		defer cancel()
 		_ = c.post(ctx2, "/v1/learn", req, nil)
 	}()
+}
+
+func summarizeAutonomyRunQuality(findings []model.Finding, runs []model.AgentRunTelemetry, durationMs int64) (decisionQuality float64, falsePositiveProxy float64, timeToSignalMs int64) {
+	scoreSum := 0.0
+	scoreCount := 0
+	lowConf := 0
+	withConf := 0
+	elapsed := int64(0)
+	timeToSignalMs = durationMs
+	for _, run := range runs {
+		elapsed += run.DurationMs
+		if run.Metadata != nil {
+			if raw := strings.TrimSpace(run.Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					scoreSum += clamp(parsed, 0, 1)
+					scoreCount++
+				}
+			}
+		}
+		if timeToSignalMs == durationMs {
+			if raw := strings.TrimSpace(run.Metadata["findings"]); raw != "" && raw != "0" {
+				timeToSignalMs = elapsed
+			}
+		}
+	}
+	for _, f := range findings {
+		if f.Confidence <= 0 {
+			continue
+		}
+		withConf++
+		if f.Confidence < 0.4 {
+			lowConf++
+		}
+	}
+	if scoreCount > 0 {
+		decisionQuality = scoreSum / float64(scoreCount)
+	}
+	if withConf > 0 {
+		falsePositiveProxy = float64(lowConf) / float64(withConf)
+	}
+	return clamp(decisionQuality, 0, 1), clamp(falsePositiveProxy, 0, 1), maxInt64(0, timeToSignalMs)
+}
+
+func clamp(v, minV, maxV float64) float64 {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Weights fetches the current Q-table weights summary from the agents service.

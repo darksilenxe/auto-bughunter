@@ -236,6 +236,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
 	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
 	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
+	mux.HandleFunc("/api/automation/operator-feedback", s.handleAutomationOperatorFeedback)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
@@ -664,7 +665,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		})
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
-	s.persistScanState(target, job.Findings, outputs)
+	s.persistScanState(target, job.Findings, outputs, options)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -681,7 +682,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		if job.CompletedAt != nil {
 			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
 		}
-		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
+		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs, job.AgentRuns)
 	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
 	emit(model.ScanEvent{
@@ -915,6 +916,68 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleAutomationOperatorFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		ScanID          string `json:"scanId"`
+		ActionID        string `json:"actionId"`
+		SuggestedAction string `json:"suggestedAction"`
+		Decision        string `json:"decision"`
+		AgentName       string `json:"agentName"`
+		Notes           string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.ScanID = strings.TrimSpace(req.ScanID)
+	req.ActionID = strings.TrimSpace(req.ActionID)
+	req.SuggestedAction = strings.TrimSpace(req.SuggestedAction)
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	req.AgentName = strings.TrimSpace(req.AgentName)
+	req.Notes = strings.TrimSpace(req.Notes)
+	if req.ScanID == "" || req.Decision == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and decision are required"})
+		return
+	}
+	if req.Decision != "approve" && req.Decision != "reject" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "decision must be approve or reject"})
+		return
+	}
+	job, err := s.repo.GetJob(r.Context(), req.ScanID)
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+	actionID := req.ActionID
+	if actionID == "" {
+		actionID = uuid.NewString()
+	}
+	outcome := "rejected"
+	if req.Decision == "approve" {
+		outcome = "accepted"
+	}
+	feedback := model.ReportFeedback{
+		ID:          uuid.NewString(),
+		ScanID:      req.ScanID,
+		FindingID:   "autonomy-action:" + actionID,
+		Category:    "autonomy-action",
+		Title:       firstNonEmpty(req.SuggestedAction, "autonomous operator decision"),
+		Outcome:     outcome,
+		Notes:       strings.TrimSpace("decision=" + req.Decision + ";agent=" + req.AgentName + ";actionId=" + actionID + ";suggestedAction=" + req.SuggestedAction + ";notes=" + req.Notes),
+		CreatedAt:   time.Now().UTC(),
+		ProgramName: strings.TrimSpace(job.ProgramName),
+	}
+	if err := s.repo.SaveFeedback(r.Context(), feedback); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist operator feedback"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": feedback.ID, "status": "recorded"})
 }
 
 func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Request) {
@@ -1481,20 +1544,62 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 	if governance.FailureHandling.AutoRetryOnFailure {
 		options.AutonomyFallbackRerun = true
 	}
-	if governance.OperatorOverride.RequireAuditLogging && !governance.OperatorOverride.AllowEmergencyStop {
-		options.AutonomyEmergencyStop = false
+	if lock := strings.ToLower(strings.TrimSpace(governance.FailureHandling.FallbackPlanner)); lock == "static" || lock == "fallback" || lock == "ai" {
+		if strings.TrimSpace(options.AutonomyPlannerLock) == "" {
+			options.AutonomyPlannerLock = lock
+		}
+	}
+	if governance.MemoryPolicy.RetentionDays > 0 {
+		options.AutonomyMemoryRetentionDays = governance.MemoryPolicy.RetentionDays
+	}
+	if governance.RiskMatrix.RetryLimit > 0 {
+		if options.MaxRetries <= 0 {
+			options.MaxRetries = governance.RiskMatrix.RetryLimit
+		} else {
+			options.MaxRetries = minInt(options.MaxRetries, governance.RiskMatrix.RetryLimit)
+		}
+	}
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	if stage == "" {
+		stage = "dev"
+	}
+	if criteria, ok := governance.SuccessCriteria[stage]; ok {
+		marginal := criteria.NovelFindingsRateMin
+		if criteria.FalsePositiveRateMax > 0 {
+			marginal *= maxFloat(0.1, 1.0-criteria.FalsePositiveRateMax*0.5)
+		}
+		if marginal > 0 {
+			options.AutonomyMinMarginalScore = maxFloat(options.AutonomyMinMarginalScore, minFloat(0.95, marginal))
+		}
 	}
 	if governance.RolloutControl.CanaryPercentByStage != nil {
-		stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
-		if stage == "" {
-			stage = "dev"
-		}
 		if p, ok := governance.RolloutControl.CanaryPercentByStage[stage]; ok {
 			p = maxInt(0, minInt(100, p))
 			if p == 0 {
 				options.MaxAutomationConcurrency = 1
+				options.AutonomyExplorationBudgetPercent = 0
+			} else {
+				options.AutonomyExplorationBudgetPercent = maxInt(options.AutonomyExplorationBudgetPercent, minInt(25, maxInt(5, p/4)))
 			}
 		}
+	}
+	if !governance.OperatorOverride.AllowForceRun {
+		options.AutonomyForceRunAgents = nil
+	}
+	if !governance.OperatorOverride.AllowSuppress {
+		options.AutonomySuppressAgents = nil
+	}
+	if !governance.OperatorOverride.AllowPlannerLock {
+		options.AutonomyPlannerLock = ""
+	}
+	if !governance.OperatorOverride.AllowFallbackRerun {
+		options.AutonomyFallbackRerun = false
+	}
+	if !governance.OperatorOverride.AllowEmergencyStop {
+		options.AutonomyEmergencyStop = false
+	}
+	if governance.OperatorOverride.RequireAuditLogging && !governance.OperatorOverride.AllowEmergencyStop {
+		options.AutonomyEmergencyStop = false
 	}
 	return options
 }
@@ -1781,8 +1886,18 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		pack.GovernanceProfile.EvaluationGate.PromoteToProdOnlyIfPass &&
 		pack.GovernanceProfile.EvaluationGate.RequireReplayBenchmark &&
 		!strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Replay-Benchmark-Pass")), "true") {
-		writeJSON(w, http.StatusPreconditionFailed, map[string]string{"error": "replay benchmark approval is required for production promotion"})
-		return
+		passed, delta, benchErr := s.runReplayBenchmark(r.Context(), workspaceID, pack.GovernanceProfile.EvaluationGate.MinKPIDeltaScore)
+		if benchErr != nil {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{"error": "replay benchmark approval is required for production promotion"})
+			return
+		}
+		if !passed {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"error": "replay benchmark did not meet minimum KPI delta score",
+				"delta": fmt.Sprintf("%.3f", delta),
+			})
+			return
+		}
 	}
 	beforeRaw, _ := json.Marshal(pack)
 	next := *pack
@@ -1828,6 +1943,51 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		"canaryPercent":   next.CanaryPercent,
 		"rollback":        req.Rollback,
 	})
+}
+
+func (s *Server) runReplayBenchmark(ctx context.Context, workspaceID string, minDelta float64) (bool, float64, error) {
+	jobs, err := s.repo.ListCompletedJobs(ctx, 500)
+	if err != nil {
+		return false, 0, err
+	}
+	total := 0.0
+	count := 0
+	for _, job := range jobs {
+		if firstNonEmpty(job.WorkspaceID, "default") != firstNonEmpty(workspaceID, "default") {
+			continue
+		}
+		runScore := 0.0
+		runCount := 0
+		for _, run := range job.AgentRuns {
+			if run.Metadata == nil {
+				continue
+			}
+			raw := strings.TrimSpace(run.Metadata["decision_quality_score"])
+			if raw == "" {
+				continue
+			}
+			parsed, parseErr := strconv.ParseFloat(raw, 64)
+			if parseErr != nil {
+				continue
+			}
+			runScore += clampFloat(parsed, 0, 1)
+			runCount++
+		}
+		if runCount == 0 {
+			continue
+		}
+		total += runScore / float64(runCount)
+		count++
+		if count >= 100 {
+			break
+		}
+	}
+	if count == 0 {
+		return false, 0, fmt.Errorf("no replay data")
+	}
+	avg := total / float64(count)
+	delta := avg - 0.5
+	return delta >= minDelta, delta, nil
 }
 
 func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string) model.PolicyGateResult {
@@ -1996,6 +2156,8 @@ func (s *Server) effectiveMinROI(ctx context.Context, job *model.ScanJob) float6
 }
 
 func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOptions {
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	isProductionLike := stage == "prod" || stage == "production" || stage == "staging"
 	switch normalizeAutomationMode(options.AutomationMode) {
 	case "safe":
 		options.MaxExploitAttempts = 0
@@ -2013,6 +2175,11 @@ func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOpti
 		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 2)
 		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 2)
 		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+		if isProductionLike {
+			options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, 1)
+			options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+			options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		}
 	}
 	options.DailyScanLimit = maxInt(options.DailyScanLimit, s.defaultDailyScanLimit)
 	options.DailyRuntimeLimitMinutes = maxInt(options.DailyRuntimeLimitMinutes, s.defaultDailyRuntimeMinutes)
@@ -2565,7 +2732,11 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		useAI = s.aiClient != nil
 	}
 	if useAI {
-		planner = agent.NewAIPlanner(s.aiClient, available, fallback)
+		aiPlanner := agent.NewAIPlanner(s.aiClient, available, fallback)
+		if input.Options.AutonomyExplorationBudgetPercent > 0 {
+			aiPlanner.ExplorationBudget = input.Options.AutonomyExplorationBudgetPercent
+		}
+		planner = aiPlanner
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
@@ -2573,6 +2744,9 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	}
 	if input.Options.AutonomyMaxConsecutiveFailRounds > 0 {
 		orchestrator.MaxConsecutiveFailureRounds = input.Options.AutonomyMaxConsecutiveFailRounds
+	}
+	if input.Options.AutonomyMinMarginalScore > 0 {
+		orchestrator.MinMarginalScore = input.Options.AutonomyMinMarginalScore
 	}
 	outputs, findings, err := orchestrator.Run(ctx, input)
 	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
@@ -3235,7 +3409,7 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 	return out
 }
 
-func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput) {
+func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions) {
 	prev, _ := s.repo.GetScanState(context.Background(), target)
 	state := model.PersistentScanState{
 		Target:        target,
@@ -3262,12 +3436,15 @@ func (s *Server) persistScanState(target string, findings []model.Finding, outpu
 	}
 	sort.Strings(refs)
 	state.KnownRuntimeEndpoints = limitStrings(mergeActions(state.KnownRuntimeEndpoints, refs), 25)
-	state.AutonomyMemory = mergeAutonomyMemory(state.AutonomyMemory, outputs)
+	feedback, _ := s.repo.ListFeedback(context.Background(), 1000)
+	state.AutonomyMemory = mergeAutonomyMemory(state.AutonomyMemory, outputs, options.AutonomyMemoryRetentionDays, feedback)
 	_ = s.repo.UpsertScanState(context.Background(), state)
 }
 
-func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput) model.AutonomyMemory {
-	retentionDays := intFromEnv("AUTONOMY_MEMORY_RETENTION_DAYS", 30)
+func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput, retentionDays int, feedback []model.ReportFeedback) model.AutonomyMemory {
+	if retentionDays <= 0 {
+		retentionDays = intFromEnv("AUTONOMY_MEMORY_RETENTION_DAYS", 30)
+	}
 	if retentionDays > 0 && !memory.LastRunAt.IsZero() {
 		expiry := memory.LastRunAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
 		if time.Now().UTC().After(expiry) {
@@ -3279,6 +3456,25 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	}
 	if memory.AgentStats == nil {
 		memory.AgentStats = map[string]model.AutonomyAgentStat{}
+	}
+	if !memory.LastRunAt.IsZero() {
+		daysSince := int(time.Since(memory.LastRunAt).Hours() / 24)
+		if daysSince > 0 {
+			dailyDecay := clampFloat(floatFromEnv("AUTONOMY_MEMORY_DAILY_DECAY", 0.03), 0, 0.25)
+			decay := clampFloat(float64(daysSince)*dailyDecay, 0, 0.8)
+			for name, stat := range memory.AgentStats {
+				stat.Runs = int(float64(stat.Runs) * (1 - decay))
+				stat.Errors = int(float64(stat.Errors) * (1 - decay))
+				stat.Timeouts = int(float64(stat.Timeouts) * (1 - decay))
+				stat.Findings = int(float64(stat.Findings) * (1 - decay))
+				stat.HighConfidenceFindings = int(float64(stat.HighConfidenceFindings) * (1 - decay))
+				stat.OperatorApprovals = int(float64(stat.OperatorApprovals) * (1 - decay))
+				stat.OperatorRejections = int(float64(stat.OperatorRejections) * (1 - decay))
+				stat.DecisionQualitySum = stat.DecisionQualitySum * (1 - decay)
+				stat.DecisionQualitySamples = int(float64(stat.DecisionQualitySamples) * (1 - decay))
+				memory.AgentStats[name] = stat
+			}
+		}
 	}
 	sequence := make([]string, 0, len(outputs))
 	for _, out := range outputs {
@@ -3307,7 +3503,32 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 				stat.YieldPerMinute = maxFloat(stat.YieldPerMinute, float64(len(out.Findings))/minutes)
 			}
 		}
+		if out.Metadata != nil {
+			if raw := strings.TrimSpace(out.Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					stat.DecisionQualitySum += clampFloat(parsed, 0, 1)
+					stat.DecisionQualitySamples++
+				}
+			}
+		}
 		memory.AgentStats[name] = stat
+	}
+	for _, item := range feedback {
+		if strings.ToLower(strings.TrimSpace(item.Category)) != "autonomy-action" {
+			continue
+		}
+		agentName := parseOperatorFeedbackAgent(item.Notes)
+		if agentName == "" {
+			continue
+		}
+		stat := memory.AgentStats[agentName]
+		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
+		case "accepted":
+			stat.OperatorApprovals++
+		case "rejected", "duplicate":
+			stat.OperatorRejections++
+		}
+		memory.AgentStats[agentName] = stat
 	}
 	memory.LastAgentSequence = limitStrings(sequence, 20)
 	memory.LastRunAt = time.Now().UTC()
@@ -3321,10 +3542,19 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		errorRate := float64(stat.Errors) / float64(stat.Runs)
 		normalFindings := maxInt(0, stat.Findings-stat.HighConfidenceFindings)
 		noveltyScore := float64(stat.HighConfidenceFindings) + float64(normalFindings)*autonomyNoveltyFindingWeight
+		operatorPenalty := 0.0
+		if stat.OperatorRejections > 0 {
+			totalOps := maxInt(1, stat.OperatorApprovals+stat.OperatorRejections)
+			operatorPenalty = float64(stat.OperatorRejections) / float64(totalOps)
+		}
+		if stat.DecisionQualitySamples > 0 {
+			avgQuality := stat.DecisionQualitySum / float64(maxInt(1, stat.DecisionQualitySamples))
+			noveltyScore += avgQuality
+		}
 		if noveltyScore >= autonomyPreferredMinScore && errorRate < autonomyPreferredMaxErrRate {
 			preferred = append(preferred, name)
 		}
-		if stat.Runs >= autonomySuppressMinRuns && (stat.Findings == 0 || errorRate >= autonomySuppressErrRate || stat.Timeouts >= autonomySuppressTimeouts) {
+		if stat.Runs >= autonomySuppressMinRuns && (stat.Findings == 0 || errorRate >= autonomySuppressErrRate || stat.Timeouts >= autonomySuppressTimeouts || operatorPenalty >= 0.5) {
 			suppressed = append(suppressed, name)
 		}
 	}
@@ -3334,6 +3564,29 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	memory.SuppressedAgents = limitStrings(suppressed, 8)
 	memory.RetentionAppliedAt = time.Now().UTC()
 	return memory
+}
+
+func parseOperatorFeedbackAgent(notes string) string {
+	notes = strings.TrimSpace(notes)
+	if notes == "" {
+		return ""
+	}
+	parts := strings.Split(notes, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(strings.ToLower(part), "agent=") {
+			continue
+		}
+		segments := strings.SplitN(part, "=", 2)
+		if len(segments) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(segments[1])
+		if name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func (s *Server) notifyFindings(job *model.ScanJob) {
@@ -3945,6 +4198,16 @@ func minFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func clampFloat(v, minV, maxV float64) float64 {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }
 
 func maxFloat(a, b float64) float64 {

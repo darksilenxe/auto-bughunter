@@ -21,6 +21,7 @@ type Orchestrator struct {
 	MaxRounds                   int
 	MaxNoNoveltyRounds          int
 	MaxConsecutiveFailureRounds int
+	MinMarginalScore            float64
 }
 
 // NewOrchestrator constructs an Orchestrator. maxRounds bounds the number of
@@ -37,6 +38,7 @@ func NewOrchestrator(planner Planner, factory *Factory, maxRounds int) *Orchestr
 		MaxRounds:                   maxRounds,
 		MaxNoNoveltyRounds:          2,
 		MaxConsecutiveFailureRounds: 2,
+		MinMarginalScore:            0,
 	}
 }
 
@@ -51,6 +53,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 	allFindings := make([]model.Finding, 0)
 	noNoveltyRounds := 0
 	consecutiveFailureRounds := 0
+	lowMarginalScoreRounds := 0
 	forcePending := make(map[string]bool, len(input.Options.AutonomyForceRunAgents))
 	for _, name := range input.Options.AutonomyForceRunAgents {
 		name = strings.TrimSpace(name)
@@ -119,6 +122,10 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		decision.Agents = filtered
 		beforeCount := len(combineFindingsWithDedup(allFindings))
 		roundFailures := 0
+		roundScoreSum := 0.0
+		roundScoredActions := 0
+		timeToSignalMs := int64(-1)
+		roundDurationMs := int64(0)
 
 		for _, spec := range decision.Agents {
 			select {
@@ -179,6 +186,15 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			if reason := strings.TrimSpace(spec.Reason); reason != "" {
 				output.Metadata["orchestration_reason"] = reason
 			}
+			output.Metadata["findings"] = fmt.Sprintf("%d", len(output.Findings))
+			qualityScore := computeActionQuality(output)
+			output.Metadata["decision_quality_score"] = formatScore(qualityScore)
+			roundScoreSum += qualityScore
+			roundScoredActions++
+			roundDurationMs += output.DurationMs
+			if timeToSignalMs < 0 && len(output.Findings) > 0 {
+				timeToSignalMs = roundDurationMs
+			}
 			output.Telemetry = model.AgentRunTelemetry{
 				AgentName:   output.AgentName,
 				Status:      output.Status,
@@ -195,6 +211,19 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		}
 
 		afterCount := len(combineFindingsWithDedup(allFindings))
+		novelFindings := maxInt(0, afterCount-beforeCount)
+		roundScore := 0.0
+		if roundScoredActions > 0 {
+			roundScore = roundScoreSum / float64(roundScoredActions)
+		}
+		roundScore += clamp01(float64(novelFindings) / 3.0)
+		if timeToSignalMs < 0 {
+			timeToSignalMs = roundDurationMs
+		}
+		if timeToSignalMs > 0 {
+			roundScore -= clamp01(float64(timeToSignalMs)/120000.0) * 0.25
+		}
+		roundScore = clamp01(roundScore)
 		if afterCount <= beforeCount {
 			noNoveltyRounds++
 		} else {
@@ -211,7 +240,71 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		if o.MaxConsecutiveFailureRounds > 0 && consecutiveFailureRounds >= o.MaxConsecutiveFailureRounds {
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
+		if o.MinMarginalScore > 0 && roundScore < o.MinMarginalScore {
+			lowMarginalScoreRounds++
+		} else {
+			lowMarginalScoreRounds = 0
+		}
+		if o.MinMarginalScore > 0 && lowMarginalScoreRounds >= 2 {
+			return outputs, combineFindingsWithDedup(allFindings), nil
+		}
 	}
 
 	return outputs, combineFindingsWithDedup(allFindings), nil
+}
+
+func computeActionQuality(output AgentOutput) float64 {
+	score := 0.0
+	findings := len(output.Findings)
+	if findings > 0 {
+		score += clamp01(float64(findings) / 3.0)
+	}
+	highSignal := 0
+	lowSignal := 0
+	for _, f := range output.Findings {
+		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+			highSignal++
+		}
+		if f.Confidence > 0 && f.Confidence < 0.4 {
+			lowSignal++
+		}
+	}
+	score += clamp01(float64(highSignal)/3.0) * 0.35
+	if findings > 0 {
+		score -= (float64(lowSignal) / float64(findings)) * 0.3
+	}
+	if output.Status == "error" || output.TimedOut || strings.TrimSpace(output.Error) != "" {
+		score -= 0.6
+	}
+	if output.DurationMs > 0 {
+		score -= clamp01(float64(output.DurationMs)/90000.0) * 0.2
+	}
+	return clamp01(score)
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func formatScore(v float64) string {
+	if v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	return fmt.Sprintf("%.3f", v)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

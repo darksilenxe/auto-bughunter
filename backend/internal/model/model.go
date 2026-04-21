@@ -203,6 +203,9 @@ type ScanOptions struct {
 	AutonomyPlannerLock              string   `json:"autonomyPlannerLock,omitempty"`
 	AutonomyEmergencyStop            bool     `json:"autonomyEmergencyStop,omitempty"`
 	AutonomyFallbackRerun            bool     `json:"autonomyFallbackRerun,omitempty"`
+	AutonomyMinMarginalScore         float64  `json:"autonomyMinMarginalScore,omitempty"`
+	AutonomyExplorationBudgetPercent int      `json:"autonomyExplorationBudgetPercent,omitempty"`
+	AutonomyMemoryRetentionDays      int      `json:"autonomyMemoryRetentionDays,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -583,6 +586,10 @@ type AutonomyAgentStat struct {
 	Findings               int     `json:"findings,omitempty"`
 	HighConfidenceFindings int     `json:"highConfidenceFindings,omitempty"`
 	YieldPerMinute         float64 `json:"yieldPerMinute,omitempty"`
+	DecisionQualitySum     float64 `json:"decisionQualitySum,omitempty"`
+	DecisionQualitySamples int     `json:"decisionQualitySamples,omitempty"`
+	OperatorApprovals      int     `json:"operatorApprovals,omitempty"`
+	OperatorRejections     int     `json:"operatorRejections,omitempty"`
 }
 
 type ModelRecommendations struct {
