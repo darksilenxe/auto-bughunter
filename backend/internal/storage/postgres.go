@@ -642,7 +642,8 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_policy_packs table: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_policy_packs ADD COLUMN IF NOT EXISTS governance_profile JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
+	_, err = p.db.ExecContext(ctx, `ALTER TABLE automation_policy_packs ADD COLUMN IF NOT EXISTS governance_profile JSONB NOT NULL DEFAULT '{}'::jsonb`)
+	if err != nil {
 		return fmt.Errorf("migrate automation_policy_packs.governance_profile column: %w", err)
 	}
 	_, err = p.db.ExecContext(ctx, `

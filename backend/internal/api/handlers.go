@@ -1494,7 +1494,7 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 		if p, ok := governance.RolloutControl.CanaryPercentByStage[stage]; ok {
 			p = maxInt(0, minInt(100, p))
 			if p == 0 {
-				options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+				options.MaxAutomationConcurrency = 1
 			}
 		}
 	}
