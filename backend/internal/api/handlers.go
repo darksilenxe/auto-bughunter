@@ -1481,10 +1481,8 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 	if governance.FailureHandling.AutoRetryOnFailure {
 		options.AutonomyFallbackRerun = true
 	}
-	if governance.OperatorOverride.AllowEmergencyStop && governance.OperatorOverride.RequireAuditLogging {
-		// Policy supports audited emergency stops; default remains false until
-		// an explicit operator trigger sets it on a request.
-		options.AutonomyEmergencyStop = options.AutonomyEmergencyStop && governance.OperatorOverride.AllowEmergencyStop
+	if governance.OperatorOverride.RequireAuditLogging && !governance.OperatorOverride.AllowEmergencyStop {
+		options.AutonomyEmergencyStop = false
 	}
 	if governance.RolloutControl.CanaryPercentByStage != nil {
 		stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
