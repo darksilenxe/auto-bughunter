@@ -387,7 +387,7 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 	}
 
-	return spawned
+	return dedupeAgentNames(spawned)
 }
 
 func combineFindingsWithDedup(findings []model.Finding) []model.Finding {
@@ -400,6 +400,25 @@ func combineFindingsWithDedup(findings []model.Finding) []model.Finding {
 		}
 		seen[key] = struct{}{}
 		deduped = append(deduped, f)
+	}
+	return deduped
+}
+
+func dedupeAgentNames(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]struct{}, len(items))
+	deduped := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		deduped = append(deduped, item)
 	}
 	return deduped
 }

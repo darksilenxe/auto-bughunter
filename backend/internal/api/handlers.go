@@ -3178,7 +3178,7 @@ func sendWebhookJSON(target string, payload any) {
 				return errors.New("too many redirects")
 			}
 			if err := safety.ValidateOutboundURL(redirReq.URL.String()); err != nil {
-				return err
+				return fmt.Errorf("redirect blocked by outbound safety policy for %q: %w", redirReq.URL.String(), err)
 			}
 			return nil
 		},
