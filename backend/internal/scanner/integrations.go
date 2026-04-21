@@ -340,18 +340,6 @@ func expandTargetsWithScope(target string, state *integrationState, scanScope mo
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
-	if !s.cfg.EnableNuclei {
-		return []model.Finding{{
-			ID:             "nuclei-disabled",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "Nuclei integration requested but disabled",
-			Description:    "The job requested Nuclei but ENABLE_NUCLEI_INTEGRATION is false.",
-			Evidence:       "ENABLE_NUCLEI_INTEGRATION=false",
-			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
-		}}
-	}
-
 	if _, err := exec.LookPath(s.cfg.NucleiBinary); err != nil {
 		return []model.Finding{{
 			ID:             "nuclei-binary-missing",
@@ -418,18 +406,6 @@ func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding 
 }
 
 func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Finding {
-	if !s.cfg.EnableZAPBaseline {
-		return []model.Finding{{
-			ID:             "zap-baseline-disabled",
-			Category:       "integration",
-			Severity:       model.SeverityInfo,
-			Title:          "ZAP Baseline integration requested but disabled",
-			Description:    "The job requested ZAP Baseline but ENABLE_ZAP_BASELINE_INTEGRATION is false.",
-			Evidence:       "ENABLE_ZAP_BASELINE_INTEGRATION=false",
-			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
-		}}
-	}
-
 	if _, err := exec.LookPath(s.cfg.ZAPBaselineBinary); err != nil {
 		return []model.Finding{{
 			ID:             "zap-baseline-binary-missing",

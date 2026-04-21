@@ -50,8 +50,6 @@ func main() {
 	}
 
 	scanService := scanner.NewService(scanner.Config{
-		EnableNuclei:       getbool("ENABLE_NUCLEI_INTEGRATION", false),
-		EnableZAPBaseline:  getbool("ENABLE_ZAP_BASELINE_INTEGRATION", false),
 		EnableSubfinder:    getbool("ENABLE_SUBFINDER_INTEGRATION", false),
 		EnableHttpx:        getbool("ENABLE_HTTPX_INTEGRATION", false),
 		EnableNaabu:        getbool("ENABLE_NAABU_INTEGRATION", false),
