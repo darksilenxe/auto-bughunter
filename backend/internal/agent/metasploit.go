@@ -826,6 +826,9 @@ func probePHPUnitEvalStdinRCE(ctx context.Context, client *http.Client, target s
 
 	for _, ep := range endpoints {
 		probeURL := base + ep
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, probeURL, strings.NewReader(payload))
 		if err != nil {
 			continue
@@ -890,6 +893,9 @@ func probeGrafanaPluginTraversal(ctx context.Context, client *http.Client, targe
 
 	for _, p := range paths {
 		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
@@ -949,6 +955,9 @@ func probeVBulletinWidgetTemplateRCE(ctx context.Context, client *http.Client, t
 	form.Set("subWidgets[0][config][code]", "echo '"+marker+"';")
 	form.Set("routestring", "ajax/render/widget_tabbedcontainer_tab_panel")
 
+	if err := validateMetasploitProbeTarget(endpoint); err != nil {
+		return nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil
@@ -1008,6 +1017,9 @@ func probeF5BIGIPTMUITraversal(ctx context.Context, client *http.Client, target 
 
 	for _, p := range paths {
 		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
@@ -1068,6 +1080,9 @@ func probePulseSecureFileDisclosure(ctx context.Context, client *http.Client, ta
 
 	for _, p := range paths {
 		probeURL := base + p
+		if err := validateMetasploitProbeTarget(probeURL); err != nil {
+			continue
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
