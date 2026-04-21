@@ -42,36 +42,39 @@ type AgentConfig struct {
 }
 
 type Server struct {
-	scanService    *scanner.Service
-	aiClient       *ai.Client
-	repo           Repository
-	agentRegistry  *agent.Registry
-	agentFactory   *agent.Factory
-	autonomous     bool
-	maxRounds      int
-	proxyServer    *proxy.Server
-	mlService      *ml.Service
-	knowledgeSvc   *knowledge.Client
-	agentLearner   *agentlearner.Client
-	agentConfig    AgentConfig
-	maxPerTarget   int
-	semMu          sync.Mutex
-	targetSem      map[string]chan struct{}
-	globalSem      chan struct{}
-	rateMu         sync.Mutex
-	targetLastRun  map[string]time.Time
-	webhookURL     string
-	slackWebhook   string
-	notifyMinConf  float64
-	gateHighBlock  int
-	gateMedBlock   int
-	scanTimeout    time.Duration
-	eventBus       *EventBus
-	oast           *oast.Service
-	attackGraphDB  AttackGraphStore
-	apiRateLimiter *apiRateLimiter
-	defaultMinROI  float64
-	campaignPoll   time.Duration
+	scanService                *scanner.Service
+	aiClient                   *ai.Client
+	repo                       Repository
+	agentRegistry              *agent.Registry
+	agentFactory               *agent.Factory
+	autonomous                 bool
+	maxRounds                  int
+	proxyServer                *proxy.Server
+	mlService                  *ml.Service
+	knowledgeSvc               *knowledge.Client
+	agentLearner               *agentlearner.Client
+	agentConfig                AgentConfig
+	maxPerTarget               int
+	semMu                      sync.Mutex
+	targetSem                  map[string]chan struct{}
+	globalSem                  chan struct{}
+	rateMu                     sync.Mutex
+	targetLastRun              map[string]time.Time
+	webhookURL                 string
+	slackWebhook               string
+	notifyMinConf              float64
+	gateHighBlock              int
+	gateMedBlock               int
+	scanTimeout                time.Duration
+	eventBus                   *EventBus
+	oast                       *oast.Service
+	attackGraphDB              AttackGraphStore
+	apiRateLimiter             *apiRateLimiter
+	defaultMinROI              float64
+	campaignPoll               time.Duration
+	defaultDailyScanLimit      int
+	defaultDailyRuntimeMinutes int
+	defaultDailyProbeLimit     int
 }
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -114,6 +117,12 @@ type Repository interface {
 	ListDueAutomationCampaigns(ctx context.Context, now time.Time, limit int) ([]model.AutomationCampaign, error)
 	UpdateAutomationCampaignRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error
 	DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error
+	TryLeaseAutomationCampaign(ctx context.Context, id string, leaseUntil time.Time) (bool, error)
+	MarkAutomationCampaignDispatchFailure(ctx context.Context, id, lastError string, now time.Time, backoff time.Duration) error
+	GetProgramROIOverride(ctx context.Context, workspaceID, programName string) (*model.ProgramROIOverride, error)
+	UpsertProgramROIOverride(ctx context.Context, item model.ProgramROIOverride) error
+	ListProgramROIOverrides(ctx context.Context, workspaceID string, limit int) ([]model.ProgramROIOverride, error)
+	GetWorkspaceDailyUsage(ctx context.Context, workspaceID string, day time.Time) (model.WorkspaceDailyUsage, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -141,32 +150,35 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		scanTimeout = 10 * time.Minute
 	}
 	s := &Server{
-		scanService:    scanService,
-		aiClient:       aiClient,
-		repo:           repo,
-		agentRegistry:  reg,
-		agentFactory:   factory,
-		autonomous:     autonomous,
-		maxRounds:      maxRounds,
-		proxyServer:    proxy.NewServer(proxyStore),
-		mlService:      mlService,
-		knowledgeSvc:   knowledgeSvc,
-		agentLearner:   agentLearner,
-		agentConfig:    agentCfg,
-		maxPerTarget:   maxInt(1, maxPerTarget),
-		targetSem:      map[string]chan struct{}{},
-		globalSem:      make(chan struct{}, globalBudget),
-		targetLastRun:  map[string]time.Time{},
-		webhookURL:     strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
-		slackWebhook:   strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
-		notifyMinConf:  maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
-		gateHighBlock:  maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
-		gateMedBlock:   maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
-		scanTimeout:    scanTimeout,
-		eventBus:       NewEventBus(),
-		apiRateLimiter: newAPIRateLimiter(),
-		defaultMinROI:  maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
-		campaignPoll:   time.Duration(maxInt(15, intFromEnv("AUTOMATION_CAMPAIGN_POLL_SECONDS", 30))) * time.Second,
+		scanService:                scanService,
+		aiClient:                   aiClient,
+		repo:                       repo,
+		agentRegistry:              reg,
+		agentFactory:               factory,
+		autonomous:                 autonomous,
+		maxRounds:                  maxRounds,
+		proxyServer:                proxy.NewServer(proxyStore),
+		mlService:                  mlService,
+		knowledgeSvc:               knowledgeSvc,
+		agentLearner:               agentLearner,
+		agentConfig:                agentCfg,
+		maxPerTarget:               maxInt(1, maxPerTarget),
+		targetSem:                  map[string]chan struct{}{},
+		globalSem:                  make(chan struct{}, globalBudget),
+		targetLastRun:              map[string]time.Time{},
+		webhookURL:                 strings.TrimSpace(os.Getenv("SCAN_WEBHOOK_URL")),
+		slackWebhook:               strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL")),
+		notifyMinConf:              maxFloat(0.0, minFloat(1.0, floatFromEnv("NOTIFY_MIN_CONFIDENCE", 0.9))),
+		gateHighBlock:              maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
+		gateMedBlock:               maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
+		scanTimeout:                scanTimeout,
+		eventBus:                   NewEventBus(),
+		apiRateLimiter:             newAPIRateLimiter(),
+		defaultMinROI:              maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
+		campaignPoll:               time.Duration(maxInt(15, intFromEnv("AUTOMATION_CAMPAIGN_POLL_SECONDS", 30))) * time.Second,
+		defaultDailyScanLimit:      maxInt(0, intFromEnv("AUTOMATION_DAILY_SCAN_LIMIT", 30)),
+		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
+		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 	}
 	go s.runCampaignScheduler()
 	return s
@@ -193,6 +205,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
 	mux.HandleFunc("/api/automation/campaigns", s.handleAutomationCampaigns)
+	mux.HandleFunc("/api/automation/roi-overrides", s.handleAutomationROIOverrides)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
@@ -318,6 +331,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	req.Options = s.applySafetyModePolicy(req.Options)
 	if req.Options.MinExpectedROIUSD < 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "minExpectedRoiUsd must be >= 0"})
 		return
@@ -445,7 +459,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		options.SeedRuntimeEndpoints = mergeActions(options.SeedRuntimeEndpoints, persistedState.KnownRuntimeEndpoints)
 		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
 	}
+	options = s.applySafetyModePolicy(options)
 	options = s.tuneScanOptions(options, persistedState, previousJob)
+	options, disabledForHealth := applyHealthAwareExecutionGating(options)
+	if len(disabledForHealth) > 0 {
+		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
+	}
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -472,6 +491,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	job.Findings = s.applyFeedbackConfidencePrioritization(context.Background(), job.Findings)
 	job.Findings = redactSensitiveFindings(job.Findings)
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
@@ -555,7 +575,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
 	expectedROI, roiBasis := s.estimateExpectedROI(context.Background(), job)
-	minROI := s.effectiveMinROI(job.Options)
+	minROI := s.effectiveMinROI(context.Background(), job)
 	meetsROIGate := expectedROI >= minROI
 	if job.Dashboard == nil {
 		job.Dashboard = &model.DecisionDashboard{}
@@ -1013,10 +1033,15 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	req.Options.DeepScanOnHighSignal = true
 	req.Options.RescanIntervalMinutes = 0
 	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	req.Options = s.applySafetyModePolicy(req.Options)
 	req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
 	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	if blocked, reason := s.shouldDeferForDailyBudget(r.Context(), workspaceID, req.Options); blocked {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": reason})
 		return
 	}
 	jobID := uuid.NewString()
@@ -1032,6 +1057,7 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 		AuthProfileSummary: model.SummarizeAuthProfile(req.AuthProfile),
 		Options:            req.Options,
 		Scope:              req.Scope,
+		ProgramName:        strings.TrimSpace(req.ProgramName),
 	}
 	if err := s.repo.CreateJob(r.Context(), job); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist automation scan job"})
@@ -1075,6 +1101,7 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "intervalMin must be between 5 and 10080"})
 			return
 		}
+		req.ScheduleType = normalizeScheduleType(req.ScheduleType)
 		if err := validateAuthProfile(req.AuthProfile); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1092,22 +1119,29 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 			req.Active = true
 		}
 		req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+		req.Options = s.applySafetyModePolicy(req.Options)
 		req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
-		nextRunAt := now.Add(time.Duration(req.IntervalMin) * time.Minute)
+		nextRunAt := computeNextCampaignRun(now, req)
 		item := model.AutomationCampaign{
-			ID:          req.ID,
-			Target:      target,
-			WorkspaceID: workspaceID,
-			RequestedBy: requesterFromRequest(r),
-			Name:        strings.TrimSpace(req.Name),
-			IntervalMin: req.IntervalMin,
-			NextRunAt:   nextRunAt,
-			Active:      req.Active,
-			AuthProfile: req.AuthProfile,
-			Options:     req.Options,
-			Scope:       req.Scope,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:              req.ID,
+			Target:          target,
+			WorkspaceID:     workspaceID,
+			RequestedBy:     requesterFromRequest(r),
+			Name:            strings.TrimSpace(req.Name),
+			ProgramName:     strings.TrimSpace(req.ProgramName),
+			IntervalMin:     req.IntervalMin,
+			ScheduleType:    req.ScheduleType,
+			ScheduleValue:   strings.TrimSpace(req.ScheduleValue),
+			RunWindow:       strings.TrimSpace(req.RunWindow),
+			BlackoutWindows: req.BlackoutWindows,
+			NextRunAt:       nextRunAt,
+			MaxAttempts:     maxInt(3, req.MaxAttempts),
+			Active:          req.Active,
+			AuthProfile:     req.AuthProfile,
+			Options:         req.Options,
+			Scope:           req.Scope,
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}
 		if !req.Active {
 			item.NextRunAt = time.Time{}
@@ -1147,8 +1181,14 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), "", 1000)
 
 	report := model.ExecutiveReport{
-		GeneratedAt: time.Now().UTC(),
+		GeneratedAt:            time.Now().UTC(),
+		AgentAcceptedRate:      map[string]float64{},
+		AgentPayoutPerScanHour: map[string]float64{},
+		AgentFalsePositiveRate: map[string]float64{},
+		ROISparkline:           []float64{},
 	}
+	agentRuns := map[string]int{}
+	agentScanHours := map[string]float64{}
 	for _, job := range jobs {
 		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 			continue
@@ -1158,6 +1198,18 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			report.AverageExpectedROIUSD += maxFloat(0, job.Dashboard.ExpectedROIUSD)
 			if job.Dashboard.MeetsROIGate {
 				report.HighROICompletedScans++
+			}
+			report.ROISparkline = append(report.ROISparkline, roundTo2(job.Dashboard.ExpectedROIUSD))
+		}
+		if job.CompletedAt != nil {
+			durationHours := maxFloat(0.05, job.CompletedAt.Sub(job.StartedAt).Hours())
+			for _, run := range job.AgentRuns {
+				name := strings.TrimSpace(run.AgentName)
+				if name == "" {
+					continue
+				}
+				agentRuns[name]++
+				agentScanHours[name] += durationHours
 			}
 		}
 		for _, finding := range job.Findings {
@@ -1206,12 +1258,70 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 	if report.TotalCompletedScans > 0 {
 		report.AcceptedPayoutPerScanUSD = acceptedPayout / float64(report.TotalCompletedScans)
 	}
+	acceptedRate := 0.0
+	if totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback; totalReviewed > 0 {
+		acceptedRate = float64(report.AcceptedFeedback) / float64(totalReviewed)
+	}
 	totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback
 	if totalReviewed > 0 {
 		report.FalsePositiveRate = float64(report.RejectedFeedback+report.DuplicateFeedback) / float64(totalReviewed)
 	}
+	for agentName, runs := range agentRuns {
+		hours := maxFloat(0.1, agentScanHours[agentName])
+		report.AgentAcceptedRate[agentName] = roundTo2(acceptedRate)
+		report.AgentPayoutPerScanHour[agentName] = roundTo2(acceptedPayout / hours)
+		report.AgentFalsePositiveRate[agentName] = roundTo2(report.FalsePositiveRate)
+		if runs == 0 {
+			delete(report.AgentAcceptedRate, agentName)
+			delete(report.AgentPayoutPerScanHour, agentName)
+			delete(report.AgentFalsePositiveRate, agentName)
+		}
+	}
 	_ = openTickets
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleAutomationROIOverrides(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.repo.ListProgramROIOverrides(r.Context(), workspaceID, 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list roi overrides"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		var req struct {
+			ProgramName       string  `json:"programName"`
+			MinExpectedROIUSD float64 `json:"minExpectedRoiUsd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(req.ProgramName) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "programName is required"})
+			return
+		}
+		item := model.ProgramROIOverride{
+			WorkspaceID:       workspaceID,
+			ProgramName:       strings.TrimSpace(req.ProgramName),
+			MinExpectedROIUSD: maxFloat(0, req.MinExpectedROIUSD),
+			UpdatedAt:         time.Now().UTC(),
+		}
+		if err := s.repo.UpsertProgramROIOverride(r.Context(), item); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save roi override"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "saved"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (s *Server) handleAutomationTickets(w http.ResponseWriter, r *http.Request) {
@@ -1279,6 +1389,17 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < 70 {
 		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 200)
 	}
+	if previous != nil && previous.Dashboard != nil {
+		if previous.Dashboard.MeetsROIGate && previous.Dashboard.ExpectedROIUSD > s.defaultMinROI*1.5 {
+			options.DeepScanOnHighSignal = true
+			options.UseNucleiIntegration = true
+			options.UseFFUFIntegration = true
+		}
+		if !previous.Dashboard.MeetsROIGate {
+			options.UseSQLMapIntegration = false
+			options.CrawlMaxPages = minInt(maxInt(options.CrawlMaxPages, 40), 120)
+		}
+	}
 	if state != nil && state.SessionInstability > 2 {
 		options.UseNucleiIntegration = false
 		options.UseSQLMapIntegration = false
@@ -1289,17 +1410,33 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 
 func normalizeAutomationMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "safe", "aggressive":
+	case "safe", "aggressive", "autonomous":
 		return strings.ToLower(strings.TrimSpace(mode))
 	default:
 		return "autonomous"
 	}
 }
 
-func (s *Server) effectiveMinROI(options model.ScanOptions) float64 {
+func normalizeScheduleType(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "daily", "weekly":
+		return strings.ToLower(strings.TrimSpace(kind))
+	default:
+		return "interval"
+	}
+}
+
+func (s *Server) effectiveMinROI(ctx context.Context, job *model.ScanJob) float64 {
+	if job == nil {
+		return s.defaultMinROI
+	}
+	options := job.Options
 	minROI := s.defaultMinROI
 	if options.MinExpectedROIUSD > 0 {
 		minROI = options.MinExpectedROIUSD
+	}
+	if override, err := s.repo.GetProgramROIOverride(ctx, firstNonEmpty(job.WorkspaceID, "default"), strings.TrimSpace(job.ProgramName)); err == nil && override != nil {
+		minROI = maxFloat(minROI, override.MinExpectedROIUSD)
 	}
 	switch normalizeAutomationMode(options.AutomationMode) {
 	case "safe":
@@ -1308,6 +1445,49 @@ func (s *Server) effectiveMinROI(options model.ScanOptions) float64 {
 		minROI = maxFloat(0, minROI*0.6)
 	}
 	return minROI
+}
+
+func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOptions {
+	switch normalizeAutomationMode(options.AutomationMode) {
+	case "safe":
+		options.MaxExploitAttempts = 0
+		options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+		options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(60, options.MinRescanIntervalMinutes))
+		options.AggressiveExploitation = false
+	case "aggressive":
+		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 5)
+		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 3)
+		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 4)
+		options.RescanIntervalMinutes = maxInt(15, options.RescanIntervalMinutes)
+	default:
+		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 1)
+		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 2)
+		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 2)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+	}
+	options.DailyScanLimit = maxInt(options.DailyScanLimit, s.defaultDailyScanLimit)
+	options.DailyRuntimeLimitMinutes = maxInt(options.DailyRuntimeLimitMinutes, s.defaultDailyRuntimeMinutes)
+	options.DailyProbeLimit = maxInt(options.DailyProbeLimit, s.defaultDailyProbeLimit)
+	options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 50)
+	return options
+}
+
+func (s *Server) shouldDeferForDailyBudget(ctx context.Context, workspaceID string, options model.ScanOptions) (bool, string) {
+	usage, err := s.repo.GetWorkspaceDailyUsage(ctx, firstNonEmpty(workspaceID, "default"), time.Now().UTC())
+	if err != nil {
+		return false, ""
+	}
+	if options.DailyScanLimit > 0 && usage.ScanCount >= options.DailyScanLimit {
+		return true, fmt.Sprintf("daily scan budget exceeded (%d/%d)", usage.ScanCount, options.DailyScanLimit)
+	}
+	if options.DailyRuntimeLimitMinutes > 0 && usage.RuntimeMinutes >= options.DailyRuntimeLimitMinutes {
+		return true, fmt.Sprintf("daily runtime budget exceeded (%d/%d minutes)", usage.RuntimeMinutes, options.DailyRuntimeLimitMinutes)
+	}
+	if options.DailyProbeLimit > 0 && usage.ProbeVolume >= options.DailyProbeLimit {
+		return true, fmt.Sprintf("daily probe budget exceeded (%d/%d)", usage.ProbeVolume, options.DailyProbeLimit)
+	}
+	return false, ""
 }
 
 func roundTo2(v float64) float64 {
@@ -1438,8 +1618,35 @@ func (s *Server) runCampaignScheduler() {
 			continue
 		}
 		for _, c := range campaigns {
+			if strings.TrimSpace(c.RunWindow) != "" && !inWindowUTC(now, c.RunWindow) {
+				nextRun := computeNextCampaignRun(now.Add(15*time.Minute), model.AutomationCampaignUpsertRequest{
+					IntervalMin:     c.IntervalMin,
+					ScheduleType:    c.ScheduleType,
+					ScheduleValue:   c.ScheduleValue,
+					RunWindow:       c.RunWindow,
+					BlackoutWindows: c.BlackoutWindows,
+				})
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				continue
+			}
+			if inBlackout(now, c.BlackoutWindows) {
+				nextRun := now.Add(30 * time.Minute)
+				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				continue
+			}
+			leaseUntil := now.Add(2 * s.campaignPoll)
+			ok, err := s.repo.TryLeaseAutomationCampaign(context.Background(), c.ID, leaseUntil)
+			if err != nil || !ok {
+				continue
+			}
 			c.Options.AutomationMode = normalizeAutomationMode(c.Options.AutomationMode)
+			c.Options = s.applySafetyModePolicy(c.Options)
 			c.Options.MinExpectedROIUSD = maxFloat(c.Options.MinExpectedROIUSD, s.defaultMinROI)
+			if blocked, reason := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.Options); blocked {
+				backoff := 30 * time.Minute
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, reason, now, backoff)
+				continue
+			}
 			jobID := uuid.NewString()
 			job := &model.ScanJob{
 				ID:                 jobID,
@@ -1452,11 +1659,20 @@ func (s *Server) runCampaignScheduler() {
 				AuthProfileSummary: model.SummarizeAuthProfile(c.AuthProfile),
 				Options:            c.Options,
 				Scope:              c.Scope,
+				ProgramName:        strings.TrimSpace(c.ProgramName),
 			}
 			if err := s.repo.CreateJob(context.Background(), job); err != nil {
+				backoff := campaignRetryBackoff(c.RetryCount)
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, err.Error(), now, backoff)
 				continue
 			}
-			nextRun := now.Add(time.Duration(maxInt(5, c.IntervalMin)) * time.Minute)
+			nextRun := computeNextCampaignRun(now, model.AutomationCampaignUpsertRequest{
+				IntervalMin:     c.IntervalMin,
+				ScheduleType:    c.ScheduleType,
+				ScheduleValue:   c.ScheduleValue,
+				RunWindow:       c.RunWindow,
+				BlackoutWindows: c.BlackoutWindows,
+			})
 			_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
 			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
 			go s.runJob(jobID, c.Target, c.AuthProfile, nil, c.Options, c.Scope)
@@ -1472,6 +1688,10 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 		if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium {
 			continue
 		}
+		drift := strings.ToLower(strings.TrimSpace(f.DriftStatus))
+		if drift == "resolved" {
+			continue
+		}
 		fp := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
 		if fp == "" {
 			continue
@@ -1481,13 +1701,24 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 		if f.Severity == model.SeverityHigh {
 			sla = now.Add(24 * time.Hour)
 		}
+		if drift == "new" {
+			if f.Severity == model.SeverityHigh {
+				sla = now.Add(12 * time.Hour)
+			} else {
+				sla = now.Add(48 * time.Hour)
+			}
+		}
+		status := "open"
+		if drift == "changed" && f.Severity == model.SeverityHigh {
+			status = "escalated"
+		}
 		ticket := model.AutomationTicket{
 			ID:          uuid.NewString(),
 			Target:      target,
 			Fingerprint: fp,
 			Title:       f.Title,
 			Severity:    f.Severity,
-			Status:      "open",
+			Status:      status,
 			FirstSeenAt: now,
 			LastSeenAt:  now,
 			SLADueAt:    &sla,
@@ -2066,6 +2297,212 @@ func buildIntegrationHealthFinding(outputs []agent.AgentOutput) []model.Finding 
 	}}
 }
 
+func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptions, []string) {
+	required := map[string]bool{
+		"nuclei":       options.UseNucleiIntegration,
+		"zap-baseline": options.UseZAPBaselineIntegration,
+		"subfinder":    options.UseSubfinderIntegration,
+		"httpx":        options.UseHttpxIntegration,
+		"naabu":        options.UseNaabuIntegration,
+		"dnsx":         options.UseDnsxIntegration,
+		"shuffledns":   options.UseShuffleDNSIntegration,
+		"katana":       options.UseKatanaIntegration,
+		"tlsx":         options.UseTlsxIntegration,
+		"cdncheck":     options.UseCdncheckIntegration,
+		"asnmap":       options.UseAsnmapIntegration,
+		"ffuf":         options.UseFFUFIntegration,
+		"gobuster":     options.UseGobusterIntegration,
+	}
+	health := collectToolHealth()
+	disabled := make([]string, 0)
+	for _, item := range health {
+		if !required[item.Name] || item.Installed {
+			continue
+		}
+		switch item.Name {
+		case "nuclei":
+			options.UseNucleiIntegration = false
+		case "zap-baseline":
+			options.UseZAPBaselineIntegration = false
+		case "subfinder":
+			options.UseSubfinderIntegration = false
+		case "httpx":
+			options.UseHttpxIntegration = false
+		case "naabu":
+			options.UseNaabuIntegration = false
+		case "dnsx":
+			options.UseDnsxIntegration = false
+		case "shuffledns":
+			options.UseShuffleDNSIntegration = false
+		case "katana":
+			options.UseKatanaIntegration = false
+		case "tlsx":
+			options.UseTlsxIntegration = false
+		case "cdncheck":
+			options.UseCdncheckIntegration = false
+		case "asnmap":
+			options.UseAsnmapIntegration = false
+		case "ffuf":
+			options.UseFFUFIntegration = false
+		case "gobuster":
+			options.UseGobusterIntegration = false
+		}
+		disabled = append(disabled, item.Name)
+	}
+	sort.Strings(disabled)
+	return options, disabled
+}
+
+func campaignRetryBackoff(retryCount int) time.Duration {
+	steps := maxInt(1, retryCount+1)
+	backoff := time.Duration(steps*steps) * 5 * time.Minute
+	if backoff > 6*time.Hour {
+		return 6 * time.Hour
+	}
+	return backoff
+}
+
+func parseClock(value string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	h, errH := strconv.Atoi(parts[0])
+	m, errM := strconv.Atoi(parts[1])
+	if errH != nil || errM != nil || h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0, false
+	}
+	return h, m, true
+}
+
+func inWindowUTC(now time.Time, spec string) bool {
+	parts := strings.Split(strings.TrimSpace(spec), "-")
+	if len(parts) != 2 {
+		return false
+	}
+	sh, sm, okS := parseClock(parts[0])
+	eh, em, okE := parseClock(parts[1])
+	if !okS || !okE {
+		return false
+	}
+	start := now.UTC().Truncate(24 * time.Hour).Add(time.Duration(sh)*time.Hour + time.Duration(sm)*time.Minute)
+	end := now.UTC().Truncate(24 * time.Hour).Add(time.Duration(eh)*time.Hour + time.Duration(em)*time.Minute)
+	if end.Before(start) {
+		return now.After(start) || now.Before(end)
+	}
+	return (now.Equal(start) || now.After(start)) && now.Before(end)
+}
+
+func inBlackout(now time.Time, windows []string) bool {
+	for _, win := range windows {
+		if strings.TrimSpace(win) == "" {
+			continue
+		}
+		if inWindowUTC(now, win) {
+			return true
+		}
+	}
+	return false
+}
+
+func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertRequest) time.Time {
+	base := now.UTC()
+	switch normalizeScheduleType(req.ScheduleType) {
+	case "daily":
+		h, m, ok := parseClock(req.ScheduleValue)
+		if !ok {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		next := time.Date(base.Year(), base.Month(), base.Day(), h, m, 0, 0, time.UTC)
+		if !next.After(base) {
+			next = next.Add(24 * time.Hour)
+		}
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowUTC(next, req.RunWindow) {
+			next = next.Add(24 * time.Hour)
+		}
+		for inBlackout(next, req.BlackoutWindows) {
+			next = next.Add(30 * time.Minute)
+		}
+		return next
+	case "weekly":
+		raw := strings.Split(strings.TrimSpace(req.ScheduleValue), "@")
+		if len(raw) != 2 {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		weekdayMap := map[string]time.Weekday{"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday, "thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday}
+		weekday, okDay := weekdayMap[strings.ToLower(strings.TrimSpace(raw[0]))]
+		if !okDay {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		h, m, ok := parseClock(raw[1])
+		if !ok {
+			return base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		}
+		next := time.Date(base.Year(), base.Month(), base.Day(), h, m, 0, 0, time.UTC)
+		for next.Weekday() != weekday || !next.After(base) {
+			next = next.Add(24 * time.Hour)
+		}
+		for inBlackout(next, req.BlackoutWindows) {
+			next = next.Add(24 * time.Hour)
+		}
+		return next
+	default:
+		next := base.Add(time.Duration(maxInt(5, req.IntervalMin)) * time.Minute)
+		if strings.TrimSpace(req.RunWindow) != "" && !inWindowUTC(next, req.RunWindow) {
+			next = next.Add(15 * time.Minute)
+		}
+		for inBlackout(next, req.BlackoutWindows) {
+			next = next.Add(30 * time.Minute)
+		}
+		return next
+	}
+}
+
+func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, findings []model.Finding) []model.Finding {
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil || len(feedback) == 0 {
+		return findings
+	}
+	type stats struct {
+		total     int
+		accepted  int
+		rejected  int
+		duplicate int
+	}
+	byKey := map[string]stats{}
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := byKey[key]
+		cur.total++
+		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
+		case "accepted":
+			cur.accepted++
+		case "rejected":
+			cur.rejected++
+		case "duplicate":
+			cur.duplicate++
+		}
+		byKey[key] = cur
+	}
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = defaultConfidenceForSeverity(f.Severity)
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		s := byKey[key]
+		if s.total >= 3 {
+			acceptRate := float64(s.accepted) / float64(s.total)
+			noiseRate := float64(s.rejected+s.duplicate) / float64(s.total)
+			conf = conf * (0.8 + acceptRate*0.5) * (1 - noiseRate*0.35)
+		}
+		f.Confidence = maxFloat(0.05, minFloat(0.99, conf))
+		out = append(out, f)
+	}
+	return out
+}
+
 func (s *Server) persistScanState(target string, findings []model.Finding) {
 	state := model.PersistentScanState{
 		Target:        target,
@@ -2640,6 +3077,10 @@ func (s *Server) scheduleRescan(target, workspaceID, requestedBy string, authPro
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	<-timer.C
+	options = s.applySafetyModePolicy(options)
+	if blocked, _ := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(workspaceID, "default"), options); blocked {
+		return
+	}
 
 	jobID := uuid.NewString()
 	now := time.Now().UTC()
@@ -2664,6 +3105,13 @@ func (s *Server) scheduleRescan(target, workspaceID, requestedBy string, authPro
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

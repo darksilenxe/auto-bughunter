@@ -517,9 +517,20 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			workspace_id TEXT NOT NULL DEFAULT 'default',
 			requested_by TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL DEFAULT '',
+			program_name TEXT NOT NULL DEFAULT '',
 			interval_min INTEGER NOT NULL,
+			schedule_type TEXT NOT NULL DEFAULT 'interval',
+			schedule_value TEXT NOT NULL DEFAULT '',
+			run_window TEXT NOT NULL DEFAULT '',
+			blackout_windows JSONB NOT NULL DEFAULT '[]'::jsonb,
 			next_run_at TIMESTAMPTZ NULL,
 			last_run_at TIMESTAMPTZ NULL,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			max_attempts INTEGER NOT NULL DEFAULT 3,
+			next_retry_at TIMESTAMPTZ NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			dead_letter BOOLEAN NOT NULL DEFAULT FALSE,
+			lease_until TIMESTAMPTZ NULL,
 			active BOOLEAN NOT NULL DEFAULT TRUE,
 			auth_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
 			options JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -530,6 +541,51 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate automation_campaigns table: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_type TEXT NOT NULL DEFAULT 'interval'`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.schedule_type column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_value TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.schedule_value column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_window TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.run_window column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS blackout_windows JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.blackout_windows column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.retry_count column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.max_attempts column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ NULL`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.next_retry_at column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.last_error column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS dead_letter BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.dead_letter column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ NULL`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.lease_until column: %w", err)
+	}
+	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("migrate automation_campaigns.program_name column: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS automation_program_roi_overrides (
+			workspace_id TEXT NOT NULL,
+			program_name TEXT NOT NULL,
+			min_expected_roi_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (workspace_id, program_name)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate automation_program_roi_overrides table: %w", err)
 	}
 	return nil
 }
@@ -1216,6 +1272,10 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 	if err != nil {
 		return fmt.Errorf("marshal campaign scope: %w", err)
 	}
+	blackoutJSON, err := json.Marshal(campaign.BlackoutWindows)
+	if err != nil {
+		return fmt.Errorf("marshal campaign blackout windows: %w", err)
+	}
 	if campaign.CreatedAt.IsZero() {
 		campaign.CreatedAt = time.Now().UTC()
 	}
@@ -1226,25 +1286,44 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 	if campaign.NextRunAt.IsZero() {
 		nextRunAt = nil
 	}
+	var nextRetryAt any = campaign.NextRetryAt
+	if campaign.NextRetryAt == nil || campaign.NextRetryAt.IsZero() {
+		nextRetryAt = nil
+	}
+	var leaseUntil any = campaign.LeaseUntil
+	if campaign.LeaseUntil == nil || campaign.LeaseUntil.IsZero() {
+		leaseUntil = nil
+	}
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO automation_campaigns (
-			id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+			id, target, workspace_id, requested_by, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, lease_until, active, auth_profile, options, scope, created_at, updated_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
 		ON CONFLICT (id) DO UPDATE
 		SET target = EXCLUDED.target,
 			workspace_id = EXCLUDED.workspace_id,
 			requested_by = EXCLUDED.requested_by,
 			name = EXCLUDED.name,
+			program_name = EXCLUDED.program_name,
 			interval_min = EXCLUDED.interval_min,
+			schedule_type = EXCLUDED.schedule_type,
+			schedule_value = EXCLUDED.schedule_value,
+			run_window = EXCLUDED.run_window,
+			blackout_windows = EXCLUDED.blackout_windows,
 			next_run_at = EXCLUDED.next_run_at,
 			last_run_at = EXCLUDED.last_run_at,
+			retry_count = EXCLUDED.retry_count,
+			max_attempts = EXCLUDED.max_attempts,
+			next_retry_at = EXCLUDED.next_retry_at,
+			last_error = EXCLUDED.last_error,
+			dead_letter = EXCLUDED.dead_letter,
+			lease_until = EXCLUDED.lease_until,
 			active = EXCLUDED.active,
 			auth_profile = EXCLUDED.auth_profile,
 			options = EXCLUDED.options,
 			scope = EXCLUDED.scope,
 			updated_at = EXCLUDED.updated_at
-	`, campaign.ID, campaign.Target, campaign.WorkspaceID, campaign.RequestedBy, campaign.Name, campaign.IntervalMin, nextRunAt, campaign.LastRunAt, campaign.Active, authJSON, optionsJSON, scopeJSON, campaign.CreatedAt, campaign.UpdatedAt)
+	`, campaign.ID, campaign.Target, campaign.WorkspaceID, campaign.RequestedBy, campaign.Name, campaign.ProgramName, campaign.IntervalMin, campaign.ScheduleType, campaign.ScheduleValue, campaign.RunWindow, blackoutJSON, nextRunAt, campaign.LastRunAt, campaign.RetryCount, campaign.MaxAttempts, nextRetryAt, campaign.LastError, campaign.DeadLetter, leaseUntil, campaign.Active, authJSON, optionsJSON, scopeJSON, campaign.CreatedAt, campaign.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert automation campaign: %w", err)
 	}
@@ -1260,7 +1339,7 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 		workspaceID = "default"
 	}
 	query := `
-		SELECT id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+		SELECT id, target, workspace_id, requested_by, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, lease_until, active, auth_profile, options, scope, created_at, updated_at
 		FROM automation_campaigns
 		WHERE workspace_id = $1
 	`
@@ -1278,8 +1357,8 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 	out := make([]model.AutomationCampaign, 0)
 	for rows.Next() {
 		var item model.AutomationCampaign
-		var authRaw, optionsRaw, scopeRaw []byte
-		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.IntervalMin, &item.NextRunAt, &item.LastRunAt, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var authRaw, optionsRaw, scopeRaw, blackoutRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.LeaseUntil, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan automation campaign row: %w", err)
 		}
 		if len(authRaw) > 0 {
@@ -1291,6 +1370,9 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 		if len(scopeRaw) > 0 {
 			_ = json.Unmarshal(scopeRaw, &item.Scope)
 		}
+		if len(blackoutRaw) > 0 {
+			_ = json.Unmarshal(blackoutRaw, &item.BlackoutWindows)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -1301,10 +1383,14 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 		limit = 50
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+		SELECT id, target, workspace_id, requested_by, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, lease_until, active, auth_profile, options, scope, created_at, updated_at
 		FROM automation_campaigns
-		WHERE active = TRUE AND next_run_at IS NOT NULL AND next_run_at <= $1
-		ORDER BY next_run_at ASC
+		WHERE active = TRUE
+			AND dead_letter = FALSE
+			AND COALESCE(next_retry_at, next_run_at) IS NOT NULL
+			AND COALESCE(next_retry_at, next_run_at) <= $1
+			AND (lease_until IS NULL OR lease_until < $1)
+		ORDER BY COALESCE(next_retry_at, next_run_at) ASC
 		LIMIT $2
 	`, now, limit)
 	if err != nil {
@@ -1314,8 +1400,8 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 	out := make([]model.AutomationCampaign, 0)
 	for rows.Next() {
 		var item model.AutomationCampaign
-		var authRaw, optionsRaw, scopeRaw []byte
-		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.IntervalMin, &item.NextRunAt, &item.LastRunAt, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var authRaw, optionsRaw, scopeRaw, blackoutRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.ProgramName, &item.IntervalMin, &item.ScheduleType, &item.ScheduleValue, &item.RunWindow, &blackoutRaw, &item.NextRunAt, &item.LastRunAt, &item.RetryCount, &item.MaxAttempts, &item.NextRetryAt, &item.LastError, &item.DeadLetter, &item.LeaseUntil, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan due automation campaign row: %w", err)
 		}
 		if len(authRaw) > 0 {
@@ -1327,6 +1413,9 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 		if len(scopeRaw) > 0 {
 			_ = json.Unmarshal(scopeRaw, &item.Scope)
 		}
+		if len(blackoutRaw) > 0 {
+			_ = json.Unmarshal(blackoutRaw, &item.BlackoutWindows)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -1337,6 +1426,10 @@ func (p *Postgres) UpdateAutomationCampaignRun(ctx context.Context, id string, l
 		UPDATE automation_campaigns
 		SET last_run_at = $2,
 			next_run_at = $3,
+			next_retry_at = NULL,
+			retry_count = 0,
+			last_error = '',
+			lease_until = NULL,
 			updated_at = NOW()
 		WHERE id = $1
 	`, strings.TrimSpace(id), lastRunAt, nextRunAt)
@@ -1355,6 +1448,149 @@ func (p *Postgres) DeleteAutomationCampaign(ctx context.Context, id, workspaceID
 		return fmt.Errorf("delete automation campaign: %w", err)
 	}
 	return nil
+}
+
+func (p *Postgres) TryLeaseAutomationCampaign(ctx context.Context, id string, leaseUntil time.Time) (bool, error) {
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE automation_campaigns
+		SET lease_until = $2,
+			updated_at = NOW()
+		WHERE id = $1
+			AND (lease_until IS NULL OR lease_until < NOW())
+	`, strings.TrimSpace(id), leaseUntil)
+	if err != nil {
+		return false, fmt.Errorf("lease automation campaign: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	return affected > 0, nil
+}
+
+func (p *Postgres) MarkAutomationCampaignDispatchFailure(ctx context.Context, id, lastError string, now time.Time, backoff time.Duration) error {
+	nextRetry := now.Add(backoff)
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE automation_campaigns
+		SET retry_count = retry_count + 1,
+			next_retry_at = $2,
+			last_error = $3,
+			lease_until = NULL,
+			dead_letter = (retry_count + 1) >= max_attempts,
+			updated_at = NOW()
+		WHERE id = $1
+	`, strings.TrimSpace(id), nextRetry, strings.TrimSpace(lastError))
+	if err != nil {
+		return fmt.Errorf("mark automation campaign dispatch failure: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) GetProgramROIOverride(ctx context.Context, workspaceID, programName string) (*model.ProgramROIOverride, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+	programName = strings.TrimSpace(programName)
+	if programName == "" {
+		return nil, nil
+	}
+	row := p.db.QueryRowContext(ctx, `
+		SELECT workspace_id, program_name, min_expected_roi_usd, updated_at
+		FROM automation_program_roi_overrides
+		WHERE workspace_id = $1 AND lower(program_name) = lower($2)
+	`, workspaceID, programName)
+	var item model.ProgramROIOverride
+	if err := row.Scan(&item.WorkspaceID, &item.ProgramName, &item.MinExpectedROIUSD, &item.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get program roi override: %w", err)
+	}
+	return &item, nil
+}
+
+func (p *Postgres) UpsertProgramROIOverride(ctx context.Context, item model.ProgramROIOverride) error {
+	item.WorkspaceID = strings.TrimSpace(item.WorkspaceID)
+	if item.WorkspaceID == "" {
+		item.WorkspaceID = "default"
+	}
+	item.ProgramName = strings.TrimSpace(item.ProgramName)
+	if item.ProgramName == "" {
+		return fmt.Errorf("program name is required")
+	}
+	if item.UpdatedAt.IsZero() {
+		item.UpdatedAt = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO automation_program_roi_overrides (workspace_id, program_name, min_expected_roi_usd, updated_at)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (workspace_id, program_name) DO UPDATE
+		SET min_expected_roi_usd = EXCLUDED.min_expected_roi_usd,
+			updated_at = EXCLUDED.updated_at
+	`, item.WorkspaceID, item.ProgramName, item.MinExpectedROIUSD, item.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert program roi override: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListProgramROIOverrides(ctx context.Context, workspaceID string, limit int) ([]model.ProgramROIOverride, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT workspace_id, program_name, min_expected_roi_usd, updated_at
+		FROM automation_program_roi_overrides
+		WHERE workspace_id = $1
+		ORDER BY updated_at DESC
+		LIMIT $2
+	`, workspaceID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list program roi overrides: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.ProgramROIOverride, 0)
+	for rows.Next() {
+		var item model.ProgramROIOverride
+		if err := rows.Scan(&item.WorkspaceID, &item.ProgramName, &item.MinExpectedROIUSD, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan program roi override row: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) GetWorkspaceDailyUsage(ctx context.Context, workspaceID string, day time.Time) (model.WorkspaceDailyUsage, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+	start := day.UTC().Truncate(24 * time.Hour)
+	end := start.Add(24 * time.Hour)
+	var usage model.WorkspaceDailyUsage
+	usage.WorkspaceID = workspaceID
+	usage.Day = start
+	err := p.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) AS scan_count,
+			COALESCE(ROUND(SUM(
+				CASE
+					WHEN completed_at IS NOT NULL THEN GREATEST(EXTRACT(EPOCH FROM (completed_at - started_at)) / 60.0, 0)
+					ELSE 0
+				END
+			)), 0)::INTEGER AS runtime_minutes,
+			COALESCE(SUM(jsonb_array_length(findings)), 0) AS probe_volume
+		FROM scans
+		WHERE workspace_id = $1
+			AND started_at >= $2
+			AND started_at < $3
+	`, workspaceID, start, end).Scan(&usage.ScanCount, &usage.RuntimeMinutes, &usage.ProbeVolume)
+	if err != nil {
+		return usage, fmt.Errorf("get workspace daily usage: %w", err)
+	}
+	return usage, nil
 }
 
 func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, role model.APIKeyRole) (*model.APIKeyRecord, string, error) {

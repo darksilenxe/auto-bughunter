@@ -187,6 +187,14 @@ type ScanOptions struct {
 	// prioritizing exploitation-focused agents (Metasploit/Burp follow-ups)
 	// earlier in orchestration.
 	AggressiveExploitation bool `json:"aggressiveExploitation,omitempty"`
+	// Daily unattended automation limits (workspace-scoped).
+	DailyScanLimit           int `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int `json:"dailyProbeLimit,omitempty"`
+	// Safety caps applied by automation mode.
+	MaxExploitAttempts       int `json:"maxExploitAttempts,omitempty"`
+	MaxAutomationConcurrency int `json:"maxAutomationConcurrency,omitempty"`
+	MinRescanIntervalMinutes int `json:"minRescanIntervalMinutes,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -329,6 +337,7 @@ type AutomationTicket struct {
 type AutomationEventRequest struct {
 	Type        string          `json:"type"`
 	Target      string          `json:"target"`
+	ProgramName string          `json:"programName,omitempty"`
 	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
 	Options     ScanOptions     `json:"options,omitempty"`
 	Scope       ScanScope       `json:"scope,omitempty"`
@@ -336,50 +345,86 @@ type AutomationEventRequest struct {
 }
 
 type AutomationCampaign struct {
-	ID          string          `json:"id"`
-	Target      string          `json:"target"`
-	WorkspaceID string          `json:"workspaceId,omitempty"`
-	RequestedBy string          `json:"requestedBy,omitempty"`
-	Name        string          `json:"name,omitempty"`
-	IntervalMin int             `json:"intervalMin"`
-	NextRunAt   time.Time       `json:"nextRunAt"`
-	LastRunAt   *time.Time      `json:"lastRunAt,omitempty"`
-	Active      bool            `json:"active"`
-	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
-	Options     ScanOptions     `json:"options,omitempty"`
-	Scope       ScanScope       `json:"scope,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	ID              string          `json:"id"`
+	Target          string          `json:"target"`
+	WorkspaceID     string          `json:"workspaceId,omitempty"`
+	RequestedBy     string          `json:"requestedBy,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	ProgramName     string          `json:"programName,omitempty"`
+	IntervalMin     int             `json:"intervalMin"`
+	ScheduleType    string          `json:"scheduleType,omitempty"`
+	ScheduleValue   string          `json:"scheduleValue,omitempty"`
+	RunWindow       string          `json:"runWindow,omitempty"`
+	BlackoutWindows []string        `json:"blackoutWindows,omitempty"`
+	NextRunAt       time.Time       `json:"nextRunAt"`
+	LastRunAt       *time.Time      `json:"lastRunAt,omitempty"`
+	RetryCount      int             `json:"retryCount,omitempty"`
+	MaxAttempts     int             `json:"maxAttempts,omitempty"`
+	NextRetryAt     *time.Time      `json:"nextRetryAt,omitempty"`
+	LastError       string          `json:"lastError,omitempty"`
+	DeadLetter      bool            `json:"deadLetter,omitempty"`
+	LeaseUntil      *time.Time      `json:"leaseUntil,omitempty"`
+	Active          bool            `json:"active"`
+	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
+	Options         ScanOptions     `json:"options,omitempty"`
+	Scope           ScanScope       `json:"scope,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 
 type AutomationCampaignUpsertRequest struct {
-	ID          string          `json:"id,omitempty"`
-	Target      string          `json:"target"`
-	Name        string          `json:"name,omitempty"`
-	IntervalMin int             `json:"intervalMin"`
-	Active      bool            `json:"active"`
-	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
-	Options     ScanOptions     `json:"options,omitempty"`
-	Scope       ScanScope       `json:"scope,omitempty"`
+	ID              string          `json:"id,omitempty"`
+	Target          string          `json:"target"`
+	Name            string          `json:"name,omitempty"`
+	ProgramName     string          `json:"programName,omitempty"`
+	IntervalMin     int             `json:"intervalMin"`
+	ScheduleType    string          `json:"scheduleType,omitempty"`
+	ScheduleValue   string          `json:"scheduleValue,omitempty"`
+	RunWindow       string          `json:"runWindow,omitempty"`
+	BlackoutWindows []string        `json:"blackoutWindows,omitempty"`
+	MaxAttempts     int             `json:"maxAttempts,omitempty"`
+	Active          bool            `json:"active"`
+	AuthProfile     ScanAuthProfile `json:"authProfile,omitempty"`
+	Options         ScanOptions     `json:"options,omitempty"`
+	Scope           ScanScope       `json:"scope,omitempty"`
+}
+
+type ProgramROIOverride struct {
+	WorkspaceID       string    `json:"workspaceId"`
+	ProgramName       string    `json:"programName"`
+	MinExpectedROIUSD float64   `json:"minExpectedRoiUsd"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+type WorkspaceDailyUsage struct {
+	WorkspaceID    string    `json:"workspaceId"`
+	Day            time.Time `json:"day"`
+	ScanCount      int       `json:"scanCount"`
+	RuntimeMinutes int       `json:"runtimeMinutes"`
+	ProbeVolume    int       `json:"probeVolume"`
 }
 
 type ExecutiveReport struct {
-	GeneratedAt                 time.Time `json:"generatedAt"`
-	TotalCompletedScans         int       `json:"totalCompletedScans"`
-	NewFindings                 int       `json:"newFindings"`
-	ChangedFindings             int       `json:"changedFindings"`
-	ResolvedFindings            int       `json:"resolvedFindings"`
-	HighOrMediumFindings        int       `json:"highOrMediumFindings"`
-	AcceptedFeedback            int       `json:"acceptedFeedback"`
-	RejectedFeedback            int       `json:"rejectedFeedback"`
-	DuplicateFeedback           int       `json:"duplicateFeedback"`
-	FalsePositiveRate           float64   `json:"falsePositiveRate"`
-	MeanTimeToResolveHours      float64   `json:"meanTimeToResolveHours"`
-	AverageExpectedROIUSD       float64   `json:"averageExpectedRoiUsd"`
-	HighROICompletedScans       int       `json:"highRoiCompletedScans"`
-	AcceptedPayoutPerScanUSD    float64   `json:"acceptedPayoutPerScanUsd"`
-	OpenAutomationTickets       int       `json:"openAutomationTickets"`
-	RecentlyResolvedTicketCount int       `json:"recentlyResolvedTicketCount"`
+	GeneratedAt                 time.Time          `json:"generatedAt"`
+	TotalCompletedScans         int                `json:"totalCompletedScans"`
+	NewFindings                 int                `json:"newFindings"`
+	ChangedFindings             int                `json:"changedFindings"`
+	ResolvedFindings            int                `json:"resolvedFindings"`
+	HighOrMediumFindings        int                `json:"highOrMediumFindings"`
+	AcceptedFeedback            int                `json:"acceptedFeedback"`
+	RejectedFeedback            int                `json:"rejectedFeedback"`
+	DuplicateFeedback           int                `json:"duplicateFeedback"`
+	FalsePositiveRate           float64            `json:"falsePositiveRate"`
+	MeanTimeToResolveHours      float64            `json:"meanTimeToResolveHours"`
+	AverageExpectedROIUSD       float64            `json:"averageExpectedRoiUsd"`
+	HighROICompletedScans       int                `json:"highRoiCompletedScans"`
+	AcceptedPayoutPerScanUSD    float64            `json:"acceptedPayoutPerScanUsd"`
+	OpenAutomationTickets       int                `json:"openAutomationTickets"`
+	RecentlyResolvedTicketCount int                `json:"recentlyResolvedTicketCount"`
+	AgentAcceptedRate           map[string]float64 `json:"agentAcceptedRate,omitempty"`
+	AgentPayoutPerScanHour      map[string]float64 `json:"agentPayoutPerScanHour,omitempty"`
+	AgentFalsePositiveRate      map[string]float64 `json:"agentFalsePositiveRate,omitempty"`
+	ROISparkline                []float64          `json:"roiSparkline,omitempty"`
 }
 
 type PersistentScanState struct {

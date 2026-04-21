@@ -242,6 +242,7 @@ Supports unattended ROI controls through scan options:
 
 - `automationMode`: `safe` | `autonomous` | `aggressive`
 - `minExpectedRoiUsd`: minimum expected ROI required for automated follow-up actions
+- `dailyScanLimit` / `dailyRuntimeLimitMinutes` / `dailyProbeLimit`: hard daily workspace budgets
 
 ### `GET|POST|PUT|DELETE /api/automation/campaigns`
 
@@ -249,7 +250,12 @@ Persistent recurring campaign scheduler for unattended operation.
 
 - `GET /api/automation/campaigns?activeOnly=true` lists campaigns for the caller workspace.
 - `POST/PUT` upserts a campaign (`target`, `intervalMin`, optional auth/options/scope).
+- `POST/PUT` also supports `scheduleType` (`interval|daily|weekly`), `scheduleValue`, `runWindow`, `blackoutWindows`, and `maxAttempts` for safer unattended dispatch.
 - `DELETE /api/automation/campaigns?id=<campaign-id>` deletes a campaign.
+
+### `GET|POST /api/automation/roi-overrides`
+
+Stores per-workspace/per-program ROI overrides used by automation gating.
 
 ### `GET /api/automation/report`
 

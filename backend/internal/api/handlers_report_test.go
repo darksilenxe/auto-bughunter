@@ -50,8 +50,8 @@ func (r *reportTestRepo) GetJob(_ context.Context, id string) (*model.ScanJob, e
 
 // The remaining Repository methods are stubbed so the type satisfies the
 // interface. Tests that invoke them will fail loudly.
-func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error    { panic("not used") }
-func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error    { panic("not used") }
+func (r *reportTestRepo) CreateJob(context.Context, *model.ScanJob) error { panic("not used") }
+func (r *reportTestRepo) UpdateJob(context.Context, *model.ScanJob) error { panic("not used") }
 func (r *reportTestRepo) GetLatestCompletedJobByTarget(context.Context, string, string) (*model.ScanJob, error) {
 	// Returns nil so handler tests that exercise the report context don't
 	// require a previous scan to be present.
@@ -122,6 +122,24 @@ func (r *reportTestRepo) UpdateAutomationCampaignRun(context.Context, string, ti
 	panic("not used")
 }
 func (r *reportTestRepo) DeleteAutomationCampaign(context.Context, string, string) error {
+	panic("not used")
+}
+func (r *reportTestRepo) TryLeaseAutomationCampaign(context.Context, string, time.Time) (bool, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) MarkAutomationCampaignDispatchFailure(context.Context, string, string, time.Time, time.Duration) error {
+	panic("not used")
+}
+func (r *reportTestRepo) GetProgramROIOverride(context.Context, string, string) (*model.ProgramROIOverride, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpsertProgramROIOverride(context.Context, model.ProgramROIOverride) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListProgramROIOverrides(context.Context, string, int) ([]model.ProgramROIOverride, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) GetWorkspaceDailyUsage(context.Context, string, time.Time) (model.WorkspaceDailyUsage, error) {
 	panic("not used")
 }
 
