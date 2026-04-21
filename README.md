@@ -238,9 +238,22 @@ Creates suppression/baseline rules (optional target scope, optional expiry) to h
 
 Queues event-driven scans from CI/CD or asset discovery pipelines (`deploy`, `dependency_change`, `config_change`, `new_asset`).
 
+Supports unattended ROI controls through scan options:
+
+- `automationMode`: `safe` | `autonomous` | `aggressive`
+- `minExpectedRoiUsd`: minimum expected ROI required for automated follow-up actions
+
+### `GET|POST|PUT|DELETE /api/automation/campaigns`
+
+Persistent recurring campaign scheduler for unattended operation.
+
+- `GET /api/automation/campaigns?activeOnly=true` lists campaigns for the caller workspace.
+- `POST/PUT` upserts a campaign (`target`, `intervalMin`, optional auth/options/scope).
+- `DELETE /api/automation/campaigns?id=<campaign-id>` deletes a campaign.
+
 ### `GET /api/automation/report`
 
-Returns an executive automation report with scan trends, feedback quality metrics, and open automated ticket counts.
+Returns an executive automation report with scan trends, feedback quality metrics, ROI KPIs, and open automated ticket counts.
 
 ### `GET /api/automation/tickets`
 

@@ -109,6 +109,21 @@ func (r *reportTestRepo) ResolveAutomationTicketsMissingFingerprints(context.Con
 func (r *reportTestRepo) ListOpenAutomationTickets(context.Context, string, int) ([]model.AutomationTicket, error) {
 	panic("not used")
 }
+func (r *reportTestRepo) UpsertAutomationCampaign(context.Context, model.AutomationCampaign) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListAutomationCampaigns(context.Context, string, bool, int) ([]model.AutomationCampaign, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListDueAutomationCampaigns(context.Context, time.Time, int) ([]model.AutomationCampaign, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) UpdateAutomationCampaignRun(context.Context, string, time.Time, time.Time) error {
+	panic("not used")
+}
+func (r *reportTestRepo) DeleteAutomationCampaign(context.Context, string, string) error {
+	panic("not used")
+}
 
 func newReportServer(t *testing.T, jobs map[string]*model.ScanJob) *Server {
 	t.Helper()

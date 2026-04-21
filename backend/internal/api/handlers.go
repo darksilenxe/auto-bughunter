@@ -70,6 +70,8 @@ type Server struct {
 	oast           *oast.Service
 	attackGraphDB  AttackGraphStore
 	apiRateLimiter *apiRateLimiter
+	defaultMinROI  float64
+	campaignPoll   time.Duration
 }
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -107,6 +109,11 @@ type Repository interface {
 	UpsertAutomationTicket(ctx context.Context, ticket model.AutomationTicket) error
 	ResolveAutomationTicketsMissingFingerprints(ctx context.Context, target string, fingerprints []string, resolvedAt time.Time) (int64, error)
 	ListOpenAutomationTickets(ctx context.Context, target string, limit int) ([]model.AutomationTicket, error)
+	UpsertAutomationCampaign(ctx context.Context, campaign model.AutomationCampaign) error
+	ListAutomationCampaigns(ctx context.Context, workspaceID string, activeOnly bool, limit int) ([]model.AutomationCampaign, error)
+	ListDueAutomationCampaigns(ctx context.Context, now time.Time, limit int) ([]model.AutomationCampaign, error)
+	UpdateAutomationCampaignRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error
+	DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -133,7 +140,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if scanTimeout <= 0 {
 		scanTimeout = 10 * time.Minute
 	}
-	return &Server{
+	s := &Server{
 		scanService:    scanService,
 		aiClient:       aiClient,
 		repo:           repo,
@@ -158,7 +165,11 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		scanTimeout:    scanTimeout,
 		eventBus:       NewEventBus(),
 		apiRateLimiter: newAPIRateLimiter(),
+		defaultMinROI:  maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
+		campaignPoll:   time.Duration(maxInt(15, intFromEnv("AUTOMATION_CAMPAIGN_POLL_SECONDS", 30))) * time.Second,
 	}
+	go s.runCampaignScheduler()
+	return s
 }
 
 func (s *Server) Routes() http.Handler {
@@ -181,6 +192,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/event", s.handleAutomationEvent)
 	mux.HandleFunc("/api/automation/report", s.handleAutomationReport)
 	mux.HandleFunc("/api/automation/tickets", s.handleAutomationTickets)
+	mux.HandleFunc("/api/automation/campaigns", s.handleAutomationCampaigns)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
@@ -303,6 +315,11 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Options.RescanIntervalMinutes < 0 || req.Options.RescanIntervalMinutes > 10080 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
+		return
+	}
+	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	if req.Options.MinExpectedROIUSD < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "minExpectedRoiUsd must be >= 0"})
 		return
 	}
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), strings.TrimSpace(req.WorkspaceID), "default")
@@ -459,6 +476,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
 	job.Findings = s.applySuppressions(target, job.Findings)
+	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
@@ -536,6 +554,19 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.ModelRecommendations.SecurityKnowledge = knowledgeCtx
 		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
+	expectedROI, roiBasis := s.estimateExpectedROI(context.Background(), job)
+	minROI := s.effectiveMinROI(job.Options)
+	meetsROIGate := expectedROI >= minROI
+	if job.Dashboard == nil {
+		job.Dashboard = &model.DecisionDashboard{}
+	}
+	job.Dashboard.ExpectedROIUSD = roundTo2(expectedROI)
+	job.Dashboard.ExpectedROIBasis = roiBasis
+	job.Dashboard.MeetsROIGate = meetsROIGate
+	job.NextActions = mergeActions(job.NextActions, []string{
+		fmt.Sprintf("Review ROI gate: expected=$%.2f threshold=$%.2f mode=%s", expectedROI, minROI, normalizeAutomationMode(job.Options.AutomationMode)),
+	})
+	s.appendAuditEvent(id, "roi", fmt.Sprintf("ROI estimate expected=$%.2f threshold=$%.2f meets=%t basis=%s", expectedROI, minROI, meetsROIGate, roiBasis))
 	policyGate := s.evaluatePolicyGate(job.Findings, job.PolicyPack)
 	if strings.EqualFold(policyGate.Status, "blocked") {
 		job.Findings = append(job.Findings, model.Finding{
@@ -553,7 +584,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if strings.TrimSpace(job.WorkspaceID) != "" {
 		ticketTarget = job.WorkspaceID + "::" + target
 	}
-	openTickets, resolvedTickets := s.syncAutomationTickets(ticketTarget, job.Findings)
+	openTickets := 0
+	resolvedTickets := 0
+	if meetsROIGate {
+		openTickets, resolvedTickets = s.syncAutomationTickets(ticketTarget, job.Findings)
+	} else {
+		s.appendAuditEvent(id, "ticketing", "Skipped automation ticket updates because ROI gate did not pass")
+	}
 	if openTickets > 0 || resolvedTickets > 0 {
 		job.Findings = append(job.Findings, model.Finding{
 			ID:          "automation-ticket-lifecycle",
@@ -598,8 +635,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.eventBus.Cleanup(id)
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
-		s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
-		go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+		if meetsROIGate {
+			s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
+			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+		} else {
+			s.appendAuditEvent(id, "scheduling", "Skipped scheduled rescan because ROI gate did not pass")
+		}
 	}
 }
 
@@ -971,6 +1012,8 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Options.DeepScanOnHighSignal = true
 	req.Options.RescanIntervalMinutes = 0
+	req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+	req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
 	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
@@ -1002,6 +1045,94 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued", "eventType": req.Type})
 }
 
+func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Request) {
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		activeOnly := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("activeOnly")), "true")
+		items, err := s.repo.ListAutomationCampaigns(r.Context(), workspaceID, activeOnly, 500)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list automation campaigns"})
+			return
+		}
+		writeJSON(w, http.StatusOK, items)
+	case http.MethodPost, http.MethodPut:
+		var req model.AutomationCampaignUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		target, _, err := normalizeAndValidateTarget(req.Target)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if req.IntervalMin < 5 || req.IntervalMin > 10080 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "intervalMin must be between 5 and 10080"})
+			return
+		}
+		if err := validateAuthProfile(req.AuthProfile); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		req.Scope = scope.Normalize(target, req.Scope)
+		if !scope.IsURLInScope(target, req.Scope) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "target is out of configured scope profile"})
+			return
+		}
+		now := time.Now().UTC()
+		if strings.TrimSpace(req.ID) == "" {
+			req.ID = uuid.NewString()
+		}
+		if r.Method == http.MethodPost {
+			req.Active = true
+		}
+		req.Options.AutomationMode = normalizeAutomationMode(req.Options.AutomationMode)
+		req.Options.MinExpectedROIUSD = maxFloat(req.Options.MinExpectedROIUSD, s.defaultMinROI)
+		nextRunAt := now.Add(time.Duration(req.IntervalMin) * time.Minute)
+		item := model.AutomationCampaign{
+			ID:          req.ID,
+			Target:      target,
+			WorkspaceID: workspaceID,
+			RequestedBy: requesterFromRequest(r),
+			Name:        strings.TrimSpace(req.Name),
+			IntervalMin: req.IntervalMin,
+			NextRunAt:   nextRunAt,
+			Active:      req.Active,
+			AuthProfile: req.AuthProfile,
+			Options:     req.Options,
+			Scope:       req.Scope,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if !req.Active {
+			item.NextRunAt = time.Time{}
+		}
+		if err := s.repo.UpsertAutomationCampaign(r.Context(), item); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save automation campaign"})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": item.ID, "status": "saved"})
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id query parameter is required"})
+			return
+		}
+		if err := s.repo.DeleteAutomationCampaign(r.Context(), id, workspaceID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete automation campaign"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
 func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1023,6 +1154,12 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			continue
 		}
 		report.TotalCompletedScans++
+		if job.Dashboard != nil {
+			report.AverageExpectedROIUSD += maxFloat(0, job.Dashboard.ExpectedROIUSD)
+			if job.Dashboard.MeetsROIGate {
+				report.HighROICompletedScans++
+			}
+		}
 		for _, finding := range job.Findings {
 			switch strings.ToLower(strings.TrimSpace(finding.DriftStatus)) {
 			case "new":
@@ -1056,6 +1193,18 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 		case "duplicate":
 			report.DuplicateFeedback++
 		}
+	}
+	if report.TotalCompletedScans > 0 {
+		report.AverageExpectedROIUSD /= float64(report.TotalCompletedScans)
+	}
+	acceptedPayout := 0.0
+	for _, item := range feedback {
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			acceptedPayout += maxFloat(0, item.PayoutUSD)
+		}
+	}
+	if report.TotalCompletedScans > 0 {
+		report.AcceptedPayoutPerScanUSD = acceptedPayout / float64(report.TotalCompletedScans)
 	}
 	totalReviewed := report.AcceptedFeedback + report.RejectedFeedback + report.DuplicateFeedback
 	if totalReviewed > 0 {
@@ -1136,6 +1285,183 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 		options.UseFFUFIntegration = false
 	}
 	return options
+}
+
+func normalizeAutomationMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "safe", "aggressive":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "autonomous"
+	}
+}
+
+func (s *Server) effectiveMinROI(options model.ScanOptions) float64 {
+	minROI := s.defaultMinROI
+	if options.MinExpectedROIUSD > 0 {
+		minROI = options.MinExpectedROIUSD
+	}
+	switch normalizeAutomationMode(options.AutomationMode) {
+	case "safe":
+		minROI = maxFloat(minROI, s.defaultMinROI*1.5)
+	case "aggressive":
+		minROI = maxFloat(0, minROI*0.6)
+	}
+	return minROI
+}
+
+func roundTo2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func (s *Server) estimateExpectedROI(ctx context.Context, job *model.ScanJob) (float64, string) {
+	if job == nil {
+		return 0, "no-job"
+	}
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil {
+		feedback = nil
+	}
+	type feedbackAgg struct {
+		total    int
+		accepted int
+		payout   float64
+	}
+	byKey := map[string]feedbackAgg{}
+	globalAccepted := 0
+	globalPayout := 0.0
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := byKey[key]
+		cur.total++
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			cur.accepted++
+			cur.payout += maxFloat(0, item.PayoutUSD)
+			globalAccepted++
+			globalPayout += maxFloat(0, item.PayoutUSD)
+		}
+		byKey[key] = cur
+	}
+	globalAvgPayout := 120.0
+	if globalAccepted > 0 {
+		globalAvgPayout = globalPayout / float64(globalAccepted)
+	}
+	expected := 0.0
+	for _, f := range job.Findings {
+		if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium && f.Severity != model.SeverityLow {
+			continue
+		}
+		severityImpact := 20.0
+		switch f.Severity {
+		case model.SeverityHigh:
+			severityImpact = 550
+		case model.SeverityMedium:
+			severityImpact = 220
+		case model.SeverityLow:
+			severityImpact = 60
+		}
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = 0.6
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		agg := byKey[key]
+		hitRate := 0.35
+		avgPayout := globalAvgPayout
+		if agg.total > 0 {
+			hitRate = float64(agg.accepted+1) / float64(agg.total+2)
+		}
+		if agg.accepted > 0 {
+			avgPayout = agg.payout / float64(agg.accepted)
+		}
+		expected += (severityImpact*0.25 + avgPayout*0.75) * conf * hitRate
+	}
+	return maxFloat(0, roundTo2(expected)), "severity+confidence+historical-payout"
+}
+
+func (s *Server) applyAutoSuppressionHeuristics(ctx context.Context, findings []model.Finding) []model.Finding {
+	feedback, err := s.repo.ListFeedback(ctx, 1000)
+	if err != nil || len(feedback) == 0 || len(findings) == 0 {
+		return findings
+	}
+	type agg struct {
+		total    int
+		accepted int
+		payout   float64
+	}
+	signals := map[string]agg{}
+	for _, item := range feedback {
+		key := strings.ToLower(strings.TrimSpace(item.Category)) + "|" + strings.ToLower(strings.TrimSpace(item.Title))
+		cur := signals[key]
+		cur.total++
+		if strings.EqualFold(strings.TrimSpace(item.Outcome), "accepted") {
+			cur.accepted++
+			cur.payout += maxFloat(0, item.PayoutUSD)
+		}
+		signals[key] = cur
+	}
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Severity == model.SeverityHigh || f.Severity == model.SeverityMedium {
+			out = append(out, f)
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
+		agg := signals[key]
+		if agg.total < 3 {
+			out = append(out, f)
+			continue
+		}
+		acceptRate := float64(agg.accepted) / float64(agg.total)
+		avgPayout := 0.0
+		if agg.accepted > 0 {
+			avgPayout = agg.payout / float64(agg.accepted)
+		}
+		if acceptRate < 0.15 && avgPayout < 20 && f.Confidence < 0.85 {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func (s *Server) runCampaignScheduler() {
+	if s.repo == nil || s.campaignPoll <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.campaignPoll)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now().UTC()
+		campaigns, err := s.repo.ListDueAutomationCampaigns(context.Background(), now, 25)
+		if err != nil || len(campaigns) == 0 {
+			continue
+		}
+		for _, c := range campaigns {
+			c.Options.AutomationMode = normalizeAutomationMode(c.Options.AutomationMode)
+			c.Options.MinExpectedROIUSD = maxFloat(c.Options.MinExpectedROIUSD, s.defaultMinROI)
+			jobID := uuid.NewString()
+			job := &model.ScanJob{
+				ID:                 jobID,
+				Target:             c.Target,
+				WorkspaceID:        firstNonEmpty(c.WorkspaceID, "default"),
+				RequestedBy:        c.RequestedBy,
+				PolicyPack:         defaultPolicyPack(),
+				Status:             "queued",
+				StartedAt:          now,
+				AuthProfileSummary: model.SummarizeAuthProfile(c.AuthProfile),
+				Options:            c.Options,
+				Scope:              c.Scope,
+			}
+			if err := s.repo.CreateJob(context.Background(), job); err != nil {
+				continue
+			}
+			nextRun := now.Add(time.Duration(maxInt(5, c.IntervalMin)) * time.Minute)
+			_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
+			go s.runJob(jobID, c.Target, c.AuthProfile, nil, c.Options, c.Scope)
+		}
+	}
 }
 
 func (s *Server) syncAutomationTickets(target string, findings []model.Finding) (int, int) {

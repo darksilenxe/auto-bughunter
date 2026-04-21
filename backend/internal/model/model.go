@@ -156,6 +156,8 @@ type ScanOptions struct {
 	MaxPerTargetConcurrency   int      `json:"maxPerTargetConcurrency,omitempty"`
 	TargetRateLimitPerMinute  int      `json:"targetRateLimitPerMinute,omitempty"`
 	GlobalScanBudget          int      `json:"globalScanBudget,omitempty"`
+	AutomationMode            string   `json:"automationMode,omitempty"`
+	MinExpectedROIUSD         float64  `json:"minExpectedRoiUsd,omitempty"`
 	DeepScanOnHighSignal      bool     `json:"deepScanOnHighSignal,omitempty"`
 	CrawlMaxPages             int      `json:"crawlMaxPages,omitempty"`
 	SeedRuntimeEndpoints      []string `json:"seedRuntimeEndpoints,omitempty"`
@@ -333,6 +335,34 @@ type AutomationEventRequest struct {
 	Assets      []string        `json:"assets,omitempty"`
 }
 
+type AutomationCampaign struct {
+	ID          string          `json:"id"`
+	Target      string          `json:"target"`
+	WorkspaceID string          `json:"workspaceId,omitempty"`
+	RequestedBy string          `json:"requestedBy,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	IntervalMin int             `json:"intervalMin"`
+	NextRunAt   time.Time       `json:"nextRunAt"`
+	LastRunAt   *time.Time      `json:"lastRunAt,omitempty"`
+	Active      bool            `json:"active"`
+	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
+	Options     ScanOptions     `json:"options,omitempty"`
+	Scope       ScanScope       `json:"scope,omitempty"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
+}
+
+type AutomationCampaignUpsertRequest struct {
+	ID          string          `json:"id,omitempty"`
+	Target      string          `json:"target"`
+	Name        string          `json:"name,omitempty"`
+	IntervalMin int             `json:"intervalMin"`
+	Active      bool            `json:"active"`
+	AuthProfile ScanAuthProfile `json:"authProfile,omitempty"`
+	Options     ScanOptions     `json:"options,omitempty"`
+	Scope       ScanScope       `json:"scope,omitempty"`
+}
+
 type ExecutiveReport struct {
 	GeneratedAt                 time.Time `json:"generatedAt"`
 	TotalCompletedScans         int       `json:"totalCompletedScans"`
@@ -345,6 +375,9 @@ type ExecutiveReport struct {
 	DuplicateFeedback           int       `json:"duplicateFeedback"`
 	FalsePositiveRate           float64   `json:"falsePositiveRate"`
 	MeanTimeToResolveHours      float64   `json:"meanTimeToResolveHours"`
+	AverageExpectedROIUSD       float64   `json:"averageExpectedRoiUsd"`
+	HighROICompletedScans       int       `json:"highRoiCompletedScans"`
+	AcceptedPayoutPerScanUSD    float64   `json:"acceptedPayoutPerScanUsd"`
 	OpenAutomationTickets       int       `json:"openAutomationTickets"`
 	RecentlyResolvedTicketCount int       `json:"recentlyResolvedTicketCount"`
 }
@@ -452,6 +485,9 @@ type DecisionDashboard struct {
 	TopAttackPaths            []string `json:"topAttackPaths,omitempty"`
 	UntestedReasons           []string `json:"untestedReasons,omitempty"`
 	ActionableFindings        int      `json:"actionableFindings"`
+	ExpectedROIUSD            float64  `json:"expectedRoiUsd,omitempty"`
+	ExpectedROIBasis          string   `json:"expectedRoiBasis,omitempty"`
+	MeetsROIGate              bool     `json:"meetsRoiGate,omitempty"`
 	// MITREHeatmap is a deterministic count of findings per MITRE ATT&CK
 	// technique ID, used by the dashboard UI to render a heatmap. Empty
 	// when no findings carry MITRE annotations.

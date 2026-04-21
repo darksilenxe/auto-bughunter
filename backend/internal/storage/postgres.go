@@ -510,6 +510,27 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate api_keys table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS automation_campaigns (
+			id TEXT PRIMARY KEY,
+			target TEXT NOT NULL,
+			workspace_id TEXT NOT NULL DEFAULT 'default',
+			requested_by TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			interval_min INTEGER NOT NULL,
+			next_run_at TIMESTAMPTZ NULL,
+			last_run_at TIMESTAMPTZ NULL,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			auth_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+			options JSONB NOT NULL DEFAULT '{}'::jsonb,
+			scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate automation_campaigns table: %w", err)
+	}
 	return nil
 }
 
@@ -1180,6 +1201,160 @@ func (p *Postgres) ListOpenAutomationTickets(ctx context.Context, target string,
 		out = append(out, ticket)
 	}
 	return out, rows.Err()
+}
+
+func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.AutomationCampaign) error {
+	authJSON, err := json.Marshal(campaign.AuthProfile)
+	if err != nil {
+		return fmt.Errorf("marshal campaign auth profile: %w", err)
+	}
+	optionsJSON, err := json.Marshal(campaign.Options)
+	if err != nil {
+		return fmt.Errorf("marshal campaign options: %w", err)
+	}
+	scopeJSON, err := json.Marshal(campaign.Scope)
+	if err != nil {
+		return fmt.Errorf("marshal campaign scope: %w", err)
+	}
+	if campaign.CreatedAt.IsZero() {
+		campaign.CreatedAt = time.Now().UTC()
+	}
+	if campaign.UpdatedAt.IsZero() {
+		campaign.UpdatedAt = campaign.CreatedAt
+	}
+	var nextRunAt any = campaign.NextRunAt
+	if campaign.NextRunAt.IsZero() {
+		nextRunAt = nil
+	}
+	_, err = p.db.ExecContext(ctx, `
+		INSERT INTO automation_campaigns (
+			id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (id) DO UPDATE
+		SET target = EXCLUDED.target,
+			workspace_id = EXCLUDED.workspace_id,
+			requested_by = EXCLUDED.requested_by,
+			name = EXCLUDED.name,
+			interval_min = EXCLUDED.interval_min,
+			next_run_at = EXCLUDED.next_run_at,
+			last_run_at = EXCLUDED.last_run_at,
+			active = EXCLUDED.active,
+			auth_profile = EXCLUDED.auth_profile,
+			options = EXCLUDED.options,
+			scope = EXCLUDED.scope,
+			updated_at = EXCLUDED.updated_at
+	`, campaign.ID, campaign.Target, campaign.WorkspaceID, campaign.RequestedBy, campaign.Name, campaign.IntervalMin, nextRunAt, campaign.LastRunAt, campaign.Active, authJSON, optionsJSON, scopeJSON, campaign.CreatedAt, campaign.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert automation campaign: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID string, activeOnly bool, limit int) ([]model.AutomationCampaign, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+	query := `
+		SELECT id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+		FROM automation_campaigns
+		WHERE workspace_id = $1
+	`
+	args := []any{workspaceID}
+	if activeOnly {
+		query += ` AND active = TRUE`
+	}
+	query += ` ORDER BY updated_at DESC LIMIT $2`
+	args = append(args, limit)
+	rows, err := p.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list automation campaigns: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.AutomationCampaign, 0)
+	for rows.Next() {
+		var item model.AutomationCampaign
+		var authRaw, optionsRaw, scopeRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.IntervalMin, &item.NextRunAt, &item.LastRunAt, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan automation campaign row: %w", err)
+		}
+		if len(authRaw) > 0 {
+			_ = json.Unmarshal(authRaw, &item.AuthProfile)
+		}
+		if len(optionsRaw) > 0 {
+			_ = json.Unmarshal(optionsRaw, &item.Options)
+		}
+		if len(scopeRaw) > 0 {
+			_ = json.Unmarshal(scopeRaw, &item.Scope)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time, limit int) ([]model.AutomationCampaign, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, target, workspace_id, requested_by, name, interval_min, next_run_at, last_run_at, active, auth_profile, options, scope, created_at, updated_at
+		FROM automation_campaigns
+		WHERE active = TRUE AND next_run_at IS NOT NULL AND next_run_at <= $1
+		ORDER BY next_run_at ASC
+		LIMIT $2
+	`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list due automation campaigns: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.AutomationCampaign, 0)
+	for rows.Next() {
+		var item model.AutomationCampaign
+		var authRaw, optionsRaw, scopeRaw []byte
+		if err := rows.Scan(&item.ID, &item.Target, &item.WorkspaceID, &item.RequestedBy, &item.Name, &item.IntervalMin, &item.NextRunAt, &item.LastRunAt, &item.Active, &authRaw, &optionsRaw, &scopeRaw, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan due automation campaign row: %w", err)
+		}
+		if len(authRaw) > 0 {
+			_ = json.Unmarshal(authRaw, &item.AuthProfile)
+		}
+		if len(optionsRaw) > 0 {
+			_ = json.Unmarshal(optionsRaw, &item.Options)
+		}
+		if len(scopeRaw) > 0 {
+			_ = json.Unmarshal(scopeRaw, &item.Scope)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) UpdateAutomationCampaignRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error {
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE automation_campaigns
+		SET last_run_at = $2,
+			next_run_at = $3,
+			updated_at = NOW()
+		WHERE id = $1
+	`, strings.TrimSpace(id), lastRunAt, nextRunAt)
+	if err != nil {
+		return fmt.Errorf("update automation campaign run: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error {
+	_, err := p.db.ExecContext(ctx, `
+		DELETE FROM automation_campaigns
+		WHERE id = $1 AND workspace_id = $2
+	`, strings.TrimSpace(id), strings.TrimSpace(workspaceID))
+	if err != nil {
+		return fmt.Errorf("delete automation campaign: %w", err)
+	}
+	return nil
 }
 
 func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, role model.APIKeyRole) (*model.APIKeyRecord, string, error) {
