@@ -326,7 +326,7 @@ export default function Settings() {
       <section className="card">
         <h2>Local AI Configuration</h2>
         <p className="meta">
-          The system uses local Ollama models (<code>phi3:mini</code> by default, with <code>codellama</code> as a second local model) for AI summaries and triage.
+          The system uses local Ollama models (<code>phi3:mini</code> by default for summaries/triage, with <code>codellama</code> for planner/coding assistance).
           No external API key is required. The model is downloaded automatically on first start.
         </p>
         <p className="meta">
