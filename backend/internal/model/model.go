@@ -12,29 +12,30 @@ const (
 )
 
 type Finding struct {
-	ID                string            `json:"id"`
-	Category          string            `json:"category"`
-	Severity          Severity          `json:"severity"`
-	Title             string            `json:"title"`
-	Description       string            `json:"description"`
-	Evidence          string            `json:"evidence"`
-	Recommendation    string            `json:"recommendation"`
-	Confidence        float64           `json:"confidence,omitempty"`
-	Sources           []string          `json:"sources,omitempty"`
-	DriftStatus       string            `json:"driftStatus,omitempty"`
-	EvidenceFields    map[string]string `json:"evidenceFields,omitempty"`
-	BusinessTags      []string          `json:"businessTags,omitempty"`
-	Exploitability    *Exploitability   `json:"exploitability,omitempty"`
-	CVSSVector        string            `json:"cvssVector,omitempty"`
-	CVSSScore         float64           `json:"cvssScore,omitempty"`
-	CWE               string            `json:"cwe,omitempty"`
-	OWASPCategory     string            `json:"owaspCategory,omitempty"`
-	AffectedURL       string            `json:"affectedUrl,omitempty"`
-	AffectedParameter string            `json:"affectedParameter,omitempty"`
-	ReproductionSteps []string          `json:"reproductionSteps,omitempty"`
-	Impact            string            `json:"impact,omitempty"`
-	References        []string          `json:"references,omitempty"`
-	PoC               string            `json:"poc,omitempty"`
+	ID                  string            `json:"id"`
+	Category            string            `json:"category"`
+	Severity            Severity          `json:"severity"`
+	Title               string            `json:"title"`
+	Description         string            `json:"description"`
+	Evidence            string            `json:"evidence"`
+	Recommendation      string            `json:"recommendation"`
+	Confidence          float64           `json:"confidence,omitempty"`
+	EvidenceQualityTier string            `json:"evidenceQualityTier,omitempty"`
+	Sources             []string          `json:"sources,omitempty"`
+	DriftStatus         string            `json:"driftStatus,omitempty"`
+	EvidenceFields      map[string]string `json:"evidenceFields,omitempty"`
+	BusinessTags        []string          `json:"businessTags,omitempty"`
+	Exploitability      *Exploitability   `json:"exploitability,omitempty"`
+	CVSSVector          string            `json:"cvssVector,omitempty"`
+	CVSSScore           float64           `json:"cvssScore,omitempty"`
+	CWE                 string            `json:"cwe,omitempty"`
+	OWASPCategory       string            `json:"owaspCategory,omitempty"`
+	AffectedURL         string            `json:"affectedUrl,omitempty"`
+	AffectedParameter   string            `json:"affectedParameter,omitempty"`
+	ReproductionSteps   []string          `json:"reproductionSteps,omitempty"`
+	Impact              string            `json:"impact,omitempty"`
+	References          []string          `json:"references,omitempty"`
+	PoC                 string            `json:"poc,omitempty"`
 	// MITRETechniques is a deterministic list of MITRE ATT&CK technique IDs
 	// (e.g. "T1190", "T1059.007") associated with this finding. Populated
 	// from the finding's category/CWE by mitre.AnnotateFinding so the field
@@ -207,6 +208,9 @@ type ScanOptions struct {
 	AutonomyMinMarginalScore         float64  `json:"autonomyMinMarginalScore,omitempty"`
 	AutonomyExplorationBudgetPercent int      `json:"autonomyExplorationBudgetPercent,omitempty"`
 	AutonomyMemoryRetentionDays      int      `json:"autonomyMemoryRetentionDays,omitempty"`
+	AutonomyTenantTier               string   `json:"autonomyTenantTier,omitempty"`
+	AutonomyMaxRoundCostUnits        int      `json:"autonomyMaxRoundCostUnits,omitempty"`
+	AutonomyCostWeight               float64  `json:"autonomyCostWeight,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -428,14 +432,16 @@ type AutomationPolicyPack struct {
 }
 
 type AutonomyGovernanceProfile struct {
-	SuccessCriteria   map[string]AutonomySuccessCriteria `json:"successCriteria,omitempty"`
-	RiskMatrix        AutonomyRiskMatrix                 `json:"riskMatrix,omitempty"`
-	FailureHandling   AutonomyFailureHandlingPolicy      `json:"failureHandling,omitempty"`
-	MemoryPolicy      AutonomyMemoryPolicy               `json:"memoryPolicy,omitempty"`
-	EvaluationGate    AutonomyEvaluationGate             `json:"evaluationGate,omitempty"`
-	RolloutControl    AutonomyRolloutControl             `json:"rolloutControl,omitempty"`
-	OperatorOverride  AutonomyOperatorOverridePolicy     `json:"operatorOverride,omitempty"`
-	GovernanceCadence AutonomyGovernanceCadence          `json:"governanceCadence,omitempty"`
+	SuccessCriteria   map[string]AutonomySuccessCriteria  `json:"successCriteria,omitempty"`
+	RiskMatrix        AutonomyRiskMatrix                  `json:"riskMatrix,omitempty"`
+	FailureHandling   AutonomyFailureHandlingPolicy       `json:"failureHandling,omitempty"`
+	MemoryPolicy      AutonomyMemoryPolicy                `json:"memoryPolicy,omitempty"`
+	EvaluationGate    AutonomyEvaluationGate              `json:"evaluationGate,omitempty"`
+	RolloutControl    AutonomyRolloutControl              `json:"rolloutControl,omitempty"`
+	OperatorOverride  AutonomyOperatorOverridePolicy      `json:"operatorOverride,omitempty"`
+	GovernanceCadence AutonomyGovernanceCadence           `json:"governanceCadence,omitempty"`
+	TenantRiskBudgets map[string]AutonomyTenantRiskBudget `json:"tenantRiskBudgets,omitempty"`
+	CostControls      AutonomyCostControls                `json:"costControls,omitempty"`
 }
 
 type AutonomySuccessCriteria struct {
@@ -499,6 +505,20 @@ type AutonomyGovernanceCadence struct {
 	MonthlyRebalanceEnabled bool `json:"monthlyRebalanceEnabled,omitempty"`
 }
 
+type AutonomyTenantRiskBudget struct {
+	MaxExploitAttempts       int `json:"maxExploitAttempts,omitempty"`
+	MaxPerTargetConcurrency  int `json:"maxPerTargetConcurrency,omitempty"`
+	MaxAutomationConcurrency int `json:"maxAutomationConcurrency,omitempty"`
+	DailyScanLimit           int `json:"dailyScanLimit,omitempty"`
+	DailyRuntimeLimitMinutes int `json:"dailyRuntimeLimitMinutes,omitempty"`
+	DailyProbeLimit          int `json:"dailyProbeLimit,omitempty"`
+}
+
+type AutonomyCostControls struct {
+	MaxRoundCostUnits int     `json:"maxRoundCostUnits,omitempty"`
+	CostWeight        float64 `json:"costWeight,omitempty"`
+}
+
 type AutomationPolicyAuditEvent struct {
 	ID              string    `json:"id"`
 	WorkspaceID     string    `json:"workspaceId"`
@@ -512,17 +532,19 @@ type AutomationPolicyAuditEvent struct {
 }
 
 type AutomationMetrics struct {
-	GeneratedAt       time.Time          `json:"generatedAt"`
-	WorkspaceID       string             `json:"workspaceId"`
-	QueueLagSeconds   float64            `json:"queueLagSeconds"`
-	MaxQueueLag       float64            `json:"maxQueueLagSeconds"`
-	RetryRate         float64            `json:"retryRate"`
-	DLQCount          int                `json:"dlqCount"`
-	ToolFailureRate   float64            `json:"toolFailureRate"`
-	ROIByStrategy     map[string]float64 `json:"roiByStrategy,omitempty"`
-	StrategyRunCounts map[string]int     `json:"strategyRunCounts,omitempty"`
-	Alerts            []string           `json:"alerts,omitempty"`
-	Extra             map[string]float64 `json:"extra,omitempty"`
+	GeneratedAt           time.Time          `json:"generatedAt"`
+	WorkspaceID           string             `json:"workspaceId"`
+	QueueLagSeconds       float64            `json:"queueLagSeconds"`
+	MaxQueueLag           float64            `json:"maxQueueLagSeconds"`
+	RetryRate             float64            `json:"retryRate"`
+	DLQCount              int                `json:"dlqCount"`
+	ToolFailureRate       float64            `json:"toolFailureRate"`
+	ROIByStrategy         map[string]float64 `json:"roiByStrategy,omitempty"`
+	StrategyRunCounts     map[string]int     `json:"strategyRunCounts,omitempty"`
+	Alerts                []string           `json:"alerts,omitempty"`
+	CanaryPercentByPolicy map[string]int     `json:"canaryPercentByPolicy,omitempty"`
+	RollbackEventsRecent  int                `json:"rollbackEventsRecent,omitempty"`
+	Extra                 map[string]float64 `json:"extra,omitempty"`
 }
 
 type ProgramROIOverride struct {

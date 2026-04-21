@@ -533,6 +533,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	beforeDedupCount := len(job.Findings)
+	dedupedFindings, dedupSuppressed := deduplicateFindingsCrossAgent(job.Findings)
+	job.Findings = dedupedFindings
+	if dedupSuppressed > 0 {
+		s.appendAuditEvent(id, "dedup", fmt.Sprintf("Suppressed %d duplicate findings before scoring", dedupSuppressed))
+	}
+	job.Findings = applyEvidenceQualityTiers(job.Findings)
 	job.Findings = s.applyFeedbackConfidencePrioritization(context.Background(), job.Findings)
 	job.Findings = redactSensitiveFindings(job.Findings)
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
@@ -541,6 +548,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
+	if beforeDedupCount > 0 {
+		s.appendAuditEvent(id, "analysis", fmt.Sprintf("Cross-agent dedupe ratio %.2f", 1.0-float64(len(job.Findings))/float64(beforeDedupCount)))
+	}
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
 	if previousJob != nil {
 		newItems, changedItems, resolvedItems, deltaFindings := buildDeltaFindings(previousJob.Findings, job.Findings)
@@ -666,6 +676,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		})
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
+	job.AutomatedReport += "\n\n## Automation Postmortem\n" + generateAutomationPostmortem(job, outputs, dedupSuppressed)
 	s.persistScanState(target, job.Findings, outputs, options)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
@@ -697,9 +708,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.eventBus.Cleanup(id)
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
+		nextOptions, adaptationNote := adaptOptionsFromDrift(job.Findings, options)
+		if adaptationNote != "" {
+			s.appendAuditEvent(id, "drift-adaptation", adaptationNote)
+		}
 		if meetsROIGate {
 			s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
-			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, nextOptions, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
 		} else {
 			s.appendAuditEvent(id, "scheduling", "Skipped scheduled rescan because ROI gate did not pass")
 		}
@@ -1597,6 +1612,60 @@ func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyG
 			}
 		}
 	}
+	tenantTier := strings.ToLower(strings.TrimSpace(options.AutonomyTenantTier))
+	if tenantTier == "" {
+		tenantTier = "default"
+	}
+	if budget, ok := governance.TenantRiskBudgets[tenantTier]; ok {
+		if budget.MaxExploitAttempts >= 0 {
+			if options.MaxExploitAttempts <= 0 {
+				options.MaxExploitAttempts = budget.MaxExploitAttempts
+			} else {
+				options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, budget.MaxExploitAttempts)
+			}
+		}
+		if budget.MaxPerTargetConcurrency > 0 {
+			if options.MaxPerTargetConcurrency <= 0 {
+				options.MaxPerTargetConcurrency = budget.MaxPerTargetConcurrency
+			} else {
+				options.MaxPerTargetConcurrency = minInt(options.MaxPerTargetConcurrency, budget.MaxPerTargetConcurrency)
+			}
+		}
+		if budget.MaxAutomationConcurrency > 0 {
+			if options.MaxAutomationConcurrency <= 0 {
+				options.MaxAutomationConcurrency = budget.MaxAutomationConcurrency
+			} else {
+				options.MaxAutomationConcurrency = minInt(options.MaxAutomationConcurrency, budget.MaxAutomationConcurrency)
+			}
+		}
+		if budget.DailyScanLimit > 0 {
+			if options.DailyScanLimit <= 0 {
+				options.DailyScanLimit = budget.DailyScanLimit
+			} else {
+				options.DailyScanLimit = minInt(options.DailyScanLimit, budget.DailyScanLimit)
+			}
+		}
+		if budget.DailyRuntimeLimitMinutes > 0 {
+			if options.DailyRuntimeLimitMinutes <= 0 {
+				options.DailyRuntimeLimitMinutes = budget.DailyRuntimeLimitMinutes
+			} else {
+				options.DailyRuntimeLimitMinutes = minInt(options.DailyRuntimeLimitMinutes, budget.DailyRuntimeLimitMinutes)
+			}
+		}
+		if budget.DailyProbeLimit > 0 {
+			if options.DailyProbeLimit <= 0 {
+				options.DailyProbeLimit = budget.DailyProbeLimit
+			} else {
+				options.DailyProbeLimit = minInt(options.DailyProbeLimit, budget.DailyProbeLimit)
+			}
+		}
+	}
+	if governance.CostControls.MaxRoundCostUnits > 0 {
+		options.AutonomyMaxRoundCostUnits = governance.CostControls.MaxRoundCostUnits
+	}
+	if governance.CostControls.CostWeight > 0 {
+		options.AutonomyCostWeight = clampFloat(governance.CostControls.CostWeight, 0.01, 1.0)
+	}
 	if !governance.OperatorOverride.AllowForceRun {
 		options.AutonomyForceRunAgents = nil
 	}
@@ -1658,6 +1727,25 @@ func validateGovernanceProfile(profile model.AutonomyGovernanceProfile) error {
 		if pct < 0 || pct > 100 {
 			return fmt.Errorf("rolloutControl.canaryPercentByStage[%s] must be between 0 and 100", stage)
 		}
+	}
+	for tier, budget := range profile.TenantRiskBudgets {
+		if strings.TrimSpace(tier) == "" {
+			return errors.New("tenantRiskBudgets tier key is required")
+		}
+		if budget.MaxExploitAttempts < 0 ||
+			budget.MaxPerTargetConcurrency < 0 ||
+			budget.MaxAutomationConcurrency < 0 ||
+			budget.DailyScanLimit < 0 ||
+			budget.DailyRuntimeLimitMinutes < 0 ||
+			budget.DailyProbeLimit < 0 {
+			return fmt.Errorf("tenantRiskBudgets[%s] values must be >= 0", tier)
+		}
+	}
+	if profile.CostControls.MaxRoundCostUnits < 0 {
+		return errors.New("costControls.maxRoundCostUnits must be >= 0")
+	}
+	if profile.CostControls.CostWeight < 0 || profile.CostControls.CostWeight > 1 {
+		return errors.New("costControls.costWeight must be between 0 and 1")
 	}
 	return nil
 }
@@ -1790,6 +1878,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	jobs, _ := s.repo.ListCompletedJobs(r.Context(), 1000)
 	strategyROI := map[string]float64{}
 	strategyCounts := map[string]int{}
+	canaryByPolicy := map[string]int{}
 	failedRuns := 0
 	totalRuns := 0
 	for _, job := range jobs {
@@ -1808,6 +1897,24 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			totalRuns++
 			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
 				failedRuns++
+			}
+		}
+	}
+	if packs, err := s.repo.ListAutomationPolicyPacks(r.Context(), workspaceID, 200); err == nil {
+		for _, pack := range packs {
+			name := normalizePolicyPackName(pack.Name)
+			if name == "" {
+				continue
+			}
+			canaryByPolicy[name] = maxInt(0, minInt(100, pack.CanaryPercent))
+		}
+	}
+	rollbackEventsRecent := 0
+	if auditItems, err := s.repo.ListAutomationPolicyAudit(r.Context(), workspaceID, "", 300); err == nil {
+		for _, item := range auditItems {
+			action := strings.ToLower(strings.TrimSpace(item.Action))
+			if strings.Contains(action, "rollback") {
+				rollbackEventsRecent++
 			}
 		}
 	}
@@ -1842,16 +1949,18 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		alerts = append(alerts, "tool failure rate exceeded threshold")
 	}
 	writeJSON(w, http.StatusOK, model.AutomationMetrics{
-		GeneratedAt:       now,
-		WorkspaceID:       workspaceID,
-		QueueLagSeconds:   roundTo2(avgLag),
-		MaxQueueLag:       roundTo2(maxLag),
-		RetryRate:         roundTo2(retryRate),
-		DLQCount:          dlq,
-		ToolFailureRate:   roundTo2(toolFailureRate),
-		ROIByStrategy:     strategyROI,
-		StrategyRunCounts: strategyCounts,
-		Alerts:            alerts,
+		GeneratedAt:           now,
+		WorkspaceID:           workspaceID,
+		QueueLagSeconds:       roundTo2(avgLag),
+		MaxQueueLag:           roundTo2(maxLag),
+		RetryRate:             roundTo2(retryRate),
+		DLQCount:              dlq,
+		ToolFailureRate:       roundTo2(toolFailureRate),
+		ROIByStrategy:         strategyROI,
+		StrategyRunCounts:     strategyCounts,
+		Alerts:                alerts,
+		CanaryPercentByPolicy: canaryByPolicy,
+		RollbackEventsRecent:  rollbackEventsRecent,
 		Extra: map[string]float64{
 			"lagSamples": float64(lagCount),
 			"agentRuns":  float64(totalRuns),
@@ -2619,6 +2728,177 @@ func fingerprintFinding(f model.Finding) string {
 		strings.ToLower(strings.TrimSpace(f.Evidence))
 }
 
+func normalizedFindingKey(f model.Finding) string {
+	category := normalizeDedupToken(f.Category)
+	title := normalizeDedupToken(f.Title)
+	evidence := normalizeDedupToken(f.Evidence)
+	if len(evidence) > 160 {
+		evidence = evidence[:160]
+	}
+	param := normalizeDedupToken(f.AffectedParameter)
+	host := normalizeDedupToken(hostFromTarget(strings.TrimSpace(f.AffectedURL)))
+	id := normalizeDedupToken(f.ID)
+	cwe := normalizeDedupToken(f.CWE)
+	return strings.Join([]string{category, title, evidence, param, host, id, cwe}, "|")
+}
+
+func normalizeDedupToken(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastSpace = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastSpace = false
+		default:
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func deduplicateFindingsCrossAgent(findings []model.Finding) ([]model.Finding, int) {
+	if len(findings) <= 1 {
+		return findings, 0
+	}
+	type cluster struct {
+		rep   model.Finding
+		count int
+	}
+	clusters := map[string]cluster{}
+	order := make([]string, 0, len(findings))
+	for _, f := range findings {
+		key := normalizedFindingKey(f)
+		cur, ok := clusters[key]
+		if !ok {
+			clusters[key] = cluster{rep: f, count: 1}
+			order = append(order, key)
+			continue
+		}
+		cur.count++
+		if severityWeight(f.Severity) > severityWeight(cur.rep.Severity) ||
+			(severityWeight(f.Severity) == severityWeight(cur.rep.Severity) && f.Confidence > cur.rep.Confidence) {
+			cur.rep = f
+		}
+		cur.rep.Sources = dedupeStrings(append(cur.rep.Sources, f.Sources...))
+		clusters[key] = cur
+	}
+	out := make([]model.Finding, 0, len(clusters))
+	for _, key := range order {
+		cur := clusters[key]
+		if cur.count > 1 {
+			if cur.rep.EvidenceFields == nil {
+				cur.rep.EvidenceFields = map[string]string{}
+			}
+			cur.rep.EvidenceFields["duplicateClusterSize"] = fmt.Sprintf("%d", cur.count)
+		}
+		out = append(out, cur.rep)
+	}
+	return out, len(findings) - len(out)
+}
+
+func applyEvidenceQualityTiers(findings []model.Finding) []model.Finding {
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		tier := inferEvidenceQualityTier(f)
+		f.EvidenceQualityTier = tier
+		if f.EvidenceFields == nil {
+			f.EvidenceFields = map[string]string{}
+		}
+		f.EvidenceFields["evidenceQualityTier"] = tier
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = defaultConfidenceForSeverity(f.Severity)
+		}
+		switch tier {
+		case "strong":
+			conf = maxFloat(conf, 0.8)
+			conf = minFloat(0.99, conf+0.08)
+		case "moderate":
+			conf = minFloat(0.99, conf+0.02)
+		case "weak":
+			conf = minFloat(0.7, conf)
+			conf = maxFloat(0.05, conf-0.08)
+		}
+		f.Confidence = conf
+		out = append(out, f)
+	}
+	return out
+}
+
+func inferEvidenceQualityTier(f model.Finding) string {
+	score := 0
+	if len(f.ReproductionSteps) >= 2 {
+		score++
+	}
+	if strings.TrimSpace(f.PoC) != "" {
+		score++
+	}
+	if f.Exploitability != nil && strings.EqualFold(strings.TrimSpace(f.Exploitability.VerifiedStatus), "verified") {
+		score++
+	}
+	if len(strings.TrimSpace(f.Evidence)) >= 120 || len(f.EvidenceFields) > 1 {
+		score++
+	}
+	if strings.TrimSpace(f.AffectedURL) != "" || strings.TrimSpace(f.AffectedParameter) != "" {
+		score++
+	}
+	if len(f.References) > 0 {
+		score++
+	}
+	switch {
+	case score >= 4:
+		return "strong"
+	case score >= 2:
+		return "moderate"
+	default:
+		return "weak"
+	}
+}
+
+func severityWeight(severity model.Severity) int {
+	switch severity {
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func dedupeStrings(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
 func fingerprintFindingBase(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title))
@@ -2794,6 +3074,12 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	}
 	if input.Options.AutonomyMinMarginalScore > 0 {
 		orchestrator.MinMarginalScore = input.Options.AutonomyMinMarginalScore
+	}
+	if input.Options.AutonomyMaxRoundCostUnits > 0 {
+		orchestrator.MaxRoundCostUnits = input.Options.AutonomyMaxRoundCostUnits
+	}
+	if input.Options.AutonomyCostWeight > 0 {
+		orchestrator.CostWeight = input.Options.AutonomyCostWeight
 	}
 	outputs, findings, err := orchestrator.Run(ctx, input)
 	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
@@ -3461,6 +3747,12 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 		if conf <= 0 {
 			conf = defaultConfidenceForSeverity(f.Severity)
 		}
+		switch strings.ToLower(strings.TrimSpace(f.EvidenceQualityTier)) {
+		case "strong":
+			conf = minFloat(0.99, conf*1.05)
+		case "weak":
+			conf = maxFloat(0.05, conf*0.9)
+		}
 		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
 		s := byKey[key]
 		if s.total >= 3 {
@@ -4087,6 +4379,92 @@ func buildNextActions(job *model.ScanJob) []string {
 	}
 	actions = append(actions, "Schedule a follow-up scan to verify remediation and monitor drift.")
 	return actions
+}
+
+func generateAutomationPostmortem(job *model.ScanJob, outputs []agent.AgentOutput, dedupSuppressed int) string {
+	if job == nil {
+		return "No postmortem data."
+	}
+	totalRuns := len(outputs)
+	failures := 0
+	timeouts := 0
+	novel := 0
+	highSignal := 0
+	totalQuality := 0.0
+	qualitySamples := 0
+	totalDurationMs := int64(0)
+	for _, out := range outputs {
+		totalDurationMs += out.DurationMs
+		if out.Status == "error" || strings.TrimSpace(out.Error) != "" {
+			failures++
+		}
+		if out.TimedOut {
+			timeouts++
+		}
+		for _, f := range out.Findings {
+			if strings.EqualFold(strings.TrimSpace(f.DriftStatus), "new") {
+				novel++
+			}
+			if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+				highSignal++
+			}
+		}
+		if out.Metadata != nil {
+			if raw := strings.TrimSpace(out.Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					totalQuality += clampFloat(parsed, 0, 1)
+					qualitySamples++
+				}
+			}
+		}
+	}
+	avgQuality := 0.0
+	if qualitySamples > 0 {
+		avgQuality = totalQuality / float64(qualitySamples)
+	}
+	efficiency := 0.0
+	if totalDurationMs > 0 {
+		efficiency = float64(len(job.Findings)) / (float64(totalDurationMs) / 60000.0)
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("- Decision quality: %.3f (samples=%d)", roundTo2(avgQuality), qualitySamples),
+		fmt.Sprintf("- Novelty yield: newDrift=%d highSignal=%d dedupSuppressed=%d", novel, highSignal, maxInt(0, dedupSuppressed)),
+		fmt.Sprintf("- Cost efficiency: findingsPerMinute=%.2f runtimeMinutes=%.2f", roundTo2(efficiency), roundTo2(float64(totalDurationMs)/60000.0)),
+		fmt.Sprintf("- Failures: totalRuns=%d failures=%d timeouts=%d", totalRuns, failures, timeouts),
+		fmt.Sprintf("- Rollback signals: policyGate=%s meetsROI=%t", firstNonEmpty(job.PolicyPack, "internal"), job.Dashboard != nil && job.Dashboard.MeetsROIGate),
+	}, "\n")
+}
+
+func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions) (model.ScanOptions, string) {
+	newCount := 0
+	changedCount := 0
+	highNewOrChanged := 0
+	for _, f := range findings {
+		drift := strings.ToLower(strings.TrimSpace(f.DriftStatus))
+		switch drift {
+		case "new":
+			newCount++
+			if f.Severity == model.SeverityHigh {
+				highNewOrChanged++
+			}
+		case "changed":
+			changedCount++
+			if f.Severity == model.SeverityHigh {
+				highNewOrChanged++
+			}
+		}
+	}
+	if highNewOrChanged == 0 && newCount < 3 && changedCount < 3 {
+		return options, ""
+	}
+	adapted := options
+	adapted.DeepScanOnHighSignal = true
+	adapted.AutonomyExplorationBudgetPercent = maxInt(adapted.AutonomyExplorationBudgetPercent, 20)
+	adapted.RescanIntervalMinutes = maxInt(10, adapted.RescanIntervalMinutes/2)
+	adapted.MaxPerTargetConcurrency = minInt(maxInt(1, adapted.MaxPerTargetConcurrency), 1)
+	note := fmt.Sprintf("Adaptive drift strategy applied (new=%d changed=%d high=%d): deepScan=true, exploration>=20%%, tighter rescan cadence",
+		newCount, changedCount, highNewOrChanged)
+	return adapted, note
 }
 
 func generateAutomatedReport(job *model.ScanJob) string {

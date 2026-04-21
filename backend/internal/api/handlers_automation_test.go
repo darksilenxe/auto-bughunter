@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -213,5 +214,126 @@ func TestApplyGovernancePolicy_CapsAutonomyCanaryPercentByStage(t *testing.T) {
 	})
 	if got.AutonomyCanaryPercent != 10 {
 		t.Fatalf("expected stage canary percent cap to be applied, got %d", got.AutonomyCanaryPercent)
+	}
+}
+
+func TestApplyGovernancePolicy_AppliesTenantRiskBudgetAndCostControls(t *testing.T) {
+	got := applyGovernancePolicy(model.ScanOptions{
+		AutonomyTenantTier:      "gold",
+		MaxExploitAttempts:      3,
+		MaxPerTargetConcurrency: 4,
+	}, model.AutonomyGovernanceProfile{
+		TenantRiskBudgets: map[string]model.AutonomyTenantRiskBudget{
+			"gold": {
+				MaxExploitAttempts:       1,
+				MaxPerTargetConcurrency:  2,
+				MaxAutomationConcurrency: 2,
+				DailyScanLimit:           10,
+			},
+		},
+		CostControls: model.AutonomyCostControls{
+			MaxRoundCostUnits: 8,
+			CostWeight:        0.4,
+		},
+	})
+	if got.MaxExploitAttempts != 1 {
+		t.Fatalf("expected tenant max exploit attempts=1, got %d", got.MaxExploitAttempts)
+	}
+	if got.MaxPerTargetConcurrency != 2 {
+		t.Fatalf("expected tenant per-target concurrency=2, got %d", got.MaxPerTargetConcurrency)
+	}
+	if got.AutonomyMaxRoundCostUnits != 8 {
+		t.Fatalf("expected max round cost units=8, got %d", got.AutonomyMaxRoundCostUnits)
+	}
+	if got.AutonomyCostWeight != 0.4 {
+		t.Fatalf("expected cost weight=0.4, got %.2f", got.AutonomyCostWeight)
+	}
+}
+
+func TestDeduplicateFindingsCrossAgent_NormalizedClustering(t *testing.T) {
+	in := []model.Finding{
+		{
+			Category:   "Input-Validation",
+			Title:      "Reflected XSS on search",
+			Evidence:   "Payload reflected in q parameter at /search with script marker",
+			Severity:   model.SeverityHigh,
+			Confidence: 0.7,
+			Sources:    []string{"scanner"},
+		},
+		{
+			Category:   "input validation",
+			Title:      "reflected xss on search",
+			Evidence:   "PAYLOAD reflected in q parameter at /search with script marker",
+			Severity:   model.SeverityHigh,
+			Confidence: 0.9,
+			Sources:    []string{"burp"},
+		},
+	}
+	out, suppressed := deduplicateFindingsCrossAgent(in)
+	if suppressed != 1 {
+		t.Fatalf("expected 1 duplicate suppressed, got %d", suppressed)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 clustered finding, got %d", len(out))
+	}
+	if out[0].Confidence < 0.89 {
+		t.Fatalf("expected highest-confidence representative, got %.2f", out[0].Confidence)
+	}
+	if !strings.Contains(out[0].EvidenceFields["duplicateClusterSize"], "2") {
+		t.Fatalf("expected duplicate cluster size annotation, got %+v", out[0].EvidenceFields)
+	}
+}
+
+func TestApplyEvidenceQualityTiers_AssignsTierAndAdjustsConfidence(t *testing.T) {
+	out := applyEvidenceQualityTiers([]model.Finding{
+		{
+			Severity:          model.SeverityHigh,
+			Confidence:        0.6,
+			Evidence:          strings.Repeat("e", 140),
+			ReproductionSteps: []string{"step1", "step2"},
+			PoC:               "curl ...",
+			AffectedURL:       "https://example.com",
+		},
+		{
+			Severity:   model.SeverityLow,
+			Confidence: 0.65,
+			Evidence:   "short",
+		},
+	})
+	if out[0].EvidenceQualityTier != "strong" {
+		t.Fatalf("expected strong evidence tier, got %s", out[0].EvidenceQualityTier)
+	}
+	if out[0].Confidence < 0.8 {
+		t.Fatalf("expected boosted confidence for strong evidence, got %.2f", out[0].Confidence)
+	}
+	if out[1].EvidenceQualityTier != "weak" {
+		t.Fatalf("expected weak evidence tier, got %s", out[1].EvidenceQualityTier)
+	}
+	if out[1].Confidence >= 0.65 {
+		t.Fatalf("expected reduced confidence for weak evidence, got %.2f", out[1].Confidence)
+	}
+}
+
+func TestAdaptOptionsFromDrift_EnablesAdaptiveStrategy(t *testing.T) {
+	options := model.ScanOptions{
+		RescanIntervalMinutes:            60,
+		AutonomyExplorationBudgetPercent: 5,
+		MaxPerTargetConcurrency:          3,
+	}
+	adapted, note := adaptOptionsFromDrift([]model.Finding{
+		{DriftStatus: "new", Severity: model.SeverityHigh},
+		{DriftStatus: "changed", Severity: model.SeverityHigh},
+	}, options)
+	if note == "" {
+		t.Fatal("expected adaptation note")
+	}
+	if !adapted.DeepScanOnHighSignal {
+		t.Fatal("expected deep scan to be enabled")
+	}
+	if adapted.AutonomyExplorationBudgetPercent < 20 {
+		t.Fatalf("expected exploration budget boost, got %d", adapted.AutonomyExplorationBudgetPercent)
+	}
+	if adapted.MaxPerTargetConcurrency != 1 {
+		t.Fatalf("expected conservative per-target concurrency, got %d", adapted.MaxPerTargetConcurrency)
 	}
 }

@@ -28,6 +28,8 @@ type Orchestrator struct {
 	MaxNoNoveltyRounds          int
 	MaxConsecutiveFailureRounds int
 	MinMarginalScore            float64
+	MaxRoundCostUnits           int
+	CostWeight                  float64
 }
 
 // NewOrchestrator constructs an Orchestrator. maxRounds bounds the number of
@@ -45,6 +47,8 @@ func NewOrchestrator(planner Planner, factory *Factory, maxRounds int) *Orchestr
 		MaxNoNoveltyRounds:          2,
 		MaxConsecutiveFailureRounds: 2,
 		MinMarginalScore:            0,
+		MaxRoundCostUnits:           0,
+		CostWeight:                  0.25,
 	}
 }
 
@@ -132,6 +136,8 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		roundScoredActions := 0
 		timeToSignalMs := int64(-1)
 		roundDurationMs := int64(0)
+		roundCostUnits := 0
+		roundHighSignal := 0
 
 		for _, spec := range decision.Agents {
 			select {
@@ -193,14 +199,18 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				output.Metadata["orchestration_reason"] = reason
 			}
 			output.Metadata["findings"] = fmt.Sprintf("%d", len(output.Findings))
+			costUnits := computeActionCostUnits(output)
+			output.Metadata["cost_units"] = fmt.Sprintf("%d", costUnits)
 			qualityScore := computeActionQuality(output)
 			output.Metadata["decision_quality_score"] = formatScore(qualityScore)
 			roundScoreSum += qualityScore
 			roundScoredActions++
 			roundDurationMs += output.DurationMs
+			roundCostUnits += costUnits
 			if timeToSignalMs < 0 && len(output.Findings) > 0 {
 				timeToSignalMs = roundDurationMs
 			}
+			roundHighSignal += countHighSignalFindings(output.Findings)
 			output.Telemetry = model.AgentRunTelemetry{
 				AgentName:   output.AgentName,
 				Status:      output.Status,
@@ -228,6 +238,21 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 		}
 		if timeToSignalMs > 0 {
 			roundScore -= clamp01(float64(timeToSignalMs)/timeToSignalPenaltyThresholdMs) * timeToSignalPenaltyWeight
+		}
+		if o.MaxRoundCostUnits > 0 && roundCostUnits > o.MaxRoundCostUnits {
+			excess := float64(roundCostUnits-o.MaxRoundCostUnits) / float64(o.MaxRoundCostUnits)
+			weight := o.CostWeight
+			if weight <= 0 {
+				weight = 0.25
+			}
+			// Guardrail: when high-signal findings are present, apply only a small
+			// cost penalty so risk/safety signal cannot be silently down-prioritized.
+			if roundHighSignal > 0 {
+				if weight > 0.08 {
+					weight = 0.08
+				}
+			}
+			roundScore -= clamp01(excess) * weight
 		}
 		roundScore = clamp01(roundScore)
 		if afterCount <= beforeCount {
@@ -286,6 +311,27 @@ func computeActionQuality(output AgentOutput) float64 {
 		score -= clamp01(float64(output.DurationMs)/90000.0) * 0.2
 	}
 	return clamp01(score)
+}
+
+func computeActionCostUnits(output AgentOutput) int {
+	cost := 1
+	if output.DurationMs > 0 {
+		cost += int(output.DurationMs / 10000)
+	}
+	if output.TimedOut || output.Status == "error" || strings.TrimSpace(output.Error) != "" {
+		cost += 2
+	}
+	return maxInt(1, cost)
+}
+
+func countHighSignalFindings(findings []model.Finding) int {
+	count := 0
+	for _, f := range findings {
+		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+			count++
+		}
+	}
+	return count
 }
 
 func clamp01(v float64) float64 {
