@@ -159,9 +159,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
       continue;
     }
     if (status === "completed" || status === "complete" || status === "success") {
-      if (nodeStates[agentName] !== "running") {
-        nodeStates[agentName] = "complete";
-      }
+      nodeStates[agentName] = "complete";
     }
   }
 
