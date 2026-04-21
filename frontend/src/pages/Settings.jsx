@@ -65,10 +65,12 @@ export default function Settings() {
     escalateOnChangedHigh: true,
   });
   const [policyStatus, setPolicyStatus] = useState("");
+  const [policyDefaults, setPolicyDefaults] = useState([]);
 
   useEffect(() => {
     loadPolicyPacks();
     loadPolicyAudit();
+    loadPolicyDefaults();
   }, []);
 
   useEffect(() => () => {
@@ -191,6 +193,18 @@ export default function Settings() {
       });
       const data = await res.json();
       if (res.ok) setPolicyAudit(Array.isArray(data) ? data : []);
+    } catch {
+      // noop
+    }
+  }
+
+  async function loadPolicyDefaults() {
+    try {
+      const res = await fetch(`${API_BASE}/api/automation/policy-profile-defaults`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (res.ok) setPolicyDefaults(Array.isArray(data) ? data : []);
     } catch {
       // noop
     }
@@ -449,12 +463,19 @@ export default function Settings() {
                 <option value="safe">safe</option>
                 <option value="autonomous">autonomous</option>
                 <option value="aggressive">aggressive</option>
+                <option value="canary">canary</option>
               </select>
             </label>
           </div>
           <button type="submit">Save policy pack</button>
         </form>
         {policyStatus && <p className="meta">{policyStatus}</p>}
+        {policyDefaults.length > 0 && (
+          <details style={{ marginTop: "0.6rem" }}>
+            <summary className="meta">Profile budget envelopes (enforced on save)</summary>
+            <pre className="summary">{JSON.stringify(policyDefaults, null, 2)}</pre>
+          </details>
+        )}
         {policyPacks.length > 0 && <pre className="summary">{JSON.stringify(policyPacks, null, 2)}</pre>}
         {policyAudit.length > 0 && <pre className="summary">{JSON.stringify(policyAudit.slice(0, 10), null, 2)}</pre>}
       </section>

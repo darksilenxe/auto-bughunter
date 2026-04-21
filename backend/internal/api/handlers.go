@@ -253,6 +253,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/campaign-authorization-export", s.handleAutomationCampaignAuthorizationExport)
 	mux.HandleFunc("/api/automation/roi-overrides", s.handleAutomationROIOverrides)
 	mux.HandleFunc("/api/automation/policy-packs", s.handleAutomationPolicyPacks)
+	mux.HandleFunc("/api/automation/policy-profile-defaults", s.handlePolicyProfileDefaults)
 	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
 	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
 	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
@@ -1042,26 +1043,99 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	}
 	req.ScanID = strings.TrimSpace(req.ScanID)
 	req.FindingID = strings.TrimSpace(req.FindingID)
-	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.Status = findingLifecycleAliases(req.Status)
+	req.Owner = strings.TrimSpace(req.Owner)
 	if req.ScanID == "" || req.FindingID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
 		return
 	}
-	if req.Status != "confirmed" && req.Status != "rejected" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status must be confirmed or rejected"})
+	allowedStates := map[string]bool{}
+	for _, st := range model.FindingLifecycleStates {
+		allowedStates[st] = true
+	}
+	// "new" is the implicit starting state and is not a valid transition target.
+	if req.Status == "new" || !allowedStates[req.Status] {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status must be one of: verified, rejected, suppressed, accepted, remediated"})
 		return
 	}
-	req.ID = uuid.NewString()
-	req.CreatedAt = time.Now().UTC()
 	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
+	priorStatus := ""
+	if existing, err := s.repo.GetLatestFindingVerifications(r.Context(), req.ScanID); err == nil {
+		if v, ok := existing[req.FindingID]; ok {
+			priorStatus = v.Status
+		}
+	}
+	if !isAllowedFindingTransition(priorStatus, req.Status) {
+		fromLabel := priorStatus
+		if fromLabel == "" {
+			fromLabel = "new"
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("illegal lifecycle transition %s -> %s", fromLabel, req.Status)})
+		return
+	}
+	if (req.Status == "accepted" || req.Status == "remediated") && req.Owner == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "owner is required for accepted or remediated transitions"})
+		return
+	}
+	if req.VerifiedBy == "" {
+		req.VerifiedBy = requesterFromRequest(r)
+	}
+	req.ID = uuid.NewString()
+	req.CreatedAt = time.Now().UTC()
 	if err := s.repo.SaveFindingVerification(r.Context(), req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": req.ID, "status": req.Status, "owner": req.Owner, "previousStatus": priorStatus})
+}
+
+// findingLifecycleAliases normalizes legacy/alias status values onto the
+// canonical lifecycle state names. "confirmed" was the original verified
+// label and remains accepted for backward-compatibility with existing
+// integrations and persisted rows.
+func findingLifecycleAliases(status string) string {
+	s := strings.ToLower(strings.TrimSpace(status))
+	if s == "confirmed" {
+		return "verified"
+	}
+	return s
+}
+
+// isAllowedFindingTransition enforces the documented state machine:
+//
+//	new       -> verified | rejected | suppressed
+//	verified  -> accepted | suppressed | remediated | rejected
+//	rejected  -> verified
+//	accepted  -> remediated | suppressed
+//	suppressed-> verified
+//	remediated-> verified            (regression detected)
+//
+// A "" (no prior verification on record) is treated as the implicit "new"
+// starting state. Identical from/to is allowed (idempotent ownership update).
+func isAllowedFindingTransition(from, to string) bool {
+	from = findingLifecycleAliases(from)
+	to = findingLifecycleAliases(to)
+	if from == "" {
+		from = "new"
+	}
+	if from == to {
+		return true
+	}
+	allowed := map[string]map[string]bool{
+		"new":        {"verified": true, "rejected": true, "suppressed": true},
+		"verified":   {"accepted": true, "suppressed": true, "remediated": true, "rejected": true},
+		"rejected":   {"verified": true},
+		"accepted":   {"remediated": true, "suppressed": true},
+		"suppressed": {"verified": true},
+		"remediated": {"verified": true},
+	}
+	if next, ok := allowed[from]; ok && next[to] {
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
@@ -1840,6 +1914,169 @@ func validateGovernanceProfile(profile model.AutonomyGovernanceProfile) error {
 	return nil
 }
 
+// PolicyProfileBudgetSpec describes the explicit risk-budget bounds enforced
+// for a given default automation profile (safe / autonomous / aggressive /
+// canary). Bounds are expressed as inclusive ranges and surface to operators
+// via the /api/automation/policy-profile-defaults endpoint so that the UI can
+// render guidance and the API can reject out-of-range policy packs.
+type PolicyProfileBudgetSpec struct {
+	Mode                        string  `json:"automationMode"`
+	Description                 string  `json:"description,omitempty"`
+	MaxExploitAttemptsMin       int     `json:"maxExploitAttemptsMin"`
+	MaxExploitAttemptsMax       int     `json:"maxExploitAttemptsMax"`
+	MaxAutomationConcurrencyMin int     `json:"maxAutomationConcurrencyMin"`
+	MaxAutomationConcurrencyMax int     `json:"maxAutomationConcurrencyMax"`
+	MaxPerTargetConcurrencyMin  int     `json:"maxPerTargetConcurrencyMin"`
+	MaxPerTargetConcurrencyMax  int     `json:"maxPerTargetConcurrencyMax"`
+	DailyScanLimitMin           int     `json:"dailyScanLimitMin"`
+	DailyScanLimitMax           int     `json:"dailyScanLimitMax"`
+	DailyRuntimeLimitMinutesMin int     `json:"dailyRuntimeLimitMinutesMin"`
+	DailyRuntimeLimitMinutesMax int     `json:"dailyRuntimeLimitMinutesMax"`
+	DailyProbeLimitMin          int     `json:"dailyProbeLimitMin"`
+	DailyProbeLimitMax          int     `json:"dailyProbeLimitMax"`
+	MinExpectedROIUSDMin        float64 `json:"minExpectedRoiUsdMin"`
+}
+
+// policyProfileBudgetSpecs returns the canonical risk-budget envelopes for
+// each supported automation mode. Operators must publish a policy pack whose
+// values fall inside these envelopes; this is what makes "every automated run
+// is attached to a policy profile and budget decision record" enforceable
+// rather than advisory.
+func policyProfileBudgetSpecs() map[string]PolicyProfileBudgetSpec {
+	return map[string]PolicyProfileBudgetSpec{
+		"safe": {
+			Mode:                        "safe",
+			Description:                 "Read-mostly profile: no exploit attempts, single-stream concurrency, conservative daily caps.",
+			MaxExploitAttemptsMin:       0,
+			MaxExploitAttemptsMax:       0,
+			MaxAutomationConcurrencyMin: 1,
+			MaxAutomationConcurrencyMax: 1,
+			MaxPerTargetConcurrencyMin:  1,
+			MaxPerTargetConcurrencyMax:  1,
+			DailyScanLimitMin:           1,
+			DailyScanLimitMax:           50,
+			DailyRuntimeLimitMinutesMin: 15,
+			DailyRuntimeLimitMinutesMax: 240,
+			DailyProbeLimitMin:          1,
+			DailyProbeLimitMax:          2000,
+			MinExpectedROIUSDMin:        0,
+		},
+		"autonomous": {
+			Mode:                        "autonomous",
+			Description:                 "Default unattended profile: bounded exploitation, modest concurrency, mandatory daily caps.",
+			MaxExploitAttemptsMin:       1,
+			MaxExploitAttemptsMax:       3,
+			MaxAutomationConcurrencyMin: 1,
+			MaxAutomationConcurrencyMax: 4,
+			MaxPerTargetConcurrencyMin:  1,
+			MaxPerTargetConcurrencyMax:  3,
+			DailyScanLimitMin:           1,
+			DailyScanLimitMax:           200,
+			DailyRuntimeLimitMinutesMin: 30,
+			DailyRuntimeLimitMinutesMax: 720,
+			DailyProbeLimitMin:          100,
+			DailyProbeLimitMax:          10000,
+			MinExpectedROIUSDMin:        25,
+		},
+		"aggressive": {
+			Mode:                        "aggressive",
+			Description:                 "Bug-bounty profile: deep exploitation allowed, higher concurrency, larger daily caps still required.",
+			MaxExploitAttemptsMin:       3,
+			MaxExploitAttemptsMax:       12,
+			MaxAutomationConcurrencyMin: 2,
+			MaxAutomationConcurrencyMax: 8,
+			MaxPerTargetConcurrencyMin:  2,
+			MaxPerTargetConcurrencyMax:  6,
+			DailyScanLimitMin:           5,
+			DailyScanLimitMax:           500,
+			DailyRuntimeLimitMinutesMin: 60,
+			DailyRuntimeLimitMinutesMax: 1440,
+			DailyProbeLimitMin:          500,
+			DailyProbeLimitMax:          50000,
+			MinExpectedROIUSDMin:        50,
+		},
+		"canary": {
+			Mode:                        "canary",
+			Description:                 "Gradual-rollout profile: minimal exploit attempts and single-stream concurrency for new strategies.",
+			MaxExploitAttemptsMin:       0,
+			MaxExploitAttemptsMax:       1,
+			MaxAutomationConcurrencyMin: 1,
+			MaxAutomationConcurrencyMax: 1,
+			MaxPerTargetConcurrencyMin:  1,
+			MaxPerTargetConcurrencyMax:  1,
+			DailyScanLimitMin:           1,
+			DailyScanLimitMax:           50,
+			DailyRuntimeLimitMinutesMin: 15,
+			DailyRuntimeLimitMinutesMax: 240,
+			DailyProbeLimitMin:          1,
+			DailyProbeLimitMax:          5000,
+			MinExpectedROIUSDMin:        0,
+		},
+	}
+}
+
+// validatePolicyPackBudgets enforces the per-profile budget envelope on an
+// AutomationPolicyPack upsert request. Returning an error rejects the upsert
+// with a descriptive 400 so operators understand which budget knob is
+// out-of-range. Required values that are zero/empty are reported as
+// "must be set" — the goal is to make budget decisions explicit, not silent.
+func validatePolicyPackBudgets(req model.AutomationPolicyPack) error {
+	mode := normalizeAutomationMode(req.AutomationMode)
+	spec, ok := policyProfileBudgetSpecs()[mode]
+	if !ok {
+		return fmt.Errorf("unknown automationMode %q", req.AutomationMode)
+	}
+	check := func(field string, value, min, max int) error {
+		if value < min {
+			if value == 0 && min > 0 {
+				return fmt.Errorf("%s must be set for %s profile (min %d)", field, mode, min)
+			}
+			return fmt.Errorf("%s=%d is below %s profile minimum %d", field, value, mode, min)
+		}
+		if value > max {
+			return fmt.Errorf("%s=%d exceeds %s profile maximum %d", field, value, mode, max)
+		}
+		return nil
+	}
+	if err := check("maxExploitAttempts", req.MaxExploitAttempts, spec.MaxExploitAttemptsMin, spec.MaxExploitAttemptsMax); err != nil {
+		return err
+	}
+	if err := check("maxAutomationConcurrency", req.MaxAutomationConcurrency, spec.MaxAutomationConcurrencyMin, spec.MaxAutomationConcurrencyMax); err != nil {
+		return err
+	}
+	if err := check("maxPerTargetConcurrency", req.MaxPerTargetConcurrency, spec.MaxPerTargetConcurrencyMin, spec.MaxPerTargetConcurrencyMax); err != nil {
+		return err
+	}
+	if err := check("dailyScanLimit", req.DailyScanLimit, spec.DailyScanLimitMin, spec.DailyScanLimitMax); err != nil {
+		return err
+	}
+	if err := check("dailyRuntimeLimitMinutes", req.DailyRuntimeLimitMinutes, spec.DailyRuntimeLimitMinutesMin, spec.DailyRuntimeLimitMinutesMax); err != nil {
+		return err
+	}
+	if err := check("dailyProbeLimit", req.DailyProbeLimit, spec.DailyProbeLimitMin, spec.DailyProbeLimitMax); err != nil {
+		return err
+	}
+	if req.MinExpectedROIUSD < spec.MinExpectedROIUSDMin {
+		return fmt.Errorf("minExpectedRoiUsd=%.2f is below %s profile minimum %.2f", req.MinExpectedROIUSD, mode, spec.MinExpectedROIUSDMin)
+	}
+	return nil
+}
+
+func (s *Server) handlePolicyProfileDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	specs := policyProfileBudgetSpecs()
+	out := make([]PolicyProfileBudgetSpec, 0, len(specs))
+	for _, mode := range []string{"safe", "autonomous", "aggressive", "canary"} {
+		if v, ok := specs[mode]; ok {
+			out = append(out, v)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
 	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), "default")
 	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
@@ -1871,6 +2108,10 @@ func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Requ
 			req.StrategyVersion = 1
 		}
 		if err := validateGovernanceProfile(req.GovernanceProfile); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := validatePolicyPackBudgets(req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1971,6 +2212,10 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	canaryByPolicy := map[string]int{}
 	failedRuns := 0
 	totalRuns := 0
+	verifiedSampled := 0
+	rejectedCount := 0
+	strictScans := 0
+	strictSuppressed := 0
 	for _, job := range jobs {
 		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 			continue
@@ -1987,6 +2232,24 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			totalRuns++
 			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
 				failedRuns++
+			}
+		}
+		if job.Options.StrictReporting {
+			strictScans++
+			if filtered, suppressed, _, applied := applyStrictReportingFilter(job, nil); applied && filtered != nil {
+				strictSuppressed += suppressed
+			}
+		}
+		if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), job.ID); err == nil {
+			for _, v := range verifications {
+				switch findingLifecycleAliases(v.Status) {
+				case "verified", "rejected", "suppressed", "accepted", "remediated":
+					verifiedSampled++
+				}
+				switch findingLifecycleAliases(v.Status) {
+				case "rejected", "suppressed":
+					rejectedCount++
+				}
 			}
 		}
 	}
@@ -2051,6 +2314,21 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		Alerts:                alerts,
 		CanaryPercentByPolicy: canaryByPolicy,
 		RollbackEventsRecent:  rollbackEventsRecent,
+		FalsePositiveRate: func() float64 {
+			if verifiedSampled == 0 {
+				return 0
+			}
+			return roundTo2(float64(rejectedCount) / float64(verifiedSampled))
+		}(),
+		VerifiedFindingsSampled:     verifiedSampled,
+		StrictReportingSuppressed:   strictSuppressed,
+		StrictReportingScansSampled: strictScans,
+		StrictReportingSuppressRate: func() float64 {
+			if strictScans == 0 {
+				return 0
+			}
+			return roundTo2(float64(strictSuppressed) / float64(strictScans))
+		}(),
 		Extra: map[string]float64{
 			"lagSamples": float64(lagCount),
 			"agentRuns":  float64(totalRuns),
@@ -2242,22 +2520,74 @@ func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string)
 		Status:      "pass",
 		GeneratedAt: time.Now().UTC(),
 	}
+	uncorroborated := 0
 	for _, f := range findings {
 		switch f.Severity {
 		case model.SeverityHigh:
 			result.HighCount++
 			result.BlockedFindings = append(result.BlockedFindings, f.Title)
+			if !findingHasHighSeverityCorroboration(f) {
+				uncorroborated++
+				if result.UncorroboratedHighFindings == nil {
+					result.UncorroboratedHighFindings = make([]string, 0, 1)
+				}
+				result.UncorroboratedHighFindings = append(result.UncorroboratedHighFindings, f.Title)
+			}
 		case model.SeverityMedium:
 			result.MediumCount++
 		}
 	}
-	if result.HighCount >= highBlock || result.MediumCount >= medBlock {
+	thresholdExceeded := result.HighCount >= highBlock || result.MediumCount >= medBlock
+	switch {
+	case thresholdExceeded && uncorroborated > 0:
+		result.Status = "blocked"
+		result.Reason = fmt.Sprintf("policy_pack=%s high=%d medium=%d exceeded thresholds high>=%d or medium>=%d; %d high finding(s) lack multi-source corroboration or verified exploitability", strings.TrimSpace(policyPack), result.HighCount, result.MediumCount, highBlock, medBlock, uncorroborated)
+	case thresholdExceeded:
 		result.Status = "blocked"
 		result.Reason = fmt.Sprintf("policy_pack=%s high=%d medium=%d exceeded thresholds high>=%d or medium>=%d", strings.TrimSpace(policyPack), result.HighCount, result.MediumCount, highBlock, medBlock)
-	} else {
+	case uncorroborated > 0:
+		result.Status = "blocked"
+		result.Reason = fmt.Sprintf("policy_pack=%s %d high finding(s) lack multi-source corroboration or verified exploitability", strings.TrimSpace(policyPack), uncorroborated)
+	default:
 		result.Reason = fmt.Sprintf("policy_pack=%s thresholds satisfied", strings.TrimSpace(policyPack))
 	}
 	return result
+}
+
+// findingHasHighSeverityCorroboration returns true when a HIGH finding meets
+// at least one of the corroboration requirements that gate publication:
+//   - confirmed by ≥2 distinct agents/tools (Sources), or
+//   - explicit reachable exploitability evidence, or
+//   - operator-verified exploitability status (verified/confirmed).
+//
+// Findings emitted by the policy/governance subsystems themselves (e.g. the
+// "policy-gate-blocked-release" sentinel) are exempt to avoid recursive
+// blocking.
+func findingHasHighSeverityCorroboration(f model.Finding) bool {
+	if strings.EqualFold(strings.TrimSpace(f.Category), "governance") {
+		return true
+	}
+	distinct := map[string]struct{}{}
+	for _, src := range f.Sources {
+		s := strings.ToLower(strings.TrimSpace(src))
+		if s == "" {
+			continue
+		}
+		distinct[s] = struct{}{}
+	}
+	if len(distinct) >= 2 {
+		return true
+	}
+	if f.Exploitability != nil {
+		if f.Exploitability.Reachable {
+			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(f.Exploitability.VerifiedStatus)) {
+		case "verified", "confirmed":
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {

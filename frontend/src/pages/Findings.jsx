@@ -1,10 +1,62 @@
 import { useState } from "react";
-import { useScan } from "../context/ScanContext";
+import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
+
+const LIFECYCLE_TRANSITIONS = {
+  "": ["verified", "rejected", "suppressed"],
+  new: ["verified", "rejected", "suppressed"],
+  verified: ["accepted", "remediated", "suppressed", "rejected"],
+  rejected: ["verified"],
+  accepted: ["remediated", "suppressed"],
+  suppressed: ["verified"],
+  remediated: ["verified"],
+};
 
 export default function Findings() {
   const { job, screenshots } = useScan();
   const [filter, setFilter] = useState("all");
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const [lifecycleStatus, setLifecycleStatus] = useState({});
+
+  async function transitionFinding(findingId, nextStatus, currentStatus) {
+    if (!job?.id) return;
+    const ownerNeeded = nextStatus === "accepted" || nextStatus === "remediated";
+    let owner = "";
+    if (ownerNeeded) {
+      owner = window.prompt(`Owner email or handle for "${nextStatus}" transition?`) || "";
+      if (!owner.trim()) {
+        setLifecycleStatus((p) => ({ ...p, [findingId]: "Owner required for this transition." }));
+        return;
+      }
+    }
+    setLifecycleStatus((p) => ({ ...p, [findingId]: "Updating..." }));
+    try {
+      const res = await fetch(`${API_BASE}/api/finding-verification`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": API_KEY,
+          "X-Workspace-ID": WORKSPACE_ID,
+        },
+        body: JSON.stringify({
+          scanId: job.id,
+          findingId,
+          status: nextStatus,
+          owner: owner.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLifecycleStatus((p) => ({ ...p, [findingId]: data.error || `Failed (${res.status})` }));
+        return;
+      }
+      setLifecycleStatus((p) => ({
+        ...p,
+        [findingId]: `${currentStatus || "new"} → ${data.status}${data.owner ? ` (owner: ${data.owner})` : ""}`,
+      }));
+    } catch (err) {
+      setLifecycleStatus((p) => ({ ...p, [findingId]: err.message || "Network error" }));
+    }
+  }
 
   if (!job) {
     return (
@@ -112,6 +164,34 @@ export default function Findings() {
                   <p><b>Exploitability:</b> reachable={String(f.exploitability.reachable)}, role={f.exploitability.requiredRole || "n/a"}</p>
                 )}
                 <p><b>Fix:</b> {f.recommendation}</p>
+                {(() => {
+                  const current = (f.exploitability && f.exploitability.verifiedStatus) || "new";
+                  const transitions = LIFECYCLE_TRANSITIONS[current] || [];
+                  return (
+                    <div style={{ marginTop: "6px", display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                      <span className="meta" style={{ fontSize: "0.72rem" }}>Lifecycle: <b>{current}</b></span>
+                      {transitions.map((next) => (
+                        <button
+                          key={next}
+                          type="button"
+                          onClick={() => transitionFinding(f.id, next, current)}
+                          style={{
+                            background: "rgba(124,58,237,0.15)",
+                            color: "#fff",
+                            border: "1px solid rgba(124,58,237,0.35)",
+                            borderRadius: "4px",
+                            padding: "2px 8px",
+                            fontSize: "0.72rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {next}
+                        </button>
+                      ))}
+                      {lifecycleStatus[f.id] && <span className="meta" style={{ fontSize: "0.7rem" }}>{lifecycleStatus[f.id]}</span>}
+                    </div>
+                  );
+                })()}
               </li>
             ))}
           </ul>
