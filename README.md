@@ -5,6 +5,8 @@
 
 A Dockerized starter platform for **authorized** web application security assessments.
 
+See the implementation roadmap: [ROADMAP.md](./ROADMAP.md)
+
 ## Important Use Policy
 
 This project is designed for defensive testing on systems you own or are explicitly authorized to test.
