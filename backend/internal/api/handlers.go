@@ -77,6 +77,14 @@ type Server struct {
 	defaultDailyProbeLimit     int
 }
 
+const (
+	coverageLowThreshold         = 70
+	coverageLowCrawlBoostPages   = 200
+	highROIMultiplierForDeepScan = 1.5
+	lowROICrawlFloorPages        = 40
+	lowROICrawlCeilingPages      = 120
+)
+
 // SetOAST attaches an OAST service so its admin endpoints become active.
 // Safe to call with nil to disable.
 func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
@@ -1386,18 +1394,18 @@ func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string)
 }
 
 func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {
-	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < 70 {
-		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, 200)
+	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < coverageLowThreshold {
+		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, coverageLowCrawlBoostPages)
 	}
 	if previous != nil && previous.Dashboard != nil {
-		if previous.Dashboard.MeetsROIGate && previous.Dashboard.ExpectedROIUSD > s.defaultMinROI*1.5 {
+		if previous.Dashboard.MeetsROIGate && previous.Dashboard.ExpectedROIUSD > s.defaultMinROI*highROIMultiplierForDeepScan {
 			options.DeepScanOnHighSignal = true
 			options.UseNucleiIntegration = true
 			options.UseFFUFIntegration = true
 		}
 		if !previous.Dashboard.MeetsROIGate {
 			options.UseSQLMapIntegration = false
-			options.CrawlMaxPages = minInt(maxInt(options.CrawlMaxPages, 40), 120)
+			options.CrawlMaxPages = minInt(maxInt(options.CrawlMaxPages, lowROICrawlFloorPages), lowROICrawlCeilingPages)
 		}
 	}
 	if state != nil && state.SessionInstability > 2 {
