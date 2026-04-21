@@ -286,7 +286,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 					Title:          "ZAP Baseline skipped after Nuclei because scan context ended",
 					Description:    "The scan context ended during the post-Nuclei delay window, so ZAP Baseline was not started.",
 					Evidence:       "delay=" + zapBaselineDelayAfterNuclei.String(),
-					Recommendation: "Retry scan if ZAP Baseline coverage is required.",
+					Recommendation: "Retry the scan with a longer SCAN_TIMEOUT_SECONDS (or a smaller target scope) so the post-Nuclei delay and ZAP Baseline phase can complete.",
 				})
 				findings = append(findings, buildIntegrationCoverageFinding(state))
 				return findings
