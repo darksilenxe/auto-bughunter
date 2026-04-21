@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,9 +32,12 @@ type AgentInput struct {
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
 	Scope       model.ScanScope
-	Previous    AgentOutput
-	History     []AgentOutput
-	AllFindings []model.Finding
+	// AutonomyMemory persists target/workspace execution learnings that can
+	// guide scheduling decisions in future runs.
+	AutonomyMemory model.AutonomyMemory
+	Previous       AgentOutput
+	History        []AgentOutput
+	AllFindings    []model.Finding
 	// Emit is an optional callback for publishing live scan events to the event bus.
 	// Agents should use the package-level Emit helper to call it safely.
 	Emit Emitter
@@ -129,7 +133,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 
 	for i := 0; i < len(queue); i++ {
 		name := queue[i]
-		ag := r.agents[name]
+		ag := r.Get(name)
 		if ag == nil || !ag.Enabled() {
 			continue
 		}
@@ -213,7 +217,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 
 		candidates := r.orchestrate(ctx, ag.Name(), output, cumulativeFindings)
 		for _, spawned := range candidates {
-			if !seen[spawned] && !queuedSet[spawned] && r.agents[spawned] != nil {
+			if !seen[spawned] && !queuedSet[spawned] && r.Get(spawned) != nil {
 				queue = append(queue, spawned)
 				queuedSet[spawned] = true
 				Emit(input.Emit, model.ScanEvent{
@@ -363,6 +367,20 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 	}
 
+	// Global adaptive autonomy rules.
+	if hasHigh {
+		spawned = append(spawned, "attack_path")
+	}
+	if hasAuthIssue {
+		spawned = append(spawned, "auth_bypass")
+	}
+	if hasSSRFIndicator {
+		spawned = append(spawned, "ssrf")
+	}
+	if hasRCEIndicator {
+		spawned = append(spawned, "metasploit")
+	}
+
 	// Neural learner recommendations (augment static rules).
 	if r.spawner != nil {
 		learned := r.spawner.Recommend(ctx, completedAgent, allFindings, 3, 0.65)
@@ -373,19 +391,146 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 	}
 
-	return spawned
+	return dedupeAgentNames(spawned)
 }
 
 func combineFindingsWithDedup(findings []model.Finding) []model.Finding {
-	seen := make(map[string]struct{})
-	deduped := make([]model.Finding, 0, len(findings))
+	if len(findings) <= 1 {
+		return findings
+	}
+	type cluster struct {
+		rep   model.Finding
+		count int
+	}
+	clusters := make(map[string]cluster, len(findings))
+	order := make([]string, 0, len(findings))
 	for _, f := range findings {
-		key := fmt.Sprintf("%s:%s:%s", f.Category, f.Title, f.Evidence)
-		if _, ok := seen[key]; ok {
+		key := findingDedupKey(f)
+		cur, exists := clusters[key]
+		if !exists {
+			clusters[key] = cluster{rep: f, count: 1}
+			order = append(order, key)
 			continue
 		}
-		seen[key] = struct{}{}
-		deduped = append(deduped, f)
+		cur.count++
+		if findingSeverityWeight(f.Severity) > findingSeverityWeight(cur.rep.Severity) ||
+			(findingSeverityWeight(f.Severity) == findingSeverityWeight(cur.rep.Severity) && f.Confidence > cur.rep.Confidence) {
+			cur.rep = f
+		}
+		if len(f.Sources) > 0 || len(cur.rep.Sources) > 0 {
+			cur.rep.Sources = dedupeStringSlice(append(cur.rep.Sources, f.Sources...))
+		}
+		clusters[key] = cur
+	}
+	deduped := make([]model.Finding, 0, len(clusters))
+	for _, key := range order {
+		cur := clusters[key]
+		if cur.count > 1 {
+			if cur.rep.EvidenceFields == nil {
+				cur.rep.EvidenceFields = map[string]string{}
+			}
+			cur.rep.EvidenceFields["duplicateClusterSize"] = fmt.Sprintf("%d", cur.count)
+		}
+		deduped = append(deduped, cur.rep)
+	}
+	return deduped
+}
+
+func findingDedupKey(f model.Finding) string {
+	category := normalizeDedupToken(f.Category)
+	title := normalizeDedupToken(f.Title)
+	evidence := normalizeEvidenceToken(f.Evidence)
+	id := normalizeDedupToken(f.ID)
+	cwe := normalizeDedupToken(f.CWE)
+	param := normalizeDedupToken(f.AffectedParameter)
+	host := ""
+	if u, err := url.Parse(strings.TrimSpace(f.AffectedURL)); err == nil {
+		host = normalizeDedupToken(u.Hostname())
+	}
+	return strings.Join([]string{category, title, evidence, id, cwe, param, host}, "|")
+}
+
+func normalizeEvidenceToken(v string) string {
+	v = normalizeDedupToken(v)
+	if len(v) > 160 {
+		return v[:160]
+	}
+	return v
+}
+
+func normalizeDedupToken(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastSpace = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastSpace = false
+		default:
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func findingSeverityWeight(sev model.Severity) int {
+	switch sev {
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func dedupeStringSlice(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeAgentNames(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := make(map[string]struct{}, len(items))
+	deduped := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		deduped = append(deduped, item)
 	}
 	return deduped
 }

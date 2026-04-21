@@ -179,6 +179,105 @@ func TestAIPlannerEmptyAgentsTriggersFallback(t *testing.T) {
 	}
 }
 
+func TestAIPlannerBlocksSuppressedAgentsFromMemory(t *testing.T) {
+	caller := &fakeCaller{specs: []map[string]string{{"name": "known", "reason": "low signal retry"}}, done: false}
+	fb := NewStaticPlanner([]string{"other"})
+	p := NewAIPlanner(caller, []string{"known", "other"}, fb)
+
+	dec, err := p.Plan(context.Background(), AgentInput{
+		AutonomyMemory: model.AutonomyMemory{SuppressedAgents: []string{"known"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(dec.Agents) != 1 || dec.Agents[0].Name != "other" {
+		t.Fatalf("expected fallback to non-suppressed other agent, got %+v", dec)
+	}
+}
+
+func TestAIPlannerInjectsExplorationAgent(t *testing.T) {
+	caller := &fakeCaller{specs: []map[string]string{{"name": "known", "reason": "known-path"}}, done: false}
+	fb := NewStaticPlanner([]string{"known", "explore"})
+	p := NewAIPlanner(caller, []string{"known", "explore"}, fb)
+	p.ExplorationBudget = 100
+
+	dec, err := p.Plan(context.Background(), AgentInput{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(dec.Agents) < 2 {
+		t.Fatalf("expected exploration agent to be injected, got %+v", dec.Agents)
+	}
+}
+
+func TestOrchestratorStopsAfterConsecutiveNoNoveltyRounds(t *testing.T) {
+	factory := newTestFactory(map[string]Agent{
+		"a": &fixedAgent{name: "a", enabled: true, findings: nil},
+	})
+	plans := []PlannerDecision{
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+	}
+	orch := NewOrchestrator(&scriptedPlanner{decisions: plans}, factory, 10)
+
+	outputs, findings, err := orch.Run(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings, got %+v", findings)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected early convergence stop after 2 rounds, got %d outputs", len(outputs))
+	}
+}
+
+func TestOrchestratorStopsAfterConsecutiveFailureRounds(t *testing.T) {
+	factory := newTestFactory(map[string]Agent{
+		"a": &fixedAgent{name: "a", enabled: true, err: errors.New("timeout: deadline exceeded")},
+	})
+	plans := []PlannerDecision{
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+	}
+	orch := NewOrchestrator(&scriptedPlanner{decisions: plans}, factory, 10)
+
+	outputs, _, err := orch.Run(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected early stop after repeated failure rounds, got %d outputs", len(outputs))
+	}
+	if !outputs[0].TimedOut || !outputs[1].TimedOut {
+		t.Fatalf("expected timeout classification for failure bumps, got %+v", outputs)
+	}
+}
+
+func TestOrchestratorStopsAfterLowMarginalScoreRounds(t *testing.T) {
+	factory := newTestFactory(map[string]Agent{
+		"a": &fixedAgent{name: "a", enabled: true, findings: nil},
+	})
+	plans := []PlannerDecision{
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+		{Agents: []AgentSpec{{Name: "a"}}},
+	}
+	orch := NewOrchestrator(&scriptedPlanner{decisions: plans}, factory, 10)
+	orch.MaxNoNoveltyRounds = 10
+	orch.MinMarginalScore = 0.25
+
+	outputs, _, err := orch.Run(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected early stop after low marginal rounds, got %d outputs", len(outputs))
+	}
+}
+
 func TestFactoryCreateUnknown(t *testing.T) {
 	f := NewFactory(nil, nil)
 	if _, err := f.Create("does_not_exist"); err == nil {

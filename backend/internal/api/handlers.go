@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net/http"
 	"net/url"
@@ -84,6 +85,15 @@ const (
 	highROIMultiplierForDeepScan = 1.5
 	lowROICrawlFloorPages        = 40
 	lowROICrawlCeilingPages      = 120
+	// High-confidence findings are already filtered by confidence/severity and
+	// therefore counted as full novelty units while all findings contribute a
+	// smaller background signal.
+	autonomyNoveltyFindingWeight = 0.2
+	autonomyPreferredMinScore    = 2.0
+	autonomyPreferredMaxErrRate  = 0.5
+	autonomySuppressMinRuns      = 3
+	autonomySuppressErrRate      = 0.66
+	autonomySuppressTimeouts     = 2
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -227,6 +237,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
 	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
 	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
+	mux.HandleFunc("/api/automation/operator-feedback", s.handleAutomationOperatorFeedback)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)
 	mux.HandleFunc("/api/report/", s.handleScanReport)
 	mux.HandleFunc("/api/compliance/evidence/", s.handleComplianceEvidence)
@@ -487,6 +498,15 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if len(disabledForHealth) > 0 {
 		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
 	}
+	if hasOperatorOverrides(options) {
+		s.appendAuditEvent(id, "override", fmt.Sprintf("Operator overrides applied emergencyStop=%t plannerLock=%s force=%s suppress=%s fallbackRerun=%t",
+			options.AutonomyEmergencyStop,
+			strings.TrimSpace(options.AutonomyPlannerLock),
+			strings.Join(limitStrings(options.AutonomyForceRunAgents, 8), ","),
+			strings.Join(limitStrings(options.AutonomySuppressAgents, 8), ","),
+			options.AutonomyFallbackRerun,
+		))
+	}
 
 	job.Status = "running"
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -495,7 +515,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, emit)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
@@ -513,6 +533,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	beforeDedupCount := len(job.Findings)
+	dedupedFindings, dedupSuppressed := deduplicateFindingsCrossAgent(job.Findings)
+	job.Findings = dedupedFindings
+	if dedupSuppressed > 0 {
+		s.appendAuditEvent(id, "dedup", fmt.Sprintf("Suppressed %d duplicate findings before scoring", dedupSuppressed))
+	}
+	job.Findings = applyEvidenceQualityTiers(job.Findings)
 	job.Findings = s.applyFeedbackConfidencePrioritization(context.Background(), job.Findings)
 	job.Findings = redactSensitiveFindings(job.Findings)
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
@@ -521,6 +548,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
+	if beforeDedupCount > 0 {
+		s.appendAuditEvent(id, "analysis", fmt.Sprintf("Cross-agent dedupe ratio %.2f", 1.0-float64(len(job.Findings))/float64(beforeDedupCount)))
+	}
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
 	if previousJob != nil {
 		newItems, changedItems, resolvedItems, deltaFindings := buildDeltaFindings(previousJob.Findings, job.Findings)
@@ -646,7 +676,8 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		})
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
-	s.persistScanState(target, job.Findings)
+	job.AutomatedReport += "\n\n## Automation Postmortem\n" + generateAutomationPostmortem(job, outputs, dedupSuppressed)
+	s.persistScanState(target, job.Findings, outputs, options)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -663,7 +694,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		if job.CompletedAt != nil {
 			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
 		}
-		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs)
+		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs, job.AgentRuns)
 	}
 	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
 	emit(model.ScanEvent{
@@ -677,13 +708,25 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.eventBus.Cleanup(id)
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
+		nextOptions, adaptationNote := adaptOptionsFromDrift(job.Findings, options)
+		if adaptationNote != "" {
+			s.appendAuditEvent(id, "drift-adaptation", adaptationNote)
+		}
 		if meetsROIGate {
 			s.appendAuditEvent(id, "scheduling", fmt.Sprintf("Scheduled rescan in %d minutes", job.Options.RescanIntervalMinutes))
-			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
+			go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, nextOptions, scanScope, time.Duration(job.Options.RescanIntervalMinutes)*time.Minute)
 		} else {
 			s.appendAuditEvent(id, "scheduling", "Skipped scheduled rescan because ROI gate did not pass")
 		}
 	}
+}
+
+func hasOperatorOverrides(options model.ScanOptions) bool {
+	return options.AutonomyEmergencyStop ||
+		len(options.AutonomyForceRunAgents) > 0 ||
+		len(options.AutonomySuppressAgents) > 0 ||
+		strings.TrimSpace(options.AutonomyPlannerLock) != "" ||
+		options.AutonomyFallbackRerun
 }
 
 func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
@@ -897,6 +940,75 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": req.ID, "status": "recorded"})
+}
+
+func (s *Server) handleAutomationOperatorFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		ScanID          string `json:"scanId"`
+		ActionID        string `json:"actionId"`
+		SuggestedAction string `json:"suggestedAction"`
+		Decision        string `json:"decision"`
+		AgentName       string `json:"agentName"`
+		Notes           string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.ScanID = strings.TrimSpace(req.ScanID)
+	req.ActionID = strings.TrimSpace(req.ActionID)
+	req.SuggestedAction = strings.TrimSpace(req.SuggestedAction)
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	req.AgentName = strings.TrimSpace(req.AgentName)
+	req.Notes = strings.TrimSpace(req.Notes)
+	if req.ScanID == "" || req.Decision == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and decision are required"})
+		return
+	}
+	if req.Decision != "approve" && req.Decision != "reject" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "decision must be approve or reject"})
+		return
+	}
+	job, err := s.repo.GetJob(r.Context(), req.ScanID)
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+	actionID := req.ActionID
+	if actionID == "" {
+		actionID = uuid.NewString()
+	}
+	outcome := "rejected"
+	if req.Decision == "approve" {
+		outcome = "accepted"
+	}
+	notesJSON, _ := json.Marshal(map[string]string{
+		"decision":        req.Decision,
+		"agent":           req.AgentName,
+		"actionId":        actionID,
+		"suggestedAction": req.SuggestedAction,
+		"notes":           req.Notes,
+	})
+	feedback := model.ReportFeedback{
+		ID:          uuid.NewString(),
+		ScanID:      req.ScanID,
+		FindingID:   "autonomy-action:" + actionID,
+		Category:    "autonomy-action",
+		Title:       firstNonEmpty(req.SuggestedAction, "autonomous operator decision"),
+		Outcome:     outcome,
+		Notes:       string(notesJSON),
+		CreatedAt:   time.Now().UTC(),
+		ProgramName: strings.TrimSpace(job.ProgramName),
+	}
+	if err := s.repo.SaveFeedback(r.Context(), feedback); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist operator feedback"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": feedback.ID, "status": "recorded"})
 }
 
 func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Request) {
@@ -1403,6 +1515,7 @@ func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, pac
 	if mode := normalizeAutomationMode(pack.AutomationMode); mode != "" {
 		options.AutomationMode = mode
 	}
+	options.AutonomyCanaryPercent = maxInt(0, minInt(100, pack.CanaryPercent))
 	options.MinExpectedROIUSD = maxFloat(options.MinExpectedROIUSD, pack.MinExpectedROIUSD)
 	if pack.MaxAutomationConcurrency > 0 {
 		if options.MaxAutomationConcurrency <= 0 {
@@ -1446,7 +1559,203 @@ func (s *Server) applyAutomationPolicyPack(ctx context.Context, workspaceID, pac
 			options.DailyProbeLimit = minInt(options.DailyProbeLimit, pack.DailyProbeLimit)
 		}
 	}
+	options = applyGovernancePolicy(options, pack.GovernanceProfile)
 	return options, maxInt(1, pack.StrategyVersion)
+}
+
+func applyGovernancePolicy(options model.ScanOptions, governance model.AutonomyGovernanceProfile) model.ScanOptions {
+	if governance.FailureHandling.MaxNoNoveltyRounds > 0 {
+		options.AutonomyMaxNoNoveltyRounds = governance.FailureHandling.MaxNoNoveltyRounds
+	}
+	if governance.FailureHandling.MaxConsecutiveFailureRounds > 0 {
+		options.AutonomyMaxConsecutiveFailRounds = governance.FailureHandling.MaxConsecutiveFailureRounds
+	}
+	if governance.FailureHandling.BackoffMillis > 0 {
+		options.BackoffMillis = maxInt(options.BackoffMillis, governance.FailureHandling.BackoffMillis)
+	}
+	if governance.FailureHandling.AutoRetryOnFailure {
+		options.AutonomyFallbackRerun = true
+	}
+	if lock := strings.ToLower(strings.TrimSpace(governance.FailureHandling.FallbackPlanner)); lock == "static" || lock == "fallback" || lock == "ai" {
+		if strings.TrimSpace(options.AutonomyPlannerLock) == "" {
+			options.AutonomyPlannerLock = lock
+		}
+	}
+	if governance.MemoryPolicy.RetentionDays > 0 {
+		options.AutonomyMemoryRetentionDays = governance.MemoryPolicy.RetentionDays
+	}
+	if governance.RiskMatrix.RetryLimit > 0 {
+		if options.MaxRetries <= 0 {
+			options.MaxRetries = governance.RiskMatrix.RetryLimit
+		} else {
+			options.MaxRetries = minInt(options.MaxRetries, governance.RiskMatrix.RetryLimit)
+		}
+	}
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	if stage == "" {
+		stage = "dev"
+	}
+	if criteria, ok := governance.SuccessCriteria[stage]; ok {
+		marginal := criteria.NovelFindingsRateMin
+		if criteria.FalsePositiveRateMax > 0 {
+			marginal *= maxFloat(0.1, 1.0-criteria.FalsePositiveRateMax*0.5)
+		}
+		if marginal > 0 {
+			options.AutonomyMinMarginalScore = maxFloat(options.AutonomyMinMarginalScore, minFloat(0.95, marginal))
+		}
+	}
+	if governance.RolloutControl.CanaryPercentByStage != nil {
+		if p, ok := governance.RolloutControl.CanaryPercentByStage[stage]; ok {
+			p = maxInt(0, minInt(100, p))
+			if options.AutonomyCanaryPercent <= 0 {
+				options.AutonomyCanaryPercent = p
+			} else {
+				options.AutonomyCanaryPercent = minInt(options.AutonomyCanaryPercent, p)
+			}
+			if p == 0 {
+				options.MaxAutomationConcurrency = 1
+				options.AutonomyExplorationBudgetPercent = 0
+			} else {
+				options.AutonomyExplorationBudgetPercent = maxInt(options.AutonomyExplorationBudgetPercent, minInt(25, maxInt(5, p/4)))
+			}
+		}
+	}
+	tenantTier := strings.ToLower(strings.TrimSpace(options.AutonomyTenantTier))
+	if tenantTier == "" {
+		tenantTier = "default"
+	}
+	if budget, ok := governance.TenantRiskBudgets[tenantTier]; ok {
+		if budget.MaxExploitAttempts >= 0 {
+			if options.MaxExploitAttempts <= 0 {
+				options.MaxExploitAttempts = budget.MaxExploitAttempts
+			} else {
+				options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, budget.MaxExploitAttempts)
+			}
+		}
+		if budget.MaxPerTargetConcurrency > 0 {
+			if options.MaxPerTargetConcurrency <= 0 {
+				options.MaxPerTargetConcurrency = budget.MaxPerTargetConcurrency
+			} else {
+				options.MaxPerTargetConcurrency = minInt(options.MaxPerTargetConcurrency, budget.MaxPerTargetConcurrency)
+			}
+		}
+		if budget.MaxAutomationConcurrency > 0 {
+			if options.MaxAutomationConcurrency <= 0 {
+				options.MaxAutomationConcurrency = budget.MaxAutomationConcurrency
+			} else {
+				options.MaxAutomationConcurrency = minInt(options.MaxAutomationConcurrency, budget.MaxAutomationConcurrency)
+			}
+		}
+		if budget.DailyScanLimit > 0 {
+			if options.DailyScanLimit <= 0 {
+				options.DailyScanLimit = budget.DailyScanLimit
+			} else {
+				options.DailyScanLimit = minInt(options.DailyScanLimit, budget.DailyScanLimit)
+			}
+		}
+		if budget.DailyRuntimeLimitMinutes > 0 {
+			if options.DailyRuntimeLimitMinutes <= 0 {
+				options.DailyRuntimeLimitMinutes = budget.DailyRuntimeLimitMinutes
+			} else {
+				options.DailyRuntimeLimitMinutes = minInt(options.DailyRuntimeLimitMinutes, budget.DailyRuntimeLimitMinutes)
+			}
+		}
+		if budget.DailyProbeLimit > 0 {
+			if options.DailyProbeLimit <= 0 {
+				options.DailyProbeLimit = budget.DailyProbeLimit
+			} else {
+				options.DailyProbeLimit = minInt(options.DailyProbeLimit, budget.DailyProbeLimit)
+			}
+		}
+	}
+	if governance.CostControls.MaxRoundCostUnits > 0 {
+		options.AutonomyMaxRoundCostUnits = governance.CostControls.MaxRoundCostUnits
+	}
+	if governance.CostControls.CostWeight > 0 {
+		options.AutonomyCostWeight = clampFloat(governance.CostControls.CostWeight, 0.01, 1.0)
+	}
+	if !governance.OperatorOverride.AllowForceRun {
+		options.AutonomyForceRunAgents = nil
+	}
+	if !governance.OperatorOverride.AllowSuppress {
+		options.AutonomySuppressAgents = nil
+	}
+	if !governance.OperatorOverride.AllowPlannerLock {
+		options.AutonomyPlannerLock = ""
+	}
+	if !governance.OperatorOverride.AllowFallbackRerun {
+		options.AutonomyFallbackRerun = false
+	}
+	if !governance.OperatorOverride.AllowEmergencyStop {
+		options.AutonomyEmergencyStop = false
+	}
+	return options
+}
+
+func validateGovernanceProfile(profile model.AutonomyGovernanceProfile) error {
+	for env, c := range profile.SuccessCriteria {
+		if strings.TrimSpace(env) == "" {
+			return errors.New("successCriteria environment key is required")
+		}
+		if c.NovelFindingsRateMin < 0 || c.NovelFindingsRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].novelFindingsRateMin must be between 0 and 1", env)
+		}
+		if c.FalsePositiveRateMax < 0 || c.FalsePositiveRateMax > 1 {
+			return fmt.Errorf("successCriteria[%s].falsePositiveRateMax must be between 0 and 1", env)
+		}
+		if c.DuplicateSuppressionRateMin < 0 || c.DuplicateSuppressionRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].duplicateSuppressionRateMin must be between 0 and 1", env)
+		}
+		if c.FailureRecoveryRateMin < 0 || c.FailureRecoveryRateMin > 1 {
+			return fmt.Errorf("successCriteria[%s].failureRecoveryRateMin must be between 0 and 1", env)
+		}
+		if c.ScanDurationCapMinutes < 0 {
+			return fmt.Errorf("successCriteria[%s].scanDurationCapMinutes must be >= 0", env)
+		}
+	}
+	if profile.RiskMatrix.RetryLimit < 0 {
+		return errors.New("riskMatrix.retryLimit must be >= 0")
+	}
+	if profile.FailureHandling.BackoffMillis < 0 ||
+		profile.FailureHandling.MaxNoNoveltyRounds < 0 ||
+		profile.FailureHandling.MaxConsecutiveFailureRounds < 0 ||
+		profile.FailureHandling.PauseForOperatorAfterFailures < 0 {
+		return errors.New("failureHandling numeric values must be >= 0")
+	}
+	if profile.MemoryPolicy.RetentionDays < 0 {
+		return errors.New("memoryPolicy.retentionDays must be >= 0")
+	}
+	if profile.EvaluationGate.MinKPIDeltaScore < 0 {
+		return errors.New("evaluationGate.minKpiDeltaScore must be >= 0")
+	}
+	for stage, pct := range profile.RolloutControl.CanaryPercentByStage {
+		if strings.TrimSpace(stage) == "" {
+			return errors.New("rolloutControl.canaryPercentByStage stage key is required")
+		}
+		if pct < 0 || pct > 100 {
+			return fmt.Errorf("rolloutControl.canaryPercentByStage[%s] must be between 0 and 100", stage)
+		}
+	}
+	for tier, budget := range profile.TenantRiskBudgets {
+		if strings.TrimSpace(tier) == "" {
+			return errors.New("tenantRiskBudgets tier key is required")
+		}
+		if budget.MaxExploitAttempts < 0 ||
+			budget.MaxPerTargetConcurrency < 0 ||
+			budget.MaxAutomationConcurrency < 0 ||
+			budget.DailyScanLimit < 0 ||
+			budget.DailyRuntimeLimitMinutes < 0 ||
+			budget.DailyProbeLimit < 0 {
+			return fmt.Errorf("tenantRiskBudgets[%s] values must be >= 0", tier)
+		}
+	}
+	if profile.CostControls.MaxRoundCostUnits < 0 {
+		return errors.New("costControls.maxRoundCostUnits must be >= 0")
+	}
+	if profile.CostControls.CostWeight < 0 || profile.CostControls.CostWeight > 1 {
+		return errors.New("costControls.costWeight must be between 0 and 1")
+	}
+	return nil
 }
 
 func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
@@ -1478,6 +1787,10 @@ func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Requ
 		req.UpdatedBy = requesterFromRequest(r)
 		if req.StrategyVersion <= 0 {
 			req.StrategyVersion = 1
+		}
+		if err := validateGovernanceProfile(req.GovernanceProfile); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
 		}
 		before, _ := s.repo.GetAutomationPolicyPack(r.Context(), workspaceID, req.Name)
 		req.UpdatedAt = time.Now().UTC()
@@ -1573,6 +1886,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	jobs, _ := s.repo.ListCompletedJobs(r.Context(), 1000)
 	strategyROI := map[string]float64{}
 	strategyCounts := map[string]int{}
+	canaryByPolicy := map[string]int{}
 	failedRuns := 0
 	totalRuns := 0
 	for _, job := range jobs {
@@ -1591,6 +1905,24 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			totalRuns++
 			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
 				failedRuns++
+			}
+		}
+	}
+	if packs, err := s.repo.ListAutomationPolicyPacks(r.Context(), workspaceID, 200); err == nil {
+		for _, pack := range packs {
+			name := normalizePolicyPackName(pack.Name)
+			if name == "" {
+				continue
+			}
+			canaryByPolicy[name] = maxInt(0, minInt(100, pack.CanaryPercent))
+		}
+	}
+	rollbackEventsRecent := 0
+	if auditItems, err := s.repo.ListAutomationPolicyAudit(r.Context(), workspaceID, "", 300); err == nil {
+		for _, item := range auditItems {
+			action := strings.ToLower(strings.TrimSpace(item.Action))
+			if strings.Contains(action, "rollback") {
+				rollbackEventsRecent++
 			}
 		}
 	}
@@ -1625,16 +1957,18 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		alerts = append(alerts, "tool failure rate exceeded threshold")
 	}
 	writeJSON(w, http.StatusOK, model.AutomationMetrics{
-		GeneratedAt:       now,
-		WorkspaceID:       workspaceID,
-		QueueLagSeconds:   roundTo2(avgLag),
-		MaxQueueLag:       roundTo2(maxLag),
-		RetryRate:         roundTo2(retryRate),
-		DLQCount:          dlq,
-		ToolFailureRate:   roundTo2(toolFailureRate),
-		ROIByStrategy:     strategyROI,
-		StrategyRunCounts: strategyCounts,
-		Alerts:            alerts,
+		GeneratedAt:           now,
+		WorkspaceID:           workspaceID,
+		QueueLagSeconds:       roundTo2(avgLag),
+		MaxQueueLag:           roundTo2(maxLag),
+		RetryRate:             roundTo2(retryRate),
+		DLQCount:              dlq,
+		ToolFailureRate:       roundTo2(toolFailureRate),
+		ROIByStrategy:         strategyROI,
+		StrategyRunCounts:     strategyCounts,
+		Alerts:                alerts,
+		CanaryPercentByPolicy: canaryByPolicy,
+		RollbackEventsRecent:  rollbackEventsRecent,
 		Extra: map[string]float64{
 			"lagSamples": float64(lagCount),
 			"agentRuns":  float64(totalRuns),
@@ -1672,13 +2006,65 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy pack not found"})
 		return
 	}
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	if stage == "" {
+		stage = "dev"
+	}
+	if stage == "prod" &&
+		pack.GovernanceProfile.EvaluationGate.PromoteToProdOnlyIfPass &&
+		pack.GovernanceProfile.EvaluationGate.RequireReplayBenchmark {
+		passed, delta, benchErr := s.runReplayBenchmark(r.Context(), workspaceID, pack.GovernanceProfile.EvaluationGate.MinKPIDeltaScore)
+		if benchErr != nil {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{"error": "replay benchmark approval is required for production promotion"})
+			return
+		}
+		if !passed {
+			if pack.GovernanceProfile.RolloutControl.AutoRollbackOnKPIRegression && pack.CanaryPercent > 0 {
+				beforeRaw, _ := json.Marshal(pack)
+				next := *pack
+				next.CanaryPercent = 0
+				next.UpdatedBy = requesterFromRequest(r)
+				next.UpdatedAt = time.Now().UTC()
+				if err := s.repo.UpsertAutomationPolicyPack(r.Context(), next); err == nil {
+					afterRaw, _ := json.Marshal(next)
+					_ = s.repo.AppendAutomationPolicyAudit(r.Context(), model.AutomationPolicyAuditEvent{
+						ID:              uuid.NewString(),
+						WorkspaceID:     workspaceID,
+						PolicyPack:      packName,
+						StrategyVersion: next.StrategyVersion,
+						Action:          "auto-rollback-kpi",
+						ChangedBy:       requesterFromRequest(r),
+						ChangedAt:       time.Now().UTC(),
+						BeforeJSON:      string(beforeRaw),
+						AfterJSON:       string(afterRaw),
+					})
+					writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+						"error":           "replay benchmark did not meet minimum KPI delta score",
+						"delta":           fmt.Sprintf("%.3f", delta),
+						"rollbackApplied": true,
+						"canaryPercent":   0,
+					})
+					return
+				}
+			}
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"error": "replay benchmark did not meet minimum KPI delta score",
+				"delta": fmt.Sprintf("%.3f", delta),
+			})
+			return
+		}
+	}
 	beforeRaw, _ := json.Marshal(pack)
 	next := *pack
 	if req.Rollback {
 		next.CanaryPercent = 0
 	} else {
 		next.StrategyVersion = maxInt(1, next.StrategyVersion+1)
-		next.CanaryPercent = maxInt(0, minInt(100, req.CanaryPercent))
+		nextCanary := maxInt(0, minInt(100, req.CanaryPercent))
+		if stageCanary, ok := next.GovernanceProfile.RolloutControl.CanaryPercentByStage[stage]; ok {
+			nextCanary = minInt(nextCanary, maxInt(0, minInt(100, stageCanary)))
+		}
+		next.CanaryPercent = nextCanary
 		if req.ExpectedMinROI > 0 {
 			next.MinExpectedROIUSD = maxFloat(next.MinExpectedROIUSD, req.ExpectedMinROI)
 		}
@@ -1712,6 +2098,51 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		"canaryPercent":   next.CanaryPercent,
 		"rollback":        req.Rollback,
 	})
+}
+
+func (s *Server) runReplayBenchmark(ctx context.Context, workspaceID string, minDelta float64) (bool, float64, error) {
+	jobs, err := s.repo.ListCompletedJobs(ctx, 500)
+	if err != nil {
+		return false, 0, err
+	}
+	total := 0.0
+	count := 0
+	for _, job := range jobs {
+		if firstNonEmpty(job.WorkspaceID, "default") != firstNonEmpty(workspaceID, "default") {
+			continue
+		}
+		runScore := 0.0
+		runCount := 0
+		for _, run := range job.AgentRuns {
+			if run.Metadata == nil {
+				continue
+			}
+			raw := strings.TrimSpace(run.Metadata["decision_quality_score"])
+			if raw == "" {
+				continue
+			}
+			parsed, parseErr := strconv.ParseFloat(raw, 64)
+			if parseErr != nil {
+				continue
+			}
+			runScore += clampFloat(parsed, 0, 1)
+			runCount++
+		}
+		if runCount == 0 {
+			continue
+		}
+		total += runScore / float64(runCount)
+		count++
+		if count >= 100 {
+			break
+		}
+	}
+	if count == 0 {
+		return false, 0, fmt.Errorf("no replay data")
+	}
+	avg := total / float64(count)
+	delta := avg - 0.5
+	return delta >= minDelta, delta, nil
 }
 
 func (s *Server) evaluatePolicyGate(findings []model.Finding, policyPack string) model.PolicyGateResult {
@@ -1772,7 +2203,7 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 
 func normalizeAutomationMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "safe", "aggressive", "autonomous":
+	case "safe", "aggressive", "autonomous", "canary":
 		return strings.ToLower(strings.TrimSpace(mode))
 	default:
 		return "autonomous"
@@ -1880,6 +2311,8 @@ func (s *Server) effectiveMinROI(ctx context.Context, job *model.ScanJob) float6
 }
 
 func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOptions {
+	stage := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOMATION_ENV_STAGE")))
+	isProductionLike := stage == "prod" || stage == "production" || stage == "staging"
 	switch normalizeAutomationMode(options.AutomationMode) {
 	case "safe":
 		options.MaxExploitAttempts = 0
@@ -1892,11 +2325,22 @@ func (s *Server) applySafetyModePolicy(options model.ScanOptions) model.ScanOpti
 		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 3)
 		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 4)
 		options.RescanIntervalMinutes = maxInt(15, options.RescanIntervalMinutes)
+	case "canary":
+		options.MaxExploitAttempts = minInt(maxInt(options.MaxExploitAttempts, 1), 1)
+		options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+		options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+		options.AggressiveExploitation = false
 	default:
 		options.MaxExploitAttempts = maxInt(options.MaxExploitAttempts, 1)
 		options.MaxPerTargetConcurrency = maxInt(options.MaxPerTargetConcurrency, 2)
 		options.MaxAutomationConcurrency = maxInt(options.MaxAutomationConcurrency, 2)
 		options.RescanIntervalMinutes = maxInt(options.RescanIntervalMinutes, maxInt(30, options.MinRescanIntervalMinutes))
+		if isProductionLike {
+			options.MaxExploitAttempts = minInt(options.MaxExploitAttempts, 1)
+			options.MaxPerTargetConcurrency = minInt(maxInt(1, options.MaxPerTargetConcurrency), 1)
+			options.MaxAutomationConcurrency = minInt(maxInt(1, options.MaxAutomationConcurrency), 1)
+		}
 	}
 	options.DailyScanLimit = maxInt(options.DailyScanLimit, s.defaultDailyScanLimit)
 	options.DailyRuntimeLimitMinutes = maxInt(options.DailyRuntimeLimitMinutes, s.defaultDailyRuntimeMinutes)
@@ -2292,6 +2736,177 @@ func fingerprintFinding(f model.Finding) string {
 		strings.ToLower(strings.TrimSpace(f.Evidence))
 }
 
+func normalizedFindingKey(f model.Finding) string {
+	category := normalizeDedupToken(f.Category)
+	title := normalizeDedupToken(f.Title)
+	evidence := normalizeDedupToken(f.Evidence)
+	if len(evidence) > 160 {
+		evidence = evidence[:160]
+	}
+	param := normalizeDedupToken(f.AffectedParameter)
+	host := normalizeDedupToken(hostFromTarget(strings.TrimSpace(f.AffectedURL)))
+	id := normalizeDedupToken(f.ID)
+	cwe := normalizeDedupToken(f.CWE)
+	return strings.Join([]string{category, title, evidence, param, host, id, cwe}, "|")
+}
+
+func normalizeDedupToken(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastSpace = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastSpace = false
+		default:
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func deduplicateFindingsCrossAgent(findings []model.Finding) ([]model.Finding, int) {
+	if len(findings) <= 1 {
+		return findings, 0
+	}
+	type cluster struct {
+		rep   model.Finding
+		count int
+	}
+	clusters := map[string]cluster{}
+	order := make([]string, 0, len(findings))
+	for _, f := range findings {
+		key := normalizedFindingKey(f)
+		cur, ok := clusters[key]
+		if !ok {
+			clusters[key] = cluster{rep: f, count: 1}
+			order = append(order, key)
+			continue
+		}
+		cur.count++
+		if severityWeight(f.Severity) > severityWeight(cur.rep.Severity) ||
+			(severityWeight(f.Severity) == severityWeight(cur.rep.Severity) && f.Confidence > cur.rep.Confidence) {
+			cur.rep = f
+		}
+		cur.rep.Sources = dedupeStrings(append(cur.rep.Sources, f.Sources...))
+		clusters[key] = cur
+	}
+	out := make([]model.Finding, 0, len(clusters))
+	for _, key := range order {
+		cur := clusters[key]
+		if cur.count > 1 {
+			if cur.rep.EvidenceFields == nil {
+				cur.rep.EvidenceFields = map[string]string{}
+			}
+			cur.rep.EvidenceFields["duplicateClusterSize"] = fmt.Sprintf("%d", cur.count)
+		}
+		out = append(out, cur.rep)
+	}
+	return out, len(findings) - len(out)
+}
+
+func applyEvidenceQualityTiers(findings []model.Finding) []model.Finding {
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		tier := inferEvidenceQualityTier(f)
+		f.EvidenceQualityTier = tier
+		if f.EvidenceFields == nil {
+			f.EvidenceFields = map[string]string{}
+		}
+		f.EvidenceFields["evidenceQualityTier"] = tier
+		conf := f.Confidence
+		if conf <= 0 {
+			conf = defaultConfidenceForSeverity(f.Severity)
+		}
+		switch tier {
+		case "strong":
+			conf = maxFloat(conf, 0.8)
+			conf = minFloat(0.99, conf+0.08)
+		case "moderate":
+			conf = minFloat(0.99, conf+0.02)
+		case "weak":
+			conf = minFloat(0.7, conf)
+			conf = maxFloat(0.05, conf-0.08)
+		}
+		f.Confidence = conf
+		out = append(out, f)
+	}
+	return out
+}
+
+func inferEvidenceQualityTier(f model.Finding) string {
+	score := 0
+	if len(f.ReproductionSteps) >= 2 {
+		score++
+	}
+	if strings.TrimSpace(f.PoC) != "" {
+		score++
+	}
+	if f.Exploitability != nil && strings.EqualFold(strings.TrimSpace(f.Exploitability.VerifiedStatus), "verified") {
+		score++
+	}
+	if len(strings.TrimSpace(f.Evidence)) >= 120 || len(f.EvidenceFields) > 1 {
+		score++
+	}
+	if strings.TrimSpace(f.AffectedURL) != "" || strings.TrimSpace(f.AffectedParameter) != "" {
+		score++
+	}
+	if len(f.References) > 0 {
+		score++
+	}
+	switch {
+	case score >= 4:
+		return "strong"
+	case score >= 2:
+		return "moderate"
+	default:
+		return "weak"
+	}
+}
+
+func severityWeight(severity model.Severity) int {
+	switch severity {
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func dedupeStrings(items []string) []string {
+	if len(items) <= 1 {
+		return items
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
 func fingerprintFindingBase(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title))
@@ -2377,15 +2992,20 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
-	input := agent.AgentInput{
-		Target:      target,
-		AuthProfile: authProfile,
-		Options:     options,
-		Scope:       scanScope,
-		Emit:        emit,
+func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, persistedState *model.PersistentScanState, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
+	autonomyMemory := model.AutonomyMemory{}
+	if persistedState != nil {
+		autonomyMemory = persistedState.AutonomyMemory
 	}
-	outputs, findings, err := s.newRegistry(options).RunAll(ctx, input)
+	input := agent.AgentInput{
+		Target:         target,
+		AuthProfile:    authProfile,
+		Options:        options,
+		Scope:          scanScope,
+		AutonomyMemory: autonomyMemory,
+		Emit:           emit,
+	}
+	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
 		return outputs, findings, err
 	}
@@ -2397,7 +3017,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
-		roleOutputs, roleFindings, roleErr := s.newRegistry(options).RunAll(ctx, roleInput)
+		roleOutputs, roleFindings, roleErr := s.runAgents(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
 			continue
@@ -2425,18 +3045,85 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 // the findings observed so far. Otherwise it falls back to the static
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
-	if !s.autonomous || s.agentFactory == nil {
+	if input.Options.AutonomyEmergencyStop {
+		return nil, nil, errors.New("autonomy emergency stop is enabled")
+	}
+	if s.agentFactory == nil {
 		return s.agentRegistry.RunAll(ctx, input)
 	}
 	available := s.agentFactory.Names()
 	staticOrder := s.agentRegistry.Order()
 	fallback := agent.NewStaticPlanner(staticOrder)
 	var planner agent.Planner = fallback
-	if s.aiClient != nil {
-		planner = agent.NewAIPlanner(s.aiClient, available, fallback)
+	plannerLock := strings.ToLower(strings.TrimSpace(input.Options.AutonomyPlannerLock))
+	useAI := s.autonomous && s.aiClient != nil
+	if plannerLock == "static" || plannerLock == "fallback" {
+		useAI = false
+	}
+	if plannerLock == "ai" {
+		useAI = s.aiClient != nil
+	}
+	if normalizeAutomationMode(input.Options.AutomationMode) == "canary" {
+		useAI = useAI && shouldEnableCanaryAutonomy(input.Target, input.Options.AutonomyCanaryPercent)
+	}
+	if useAI {
+		aiPlanner := agent.NewAIPlanner(s.aiClient, available, fallback)
+		if input.Options.AutonomyExplorationBudgetPercent > 0 {
+			aiPlanner.ExplorationBudget = input.Options.AutonomyExplorationBudgetPercent
+		}
+		planner = aiPlanner
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
-	return orchestrator.Run(ctx, input)
+	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
+		orchestrator.MaxNoNoveltyRounds = input.Options.AutonomyMaxNoNoveltyRounds
+	}
+	if input.Options.AutonomyMaxConsecutiveFailRounds > 0 {
+		orchestrator.MaxConsecutiveFailureRounds = input.Options.AutonomyMaxConsecutiveFailRounds
+	}
+	if input.Options.AutonomyMinMarginalScore > 0 {
+		orchestrator.MinMarginalScore = input.Options.AutonomyMinMarginalScore
+	}
+	if input.Options.AutonomyMaxRoundCostUnits > 0 {
+		orchestrator.MaxRoundCostUnits = input.Options.AutonomyMaxRoundCostUnits
+	}
+	if input.Options.AutonomyCostWeight > 0 {
+		orchestrator.CostWeight = input.Options.AutonomyCostWeight
+	}
+	outputs, findings, err := orchestrator.Run(ctx, input)
+	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
+		return s.agentRegistry.RunAll(ctx, input)
+	}
+	return outputs, findings, err
+}
+
+func shouldEnableCanaryAutonomy(target string, canaryPercent int) bool {
+	canaryPercent = maxInt(0, minInt(100, canaryPercent))
+	if canaryPercent <= 0 {
+		return false
+	}
+	if canaryPercent >= 100 {
+		return true
+	}
+	key := strings.ToLower(strings.TrimSpace(target))
+	if key == "" {
+		key = "default"
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	bucket := int(h.Sum32()%100) + 1
+	return bucket <= canaryPercent
+}
+
+func allAgentRunsFailed(outputs []agent.AgentOutput) bool {
+	if len(outputs) == 0 {
+		return false
+	}
+	for _, out := range outputs {
+		if strings.EqualFold(strings.TrimSpace(out.Status), "completed") && !out.TimedOut && strings.TrimSpace(out.Error) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func buildRoleDiffFindings(baseline []model.Finding, perRole map[string][]model.Finding) []model.Finding {
@@ -3068,6 +3755,12 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 		if conf <= 0 {
 			conf = defaultConfidenceForSeverity(f.Severity)
 		}
+		switch strings.ToLower(strings.TrimSpace(f.EvidenceQualityTier)) {
+		case "strong":
+			conf = minFloat(0.99, conf*1.05)
+		case "weak":
+			conf = maxFloat(0.05, conf*0.9)
+		}
 		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
 		s := byKey[key]
 		if s.total >= 3 {
@@ -3081,10 +3774,16 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 	return out
 }
 
-func (s *Server) persistScanState(target string, findings []model.Finding) {
+func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions) {
+	prev, _ := s.repo.GetScanState(context.Background(), target)
 	state := model.PersistentScanState{
 		Target:        target,
 		LastUpdatedAt: time.Now().UTC(),
+	}
+	if prev != nil {
+		state.SessionInstability = prev.SessionInstability
+		state.KnownRuntimeEndpoints = append([]string(nil), prev.KnownRuntimeEndpoints...)
+		state.AutonomyMemory = prev.AutonomyMemory
 	}
 	refs := make([]string, 0)
 	for _, f := range findings {
@@ -3101,8 +3800,159 @@ func (s *Server) persistScanState(target string, findings []model.Finding) {
 		}
 	}
 	sort.Strings(refs)
-	state.KnownRuntimeEndpoints = limitStrings(mergeActions(nil, refs), 25)
+	state.KnownRuntimeEndpoints = limitStrings(mergeActions(state.KnownRuntimeEndpoints, refs), 25)
+	feedback, _ := s.repo.ListFeedback(context.Background(), 1000)
+	state.AutonomyMemory = mergeAutonomyMemory(state.AutonomyMemory, outputs, options.AutonomyMemoryRetentionDays, feedback)
 	_ = s.repo.UpsertScanState(context.Background(), state)
+}
+
+func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput, retentionDays int, feedback []model.ReportFeedback) model.AutonomyMemory {
+	if retentionDays <= 0 {
+		retentionDays = intFromEnv("AUTONOMY_MEMORY_RETENTION_DAYS", 30)
+	}
+	if retentionDays > 0 && !memory.LastRunAt.IsZero() {
+		expiry := memory.LastRunAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
+		if time.Now().UTC().After(expiry) {
+			memory.PreferredAgents = nil
+			memory.SuppressedAgents = nil
+			memory.LastAgentSequence = nil
+			memory.AgentStats = map[string]model.AutonomyAgentStat{}
+		}
+	}
+	if memory.AgentStats == nil {
+		memory.AgentStats = map[string]model.AutonomyAgentStat{}
+	}
+	if !memory.LastRunAt.IsZero() {
+		daysSince := int(time.Since(memory.LastRunAt).Hours() / 24)
+		if daysSince > 0 {
+			dailyDecay := clampFloat(floatFromEnv("AUTONOMY_MEMORY_DAILY_DECAY", 0.03), 0, 0.25)
+			decay := clampFloat(float64(daysSince)*dailyDecay, 0, 0.8)
+			for name, stat := range memory.AgentStats {
+				stat.Runs = int(float64(stat.Runs) * (1 - decay))
+				stat.Errors = int(float64(stat.Errors) * (1 - decay))
+				stat.Timeouts = int(float64(stat.Timeouts) * (1 - decay))
+				stat.Findings = int(float64(stat.Findings) * (1 - decay))
+				stat.HighConfidenceFindings = int(float64(stat.HighConfidenceFindings) * (1 - decay))
+				stat.OperatorApprovals = int(float64(stat.OperatorApprovals) * (1 - decay))
+				stat.OperatorRejections = int(float64(stat.OperatorRejections) * (1 - decay))
+				stat.DecisionQualitySum = stat.DecisionQualitySum * (1 - decay)
+				stat.DecisionQualitySamples = int(float64(stat.DecisionQualitySamples) * (1 - decay))
+				memory.AgentStats[name] = stat
+			}
+		}
+	}
+	sequence := make([]string, 0, len(outputs))
+	for _, out := range outputs {
+		name := strings.TrimSpace(out.AgentName)
+		if name == "" {
+			continue
+		}
+		sequence = append(sequence, name)
+		stat := memory.AgentStats[name]
+		stat.Runs++
+		if out.Status == "error" || strings.TrimSpace(out.Error) != "" {
+			stat.Errors++
+		}
+		if out.TimedOut {
+			stat.Timeouts++
+		}
+		stat.Findings += len(out.Findings)
+		for _, f := range out.Findings {
+			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh {
+				stat.HighConfidenceFindings++
+			}
+		}
+		if out.DurationMs > 0 {
+			minutes := float64(out.DurationMs) / 60000.0
+			if minutes > 0 {
+				stat.YieldPerMinute = maxFloat(stat.YieldPerMinute, float64(len(out.Findings))/minutes)
+			}
+		}
+		if out.Metadata != nil {
+			if raw := strings.TrimSpace(out.Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					stat.DecisionQualitySum += clampFloat(parsed, 0, 1)
+					stat.DecisionQualitySamples++
+				}
+			}
+		}
+		memory.AgentStats[name] = stat
+	}
+	for _, item := range feedback {
+		if strings.ToLower(strings.TrimSpace(item.Category)) != "autonomy-action" {
+			continue
+		}
+		agentName := parseOperatorFeedbackAgent(item.Notes)
+		if agentName == "" {
+			continue
+		}
+		stat := memory.AgentStats[agentName]
+		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
+		case "accepted":
+			stat.OperatorApprovals++
+		case "rejected", "duplicate":
+			stat.OperatorRejections++
+		}
+		memory.AgentStats[agentName] = stat
+	}
+	memory.LastAgentSequence = limitStrings(sequence, 20)
+	memory.LastRunAt = time.Now().UTC()
+
+	preferred := make([]string, 0)
+	suppressed := make([]string, 0)
+	for name, stat := range memory.AgentStats {
+		if stat.Runs == 0 {
+			continue
+		}
+		errorRate := float64(stat.Errors) / float64(stat.Runs)
+		normalFindings := maxInt(0, stat.Findings-stat.HighConfidenceFindings)
+		noveltyScore := float64(stat.HighConfidenceFindings) + float64(normalFindings)*autonomyNoveltyFindingWeight
+		totalOps := maxInt(1, stat.OperatorApprovals+stat.OperatorRejections)
+		operatorPenalty := float64(stat.OperatorRejections) / float64(totalOps)
+		if stat.DecisionQualitySamples > 0 {
+			avgQuality := stat.DecisionQualitySum / float64(maxInt(1, stat.DecisionQualitySamples))
+			noveltyScore += avgQuality
+		}
+		if noveltyScore >= autonomyPreferredMinScore && errorRate < autonomyPreferredMaxErrRate {
+			preferred = append(preferred, name)
+		}
+		if stat.Runs >= autonomySuppressMinRuns && (stat.Findings == 0 || errorRate >= autonomySuppressErrRate || stat.Timeouts >= autonomySuppressTimeouts || operatorPenalty >= 0.5) {
+			suppressed = append(suppressed, name)
+		}
+	}
+	sort.Strings(preferred)
+	sort.Strings(suppressed)
+	memory.PreferredAgents = limitStrings(preferred, 8)
+	memory.SuppressedAgents = limitStrings(suppressed, 8)
+	memory.RetentionAppliedAt = time.Now().UTC()
+	return memory
+}
+
+func parseOperatorFeedbackAgent(notes string) string {
+	notes = strings.TrimSpace(notes)
+	if notes == "" {
+		return ""
+	}
+	var structured map[string]string
+	if json.Unmarshal([]byte(notes), &structured) == nil {
+		return strings.TrimSpace(structured["agent"])
+	}
+	parts := strings.Split(notes, ";")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(strings.ToLower(part), "agent=") {
+			continue
+		}
+		segments := strings.SplitN(part, "=", 2)
+		if len(segments) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(segments[1])
+		if name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func (s *Server) notifyFindings(job *model.ScanJob) {
@@ -3159,6 +4009,9 @@ func sendWebhookJSON(target string, payload any) {
 	if target == "" {
 		return
 	}
+	if err := safety.ValidateOutboundURL(target); err != nil {
+		return
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return
@@ -3168,7 +4021,18 @@ func sendWebhookJSON(target string, payload any) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(redirReq *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many redirects")
+			}
+			if err := safety.ValidateOutboundURL(redirReq.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked by outbound safety policy for %q: %w", redirReq.URL.String(), err)
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return
@@ -3525,6 +4389,92 @@ func buildNextActions(job *model.ScanJob) []string {
 	return actions
 }
 
+func generateAutomationPostmortem(job *model.ScanJob, outputs []agent.AgentOutput, dedupSuppressed int) string {
+	if job == nil {
+		return "No postmortem data."
+	}
+	totalRuns := len(outputs)
+	failures := 0
+	timeouts := 0
+	novel := 0
+	highSignal := 0
+	totalQuality := 0.0
+	qualitySamples := 0
+	totalDurationMs := int64(0)
+	for _, out := range outputs {
+		totalDurationMs += out.DurationMs
+		if out.Status == "error" || strings.TrimSpace(out.Error) != "" {
+			failures++
+		}
+		if out.TimedOut {
+			timeouts++
+		}
+		for _, f := range out.Findings {
+			if strings.EqualFold(strings.TrimSpace(f.DriftStatus), "new") {
+				novel++
+			}
+			if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+				highSignal++
+			}
+		}
+		if out.Metadata != nil {
+			if raw := strings.TrimSpace(out.Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					totalQuality += clampFloat(parsed, 0, 1)
+					qualitySamples++
+				}
+			}
+		}
+	}
+	avgQuality := 0.0
+	if qualitySamples > 0 {
+		avgQuality = totalQuality / float64(qualitySamples)
+	}
+	efficiency := 0.0
+	if totalDurationMs > 0 {
+		efficiency = float64(len(job.Findings)) / (float64(totalDurationMs) / 60000.0)
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("- Decision quality: %.3f (samples=%d)", roundTo2(avgQuality), qualitySamples),
+		fmt.Sprintf("- Novelty yield: newDrift=%d highSignal=%d dedupSuppressed=%d", novel, highSignal, maxInt(0, dedupSuppressed)),
+		fmt.Sprintf("- Cost efficiency: findingsPerMinute=%.2f runtimeMinutes=%.2f", roundTo2(efficiency), roundTo2(float64(totalDurationMs)/60000.0)),
+		fmt.Sprintf("- Failures: totalRuns=%d failures=%d timeouts=%d", totalRuns, failures, timeouts),
+		fmt.Sprintf("- Rollback signals: policyGate=%s meetsROI=%t", firstNonEmpty(job.PolicyPack, "internal"), job.Dashboard != nil && job.Dashboard.MeetsROIGate),
+	}, "\n")
+}
+
+func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions) (model.ScanOptions, string) {
+	newCount := 0
+	changedCount := 0
+	highNewOrChanged := 0
+	for _, f := range findings {
+		drift := strings.ToLower(strings.TrimSpace(f.DriftStatus))
+		switch drift {
+		case "new":
+			newCount++
+			if f.Severity == model.SeverityHigh {
+				highNewOrChanged++
+			}
+		case "changed":
+			changedCount++
+			if f.Severity == model.SeverityHigh {
+				highNewOrChanged++
+			}
+		}
+	}
+	if highNewOrChanged == 0 && newCount < 3 && changedCount < 3 {
+		return options, ""
+	}
+	adapted := options
+	adapted.DeepScanOnHighSignal = true
+	adapted.AutonomyExplorationBudgetPercent = maxInt(adapted.AutonomyExplorationBudgetPercent, 20)
+	adapted.RescanIntervalMinutes = maxInt(10, adapted.RescanIntervalMinutes/2)
+	adapted.MaxPerTargetConcurrency = minInt(maxInt(1, adapted.MaxPerTargetConcurrency), 1)
+	note := fmt.Sprintf("Adaptive drift strategy applied (new=%d changed=%d high=%d): deepScan=true, exploration>=20%%, tighter rescan cadence",
+		newCount, changedCount, highNewOrChanged)
+	return adapted, note
+}
+
 func generateAutomatedReport(job *model.ScanJob) string {
 	if job == nil {
 		return ""
@@ -3700,6 +4650,16 @@ func minFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func clampFloat(v, minV, maxV float64) float64 {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
 }
 
 func maxFloat(a, b float64) float64 {

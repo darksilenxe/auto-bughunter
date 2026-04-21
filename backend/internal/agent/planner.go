@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"net/url"
+	"strconv"
 	"strings"
+
+	"auto-bughunter/backend/internal/model"
 )
 
 // AgentSpec describes a single agent the planner has decided to run next.
@@ -79,11 +83,18 @@ type AIPlanCaller interface {
 // the supplied StaticPlanner when the provider is unavailable, returns an
 // error, or yields no actionable agents.
 type AIPlanner struct {
-	Caller          AIPlanCaller
-	AvailableAgents []string
-	Fallback        *StaticPlanner
+	Caller            AIPlanCaller
+	AvailableAgents   []string
+	Fallback          *StaticPlanner
 	MaxAgentsPerRound int
+	ExplorationBudget int
 }
+
+const (
+	minRunsBeforeAdaptiveBlock  = 2
+	minRunsForHighErrorBlock    = 3
+	highErrorRateBlockThreshold = 0.66
+)
 
 // NewAIPlanner constructs an AIPlanner. availableAgents should list every
 // agent name the factory can build; fallback is required.
@@ -103,6 +114,7 @@ func NewAIPlanner(caller AIPlanCaller, availableAgents []string, fallback *Stati
 		AvailableAgents:   cleaned,
 		Fallback:          fallback,
 		MaxAgentsPerRound: 3,
+		ExplorationBudget: 15,
 	}
 }
 
@@ -117,6 +129,13 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		return PlannerDecision{IsDone: true}, nil
 	}
 
+	if shouldStopForLowMarginalValue(history, input.Options.AutonomyMinMarginalScore) {
+		return PlannerDecision{
+			IsDone: true,
+			Notes:  "stopped: low marginal decision quality",
+		}, nil
+	}
+
 	findings := make([]any, 0, len(input.AllFindings))
 	for _, f := range input.AllFindings {
 		findings = append(findings, map[string]string{
@@ -128,11 +147,16 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	}
 
 	historySummary := make([]map[string]string, 0, len(history))
+	stats := computeAgentRunStats(history)
 	for _, h := range history {
 		historySummary = append(historySummary, map[string]string{
-			"agent":    h.AgentName,
-			"status":   h.Status,
-			"findings": itoa(len(h.Findings)),
+			"agent":      h.AgentName,
+			"status":     h.Status,
+			"findings":   itoa(len(h.Findings)),
+			"errors":     itoa(stats[h.AgentName].Errors),
+			"runs":       itoa(stats[h.AgentName].Runs),
+			"novelty":    itoa(stats[h.AgentName].NovelFindings),
+			"durationMs": itoa(int(h.DurationMs)),
 		})
 	}
 
@@ -148,6 +172,9 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	for _, name := range p.AvailableAgents {
 		available[name] = struct{}{}
 	}
+	blocked := buildBlockedAgents(stats, input.AutonomyMemory)
+	preferredSet := toNameSet(input.AutonomyMemory.PreferredAgents)
+	contextPreferredSet := contextPreferredAgents(input.Target, input.AllFindings, p.AvailableAgents)
 
 	agents := make([]AgentSpec, 0, len(specs))
 	for _, s := range specs {
@@ -158,10 +185,37 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		if _, ok := available[name]; !ok {
 			continue
 		}
-		agents = append(agents, AgentSpec{Name: name, Reason: strings.TrimSpace(s["reason"])})
+		if blocked[name] && !isUrgentReason(s["reason"]) {
+			continue
+		}
+		reason := strings.TrimSpace(s["reason"])
+		if reason == "" {
+			switch {
+			case preferredSet[name]:
+				reason = "memory-preferred"
+			case contextPreferredSet[name]:
+				reason = "target-context"
+			default:
+				reason = "ai-planned"
+			}
+		}
+		agents = append(agents, AgentSpec{Name: name, Reason: reason})
 		if p.MaxAgentsPerRound > 0 && len(agents) >= p.MaxAgentsPerRound {
 			break
 		}
+	}
+	agents = prioritizeAgentSpecs(agents, preferredSet, contextPreferredSet)
+	if p.MaxAgentsPerRound > 0 && len(agents) > p.MaxAgentsPerRound {
+		agents = agents[:p.MaxAgentsPerRound]
+	}
+	if shouldInjectExploration(history, p.ExplorationBudget) {
+		exploration := pickExplorationAgent(p.AvailableAgents, history, agents, blocked, preferredSet)
+		if exploration != "" {
+			agents = append(agents, AgentSpec{Name: exploration, Reason: "exploration-budget"})
+		}
+	}
+	if p.MaxAgentsPerRound > 0 && len(agents) > p.MaxAgentsPerRound {
+		agents = agents[:p.MaxAgentsPerRound]
 	}
 
 	if len(agents) == 0 && !done {
@@ -172,6 +226,94 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	}
 
 	return PlannerDecision{Agents: agents, IsDone: done, Notes: "ai-planned"}, nil
+}
+
+type agentRunStats struct {
+	Runs          int
+	Errors        int
+	Timeouts      int
+	Findings      int
+	NovelFindings int
+}
+
+func computeAgentRunStats(history []AgentOutput) map[string]agentRunStats {
+	stats := map[string]agentRunStats{}
+	type findingKey struct {
+		Category string
+		Title    string
+		Evidence string
+	}
+	seen := map[findingKey]struct{}{}
+	for _, h := range history {
+		name := strings.TrimSpace(h.AgentName)
+		if name == "" {
+			continue
+		}
+		cur := stats[name]
+		cur.Runs++
+		if h.Status == "error" || strings.TrimSpace(h.Error) != "" {
+			cur.Errors++
+		}
+		if h.TimedOut {
+			cur.Timeouts++
+		}
+		cur.Findings += len(h.Findings)
+		for _, f := range h.Findings {
+			key := findingKey{Category: f.Category, Title: f.Title, Evidence: f.Evidence}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			cur.NovelFindings++
+		}
+		stats[name] = cur
+	}
+	return stats
+}
+
+func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMemory) map[string]bool {
+	blocked := map[string]bool{}
+	for _, name := range memory.SuppressedAgents {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			blocked[name] = true
+		}
+	}
+	for name, st := range stats {
+		if st.Runs < minRunsBeforeAdaptiveBlock {
+			continue
+		}
+		errorRate := float64(st.Errors) / float64(st.Runs)
+		if st.Findings == 0 && (st.Errors > 0 || st.Timeouts > 0) {
+			blocked[name] = true
+			continue
+		}
+		if shouldBlockForHighErrorRate(st, errorRate) {
+			blocked[name] = true
+		}
+	}
+	return blocked
+}
+
+// shouldBlockForHighErrorRate suppresses an agent only when repeated runs show
+// mostly failures and no novelty, which indicates the agent is currently
+// expensive noise rather than a useful follow-up.
+func shouldBlockForHighErrorRate(st agentRunStats, errorRate float64) bool {
+	return st.Runs >= minRunsForHighErrorBlock &&
+		errorRate >= highErrorRateBlockThreshold &&
+		st.NovelFindings == 0
+}
+
+func isUrgentReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	if reason == "" {
+		return false
+	}
+	return strings.Contains(reason, "critical") ||
+		strings.Contains(reason, "high") ||
+		strings.Contains(reason, "rce") ||
+		strings.Contains(reason, "exploit") ||
+		strings.Contains(reason, "auth")
 }
 
 func itoa(n int) string {
@@ -194,4 +336,143 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+func toNameSet(names []string) map[string]bool {
+	out := map[string]bool{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			out[n] = true
+		}
+	}
+	return out
+}
+
+func contextPreferredAgents(target string, findings []model.Finding, available []string) map[string]bool {
+	preferred := map[string]bool{}
+	host := strings.ToLower(strings.TrimSpace(target))
+	if u, err := url.Parse(target); err == nil {
+		host = strings.ToLower(strings.TrimSpace(u.Hostname()))
+	}
+	hasAPI := false
+	hasAccessControlSignal := false
+	hasInputValidationSignal := false
+	hasInfoDisclosureSignal := false
+	for _, f := range findings {
+		cat := strings.ToLower(strings.TrimSpace(f.Category))
+		switch cat {
+		case "api-security", "api":
+			hasAPI = true
+		case "access-control", "idor", "authorization":
+			hasAccessControlSignal = true
+		case "injection", "input-validation", "xss", "sql-injection":
+			hasInputValidationSignal = true
+		case "information-disclosure", "misconfiguration", "secrets":
+			hasInfoDisclosureSignal = true
+		}
+	}
+	for _, name := range available {
+		lc := strings.ToLower(strings.TrimSpace(name))
+		switch {
+		case hasAPI && (strings.Contains(lc, "api") || strings.Contains(host, "api")):
+			preferred[name] = true
+		case hasAccessControlSignal && (strings.Contains(lc, "access") || strings.Contains(lc, "idor")):
+			preferred[name] = true
+		case hasInputValidationSignal && (strings.Contains(lc, "input") || strings.Contains(lc, "scan")):
+			preferred[name] = true
+		case hasInfoDisclosureSignal && (strings.Contains(lc, "information") || strings.Contains(lc, "analysis")):
+			preferred[name] = true
+		}
+	}
+	return preferred
+}
+
+func prioritizeAgentSpecs(specs []AgentSpec, preferred map[string]bool, contextPreferred map[string]bool) []AgentSpec {
+	if len(specs) <= 1 {
+		return specs
+	}
+	out := make([]AgentSpec, 0, len(specs))
+	bucket := make([][]AgentSpec, 4)
+	for _, s := range specs {
+		switch {
+		case preferred[s.Name] && contextPreferred[s.Name]:
+			bucket[0] = append(bucket[0], s)
+		case preferred[s.Name]:
+			bucket[1] = append(bucket[1], s)
+		case contextPreferred[s.Name]:
+			bucket[2] = append(bucket[2], s)
+		default:
+			bucket[3] = append(bucket[3], s)
+		}
+	}
+	for _, b := range bucket {
+		out = append(out, b...)
+	}
+	return out
+}
+
+func shouldInjectExploration(history []AgentOutput, budgetPercent int) bool {
+	if budgetPercent <= 0 {
+		return false
+	}
+	if budgetPercent > 100 {
+		budgetPercent = 100
+	}
+	round := len(history) + 1
+	interval := 100 / budgetPercent
+	if interval <= 0 {
+		interval = 1
+	}
+	return round%interval == 0
+}
+
+func pickExplorationAgent(available []string, history []AgentOutput, current []AgentSpec, blocked map[string]bool, preferred map[string]bool) string {
+	seen := map[string]bool{}
+	for _, h := range history {
+		name := strings.TrimSpace(h.AgentName)
+		if name != "" {
+			seen[name] = true
+		}
+	}
+	for _, s := range current {
+		seen[strings.TrimSpace(s.Name)] = true
+	}
+	for _, name := range available {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] || blocked[name] || preferred[name] {
+			continue
+		}
+		return name
+	}
+	for _, name := range available {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] || blocked[name] {
+			continue
+		}
+		return name
+	}
+	return ""
+}
+
+func shouldStopForLowMarginalValue(history []AgentOutput, minMarginalScore float64) bool {
+	if minMarginalScore <= 0 || len(history) < 2 {
+		return false
+	}
+	checked := 0
+	for i := len(history) - 1; i >= 0 && checked < 2; i-- {
+		score := 0.0
+		if history[i].Metadata != nil {
+			if raw := strings.TrimSpace(history[i].Metadata["decision_quality_score"]); raw != "" {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					score = parsed
+				}
+			}
+		}
+		if score >= minMarginalScore {
+			return false
+		}
+		checked++
+	}
+	return checked == 2
 }

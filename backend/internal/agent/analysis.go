@@ -188,6 +188,8 @@ func scoreAndRankFindings(findings []model.Finding) []model.Finding {
 	for _, f := range findings {
 		score := severityScore(f.Severity) * 1000
 		score += categoryScore(f.Category) * 100
+		score += int(maxFloat(0, minFloat(0.99, f.Confidence)) * 100)
+		score += evidenceTierScore(f.EvidenceQualityTier) * 15
 		scoredList = append(scoredList, scored{finding: f, score: score})
 	}
 
@@ -246,4 +248,31 @@ func countBySeverity(findings []model.Finding, severity model.Severity) int {
 		}
 	}
 	return count
+}
+
+func evidenceTierScore(tier string) int {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "strong":
+		return 3
+	case "moderate":
+		return 2
+	case "weak":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
