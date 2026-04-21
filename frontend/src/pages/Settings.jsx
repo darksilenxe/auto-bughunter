@@ -21,9 +21,12 @@ const DEFAULT_AI_CONFIG = {
   maxTokens: "1200",
   topP: "1.0",
   summarySystemPrompt: "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only.",
-  summaryUserPromptTemplate: "Target: {{target}}\\nFindings JSON: {{findings}}\\nKnowledge Context JSON: {{knowledge}}\\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.",
+  summaryUserPromptTemplate: `Target: {{target}}
+Findings JSON: {{findings}}
+Knowledge Context JSON: {{knowledge}}
+Provide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.`,
   plannerSystemPrompt: "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON.",
-  plannerInstructionTemplate: "Pick zero or more agents to run next from the available_agents list. You may repeat agents from history when new findings warrant it. Set done=true once additional agents are unlikely to surface new value. Reply with strict JSON only: {\"agents\":[{\"name\":string,\"reason\":string}],\"done\":bool}",
+  plannerInstructionTemplate: `Pick zero or more agents to run next from the available_agents list. You may repeat agents from history when new findings warrant it. Set done=true once additional agents are unlikely to surface new value. Reply with strict JSON only: {"agents":[{"name":string,"reason":string}],"done":bool}`,
 };
 
 export default function Settings() {
