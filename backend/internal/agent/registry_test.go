@@ -7,7 +7,7 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
-func TestRegistryOrchestrateAppliesGlobalAdaptiveRules(t *testing.T) {
+func TestOrchestrateGlobalAdaptiveRules(t *testing.T) {
 	r := NewRegistry()
 	findings := []model.Finding{
 		{Category: "access_control", Severity: model.SeverityHigh, Title: "Authentication bypass risk"},
@@ -20,6 +20,24 @@ func TestRegistryOrchestrateAppliesGlobalAdaptiveRules(t *testing.T) {
 		if !containsAgentName(spawned, expected) {
 			t.Fatalf("expected %q to be spawned, got %v", expected, spawned)
 		}
+	}
+}
+
+func TestOrchestrateDeduplicatesSpawnedAgents(t *testing.T) {
+	r := NewRegistry()
+	findings := []model.Finding{
+		{Category: "ssrf", Severity: model.SeverityHigh, Title: "Server-side request forgery"},
+	}
+
+	spawned := r.orchestrate(context.Background(), "api_security", AgentOutput{}, findings)
+	ssrfCount := 0
+	for _, item := range spawned {
+		if item == "ssrf" {
+			ssrfCount++
+		}
+	}
+	if ssrfCount != 1 {
+		t.Fatalf("expected deduplicated ssrf spawn exactly once, got %d in %v", ssrfCount, spawned)
 	}
 }
 
