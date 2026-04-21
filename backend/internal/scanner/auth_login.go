@@ -19,6 +19,7 @@ const (
 	loginBootstrapTimeout   = 35 * time.Second
 	loginBootstrapLoadDelay = 1200 * time.Millisecond
 	loginBootstrapPostDelay = 2200 * time.Millisecond
+	loginBootstrapNoDelay   = 0 * time.Millisecond
 )
 
 func hasStandardLoginCredentials(profile model.ScanAuthProfile) bool {
@@ -31,6 +32,13 @@ func hasCompleteStandardLoginCredentials(profile model.ScanAuthProfile) bool {
 
 func hasCustomLoginSteps(profile model.ScanAuthProfile) bool {
 	return len(profile.LoginSteps) > 0
+}
+
+func loginBootstrapInitialDelay(profile model.ScanAuthProfile) time.Duration {
+	if hasCustomLoginSteps(profile) {
+		return loginBootstrapNoDelay
+	}
+	return loginBootstrapLoadDelay
 }
 
 func candidateLoginURLs(target string, profile model.ScanAuthProfile, scanScope model.ScanScope) []string {
@@ -140,10 +148,13 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 
 	for _, loginURL := range candidateLoginURLs(target, profile, scanScope) {
 		var submit loginFormSubmitResult
-		if err := chromedp.Run(ctx,
+		navigateActions := []chromedp.Action{
 			chromedp.Navigate(loginURL),
-			chromedp.Sleep(loginBootstrapLoadDelay),
-		); err != nil {
+		}
+		if delay := loginBootstrapInitialDelay(profile); delay > 0 {
+			navigateActions = append(navigateActions, chromedp.Sleep(delay))
+		}
+		if err := chromedp.Run(ctx, navigateActions...); err != nil {
 			continue
 		}
 		if hasCustomLoginSteps(profile) {

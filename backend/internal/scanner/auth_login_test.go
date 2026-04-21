@@ -40,3 +40,19 @@ func TestResolveLoginStepValueReplacesCredentialPlaceholders(t *testing.T) {
 		t.Fatalf("unexpected resolved value: %q", got)
 	}
 }
+
+func TestLoginBootstrapInitialDelayUsesDefaultForLegacyFlow(t *testing.T) {
+	delay := loginBootstrapInitialDelay(model.ScanAuthProfile{})
+	if delay != loginBootstrapLoadDelay {
+		t.Fatalf("expected default load delay %s, got %s", loginBootstrapLoadDelay, delay)
+	}
+}
+
+func TestLoginBootstrapInitialDelaySkipsWarmupForCustomSteps(t *testing.T) {
+	delay := loginBootstrapInitialDelay(model.ScanAuthProfile{
+		LoginSteps: []model.ScanAuthLoginStep{{Action: "click", Selector: "#accept-cookies"}},
+	})
+	if delay != loginBootstrapNoDelay {
+		t.Fatalf("expected no initial delay for custom login steps, got %s", delay)
+	}
+}
