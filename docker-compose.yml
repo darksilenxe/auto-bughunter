@@ -69,7 +69,7 @@ services:
       - agents_data:/data
 
   # Local Ollama LLM — powers AI summaries without any external API key.
-  # On first start it will download the configured model (~2 GB for phi3:mini).
+  # On first start it will download the configured models (~2 GB for phi3:mini).
   # Gated behind the `ollama` compose profile so it doesn't start by default
   # (e.g. in CI or for users who don't want the model download). Enable with:
   #   docker compose --profile ollama up -d
@@ -87,7 +87,7 @@ services:
       retries: 3
       start_period: 60s
 
-  # Pull the default model on startup so the backend can use it immediately.
+  # Pull default local models on startup so the backend can use them immediately.
   ollama-init:
     image: ollama/ollama:latest
     profiles: ["ollama"]
@@ -97,7 +97,8 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
-    entrypoint: /bin/sh -c "sleep 5 && ollama pull $${OLLAMA_MODEL:-phi3:mini}"
+      OLLAMA_SECONDARY_MODEL: ${OLLAMA_SECONDARY_MODEL:-codellama}
+    entrypoint: /bin/sh -c "sleep 5 && primary=$${OLLAMA_MODEL:-phi3:mini} && secondary=$${OLLAMA_SECONDARY_MODEL:-codellama} && if [ -n \"$$primary\" ]; then ollama pull \"$$primary\"; fi && if [ -n \"$$secondary\" ] && [ \"$$secondary\" != \"$$primary\" ]; then ollama pull \"$$secondary\"; fi"
     volumes:
       - ollama_data:/root/.ollama
 
