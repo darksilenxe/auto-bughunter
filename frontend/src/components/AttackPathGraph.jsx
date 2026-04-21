@@ -139,7 +139,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
         nodeStates[agentName] = "spawned";
       }
       // Try to extract which agent triggered the spawn from the message.
-      const match = evt.message && evt.message.match(/from "([^"]+)"/i);
+      const match = evt.message && evt.message.match(/from "([^"]+)"/);
       if (match) {
         dynamicEdges.push([normalizeAgentName(match[1]), agentName]);
       }

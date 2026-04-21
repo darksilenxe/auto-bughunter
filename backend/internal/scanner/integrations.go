@@ -365,7 +365,7 @@ func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding 
 			Severity:       model.SeverityLow,
 			Title:          "Nuclei integration failed",
 			Description:    "Nuclei did not complete successfully.",
-			Evidence:       strings.TrimSpace(strings.TrimSpace(stderr.String()) + "\n" + strings.TrimSpace(stdout.String())),
+			Evidence:       strings.TrimSpace(stderr.String() + "\n" + stdout.String()),
 			Recommendation: "Validate nuclei templates/network access and rerun.",
 		}}
 	}
@@ -446,7 +446,7 @@ func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Fin
 			Severity:       model.SeverityLow,
 			Title:          "ZAP Baseline integration failed",
 			Description:    "ZAP Baseline did not complete successfully.",
-			Evidence:       strings.TrimSpace(strings.TrimSpace(stderr.String()) + "\n" + strings.TrimSpace(outText)),
+			Evidence:       strings.TrimSpace(stderr.String() + "\n" + outText),
 			Recommendation: "Validate ZAP runtime dependencies and rerun.",
 		}}
 	}
