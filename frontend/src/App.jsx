@@ -7,6 +7,7 @@ import Reports from "./pages/Reports";
 import Scans from "./pages/Scans";
 import Settings from "./pages/Settings";
 import Proxy from "./pages/Proxy";
+import References from "./pages/References";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/reports"      element={<Reports />} />
           <Route path="/scans"        element={<Scans />} />
           <Route path="/proxy"        element={<Proxy />} />
+          <Route path="/references"   element={<References />} />
           <Route path="/settings"     element={<Settings />} />
         </Routes>
       </main>
