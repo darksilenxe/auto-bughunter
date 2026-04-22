@@ -310,7 +310,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active XSS testing.",
 			})
 		} else {
-			emitCmd("xssmap", "-u "+input.Target)
+			emitCmd("xssmap", "scan --url "+input.Target)
 			findings = append(findings, s.runXSSMap(ctx, input.Target)...)
 		}
 	}
