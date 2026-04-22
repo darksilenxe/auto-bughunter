@@ -3,8 +3,39 @@ import { useScan } from "../context/ScanContext";
 import BurpImport from "../components/BurpImport";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 
+// Scenario presets — each defines the opinionated defaults for a scan mode.
+const SCENARIOS = {
+  bugbounty: {
+    label: "🏆 Bug Bounty",
+    description: "Cautious scan tuned for bug-bounty programs: no destructive checks, focuses on high-signal findings.",
+    policyPack: "bugbounty",
+    useNuclei: true,
+    useZap: false,
+    useXSSMap: false,
+    useMLTriage: true,
+    useAttackPath: true,
+    useFalsePositiveReview: true,
+    useRemediationPlanner: false,
+    aggressiveExploitation: false,
+  },
+  pentest: {
+    label: "🔓 Pen Test",
+    description: "Full-depth engagement: aggressive exploitation, all integrations, remediation planning.",
+    policyPack: "internal",
+    useNuclei: true,
+    useZap: true,
+    useXSSMap: false,
+    useMLTriage: true,
+    useAttackPath: true,
+    useFalsePositiveReview: true,
+    useRemediationPlanner: true,
+    aggressiveExploitation: true,
+  },
+};
+
 export default function Dashboard() {
   const { startScan, job, loading, error, scanId } = useScan();
+  const [scenario, setScenario] = useState("");
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
   const [customHeaderName, setCustomHeaderName] = useState("");
@@ -30,6 +61,21 @@ export default function Dashboard() {
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("internal");
   const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
+
+  function applyScenario(key) {
+    const preset = SCENARIOS[key];
+    if (!preset) return;
+    setScenario(key);
+    setPolicyPack(preset.policyPack);
+    setUseNuclei(preset.useNuclei);
+    setUseZap(preset.useZap);
+    setUseXSSMap(preset.useXSSMap);
+    setUseMLTriage(preset.useMLTriage);
+    setUseAttackPath(preset.useAttackPath);
+    setUseFalsePositiveReview(preset.useFalsePositiveReview);
+    setUseRemediationPlanner(preset.useRemediationPlanner);
+    setAggressiveExploitation(preset.aggressiveExploitation);
+  }
 
   function handleBurpImport(cfg) {
     if (cfg.target)       setTarget(cfg.target);
@@ -110,6 +156,56 @@ export default function Dashboard() {
       <section className="card">
         <h2>Start Autonomous Scan</h2>
         <p className="meta">Authentication is optional. Leave the auth fields empty to run an unauthenticated attack-surface scan.</p>
+
+        {/* ── Scenario selector ── */}
+        <div style={{ marginBottom: "1.25rem" }}>
+          <p style={{ marginBottom: "0.5rem", fontWeight: 600, fontSize: "0.9rem" }}>Scan Scenario</p>
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            {Object.entries(SCENARIOS).map(([key, s]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => applyScenario(key)}
+                style={{
+                  padding: "0.5rem 1.1rem",
+                  borderRadius: "8px",
+                  border: scenario === key ? "2px solid #60a5fa" : "2px solid rgba(255,255,255,0.15)",
+                  background: scenario === key ? "rgba(96,165,250,0.15)" : "rgba(255,255,255,0.05)",
+                  color: scenario === key ? "#93c5fd" : "inherit",
+                  fontWeight: scenario === key ? 700 : 400,
+                  cursor: "pointer",
+                  fontSize: "0.9rem",
+                  transition: "all 0.15s",
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+            {scenario && (
+              <button
+                type="button"
+                onClick={() => setScenario("")}
+                style={{
+                  padding: "0.5rem 0.75rem",
+                  borderRadius: "8px",
+                  border: "2px solid rgba(255,255,255,0.1)",
+                  background: "transparent",
+                  color: "#6b7280",
+                  cursor: "pointer",
+                  fontSize: "0.8rem",
+                }}
+              >
+                ✕ Clear
+              </button>
+            )}
+          </div>
+          {scenario && (
+            <p className="meta" style={{ marginTop: "0.4rem" }}>
+              {SCENARIOS[scenario].description}
+            </p>
+          )}
+        </div>
+
         <form onSubmit={handleSubmit}>
           <label>
             Target URL *
