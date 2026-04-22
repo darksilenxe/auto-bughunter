@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scanner"
 )
@@ -26,6 +27,7 @@ import (
 type HypothesisAgent struct {
 	aiClient    *ai.Client
 	scanService *scanner.Service
+	memStore    memory.Store // optional episodic memory for cross-scan context
 	enabled     bool
 }
 
@@ -38,6 +40,13 @@ func NewHypothesisAgent(aiClient *ai.Client, scanService *scanner.Service, enabl
 		scanService: scanService,
 		enabled:     enabled,
 	}
+}
+
+// SetMemoryStore attaches an episodic vector memory store to this agent.
+// When set, the agent queries the store for similar past findings before
+// generating hypotheses, enriching the prompt with cross-scan evidence.
+func (a *HypothesisAgent) SetMemoryStore(s memory.Store) {
+	a.memStore = s
 }
 
 func (a *HypothesisAgent) Name() string  { return "hypothesis" }
@@ -62,8 +71,29 @@ func (a *HypothesisAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	// Collect known endpoints for context.
 	endpoints := append([]string{input.Target}, input.Options.SeedRuntimeEndpoints...)
 
+	// Augment the finding context with episodic memories from past scans when
+	// a vector memory store is attached.
+	allFindings := input.AllFindings
+	if a.memStore != nil {
+		if recalled, err := a.memStore.SearchByTarget(ctx, input.Target, 10); err == nil && len(recalled) > 0 {
+			output.Metadata["recalled_memories"] = fmt.Sprintf("%d", len(recalled))
+			// Convert recalled memories into synthetic findings so the AI
+			// prompt receives real past evidence without changing the Finding
+			// model's required fields.
+			for _, m := range recalled {
+				synth := model.Finding{
+					ID:       "memory-" + m.ID,
+					Category: m.Category,
+					Title:    "[past-scan] " + m.Title,
+					Severity: model.Severity(m.Severity),
+				}
+				allFindings = append(allFindings, synth)
+			}
+		}
+	}
+
 	// Ask the AI (or local reasoner) to generate hypotheses.
-	hypotheses := a.aiClient.Hypothesize(ctx, input.Target, input.AllFindings, endpoints)
+	hypotheses := a.aiClient.Hypothesize(ctx, input.Target, allFindings, endpoints)
 	if len(hypotheses) == 0 {
 		output.DebugNotes = "HypothesisAgent: no hypotheses generated"
 		return output, nil
