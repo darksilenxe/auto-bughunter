@@ -113,7 +113,7 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 ### Remaining implementation checklist
 
 - [ ] Add runtime policy-aware model/prompt tuning profiles with audit traces.
-- [ ] Ship planner offline replay harness with baseline comparison output.
+- [x] Ship planner offline replay harness with baseline comparison output.
 - [ ] Add per-target adaptive strategy policy using historical drift and ROI signals.
 - [x] Surface “why agent ran” and “why ranked high” in UI and report exports.
 - [x] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
