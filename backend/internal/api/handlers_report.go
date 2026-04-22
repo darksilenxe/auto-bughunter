@@ -305,6 +305,7 @@ func (s *Server) serveSingleFindingReport(w http.ResponseWriter, r *http.Request
 	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	platform := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("platform")))
 	switch format {
 	case "json":
 		writeJSON(w, http.StatusOK, report.FindingToBugBountySubmission(finding, job.Target))
@@ -321,7 +322,7 @@ func (s *Server) serveSingleFindingReport(w http.ResponseWriter, r *http.Request
 		}
 		writeBytes(w, "application/pdf", fmt.Sprintf("bugbounty-%s-%s.pdf", scanID, safeIDForFilename(findingID)), pdfBytes, true)
 	case "", "md", "markdown":
-		md := report.RenderBugBountyMarkdown(finding, job.Target)
+		md := report.RenderBugBountyMarkdownForPlatform(finding, job.Target, platform)
 		writeBytes(w, "text/markdown; charset=utf-8", fmt.Sprintf("bugbounty-%s-%s.md", scanID, safeIDForFilename(findingID)), []byte(md), false)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported format: " + format})
@@ -339,7 +340,8 @@ func (s *Server) serveBugBountyZip(w http.ResponseWriter, r *http.Request, scanI
 		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))
 		w.Header().Set("X-Strict-Reporting-Suppressed", fmt.Sprintf("%d", suppressed))
 	}
-	zipBytes, err := report.RenderBugBountyZip(job)
+	platform := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("platform")))
+	zipBytes, err := report.RenderBugBountyZipForPlatform(job, platform)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate zip"})
 		return

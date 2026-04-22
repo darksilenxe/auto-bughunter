@@ -169,9 +169,11 @@ func (s *Service) RecommendFromHistory(ctx context.Context, repo Repository, pro
 	if err != nil {
 		return fallbackRecommendations(job)
 	}
+	feedback := s.feedbackSignals(ctx, repo)
+	payouts := s.payoutSignals(ctx, repo, job.ProgramName)
 	recs := &model.ModelRecommendations{
 		ToolSelection:       recommendTools(dataset.Records),
-		PrioritizedFindings: prioritizeFindings(job.Findings, s.feedbackSignals(ctx, repo)),
+		PrioritizedFindings: prioritizeFindings(job.Findings, feedback, payouts),
 		Copilot:             buildCopilotSuggestion(job, dataset.Records),
 		ModelMode:           "historical-deterministic",
 	}
@@ -187,7 +189,7 @@ func fallbackRecommendations(job *model.ScanJob) *model.ModelRecommendations {
 		ToolSelection: []model.ToolRecommendation{
 			{Tool: "native-http-tls-wordlist", Score: 0.8, Reason: "No historical training data available; defaulting to safe built-in checks.", Confidence: 0.6},
 		},
-		PrioritizedFindings: prioritizeFindings(job.Findings, nil),
+		PrioritizedFindings: prioritizeFindings(job.Findings, nil, nil),
 		Copilot:             buildCopilotSuggestion(job, nil),
 		ModelMode:           "fallback-deterministic",
 	}
@@ -234,20 +236,35 @@ func recommendTools(records []EngagementRecord) []model.ToolRecommendation {
 	return recs
 }
 
-func prioritizeFindings(findings []model.Finding, feedback map[string]float64) []model.PrioritizedFinding {
+// prioritizeFindings ranks the supplied findings using a deterministic
+// composition of the severity, confidence, drift, exploitability, operator
+// feedback, and program payout signals. The resulting Reason is a stable
+// human-readable string and Rationale exposes the per-component contribution
+// so that UIs and reports can render explainability without parsing prose.
+func prioritizeFindings(findings []model.Finding, feedback map[string]float64, payouts map[string]float64) []model.PrioritizedFinding {
 	out := make([]model.PrioritizedFinding, 0, len(findings))
 	for _, f := range findings {
-		score := scoreFinding(f)
-		if len(feedback) > 0 {
-			score += feedbackBoost(feedback, f)
+		base, components := scoreFindingWithComponents(f)
+		score := base
+		fb := feedbackBoost(feedback, f)
+		if fb != 0 {
+			score += fb
+			components["feedback_boost"] = round2(fb)
+		}
+		pb := payoutBoost(payouts, f)
+		if pb != 0 {
+			score += pb
+			components["payout_boost"] = round2(pb)
 		}
 		score = clamp(score, 0, 1)
+		components["score"] = round2(score)
 		out = append(out, model.PrioritizedFinding{
 			FindingID: f.ID,
 			Title:     f.Title,
 			Severity:  f.Severity,
 			Score:     round2(score),
-			Reason:    priorityReason(f, score),
+			Reason:    priorityReason(f, score, components),
+			Rationale: components,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -338,8 +355,99 @@ func feedbackKey(category, title, id string) string {
 	return base
 }
 
+// payoutSignals aggregates historical bug-bounty payout outcomes per finding
+// category, scoped to the supplied program name when provided. The returned
+// map is keyed by lowercased category and stores a normalized boost value in
+// the range [-0.06, +0.12]. Programs with no historical accepted payouts
+// produce no entries.
+//
+// This realises the Wave 2 "payout-feedback loop into prioritization scoring
+// by program profile" deliverable: prior accepted, payout-confirmed findings
+// from the same program steer the ranker toward high-yield categories, while
+// rejected/duplicate outcomes pull it back.
+func (s *Service) payoutSignals(ctx context.Context, repo Repository, programName string) map[string]float64 {
+	if repo == nil {
+		return nil
+	}
+	entries, err := repo.ListFeedback(ctx, 1000)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	wantProgram := strings.TrimSpace(strings.ToLower(programName))
+	type agg struct {
+		samples  int
+		accepted int
+		payout   float64
+		negative int
+	}
+	m := map[string]agg{}
+	for _, fb := range entries {
+		if wantProgram != "" && strings.TrimSpace(strings.ToLower(fb.ProgramName)) != wantProgram {
+			continue
+		}
+		key := strings.TrimSpace(strings.ToLower(fb.Category))
+		if key == "" {
+			continue
+		}
+		cur := m[key]
+		cur.samples++
+		switch strings.ToLower(strings.TrimSpace(fb.Outcome)) {
+		case "accepted":
+			cur.accepted++
+			if fb.PayoutUSD > 0 {
+				cur.payout += fb.PayoutUSD
+			}
+		case "rejected", "duplicate", "informative":
+			cur.negative++
+		}
+		m[key] = cur
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	out := map[string]float64{}
+	for k, v := range m {
+		if v.samples == 0 {
+			continue
+		}
+		// Normalised acceptance rate in [-1, 1].
+		acceptance := (float64(v.accepted) - float64(v.negative)*0.5) / float64(v.samples)
+		// Payout amplification saturates at $1k average payout per accepted
+		// finding so a single outlier cannot dominate.
+		payoutAmp := 0.0
+		if v.accepted > 0 && v.payout > 0 {
+			avg := v.payout / float64(v.accepted)
+			payoutAmp = min(1.0, avg/1000.0)
+		}
+		boost := acceptance * (0.06 + 0.06*payoutAmp)
+		boost = clamp(boost, -0.06, 0.12)
+		if boost == 0 {
+			continue
+		}
+		out[k] = boost
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func payoutBoost(signals map[string]float64, f model.Finding) float64 {
+	if len(signals) == 0 {
+		return 0
+	}
+	key := strings.TrimSpace(strings.ToLower(f.Category))
+	if key == "" {
+		return 0
+	}
+	if v, ok := signals[key]; ok {
+		return v
+	}
+	return 0
+}
+
 func buildCopilotSuggestion(job *model.ScanJob, history []EngagementRecord) model.EngagementCopilotSuggestion {
-	topFindings := prioritizeFindings(job.Findings, nil)
+	topFindings := prioritizeFindings(job.Findings, nil, nil)
 	actions := []string{
 		"Triage top-ranked findings and confirm exploitability in a controlled environment.",
 		"Map prioritized findings to recent release changes and ownership boundaries.",
@@ -489,23 +597,39 @@ func scoreSanitizedFinding(f SanitizedFinding) float64 {
 }
 
 func scoreFinding(f model.Finding) float64 {
-	base := 0.35 + (severityWeight(f.Severity) * 0.15)
-	base += min(0.35, max(0, f.Confidence)*0.35)
+	score, _ := scoreFindingWithComponents(f)
+	return score
+}
+
+// scoreFindingWithComponents returns the finding's base score (severity +
+// confidence + drift + exploitability) along with a per-component map that
+// callers can persist as machine-readable ranking rationale.
+func scoreFindingWithComponents(f model.Finding) (float64, map[string]float64) {
+	components := map[string]float64{}
+	severity := severityWeight(f.Severity) * 0.15
+	components["severity"] = round2(severity)
+	confidence := min(0.35, max(0, f.Confidence)*0.35)
+	components["confidence"] = round2(confidence)
+	base := 0.35 + severity + confidence
 	if f.Exploitability != nil && f.Exploitability.Reachable {
 		base += 0.07
+		components["exploitability"] = 0.07
 	}
 	switch strings.ToLower(strings.TrimSpace(f.DriftStatus)) {
 	case "new":
 		base += 0.08
+		components["drift"] = 0.08
 	case "changed":
 		base += 0.04
+		components["drift"] = 0.04
 	case "resolved":
 		base -= 0.08
+		components["drift"] = -0.08
 	}
-	return clamp(base, 0, 1)
+	return clamp(base, 0, 1), components
 }
 
-func priorityReason(f model.Finding, score float64) string {
+func priorityReason(f model.Finding, score float64, components map[string]float64) string {
 	parts := []string{
 		"severity=" + string(f.Severity),
 		"confidence=" + strconv.FormatFloat(f.Confidence, 'f', 2, 64),
@@ -513,6 +637,12 @@ func priorityReason(f model.Finding, score float64) string {
 	}
 	if f.Exploitability != nil && f.Exploitability.Reachable {
 		parts = append(parts, "reachable=true")
+	}
+	if v, ok := components["feedback_boost"]; ok && v != 0 {
+		parts = append(parts, fmt.Sprintf("feedback=%+0.2f", v))
+	}
+	if v, ok := components["payout_boost"]; ok && v != 0 {
+		parts = append(parts, fmt.Sprintf("payout=%+0.2f", v))
 	}
 	return fmt.Sprintf("Score %.2f from %s", score, strings.Join(parts, ", "))
 }

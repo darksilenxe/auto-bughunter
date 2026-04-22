@@ -243,6 +243,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
+	mux.HandleFunc("/api/findings/duplicates", s.handleFindingDuplicates)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
 	mux.HandleFunc("/api/tools/health", s.handleToolsHealth)
 	mux.HandleFunc("/api/tools/updates", s.handleToolsUpdates)

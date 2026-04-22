@@ -138,6 +138,9 @@ func RenderPentestMarkdown(job *model.ScanJob, opts model.ReportTemplateOptions,
 		b.WriteString("\n")
 	}
 
+	writeRankingRationaleMarkdown(&b, data.Job)
+	writeAgentScheduleRationaleMarkdown(&b, data.Job)
+
 	// --- Per-Asset Rollup ---
 	if len(data.AssetRollup) > 0 {
 		b.WriteString("## Per-Asset Rollup\n\n")

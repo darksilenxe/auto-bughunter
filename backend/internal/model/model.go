@@ -715,12 +715,18 @@ type ToolRecommendation struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// PrioritizedFinding represents a single finding promoted to the
+// recommendation surface. Reason is a human-readable explanation suitable for
+// UI display; Rationale is a stable, machine-readable breakdown of the
+// individual scoring components that produced Score so consumers (UI, reports,
+// downstream tooling) can render explainability without parsing free text.
 type PrioritizedFinding struct {
-	FindingID string   `json:"findingId"`
-	Title     string   `json:"title"`
-	Severity  Severity `json:"severity"`
-	Score     float64  `json:"score"`
-	Reason    string   `json:"reason"`
+	FindingID string             `json:"findingId"`
+	Title     string             `json:"title"`
+	Severity  Severity           `json:"severity"`
+	Score     float64            `json:"score"`
+	Reason    string             `json:"reason"`
+	Rationale map[string]float64 `json:"rationale,omitempty"`
 }
 
 type EngagementCopilotSuggestion struct {
