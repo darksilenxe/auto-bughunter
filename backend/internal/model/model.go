@@ -649,12 +649,28 @@ type ExecutiveReport struct {
 	ROISparkline                []float64          `json:"roiSparkline,omitempty"`
 }
 
+// SurfaceSnapshot is a lightweight fingerprint of a target's public attack
+// surface captured at a point in time. It is persisted in PersistentScanState
+// and compared against the current scan's surface to detect drift: newly
+// added endpoints, changed JS bundles, and updated API schema documents are
+// all high-value re-test targets because they are most likely to contain
+// unreported vulnerabilities.
+type SurfaceSnapshot struct {
+	TakenAt        time.Time         `json:"takenAt"`
+	EndpointCount  int               `json:"endpointCount"`
+	RobotsTxtHash  string            `json:"robotsTxtHash,omitempty"`
+	SitemapHash    string            `json:"sitemapHash,omitempty"`
+	OpenAPIHash    string            `json:"openApiHash,omitempty"`
+	JSBundleHashes map[string]string `json:"jsBundleHashes,omitempty"` // url → sha256
+}
+
 type PersistentScanState struct {
-	Target                string         `json:"target"`
-	LastUpdatedAt         time.Time      `json:"lastUpdatedAt"`
-	SessionInstability    int            `json:"sessionInstability"`
-	KnownRuntimeEndpoints []string       `json:"knownRuntimeEndpoints,omitempty"`
-	AutonomyMemory        AutonomyMemory `json:"autonomyMemory,omitempty"`
+	Target                string           `json:"target"`
+	LastUpdatedAt         time.Time        `json:"lastUpdatedAt"`
+	SessionInstability    int              `json:"sessionInstability"`
+	KnownRuntimeEndpoints []string         `json:"knownRuntimeEndpoints,omitempty"`
+	AutonomyMemory        AutonomyMemory   `json:"autonomyMemory,omitempty"`
+	SurfaceSnapshot       *SurfaceSnapshot `json:"surfaceSnapshot,omitempty"`
 }
 
 type AutonomyMemory struct {
