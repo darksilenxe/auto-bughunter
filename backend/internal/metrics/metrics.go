@@ -193,13 +193,16 @@ func (r *Registry) WriteTo(w http.ResponseWriter) {
 // Handler returns an http.HandlerFunc that serves Prometheus-format metrics.
 func (r *Registry) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
+		// text/plain + nosniff prevents browsers from treating the response
+		// as HTML even when label values contain special characters.
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		r.WriteTo(w)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// WriteTo renders the registry in Prometheus text format.
+// Package-level pre-registered metrics
 // ---------------------------------------------------------------------------
 
 var (
