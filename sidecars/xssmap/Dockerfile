@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # XSSMap sidecar
 #
-# Bundles the third-party XSSMap (https://github.com/Jewel591/xssmap) tool
+# Bundles the third-party XSSMap (https://github.com/secdec/xssmap) tool
 # in a self-contained Python + Playwright image. The backend never imports
 # XSSMap source — it shells out to the `xssmap` CLI installed here via the
 # matching shim under backend/scripts/shims/xssmap.
@@ -27,7 +27,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /opt/xssmap
 
 # Pinned commit/branch to keep the image build reproducible. Bump as needed.
-# Mirror: Jewel591/xssmap (public fork of the original XSSMap project).
+# Source: secdec/xssmap (the original canonical XSSMap repository).
 ARG XSSMAP_REF=master
 
 RUN apt-get update \
@@ -39,7 +39,7 @@ RUN apt-get update \
  && export GIT_TERMINAL_PROMPT=0 \
  && git -c credential.helper= -c core.askpass=true \
       clone --depth 1 --branch "${XSSMAP_REF}" \
-      https://github.com/Jewel591/xssmap.git /opt/xssmap/src \
+      https://github.com/secdec/xssmap.git /opt/xssmap/src \
  && if [ -f /opt/xssmap/src/requirements.txt ]; then \
         pip install --no-cache-dir -r /opt/xssmap/src/requirements.txt ; \
     fi \
