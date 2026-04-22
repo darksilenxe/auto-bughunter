@@ -258,7 +258,7 @@ func detectDeserializationSignal(body, hint string) (indicator, lang string) {
 	}
 	// Hint-based fallback for the PHP probe.
 	if hint == "php-object" && strings.Contains(body, "__destruct") {
-		return "PHP __destruct reference in response (possible pickle class loading)", "PHP"
+		return "PHP __destruct reference in response (possible PHP object instantiation via deserialization)", "PHP"
 	}
 	return "", ""
 }

@@ -215,7 +215,7 @@ func (s *Service) runSingleFlow(
 			_ = resp.Body.Close()
 			if is2xx(resp.StatusCode) {
 				findings = append(findings, model.Finding{
-					ID:       "flow-tamper-" + flowSlug(flow.Name, step.Name) + "-" + fmt.Sprintf("%v", mutVal),
+					ID:       "flow-tamper-" + flowSlug(flow.Name, step.Name) + "-" + raceSlug(fmt.Sprintf("%v", mutVal)),
 					Category: "access-control",
 					Severity: model.SeverityHigh,
 					Title:    fmt.Sprintf("[%s] Parameter tampering at step %q accepted by server", flow.Name, step.Name),

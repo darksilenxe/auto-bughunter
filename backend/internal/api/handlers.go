@@ -99,6 +99,9 @@ const (
 	autonomySuppressMinRuns      = 3
 	autonomySuppressErrRate      = 0.66
 	autonomySuppressTimeouts     = 2
+	// maxAnnotationTextLength caps the size of an operator mid-scan annotation
+	// to avoid overly large payloads that could degrade hypothesis agent context.
+	maxAnnotationTextLength = 4096
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -581,6 +584,10 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
 	job.Findings = s.applySuppressions(target, job.Findings)
 	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
+	// Attach Python PoC scripts to findings where a template is available.
+	for i := range job.Findings {
+		job.Findings[i] = scanner.AttachPythonPoC(job.Findings[i], authProfile)
+	}
 	job.AgentRuns = buildAgentTelemetry(outputs)
 	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	if beforeDedupCount > 0 {
@@ -646,6 +653,28 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.AISummary = s.aiClient.SummarizeWithKnowledge(context.Background(), target, job.Findings, knowledgeCtx)
+	// Generate domain-aware narrative report enriching the AI summary.
+	if s.aiClient != nil && len(job.Findings) > 0 {
+		narrative := s.aiClient.GenerateNarrativeReport(context.Background(), target, job.Findings)
+		if strings.TrimSpace(narrative.ExecutiveSummary) != "" && strings.TrimSpace(job.AISummary) != "" {
+			// Prepend the narrative executive summary and attack narrative to the AI summary.
+			enhancedSummary := narrative.ExecutiveSummary
+			if narrative.AttackNarrative != "" {
+				enhancedSummary += "\n\nAttack Scenario: " + narrative.AttackNarrative
+			}
+			if narrative.ComplianceFramework != "" {
+				enhancedSummary += "\n\nCompliance Framework: " + narrative.ComplianceFramework
+			}
+			if len(narrative.TopPriorities) > 0 {
+				enhancedSummary += "\n\nTop Remediation Priorities:\n"
+				for i, p := range narrative.TopPriorities {
+					enhancedSummary += fmt.Sprintf("%d. %s\n", i+1, p)
+				}
+			}
+			enhancedSummary += "\n\n---\n\n" + job.AISummary
+			job.AISummary = enhancedSummary
+		}
+	}
 	job.NextActions = buildNextActions(job)
 	if s.mlService != nil {
 		job.ModelRecommendations = s.mlService.RecommendFromHistory(context.Background(), s.repo, s.proxyServer.Store(), job)
@@ -977,8 +1006,8 @@ func (s *Server) handleScanAnnotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text is required"})
 		return
 	}
-	if len(req.Text) > 4096 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text must be 4096 characters or less"})
+	if len(req.Text) > maxAnnotationTextLength {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("text must be %d characters or less", maxAnnotationTextLength)})
 		return
 	}
 
