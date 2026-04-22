@@ -32,8 +32,13 @@ ARG XSSMAP_REF=main
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && git clone --depth 1 --branch "${XSSMAP_REF}" \
-        https://github.com/Sh3llholic/XSSMap.git /opt/xssmap/src \
+ # Avoid any interactive credential prompting in non-interactive CI builds.
+ # If the upstream repo becomes private/removed/redirects, fail loudly instead
+ # of hanging or erroring with an unhelpful prompt-related message.
+ && export GIT_TERMINAL_PROMPT=0 \
+ && git -c credential.helper= -c core.askpass=true \
+      clone --depth 1 --branch "${XSSMAP_REF}" \
+      https://github.com/Sh3llholic/XSSMap.git /opt/xssmap/src \
  && if [ -f /opt/xssmap/src/requirements.txt ]; then \
         pip install --no-cache-dir -r /opt/xssmap/src/requirements.txt ; \
     fi \
