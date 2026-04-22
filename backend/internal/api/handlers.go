@@ -170,6 +170,7 @@ type Repository interface {
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	reg := agent.NewRegistry()
 	factory := agent.NewFactory(scanService, mlService)
+	factory.SetAIClient(aiClient, scanService)
 	reg.RegisterFactory(factory)
 	reg.Register(agent.NewReconnaissanceAgent(true))
 	reg.Register(agent.NewScanningAgent(scanService, true))
@@ -698,7 +699,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 	job.AutomatedReport = generateAutomatedReport(job)
 	job.AutomatedReport += "\n\n## Automation Postmortem\n" + generateAutomationPostmortem(job, outputs, dedupSuppressed)
-	s.persistScanState(target, job.Findings, outputs, options)
+	var surfaceSnapshot *model.SurfaceSnapshot
+	if persistedState != nil {
+		surfaceSnapshot = persistedState.SurfaceSnapshot
+	}
+	s.persistScanState(target, job.Findings, outputs, options, surfaceSnapshot)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	_ = s.repo.UpdateJob(context.Background(), job)
@@ -3593,6 +3598,29 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
 	if s.scanService != nil {
 		findings = append(findings, s.scanService.RunIDORRoleDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
+		findings = append(findings, s.scanService.RunBusinessLogicDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
+	}
+	// Exploit-chain analysis: deterministic, zero-request, runs on the full
+	// accumulated finding set to detect multi-step attack paths.
+	findings = append(findings, scanner.RunExploitChain(findings, emit)...)
+	// Surface diff probe: compare the current surface fingerprint against the
+	// prior snapshot to detect newly added or changed attack surface.
+	if s.scanService != nil {
+		surfaceFindings, newSnapshot := s.scanService.RunSurfaceDiffProbe(
+			ctx, target, options, authProfile,
+			"", // bodyText not re-fetched here; TakeSurfaceSnapshot probes well-known paths directly
+			func() *model.SurfaceSnapshot {
+				if persistedState != nil {
+					return persistedState.SurfaceSnapshot
+				}
+				return nil
+			}(),
+			emit,
+		)
+		findings = append(findings, surfaceFindings...)
+		if persistedState != nil && newSnapshot != nil {
+			persistedState.SurfaceSnapshot = newSnapshot
+		}
 	}
 	return outputs, findings, nil
 }
@@ -4332,7 +4360,7 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 	return out
 }
 
-func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions) {
+func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions, surfaceSnapshot *model.SurfaceSnapshot) {
 	prev, _ := s.repo.GetScanState(context.Background(), target)
 	state := model.PersistentScanState{
 		Target:        target,
@@ -4342,6 +4370,13 @@ func (s *Server) persistScanState(target string, findings []model.Finding, outpu
 		state.SessionInstability = prev.SessionInstability
 		state.KnownRuntimeEndpoints = append([]string(nil), prev.KnownRuntimeEndpoints...)
 		state.AutonomyMemory = prev.AutonomyMemory
+		// Carry forward the previous surface snapshot if no new one was produced.
+		if surfaceSnapshot == nil {
+			state.SurfaceSnapshot = prev.SurfaceSnapshot
+		}
+	}
+	if surfaceSnapshot != nil {
+		state.SurfaceSnapshot = surfaceSnapshot
 	}
 	refs := make([]string, 0)
 	for _, f := range findings {

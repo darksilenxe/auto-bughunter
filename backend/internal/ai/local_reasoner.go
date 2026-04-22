@@ -157,3 +157,125 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// localReasonerHypotheses generates a rule-based set of VulnerabilityHypotheses
+// when no AI provider is configured. It examines the current finding set and
+// known endpoints to propose targeted probes for the scanner's deterministic
+// verification step.
+func localReasonerHypotheses(target string, findings []model.Finding, endpoints []string) []VulnerabilityHypothesis {
+	// Build a set of already-known categories to avoid redundant re-probing.
+	knownCategories := map[string]bool{}
+	for _, f := range findings {
+		cat := strings.ToLower(strings.TrimSpace(f.Category))
+		if cat != "" {
+			knownCategories[cat] = true
+		}
+		if strings.Contains(strings.ToLower(f.CWE), "89") {
+			knownCategories["sqli"] = true
+		}
+		if strings.Contains(strings.ToLower(f.CWE), "79") {
+			knownCategories["xss"] = true
+		}
+	}
+
+	// Choose a representative endpoint for hypothesis targeting.
+	representative := target
+	for _, ep := range endpoints {
+		if ep = strings.TrimSpace(ep); ep != "" {
+			representative = ep
+			break
+		}
+	}
+
+	var hs []VulnerabilityHypothesis
+
+	// Rule 1: Reflected parameter detected but no XSS confirmed yet — propose XSS probe.
+	for _, f := range findings {
+		if strings.Contains(strings.ToLower(f.ID), "contextual-param-reflection") && !knownCategories["xss"] {
+			hs = append(hs, VulnerabilityHypothesis{
+				ID:          "local-hyp-xss-reflection",
+				Endpoint:    f.AffectedURL,
+				Method:      "GET",
+				ParamName:   "q",
+				PayloadHint: `"><svg/onload=prompt(1)>`,
+				Category:    "xss",
+				Rationale:   "Reflected parameter already confirmed; XSS confirmation probe not yet run.",
+			})
+			break
+		}
+	}
+
+	// Rule 2: Open-redirect present — propose OAuth redirect-uri abuse probe.
+	for _, f := range findings {
+		if strings.Contains(strings.ToLower(f.Category), "redirect") {
+			hs = append(hs, VulnerabilityHypothesis{
+				ID:          "local-hyp-oauth-redirect",
+				Endpoint:    representative,
+				Method:      "GET",
+				ParamName:   "redirect_uri",
+				PayloadHint: "https://evil.example.com/callback",
+				Category:    "open_redirect",
+				Rationale:   "Open redirect in scope; OAuth/OIDC callback parameter may be unsecured.",
+			})
+			break
+		}
+	}
+
+	// Rule 3: API endpoint present but no IDOR confirmed — propose IDOR probe.
+	hasIDOR := false
+	for _, f := range findings {
+		if strings.Contains(f.CWE, "639") || strings.Contains(strings.ToLower(f.Category), "idor") {
+			hasIDOR = true
+			break
+		}
+	}
+	if !hasIDOR {
+		for _, ep := range endpoints {
+			if strings.Contains(ep, "/api/") {
+				hs = append(hs, VulnerabilityHypothesis{
+					ID:          "local-hyp-api-idor",
+					Endpoint:    ep,
+					Method:      "GET",
+					ParamName:   "id",
+					PayloadHint: "1",
+					Category:    "idor",
+					Rationale:   "API endpoint present without confirmed IDOR testing; object-level auth check needed.",
+				})
+				break
+			}
+		}
+	}
+
+	// Rule 4: No SQL injection confirmed — propose SQLi probe on key parameter.
+	if !knownCategories["sqli"] {
+		hs = append(hs, VulnerabilityHypothesis{
+			ID:          "local-hyp-sqli",
+			Endpoint:    representative,
+			Method:      "GET",
+			ParamName:   "id",
+			PayloadHint: `' OR '1'='1`,
+			Category:    "sqli",
+			Rationale:   "No SQL injection confirmed; baseline injection test not yet run for key parameters.",
+		})
+	}
+
+	// Rule 5: CORS misconfiguration present — propose credentialed cross-origin probe.
+	for _, f := range findings {
+		if strings.Contains(strings.ToLower(f.Category), "cors") {
+			hs = append(hs, VulnerabilityHypothesis{
+				ID:          "local-hyp-cors-credential",
+				Endpoint:    f.AffectedURL,
+				Method:      "GET",
+				PayloadHint: "Origin: https://evil.example.com",
+				Category:    "cors",
+				Rationale:   "CORS misconfiguration found; credential-bearing cross-origin request may expose authenticated data.",
+			})
+			break
+		}
+	}
+
+	if len(hs) > 5 {
+		hs = hs[:5]
+	}
+	return hs
+}

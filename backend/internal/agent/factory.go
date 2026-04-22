@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 
+	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/scanner"
 )
@@ -48,7 +49,28 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("remediation_planner", func() Agent { return NewRemediationPlannerAgent(mlService, true) })
 	f.Register("reporting", func() Agent { return NewReportingAgent(true) })
 
+	// Exploit-chain agent: deterministic multi-step attack-chain analysis.
+	// No external dependencies; registered unconditionally.
+	f.Register("exploit_chain", func() Agent { return NewExploitChainAgent(true) })
+
+	// HypothesisAgent: registered with nil AI client by default.
+	// Callers that have an AI client should call SetAIClient to upgrade the
+	// agent to LLM-powered hypothesis generation; it falls back to the local
+	// rule-based reasoner when the client is nil or has no provider configured.
+	f.Register("hypothesis", func() Agent { return NewHypothesisAgent(nil, scanService, true) })
+
 	return f
+}
+
+// SetAIClient re-registers the hypothesis agent with the provided AI client so
+// it can use the configured LLM provider for hypothesis generation. This is
+// called after NewFactory in the server setup once the AI client is available.
+// It is safe to call concurrently with other factory operations.
+func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
+	if f == nil {
+		return
+	}
+	f.Register("hypothesis", func() Agent { return NewHypothesisAgent(c, scanService, true) })
 }
 
 // Register adds or replaces a builder for the given agent name.

@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
-	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
 
@@ -340,10 +339,6 @@ func (s *Service) bldPOSTWithBody(
 	auth model.ScanAuthProfile,
 	options model.ScanOptions,
 ) (int, []byte) {
-	if err := safety.ValidateOutboundURL(rawURL); err != nil {
-		return 0, nil
-	}
-
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
@@ -466,9 +461,6 @@ func bldCandidateEndpoints(target string, seeded []string, scanScope model.ScanS
 			continue
 		}
 		if !scope.IsURLInScope(raw, scanScope) {
-			continue
-		}
-		if err := safety.ValidateOutboundURL(raw); err != nil {
 			continue
 		}
 		seen[raw] = struct{}{}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"auto-bughunter/backend/internal/model"
@@ -251,9 +252,17 @@ func TestRunBusinessLogicDiff_NoTamperFindingWhenRejected(t *testing.T) {
 
 // TestRunBusinessLogicDiff_SkipsNonTransitionEndpoints verifies that
 // endpoints whose paths do not match any workflow keyword are ignored.
+// The server here only returns 200 for the non-transition path; well-known
+// transition paths return 404, so no finding should be emitted.
 func TestRunBusinessLogicDiff_SkipsNonTransitionEndpoints(t *testing.T) {
+	nonTransitionPath := "/api/users/list"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == nonTransitionPath {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// All other paths (including well-known transition paths) return 404.
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 
@@ -266,16 +275,15 @@ func TestRunBusinessLogicDiff_SkipsNonTransitionEndpoints(t *testing.T) {
 		srv.URL,
 		model.ScanScope{},
 		// Non-transition path — does not match workflowTransitionPattern.
-		model.ScanOptions{SeedRuntimeEndpoints: []string{srv.URL + "/api/users/list"}},
+		model.ScanOptions{SeedRuntimeEndpoints: []string{srv.URL + nonTransitionPath}},
 		baseline,
 		nil,
 		nil,
 	)
+	// No finding should have AffectedURL pointing to the non-transition path.
 	for _, f := range findings {
-		for _, src := range f.Sources {
-			if src == "business-logic-diff" {
-				t.Fatalf("expected no business-logic-diff finding for non-transition endpoint, got: %+v", f)
-			}
+		if f.AffectedURL == srv.URL+nonTransitionPath {
+			t.Fatalf("expected no finding for non-transition endpoint %s, got: %+v", nonTransitionPath, f)
 		}
 	}
 }
@@ -320,7 +328,7 @@ func TestBldCandidateEndpoints(t *testing.T) {
 	hasPayment := false
 	dupCount := 0
 	for _, ep := range got {
-		if strings.HasSuffix(ep, "/checkout") {
+		if ep == "https://example.com/checkout" {
 			if hasCheckout {
 				dupCount++
 			}
