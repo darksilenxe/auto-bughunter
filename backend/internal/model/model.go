@@ -861,3 +861,16 @@ type ProxyReplayRequest struct {
 	OverrideBody    string            `json:"overrideBody,omitempty"`
 	Scope           *ScanScope        `json:"scope,omitempty"`
 }
+
+// ScanAnnotation is an operator-provided observation injected into an active
+// or recently completed scan. The hypothesis agent picks up annotations on its
+// next cycle to sharpen its probe list based on human insight.
+// Example: "I noticed the API uses sequential integer user IDs starting at 1000."
+type ScanAnnotation struct {
+	ID          string    `json:"id"`
+	ScanID      string    `json:"scanId"`
+	WorkspaceID string    `json:"workspaceId,omitempty"`
+	Author      string    `json:"author,omitempty"`
+	Text        string    `json:"text"`
+	CreatedAt   time.Time `json:"createdAt"`
+}

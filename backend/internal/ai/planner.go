@@ -49,7 +49,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 		"messages": []map[string]string{
 			{
 				"role":    "system",
-				"content": "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON.",
+				"content": buildPlannerSystemPrompt(target),
 			},
 			{
 				"role":    "user",
@@ -127,8 +127,16 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	return specs, parsed.Done, nil
 }
 
-// stripCodeFence removes ```json ... ``` wrappers some providers add even when
-// asked for a JSON response.
+// buildPlannerSystemPrompt builds the AI planner system prompt, injecting a
+// domain-specific profile pack when the target URL matches a known domain.
+func buildPlannerSystemPrompt(target string) string {
+	base := "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON."
+	if pack := SelectDomainProfile(target); pack != nil {
+		base += "\n\nDOMAIN CONTEXT (" + pack.Name + "): " + pack.SystemInstruction
+	}
+	return base
+}
+
 func stripCodeFence(s string) string {
 	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, "```") {
