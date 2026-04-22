@@ -298,6 +298,22 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("zap-baseline.py", "-t "+input.Target)
 		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
 	}
+	if input.Options.UseXSSMapIntegration {
+		if !s.cfg.AllowDestructive {
+			findings = append(findings, model.Finding{
+				ID:             "xssmap-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "XSSMap blocked by safety policy",
+				Description:    "XSSMap actively sends XSS payloads against the target. Destructive or high-impact checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active XSS testing.",
+			})
+		} else {
+			emitCmd("xssmap", "scan --url "+input.Target)
+			findings = append(findings, s.runXSSMap(ctx, input.Target)...)
+		}
+	}
 	findings = append(findings, buildIntegrationCoverageFinding(state))
 
 	return findings
@@ -485,6 +501,166 @@ func countNonEmptyLines(s string) int {
 		}
 	}
 	return count
+}
+
+// xssmapResult mirrors the JSON contract emitted by the `xssmap` CLI in the
+// `xssmap` Docker Compose sidecar. We intentionally keep this contract small
+// and forgiving so it survives upstream CLI tweaks: missing fields simply
+// produce an unknown value in the resulting Finding evidence rather than a
+// parse error.
+type xssmapResult struct {
+	Vulnerabilities []xssmapVuln `json:"vulnerabilities"`
+}
+
+type xssmapVuln struct {
+	URL       string `json:"url"`
+	Parameter string `json:"parameter"`
+	Payload   string `json:"payload"`
+	Type      string `json:"type"`
+	Evidence  string `json:"evidence"`
+	Severity  string `json:"severity"`
+}
+
+func (s *Service) runXSSMap(ctx context.Context, target string) []model.Finding {
+	if _, err := exec.LookPath(s.cfg.XSSMapBinary); err != nil {
+		return []model.Finding{{
+			ID:             "xssmap-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "XSSMap binary not found",
+			Description:    "XSSMap integration is enabled but binary is missing in the runtime image.",
+			Evidence:       err.Error(),
+			Recommendation: "Install xssmap (or run the xssmap docker compose sidecar) or set XSSMAP_BINARY to a valid path.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+
+	args := []string{"scan", "--url", target, "--output", "json"}
+	if v := strings.TrimSpace(os.Getenv("XSSMAP_MAX_PAYLOADS")); v != "" {
+		args = append(args, "--max-payloads", v)
+	}
+	if v := strings.TrimSpace(os.Getenv("XSSMAP_MODEL")); v != "" {
+		args = append(args, "--model", v)
+	} else if v := strings.TrimSpace(os.Getenv("OLLAMA_MODEL")); v != "" {
+		args = append(args, "--model", v)
+	}
+	if v := strings.TrimSpace(os.Getenv("XSSMAP_OLLAMA_URL")); v != "" {
+		args = append(args, "--ollama-url", v)
+	}
+
+	cmd := exec.CommandContext(ictx, s.cfg.XSSMapBinary, args...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
+		return []model.Finding{{
+			ID:             "xssmap-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "XSSMap integration timed out",
+			Description:    "XSSMap did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS, lower XSSMAP_MAX_PAYLOADS, or reduce scan scope.",
+		}}
+	}
+
+	out := strings.TrimSpace(stdout.String())
+	if err != nil && out == "" {
+		return []model.Finding{{
+			ID:             "xssmap-execution-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "XSSMap integration failed",
+			Description:    "XSSMap did not complete successfully.",
+			Evidence:       strings.TrimSpace(stderr.String() + "\n" + out),
+			Recommendation: "Validate xssmap runtime dependencies (Playwright/Ollama) and rerun.",
+		}}
+	}
+
+	var parsed xssmapResult
+	if jerr := json.Unmarshal([]byte(out), &parsed); jerr != nil {
+		// Fall back to a coarse summary based on raw output so we still surface
+		// a finding even if the upstream CLI changes its JSON shape.
+		lines := countNonEmptyLines(out)
+		severity := model.SeverityInfo
+		title := "XSSMap integration completed (unparsed output)"
+		if lines > 0 {
+			severity = model.SeverityMedium
+			title = "XSSMap integration produced output that could not be parsed as JSON"
+		}
+		return []model.Finding{{
+			ID:             "xssmap-summary",
+			Category:       "integration",
+			Severity:       severity,
+			Title:          title,
+			Description:    "XSSMap ran but its stdout was not valid JSON. Review the raw evidence below.",
+			Evidence:       "parse_error=" + jerr.Error() + ", lines=" + strconv.Itoa(lines),
+			Recommendation: "Inspect raw XSSMap logs or upgrade the xssmap sidecar to align its JSON contract.",
+		}}
+	}
+
+	if len(parsed.Vulnerabilities) == 0 {
+		return []model.Finding{{
+			ID:             "xssmap-summary",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "XSSMap integration found no XSS",
+			Description:    "Optional LLM-assisted XSS scanner (XSSMap) executed and reported no reflected/DOM XSS.",
+			Evidence:       "vulnerabilities=0",
+			Recommendation: "No action required. Re-run with a wider --max-payloads budget if confidence is needed.",
+		}}
+	}
+
+	findings := make([]model.Finding, 0, len(parsed.Vulnerabilities)+1)
+	for i, v := range parsed.Vulnerabilities {
+		sev := normalizeXSSMapSeverity(v.Severity)
+		evidence := fmt.Sprintf("url=%s, parameter=%s, payload=%s", v.URL, v.Parameter, v.Payload)
+		if strings.TrimSpace(v.Evidence) != "" {
+			evidence += ", evidence=" + v.Evidence
+		}
+		title := "XSSMap reported reflected XSS"
+		if t := strings.TrimSpace(v.Type); t != "" {
+			title = "XSSMap reported " + t + " XSS"
+		}
+		findings = append(findings, model.Finding{
+			ID:             fmt.Sprintf("xssmap-finding-%d", i+1),
+			Category:       "xss",
+			Severity:       sev,
+			Title:          title,
+			Description:    "XSSMap (LLM-assisted XSS scanner) confirmed an XSS payload reflected on the target. Validate the payload manually before triage.",
+			Evidence:       evidence,
+			Recommendation: "Encode user-controlled input on output and reproduce the payload manually to confirm exploitability.",
+		})
+	}
+	findings = append(findings, model.Finding{
+		ID:             "xssmap-summary",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          "XSSMap integration reported potential issues",
+		Description:    "Optional LLM-assisted XSS scanner (XSSMap) executed and produced one or more candidate findings.",
+		Evidence:       "vulnerabilities=" + strconv.Itoa(len(parsed.Vulnerabilities)),
+		Recommendation: "Review each xssmap-finding-* entry and verify before remediation.",
+	})
+	return findings
+}
+
+func normalizeXSSMapSeverity(s string) model.Severity {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical", "high":
+		return model.SeverityHigh
+	case "medium":
+		return model.SeverityMedium
+	case "low":
+		return model.SeverityLow
+	case "info", "informational":
+		return model.SeverityInfo
+	default:
+		return model.SeverityMedium
+	}
 }
 
 func (s *Service) runSubfinder(ctx context.Context, target string, state *integrationState) []model.Finding {

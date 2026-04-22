@@ -67,6 +67,9 @@ COPY scripts/shims/kr                /usr/local/bin/kr
 COPY scripts/shims/sqlmap            /usr/local/bin/sqlmap
 COPY scripts/shims/nikto             /usr/local/bin/nikto
 COPY scripts/shims/wpscan            /usr/local/bin/wpscan
+# LLM-assisted XSS scanner — runs in the `xssmap` sidecar (Python +
+# Playwright + an Ollama client that reuses the local `ollama` service).
+COPY scripts/shims/xssmap            /usr/local/bin/xssmap
 RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/nuclei \
              /usr/local/bin/zap-baseline.py \
@@ -84,7 +87,8 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/kr \
              /usr/local/bin/sqlmap \
              /usr/local/bin/nikto \
-             /usr/local/bin/wpscan
+             /usr/local/bin/wpscan \
+             /usr/local/bin/xssmap
 
 # Default chromedp wiring — the `chromium` sidecar exposes the DevTools
 # protocol on port 9222. The Go scanner picks this up via CHROME_REMOTE_URL

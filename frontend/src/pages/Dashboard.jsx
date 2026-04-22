@@ -22,6 +22,7 @@ export default function Dashboard() {
   const [programRules, setProgramRules] = useState("");
   const [useNuclei, setUseNuclei] = useState(false);
   const [useZap, setUseZap] = useState(false);
+  const [useXSSMap, setUseXSSMap] = useState(false);
   const [useMLTriage, setUseMLTriage] = useState(false);
   const [useAttackPath, setUseAttackPath] = useState(false);
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(false);
@@ -74,6 +75,7 @@ export default function Dashboard() {
       options: {
         useNucleiIntegration: useNuclei,
         useZapBaselineIntegration: useZap,
+        useXssMapIntegration: useXSSMap,
         useMLTriageAgent: useMLTriage,
         useAttackPathAgent: useAttackPath,
         useFalsePositiveReview,
@@ -203,6 +205,10 @@ export default function Dashboard() {
             <label className="check">
               <input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />
               Use ZAP Baseline
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={useXSSMap} onChange={(e) => setUseXSSMap(e.target.checked)} />
+              XSSMap (LLM-assisted XSS) — requires ALLOW_DESTRUCTIVE_CHECKS
             </label>
           </div>
           <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>

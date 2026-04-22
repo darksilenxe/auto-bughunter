@@ -49,6 +49,7 @@ Do not scan third-party systems without written permission.
 - Optional integrations behind feature flags:
   - Nuclei
   - OWASP ZAP Baseline
+  - XSSMap (LLM-assisted XSS, requires `ALLOW_DESTRUCTIVE_CHECKS=true`)
   - ShuffleDNS
   - Certificate Transparency (crt.sh)
   - Amass (native Go passive discovery)
@@ -127,6 +128,7 @@ Docker Compose sidecar:
 | `sqlmap`           | `parrotsec/sqlmap`                 | SQL injection probing — keeps Python out of the backend image                           |
 | `nikto`            | `ghcr.io/sullo/nikto`              | Web server scanner — keeps Perl out of the backend image                                |
 | `wpscan`           | `wpscanteam/wpscan`                | WordPress scanner — keeps Ruby out of the backend image                                 |
+| `xssmap`           | local build (see `sidecars/xssmap/`) | Third-party LLM-assisted XSS scanner ([XSSMap](https://github.com/Sh3llholic/XSSMap), GPL-3.0). Bundled as an external tool only — source is not vendored. Reuses the local `ollama` service via `XSSMAP_OLLAMA_URL`. Per-scan opt-in via `useXssMapIntegration` and gated by `ALLOW_DESTRUCTIVE_CHECKS=true`. |
 | `agents`           | local build (see `agents/`)        | Autonomous agent learner (HTTP, port 8091)                                              |
 | `ml-service`       | local build (see `ml-service/`)    | ML triage / classifier service (HTTP, port 8090)                                        |
 | `security-knowledge` | local build (see `security-knowledge/`) | Retrieval-only security context service with curated citations (HTTP, port 8092)    |
@@ -209,7 +211,8 @@ Body:
   },
   "options": {
     "useNucleiIntegration": false,
-    "useZapBaselineIntegration": false
+    "useZapBaselineIntegration": false,
+    "useXssMapIntegration": false
   }
 }
 ```

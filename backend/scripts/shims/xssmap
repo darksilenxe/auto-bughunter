@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs xssmap inside the `xssmap` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec xssmap xssmap "$@"
