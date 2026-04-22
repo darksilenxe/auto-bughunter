@@ -8,6 +8,7 @@ const NAV = [
   { path: "/reports",      label: "Reports",      icon: "📄" },
   { path: "/scans",        label: "Scan History", icon: "📋" },
   { path: "/proxy",        label: "Proxy Suite",  icon: "🛰️" },
+  { path: "/references",   label: "References",   icon: "📚" },
   { path: "/settings",     label: "Settings",     icon: "⚙️" },
 ];
 

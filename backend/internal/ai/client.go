@@ -281,3 +281,252 @@ func shouldCallProviderFor(baseURL, apiKey string) bool {
 	}
 	return base != strings.ToLower(defaultOpenAIBase)
 }
+
+// GeneratedToolSpec is the Python tool source returned by the coding LLM.
+// It mirrors toolbuilder.ToolSpec but is defined here to avoid a circular
+// import — the toolbuilder package imports ai indirectly through the agent
+// layer.
+type GeneratedToolSpec struct {
+	// Name is a short identifier used as the script filename (no extension).
+	Name string
+	// Code is the full Python 3 script source. The script must accept a
+	// target URL as its first positional argument and write JSON-lines
+	// findings to stdout.
+	Code string
+	// Rationale is the LLM's explanation for why this tool was chosen.
+	Rationale string
+}
+
+// GenerateTool asks the configured coding LLM to write a Python 3 pen testing
+// tool for the described task on the given target. The script must:
+//   - accept a target URL as sys.argv[1]
+//   - output zero or more JSON-lines findings to stdout, each with keys:
+//     id, category, severity, title, description, evidence, recommendation
+//   - use only the Python 3 standard library (no third-party packages)
+//   - contain no subprocess, os.system, eval, exec, or raw socket calls
+//
+// Falls back to a nil result (no code generated) when the coding LLM is not
+// configured or the request fails, allowing callers to gracefully skip
+// AI-generated tooling.
+func (c *Client) GenerateTool(ctx context.Context, taskDescription string, target string, contextFindings []string) *GeneratedToolSpec {
+	if c == nil {
+		return nil
+	}
+	baseURL, apiKey, model := c.planningProvider()
+	if !shouldCallProviderFor(baseURL, apiKey) {
+		return nil
+	}
+
+	systemPrompt := "You are an expert Python 3 security tool developer. " +
+		"Write a concise, self-contained Python 3 pen testing script. " +
+		"Rules: accept target URL as sys.argv[1]; print zero or more " +
+		"JSON-lines findings to stdout, each with keys id, category, severity, " +
+		"title, description, evidence, recommendation; use only the Python 3 " +
+		"standard library (urllib, json, sys, re, base64, hashlib, hmac, ssl, " +
+		"socket — but no subprocess, os.system, eval, exec, or raw socket.connect). " +
+		"Output strict JSON only: {\"name\":string,\"code\":string,\"rationale\":string}"
+
+	userPayload := map[string]any{
+		"task":             taskDescription,
+		"target":           target,
+		"context_findings": contextFindings,
+	}
+	userJSON, err := json.Marshal(userPayload)
+	if err != nil {
+		return nil
+	}
+
+	payload := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": string(userJSON)},
+		},
+		"temperature":     0.2,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil
+	}
+
+	var apiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil
+	}
+	if len(apiResp.Choices) == 0 {
+		return nil
+	}
+	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
+	if content == "" {
+		return nil
+	}
+
+	var parsed struct {
+		Name      string `json:"name"`
+		Code      string `json:"code"`
+		Rationale string `json:"rationale"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil
+	}
+	name := strings.TrimSpace(parsed.Name)
+	code := strings.TrimSpace(parsed.Code)
+	if name == "" || code == "" {
+		return nil
+	}
+	return &GeneratedToolSpec{
+		Name:      name,
+		Code:      code,
+		Rationale: strings.TrimSpace(parsed.Rationale),
+	}
+}
+
+// AdaptedCommand is a single concrete command that the coding LLM has adapted
+// from a HackTricks command template to the specific finding and target.
+type AdaptedCommand struct {
+	Binary    string   `json:"binary"`
+	Args      []string `json:"args"`
+	Rationale string   `json:"rationale"`
+}
+
+// AdaptTechniqueCommands asks the coding LLM to fill in the {{TARGET}},
+// {{HOST}}, {{PATH}}, and {{PARAM}} placeholders in each template string with
+// values extracted from the finding evidence and target URL.  The LLM may also
+// augment the commands (e.g. tightening sqlmap flags based on DBMS hints in
+// the evidence, or adding the correct cookie header when credentials are known).
+//
+// Each element of templates should be the human-readable form of one command
+// invocation, e.g. "sqlmap -u {{TARGET}}?{{PARAM}}=1 --batch".
+//
+// Returns nil when the coding LLM is not configured or the request fails;
+// callers should fall back to simple string substitution in that case.
+func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string, findingTitle, findingEvidence, target string) []AdaptedCommand {
+	if c == nil {
+		return nil
+	}
+	baseURL, apiKey, model := c.planningProvider()
+	if !shouldCallProviderFor(baseURL, apiKey) {
+		return nil
+	}
+
+	systemPrompt := "You are an expert penetration tester. " +
+		"You receive a list of HackTricks command templates with placeholders " +
+		"({{TARGET}}, {{HOST}}, {{PATH}}, {{PARAM}}) and a finding with its evidence. " +
+		"For each template, produce a concrete, ready-to-run command adapted to the actual target and finding. " +
+		"Rules: " +
+		"(1) Replace {{TARGET}} with the exact target URL. " +
+		"(2) Replace {{HOST}} with the target hostname. " +
+		"(3) Replace {{PATH}} with the relevant path extracted from the evidence, or / if unknown. " +
+		"(4) Replace {{PARAM}} with the vulnerable parameter name from the evidence, or 'id' if unknown. " +
+		"(5) Only use binaries from this list: sqlmap curl dalfox gobuster ffuf nikto nmap nuclei subfinder httpx python3 wafw00f wpscan arjun. " +
+		// NOTE: this list mirrors cmdbuilder.allowedBinaries. If that list
+		// changes, update here too so the LLM prompt stays in sync.
+		"(6) Do NOT add shell operators (&&, ||, ;, |, $(), backticks, or redirects). " +
+		"(7) Output strict JSON only: {\"commands\":[{\"binary\":string,\"args\":[string,...],\"rationale\":string}]}"
+
+	type adaptRequest struct {
+		Target          string   `json:"target"`
+		FindingTitle    string   `json:"finding_title"`
+		FindingEvidence string   `json:"finding_evidence"`
+		Templates       []string `json:"templates"`
+	}
+	reqBody := adaptRequest{
+		Target:          target,
+		FindingTitle:    findingTitle,
+		FindingEvidence: findingEvidence,
+		Templates:       templates,
+	}
+	userJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil
+	}
+
+	payload := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": string(userJSON)},
+		},
+		"temperature":     0.1,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil
+	}
+
+	var apiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil
+	}
+	if len(apiResp.Choices) == 0 {
+		return nil
+	}
+	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
+	if content == "" {
+		return nil
+	}
+
+	var parsed struct {
+		Commands []AdaptedCommand `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil
+	}
+	out := make([]AdaptedCommand, 0, len(parsed.Commands))
+	for _, cmd := range parsed.Commands {
+		if strings.TrimSpace(cmd.Binary) != "" && len(cmd.Args) > 0 {
+			out = append(out, cmd)
+		}
+	}
+	return out
+}
