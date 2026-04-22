@@ -64,6 +64,10 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	// coding-LLM-adapted template instantiation.
 	f.Register("hacktricks_techniques", func() Agent { return NewHackTricksAgent(true, nil) })
 
+	// LLMChainSynthesisAgent: reasons across the full finding set to identify
+	// novel multi-step attack chains. Registered with nil AI client by default.
+	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(nil, true) })
+
 	return f
 }
 
@@ -71,6 +75,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 //   - "hypothesis" uses the primary model for hypothesis generation.
 //   - "tool_builder" uses the coding model for on-the-fly Python tool synthesis.
 //   - "hacktricks_techniques" uses the coding model to adapt HackTricks templates.
+//   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
 //
 // This is called after NewFactory once the AI client is available. It is safe
 // to call concurrently with other factory operations.
@@ -81,6 +86,7 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("hypothesis", func() Agent { return NewHypothesisAgent(c, scanService, true) })
 	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, c) })
 	f.Register("hacktricks_techniques", func() Agent { return NewHackTricksAgent(true, c) })
+	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })
 }
 
 // Register adds or replaces a builder for the given agent name.

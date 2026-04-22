@@ -166,6 +166,12 @@ func (r *reportTestRepo) AppendAutomationPolicyAudit(context.Context, model.Auto
 func (r *reportTestRepo) ListAutomationPolicyAudit(context.Context, string, string, int) ([]model.AutomationPolicyAuditEvent, error) {
 	panic("not used")
 }
+func (r *reportTestRepo) SaveScanAnnotation(context.Context, model.ScanAnnotation) error {
+	return nil
+}
+func (r *reportTestRepo) ListScanAnnotations(_ context.Context, _ string) ([]model.ScanAnnotation, error) {
+	return nil, nil
+}
 
 func newReportServer(t *testing.T, jobs map[string]*model.ScanJob) *Server {
 	t.Helper()

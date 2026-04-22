@@ -165,6 +165,10 @@ type Repository interface {
 	ListAutomationPolicyPacks(ctx context.Context, workspaceID string, limit int) ([]model.AutomationPolicyPack, error)
 	AppendAutomationPolicyAudit(ctx context.Context, event model.AutomationPolicyAuditEvent) error
 	ListAutomationPolicyAudit(ctx context.Context, workspaceID, policyPack string, limit int) ([]model.AutomationPolicyAuditEvent, error)
+	// SaveScanAnnotation persists a mid-scan operator observation.
+	SaveScanAnnotation(ctx context.Context, annotation model.ScanAnnotation) error
+	// ListScanAnnotations returns all annotations for a scan, oldest first.
+	ListScanAnnotations(ctx context.Context, scanID string) ([]model.ScanAnnotation, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -182,6 +186,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
+	reg.Register(agent.NewLLMChainSynthesisAgent(aiClient, true))
 
 	autonomous := boolFromEnv("ENABLE_AUTONOMOUS_ORCHESTRATION", true)
 	maxRounds := maxInt(1, intFromEnv("MAX_ORCHESTRATION_ROUNDS", 10))
@@ -274,6 +279,14 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/events") {
 		s.handleScanEvents(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/annotate") {
+		s.handleScanAnnotate(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/annotations") {
+		s.handleListScanAnnotations(w, r)
 		return
 	}
 	s.handleGetScan(w, r)
@@ -932,6 +945,97 @@ func (s *Server) handleListMLEngagements(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, dataset)
+}
+
+// handleScanAnnotate handles POST /api/scan/{id}/annotate. It persists a
+// mid-scan operator observation that the hypothesis agent picks up on its next
+// cycle to sharpen its probe list based on human insight.
+func (s *Server) handleScanAnnotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	// Extract scan ID from path: /api/scan/{id}/annotate
+	path := strings.TrimSuffix(r.URL.Path, "/annotate")
+	scanID := strings.TrimPrefix(path, "/api/scan/")
+	scanID = strings.TrimSpace(scanID)
+	if scanID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+
+	var req struct {
+		Text   string `json:"text"`
+		Author string `json:"author,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.Text = strings.TrimSpace(req.Text)
+	if req.Text == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text is required"})
+		return
+	}
+	if len(req.Text) > 4096 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text must be 4096 characters or less"})
+		return
+	}
+
+	// Verify the scan exists and is accessible in this workspace.
+	job, err := s.repo.GetJob(r.Context(), scanID)
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+
+	annotation := model.ScanAnnotation{
+		ID:          uuid.NewString(),
+		ScanID:      scanID,
+		WorkspaceID: job.WorkspaceID,
+		Author:      strings.TrimSpace(req.Author),
+		Text:        req.Text,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := s.repo.SaveScanAnnotation(r.Context(), annotation); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist annotation"})
+		return
+	}
+	// Also write the annotation as an audit event so it appears in the scan timeline.
+	s.appendAuditEvent(scanID, "annotation", fmt.Sprintf("Operator annotation: %s", req.Text))
+	writeJSON(w, http.StatusCreated, annotation)
+}
+
+// handleListScanAnnotations handles GET /api/scan/{id}/annotations.
+// Returns all operator annotations for the given scan in chronological order.
+func (s *Server) handleListScanAnnotations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/annotations")
+	scanID := strings.TrimPrefix(path, "/api/scan/")
+	scanID = strings.TrimSpace(scanID)
+	if scanID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+
+	job, err := s.repo.GetJob(r.Context(), scanID)
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+
+	annotations, err := s.repo.ListScanAnnotations(r.Context(), scanID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list annotations"})
+		return
+	}
+	if annotations == nil {
+		annotations = []model.ScanAnnotation{}
+	}
+	writeJSON(w, http.StatusOK, annotations)
 }
 
 func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
@@ -3560,6 +3664,36 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	if persistedState != nil {
 		autonomyMemory = persistedState.AutonomyMemory
 	}
+
+	// Adaptive strategy: if a prior surface snapshot exists, run a quick diff
+	// *before* the agent pipeline so that newly discovered or changed endpoints
+	// can be seeded into SeedRuntimeEndpoints for all subsequent probes and agents.
+	if persistedState != nil && persistedState.SurfaceSnapshot != nil && s.scanService != nil {
+		earlySurfaceFindings, newSnapshot := s.scanService.RunSurfaceDiffProbe(
+			ctx, target, options, authProfile, "", persistedState.SurfaceSnapshot, emit,
+		)
+		if newSnapshot != nil && len(earlySurfaceFindings) > 0 {
+			// Extract changed/new JS bundle URLs from the finding evidence and seed
+			// them back into SeedRuntimeEndpoints so every subsequent probe runs
+			// against the changed surface.
+			changedURLs := extractChangedURLsFromDriftEvidence(earlySurfaceFindings)
+			if len(changedURLs) > 0 {
+				seeded := append([]string(nil), options.SeedRuntimeEndpoints...)
+				for _, u := range changedURLs {
+					seeded = append(seeded, u)
+				}
+				options.SeedRuntimeEndpoints = uniqueStrings(seeded)
+				if emit != nil {
+					emit(model.ScanEvent{
+						Type:    model.ScanEventCommand,
+						Command: fmt.Sprintf("adaptive-strategy %s", target),
+						Message: fmt.Sprintf("Surface drift detected — seeding %d changed endpoints into probe pipeline", len(changedURLs)),
+					})
+				}
+			}
+		}
+	}
+
 	input := agent.AgentInput{
 		Target:         target,
 		AuthProfile:    authProfile,
@@ -3599,6 +3733,14 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	if s.scanService != nil {
 		findings = append(findings, s.scanService.RunIDORRoleDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
 		findings = append(findings, s.scanService.RunBusinessLogicDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
+		// Senior-parity probes: race conditions, OAuth, host-header injection,
+		// deserialization, DOM XSS, and stateful flow engine.
+		findings = append(findings, s.scanService.RunRaceConditionProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunOAuthProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunHostHeaderInjectionProbe(ctx, target, scanScope, options, authProfile, s.oast, emit)...)
+		findings = append(findings, s.scanService.RunDeserializationProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunDOMXSSProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunFlowEngine(ctx, target, scanScope, options, authProfile, emit)...)
 	}
 	// Exploit-chain analysis: deterministic, zero-request, runs on the full
 	// accumulated finding set to detect multi-step attack paths.
@@ -5303,4 +5445,43 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// extractChangedURLsFromDriftEvidence extracts URL strings from surface-diff
+// finding evidence. Surface diff findings list changed/new JS bundle URLs in
+// their Evidence field in the form "new JS bundle: <url>" or
+// "JS bundle changed: <url>". These are extracted to seed the probe pipeline.
+func extractChangedURLsFromDriftEvidence(findings []model.Finding) []string {
+	var out []string
+	for _, f := range findings {
+		for _, part := range strings.Split(f.Evidence, ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "new JS bundle: ") {
+				u := strings.TrimPrefix(part, "new JS bundle: ")
+				if strings.HasPrefix(u, "http") {
+					out = append(out, strings.TrimSpace(u))
+				}
+			} else if strings.HasPrefix(part, "JS bundle changed: ") {
+				u := strings.TrimPrefix(part, "JS bundle changed: ")
+				if strings.HasPrefix(u, "http") {
+					out = append(out, strings.TrimSpace(u))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// uniqueStrings returns a deduplicated copy of the input slice, preserving order.
+func uniqueStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }

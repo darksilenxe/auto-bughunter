@@ -682,6 +682,25 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_policy_audit table: %w", err)
 	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_annotations (
+			id TEXT PRIMARY KEY,
+			scan_id TEXT NOT NULL,
+			workspace_id TEXT NOT NULL DEFAULT '',
+			author TEXT NOT NULL DEFAULT '',
+			text TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_annotations table: %w", err)
+	}
+	_, err = p.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_scan_annotations_scan_id ON scan_annotations(scan_id)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_annotations index: %w", err)
+	}
 	return nil
 }
 
@@ -2272,6 +2291,48 @@ func redactHeaders(headers map[string]string) map[string]string {
 		out[k] = redactText(v)
 	}
 	return out
+}
+
+// SaveScanAnnotation persists a single operator scan annotation.
+func (p *Postgres) SaveScanAnnotation(ctx context.Context, annotation model.ScanAnnotation) error {
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO scan_annotations (id, scan_id, workspace_id, author, text, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (id) DO NOTHING`,
+		annotation.ID,
+		annotation.ScanID,
+		annotation.WorkspaceID,
+		annotation.Author,
+		annotation.Text,
+		annotation.CreatedAt,
+	)
+	return err
+}
+
+// ListScanAnnotations returns all annotations for the given scan ID, ordered
+// oldest first.
+func (p *Postgres) ListScanAnnotations(ctx context.Context, scanID string) ([]model.ScanAnnotation, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, scan_id, workspace_id, author, text, created_at
+		 FROM scan_annotations
+		 WHERE scan_id = $1
+		 ORDER BY created_at ASC`,
+		scanID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.ScanAnnotation
+	for rows.Next() {
+		var a model.ScanAnnotation
+		if err := rows.Scan(&a.ID, &a.ScanID, &a.WorkspaceID, &a.Author, &a.Text, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 var sensitiveKV = regexp.MustCompile(`(?i)(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s&;]+)`)

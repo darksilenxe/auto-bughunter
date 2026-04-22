@@ -530,3 +530,218 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 	}
 	return out
 }
+
+// SynthesizedChain is a novel multi-step attack chain proposed by the LLM.
+type SynthesizedChain struct {
+	// ID is a short machine-readable label (e.g. "jwt-cors-token-theft").
+	ID string `json:"id"`
+	// Title is the one-line chain description.
+	Title string `json:"title"`
+	// Steps is the ordered list of exploitation steps.
+	Steps []string `json:"steps"`
+	// Impact is a one-sentence description of the attacker's gain.
+	Impact string `json:"impact"`
+	// SourceIDs lists the Finding IDs that triggered this chain.
+	SourceIDs []string `json:"sourceIds,omitempty"`
+	// Confidence is the model's self-assessed confidence in 0.0–1.0.
+	Confidence float64 `json:"confidence"`
+}
+
+// SynthesizeChains sends the full finding set to the AI and asks it to reason
+// about novel multi-step attack chains that the static rules do not cover.
+// Results are filtered to only include chains with Confidence >= 0.60 so
+// low-quality hallucinations are suppressed before they become findings.
+//
+// Falls back to nil when no AI provider is configured.
+func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet []map[string]string) []SynthesizedChain {
+	if c == nil {
+		return nil
+	}
+	baseURL, apiKey, model := c.planningProvider()
+	if !shouldCallProviderFor(baseURL, apiKey) {
+		return nil
+	}
+	if len(findingSet) == 0 {
+		return nil
+	}
+
+	userPayload := map[string]any{
+		"target":      target,
+		"findings":    findingSet,
+		"instructions": "You are an elite penetration tester. Analyse the provided finding set and reason about " +
+			"novel multi-step attack chains NOT already represented in the findings. " +
+			"Focus on chaining 2–4 findings together to achieve a higher-impact outcome than any individual finding. " +
+			"For each chain: assign a short machine-readable id, a one-line title, ordered exploitation steps (3–6), " +
+			"a one-sentence impact statement, list the source finding IDs involved, and a confidence score (0.0–1.0). " +
+			"Reply with strict JSON only: " +
+			`{"chains":[{"id":string,"title":string,"steps":[string],"impact":string,"sourceIds":[string],"confidence":number}]}`,
+	}
+	userJSON, err := json.Marshal(userPayload)
+	if err != nil {
+		return nil
+	}
+
+	payload := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{
+				"role":    "system",
+				"content": "You are an expert penetration tester generating multi-step exploit chains. Reply with strict JSON.",
+			},
+			{
+				"role":    "user",
+				"content": string(userJSON),
+			},
+		},
+		"temperature":     0.3,
+		"response_format": map[string]string{"type": "json_object"},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil
+	}
+
+	var apiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil
+	}
+	if len(apiResp.Choices) == 0 {
+		return nil
+	}
+	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
+	if content == "" {
+		return nil
+	}
+
+	var parsed struct {
+		Chains []SynthesizedChain `json:"chains"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil
+	}
+
+	out := make([]SynthesizedChain, 0, len(parsed.Chains))
+	for _, ch := range parsed.Chains {
+		if strings.TrimSpace(ch.ID) == "" || strings.TrimSpace(ch.Title) == "" {
+			continue
+		}
+		if ch.Confidence < 0.60 {
+			continue
+		}
+		out = append(out, ch)
+	}
+	return out
+}
+
+// DomainProfilePack contains domain-specific instructions injected into the AI
+// planner's system prompt to tune its decisions to the target's business context.
+type DomainProfilePack struct {
+	// Name identifies the pack (e.g. "fintech", "healthcare").
+	Name string
+	// HostPatterns are domain suffix patterns that trigger this pack.
+	HostPatterns []string
+	// PriorityAreas are the highest-value vulnerability classes for this domain.
+	PriorityAreas []string
+	// SystemInstruction is injected into the AI planner's system message.
+	SystemInstruction string
+}
+
+// domainProfilePacks maps known domain profiles to contextual AI instructions.
+var domainProfilePacks = []DomainProfilePack{
+	{
+		Name:         "fintech",
+		HostPatterns: []string{"pay", "bank", "finance", "wallet", "money", "transfer", "trade", "invest", "loan", "credit", "fintech"},
+		PriorityAreas: []string{
+			"payment flow manipulation",
+			"price and quantity parameter tampering",
+			"race conditions on transaction endpoints",
+			"account balance manipulation",
+			"double-spend attacks",
+		},
+		SystemInstruction: "This is a FINTECH target. Prioritize: (1) payment and transfer flow integrity " +
+			"(race conditions, double-spend, negative amounts); (2) price manipulation in cart/checkout; " +
+			"(3) authorization bypass on account balance and transaction history; " +
+			"(4) PCI-DSS relevant findings (card data exposure, unencrypted storage, weak TLS). " +
+			"Frame risk rationale using PCI-DSS impact. Elevate any finding that could cause financial loss.",
+	},
+	{
+		Name:         "healthcare",
+		HostPatterns: []string{"health", "medical", "clinic", "hospital", "patient", "ehr", "emr", "pharmacy", "prescription", "hipaa"},
+		PriorityAreas: []string{
+			"PHI/PII exposure",
+			"IDOR on patient records",
+			"authentication bypass",
+			"audit log tampering",
+		},
+		SystemInstruction: "This is a HEALTHCARE target. Prioritize: (1) PHI exposure (HIPAA-relevant findings); " +
+			"(2) IDOR on patient records and appointments; (3) authentication bypass on clinician accounts; " +
+			"(4) audit log integrity (can findings be covered up?). " +
+			"Frame risk rationale using HIPAA/HITECH impact. Elevation to high when PHI is in scope.",
+	},
+	{
+		Name:         "saas",
+		HostPatterns: []string{"app.", "dashboard", "portal", "platform", "cloud", "saas"},
+		PriorityAreas: []string{
+			"tenant isolation",
+			"IDOR across accounts",
+			"privilege escalation within roles",
+			"API key / secret leakage",
+		},
+		SystemInstruction: "This is a SaaS/multi-tenant target. Prioritize: (1) cross-tenant IDOR (can a tenant A access tenant B data?); " +
+			"(2) privilege escalation within a tenant (viewer → admin); (3) API key enumeration and weak token generation; " +
+			"(4) secrets in JS bundles. Frame risk using SLA and data isolation impact.",
+	},
+	{
+		Name:         "api-first",
+		HostPatterns: []string{"api.", "/api/", "gateway", "graphql", "grpc", "rest"},
+		PriorityAreas: []string{
+			"broken object-level authorization",
+			"GraphQL introspection",
+			"mass assignment",
+			"JWT forgery",
+		},
+		SystemInstruction: "This is an API-FIRST target. Prioritize: (1) BOLA/IDOR on every object ID parameter; " +
+			"(2) GraphQL introspection and field-level auth; (3) mass assignment via undocumented fields; " +
+			"(4) JWT algorithm confusion and weak signing keys; (5) rate limiting on authentication endpoints. " +
+			"Map findings to OWASP API Security Top 10.",
+	},
+}
+
+// SelectDomainProfile returns the best-matching DomainProfilePack for a target
+// URL, or nil when no profile matches.
+func SelectDomainProfile(targetURL string) *DomainProfilePack {
+	lower := strings.ToLower(targetURL)
+	for i := range domainProfilePacks {
+		for _, pattern := range domainProfilePacks[i].HostPatterns {
+			if strings.Contains(lower, pattern) {
+				return &domainProfilePacks[i]
+			}
+		}
+	}
+	return nil
+}
+
