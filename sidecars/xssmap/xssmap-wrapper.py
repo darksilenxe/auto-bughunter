@@ -7,7 +7,7 @@ The auto-bughunter backend invokes this wrapper with a stable contract:
     xssmap scan --url <target> --output json
                 [--max-payloads N] [--model M] [--ollama-url URL]
 
-Upstream XSSMap (https://github.com/Sh3llholic/XSSMap) ships its own CLI; we
+Upstream XSSMap (https://github.com/Jewel591/xssmap) ships its own CLI; we
 keep this wrapper as the single seam so the backend doesn't have to track
 upstream flag changes. The wrapper:
 
