@@ -41,7 +41,10 @@ RUN apt-get update \
       clone --depth 1 --branch "${XSSMAP_REF}" \
       https://github.com/secdec/xssmap.git /opt/xssmap/src \
  && if [ -f /opt/xssmap/src/requirements.txt ]; then \
-        pip install --no-cache-dir -r /opt/xssmap/src/requirements.txt ; \
+        grep -v '^lxml' /opt/xssmap/src/requirements.txt \
+            > /tmp/req-filtered.txt \
+        && pip install --no-cache-dir -r /tmp/req-filtered.txt \
+        && rm -f /tmp/req-filtered.txt ; \
     fi \
  && pip install --no-cache-dir requests beautifulsoup4 lxml
 
