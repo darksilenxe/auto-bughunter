@@ -457,6 +457,30 @@ docker compose \
 ./testing/juice-shop/scan.sh
 ```
 
+## Planner offline replay harness
+
+`backend/cmd/replayharness` replays recorded historical scans through a baseline
+planner and a candidate planner and emits a JSON comparison report. It is
+hermetic — no network or database — so it can be used in CI to score candidate
+planning strategies against a baseline.
+
+```bash
+go run ./backend/cmd/replayharness \
+  -input path/to/history.json \
+  -baseline static \
+  -candidate recorded \
+  -output /tmp/replay-report.json
+```
+
+`history.json` is either a single object or an array of `replay.HistoricalRun`
+objects (`scanId`, `target`, `availableAgents`, `runs[].agentName`, plus
+optional `findings`, `metadata`, `options`, `scope`, `autonomyMemory`). The
+`-baseline` and `-candidate` flags currently support `static` (registered agent
+order) and `recorded` (oracle that follows the historical execution order).
+The output report includes per-round planner decisions, per-run match rates,
+aggregate `matchRate` / `firstChoiceMatchRate`, and a `delta` block summarising
+candidate-minus-baseline improvement.
+
 ## Notes
 
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
