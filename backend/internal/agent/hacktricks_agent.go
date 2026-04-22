@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -365,14 +366,17 @@ func parseHackTricksOutput(
 			}
 
 		case "command_injection":
-			// A total_time > 4.5 seconds for a sleep-5 probe is a strong signal.
-			if strings.Contains(low, "4.") || strings.Contains(low, "5.") || strings.Contains(low, "6.") {
+			// A response time > 4.5 seconds when we asked for sleep(5) is a
+			// strong timing oracle signal.  Parse the float from curl's
+			// %{time_total} output to avoid false positives from unrelated
+			// numeric strings (e.g. version numbers, port numbers).
+			if t := parseTimingSeconds(line); t >= 4.5 {
 				findings = append(findings, model.Finding{
 					ID:             fmt.Sprintf("ht-cmdi-%d", i),
 					Category:       "injection",
 					Severity:       model.SeverityHigh,
 					Title:          "Command Injection — timing oracle (sleep 5s) triggered",
-					Description:    fmt.Sprintf("Command injection probe (HackTricks ref: %s) showed a >4s delay, indicating OS command execution.", referenceURL),
+					Description:    fmt.Sprintf("Command injection probe (HackTricks ref: %s) showed a %.1fs delay, indicating OS command execution.", referenceURL, t),
 					Evidence:       fmt.Sprintf("response time: %s", line),
 					Recommendation: "Never pass user input to shell commands. Use safe APIs and parameterised execution.",
 					Sources:        []string{"hacktricks:curl"},
@@ -516,4 +520,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// parseTimingSeconds parses a float number of seconds from a single-line
+// string such as curl's %{time_total} output (e.g. "5.012345").
+// It returns 0 when the string cannot be parsed as a float.
+func parseTimingSeconds(s string) float64 {
+	s = strings.TrimSpace(s)
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }

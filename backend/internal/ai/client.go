@@ -444,6 +444,8 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 		"(3) Replace {{PATH}} with the relevant path extracted from the evidence, or / if unknown. " +
 		"(4) Replace {{PARAM}} with the vulnerable parameter name from the evidence, or 'id' if unknown. " +
 		"(5) Only use binaries from this list: sqlmap curl dalfox gobuster ffuf nikto nmap nuclei subfinder httpx python3 wafw00f wpscan arjun. " +
+		// NOTE: this list mirrors cmdbuilder.allowedBinaries. If that list
+		// changes, update here too so the LLM prompt stays in sync.
 		"(6) Do NOT add shell operators (&&, ||, ;, |, $(), backticks, or redirects). " +
 		"(7) Output strict JSON only: {\"commands\":[{\"binary\":string,\"args\":[string,...],\"rationale\":string}]}"
 
