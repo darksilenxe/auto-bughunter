@@ -20,9 +20,18 @@ type Client struct {
 	CodingBaseURL string
 	CodingAPIKey  string
 	CodingModel   string
-	HTTP    *http.Client
+	HTTP *http.Client
+
+	// provider and codingProvider are the resolved LLM adapters.  They are
+	// initialised by NewClient and updated by ConfigureCodingModel.  When nil,
+	// the legacy direct-HTTP path (OpenAI-compatible) is used as a fallback so
+	// existing deployments that construct Client via field assignment keep working.
+	provider       Provider
+	codingProvider Provider
 }
 
+// NewClient constructs a Client and auto-detects the LLM provider from the
+// base URL and API key using DetectProvider.
 func NewClient(baseURL, apiKey, model string) *Client {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
@@ -30,11 +39,15 @@ func NewClient(baseURL, apiKey, model string) *Client {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
+	httpClient := &http.Client{Timeout: 20 * time.Second}
+	providerName := DetectProvider(baseURL, apiKey)
+	prov := NewProvider(providerName, baseURL, apiKey, httpClient)
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		APIKey:  apiKey,
-		Model:   model,
-		HTTP:    &http.Client{Timeout: 20 * time.Second},
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		APIKey:   apiKey,
+		Model:    model,
+		HTTP:     httpClient,
+		provider: prov,
 	}
 }
 
@@ -47,6 +60,7 @@ func (c *Client) ConfigureCodingModel(baseURL, apiKey, model string) {
 		c.CodingBaseURL = ""
 		c.CodingAPIKey = ""
 		c.CodingModel = ""
+		c.codingProvider = nil
 		return
 	}
 
@@ -62,6 +76,100 @@ func (c *Client) ConfigureCodingModel(baseURL, apiKey, model string) {
 	c.CodingBaseURL = strings.TrimRight(baseURL, "/")
 	c.CodingAPIKey = apiKey
 	c.CodingModel = model
+
+	providerName := DetectProvider(baseURL, apiKey)
+	c.codingProvider = NewProvider(providerName, baseURL, apiKey, c.HTTP)
+}
+
+// completeWith delegates an LLM completion to the given provider, stripping
+// any markdown code fence from the response so callers receive clean text.
+func (c *Client) completeWith(ctx context.Context, p Provider, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
+	if p == nil {
+		// Fallback: use the legacy OpenAI-compatible path via c.HTTP directly.
+		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, model, messages, temperature, jsonMode)
+	}
+	text, err := p.Complete(ctx, model, messages, temperature, jsonMode)
+	if err != nil {
+		return "", err
+	}
+	return stripCodeFence(text), nil
+}
+
+// primaryComplete runs a completion using the primary provider/model.
+func (c *Client) primaryComplete(ctx context.Context, messages []Message, temperature float64, jsonMode bool) (string, error) {
+	p := c.provider
+	if p == nil {
+		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, c.Model, messages, temperature, jsonMode)
+	}
+	return c.completeWith(ctx, p, c.Model, messages, temperature, jsonMode)
+}
+
+// planningComplete runs a completion using the coding/planning provider (if
+// configured) or falls back to the primary provider.
+func (c *Client) planningComplete(ctx context.Context, messages []Message, temperature float64, jsonMode bool) (string, error) {
+	if strings.TrimSpace(c.CodingModel) != "" {
+		p := c.codingProvider
+		if p == nil {
+			p = c.provider
+		}
+		if p != nil {
+			return c.completeWith(ctx, p, c.CodingModel, messages, temperature, jsonMode)
+		}
+		bURL, apiKey, model := c.planningProvider()
+		return c.legacyComplete(ctx, bURL, apiKey, model, messages, temperature, jsonMode)
+	}
+	return c.primaryComplete(ctx, messages, temperature, jsonMode)
+}
+
+// legacyComplete is the original direct-HTTP OpenAI-compatible implementation,
+// retained as a fallback for Clients constructed without using NewClient().
+func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
+	msgs := make([]map[string]string, 0, len(messages))
+	for _, m := range messages {
+		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
+	}
+	payload := map[string]any{
+		"model":       model,
+		"messages":    msgs,
+		"temperature": temperature,
+	}
+	if jsonMode {
+		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("legacy complete: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("legacy complete: request: %w", err)
+	}
+	if strings.TrimSpace(apiKey) != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("legacy complete: do: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("legacy complete: status %d", resp.StatusCode)
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("legacy complete: decode: %w", err)
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("legacy complete: empty choices")
+	}
+	return stripCodeFence(strings.TrimSpace(out.Choices[0].Message.Content)), nil
 }
 
 func (c *Client) Summarize(ctx context.Context, target string, findings []model.Finding) string {
@@ -99,8 +207,7 @@ func (c *Client) GenerateNarrativeReport(ctx context.Context, target string, fin
 	if c == nil {
 		return buildLocalNarrativeReport(target, findings)
 	}
-	baseURL, apiKey, model := c.planningProvider()
-	if !shouldCallProviderFor(baseURL, apiKey) {
+	if !c.shouldCallProvider() {
 		return buildLocalNarrativeReport(target, findings)
 	}
 
@@ -158,52 +265,12 @@ Write a narrative security report in strict JSON:
 		target, domainCtx, complianceHint, len(findings), mustJSON(summaries),
 	)
 
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-		"temperature":     0.2,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return buildLocalNarrativeReport(target, findings)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return buildLocalNarrativeReport(target, findings)
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return buildLocalNarrativeReport(target, findings)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return buildLocalNarrativeReport(target, findings)
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return buildLocalNarrativeReport(target, findings)
-	}
-	if len(apiResp.Choices) == 0 {
-		return buildLocalNarrativeReport(target, findings)
-	}
-	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
-	if content == "" {
+	content, err := c.planningComplete(ctx, messages, 0.2, true)
+	if err != nil || content == "" {
 		return buildLocalNarrativeReport(target, findings)
 	}
 	var result NarrativeReport
@@ -391,58 +458,21 @@ func (c *Client) SummarizeWithKnowledge(ctx context.Context, target string, find
 		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
 
-	payload := map[string]any{
-		"model": c.Model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only. Use supplied curated references as supporting context, and preserve citations as source titles plus URLs.",
-			},
-			{
-				"role":    "user",
-				"content": fmt.Sprintf("Target: %s\nFindings JSON: %s\nKnowledge Context JSON: %s\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.", target, mustJSON(findings), mustJSON(knowledge)),
-			},
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "You are a defensive AppSec assistant. Summarize scanner findings for authorized remediation only. Use supplied curated references as supporting context, and preserve citations as source titles plus URLs.",
 		},
-		"temperature": 0.2,
+		{
+			Role:    "user",
+			Content: fmt.Sprintf("Target: %s\nFindings JSON: %s\nKnowledge Context JSON: %s\nProvide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporting citations when knowledge context is present.", target, mustJSON(findings), mustJSON(knowledge)),
+		},
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
+	content, err := c.primaryComplete(ctx, messages, 0.2, false)
+	if err != nil || strings.TrimSpace(content) == "" {
 		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
-	}
-	if strings.TrimSpace(c.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
-	}
-
-	var out struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
-	}
-	if len(out.Choices) == 0 || strings.TrimSpace(out.Choices[0].Message.Content) == "" {
-		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
-	}
-	return out.Choices[0].Message.Content
+	return content
 }
 
 func mustJSON(v any) string {
@@ -507,60 +537,12 @@ func (c *Client) Hypothesize(ctx context.Context, target string, findings []mode
 		return localReasonerHypotheses(target, findings, endpoints)
 	}
 
-	payload := map[string]any{
-		"model": c.Model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are an autonomous security researcher generating testable vulnerability hypotheses. Reply with strict JSON.",
-			},
-			{
-				"role":    "user",
-				"content": string(userJSON),
-			},
-		},
-		"temperature":     0.3,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: "You are an autonomous security researcher generating testable vulnerability hypotheses. Reply with strict JSON."},
+		{Role: "user", Content: string(userJSON)},
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-	if strings.TrimSpace(c.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-	if len(apiResp.Choices) == 0 {
-		return localReasonerHypotheses(target, findings, endpoints)
-	}
-
-	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
-	if content == "" {
+	content, err := c.primaryComplete(ctx, messages, 0.3, true)
+	if err != nil || content == "" {
 		return localReasonerHypotheses(target, findings, endpoints)
 	}
 	var parsed struct {
@@ -630,8 +612,7 @@ func (c *Client) GenerateTool(ctx context.Context, taskDescription string, targe
 	if c == nil {
 		return nil
 	}
-	baseURL, apiKey, model := c.planningProvider()
-	if !shouldCallProviderFor(baseURL, apiKey) {
+	if !c.shouldCallProvider() {
 		return nil
 	}
 
@@ -654,56 +635,14 @@ func (c *Client) GenerateTool(ctx context.Context, taskDescription string, targe
 		return nil
 	}
 
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": string(userJSON)},
-		},
-		"temperature":     0.2,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: string(userJSON)},
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
+	content, err := c.planningComplete(ctx, messages, 0.2, true)
+	if err != nil || content == "" {
 		return nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil
-	}
-	if len(apiResp.Choices) == 0 {
-		return nil
-	}
-	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
-	if content == "" {
-		return nil
-	}
-
 	var parsed struct {
 		Name      string `json:"name"`
 		Code      string `json:"code"`
@@ -747,8 +686,7 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 	if c == nil {
 		return nil
 	}
-	baseURL, apiKey, model := c.planningProvider()
-	if !shouldCallProviderFor(baseURL, apiKey) {
+	if !c.shouldCallProvider() {
 		return nil
 	}
 
@@ -784,56 +722,14 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 		return nil
 	}
 
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": string(userJSON)},
-		},
-		"temperature":     0.1,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: string(userJSON)},
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
+	content, err := c.planningComplete(ctx, messages, 0.1, true)
+	if err != nil || content == "" {
 		return nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil
-	}
-	if len(apiResp.Choices) == 0 {
-		return nil
-	}
-	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
-	if content == "" {
-		return nil
-	}
-
 	var parsed struct {
 		Commands []AdaptedCommand `json:"commands"`
 	}
@@ -875,8 +771,7 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 	if c == nil {
 		return nil
 	}
-	baseURL, apiKey, model := c.planningProvider()
-	if !shouldCallProviderFor(baseURL, apiKey) {
+	if !c.shouldCallProvider() {
 		return nil
 	}
 	if len(findingSet) == 0 {
@@ -884,8 +779,8 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 	}
 
 	userPayload := map[string]any{
-		"target":      target,
-		"findings":    findingSet,
+		"target":   target,
+		"findings": findingSet,
 		"instructions": "You are an elite penetration tester. Analyse the provided finding set and reason about " +
 			"novel multi-step attack chains NOT already represented in the findings. " +
 			"Focus on chaining 2–4 findings together to achieve a higher-impact outcome than any individual finding. " +
@@ -899,62 +794,14 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 		return nil
 	}
 
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": "You are an expert penetration tester generating multi-step exploit chains. Reply with strict JSON.",
-			},
-			{
-				"role":    "user",
-				"content": string(userJSON),
-			},
-		},
-		"temperature":     0.3,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: "You are an expert penetration tester generating multi-step exploit chains. Reply with strict JSON."},
+		{Role: "user", Content: string(userJSON)},
 	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
+	content, err := c.planningComplete(ctx, messages, 0.3, true)
+	if err != nil || content == "" {
 		return nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil
-	}
-	if len(apiResp.Choices) == 0 {
-		return nil
-	}
-	content := stripCodeFence(strings.TrimSpace(apiResp.Choices[0].Message.Content))
-	if content == "" {
-		return nil
-	}
-
 	var parsed struct {
 		Chains []SynthesizedChain `json:"chains"`
 	}

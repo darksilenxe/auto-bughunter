@@ -360,6 +360,12 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasRCEIndicator {
 			spawned = append(spawned, "metasploit")
 		}
+	case "pentest_loop":
+		// After the inner loop agent, run chain synthesis and attack-path
+		// analysis over the enriched finding set.
+		if len(output.Findings) > 0 {
+			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
+		}
 	case "attack_path":
 		// After attack path analysis, if RCE indicators exist escalate to Metasploit.
 		if hasRCEIndicator || hasHigh {

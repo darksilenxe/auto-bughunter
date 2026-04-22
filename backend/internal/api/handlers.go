@@ -26,6 +26,7 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/attackgraph"
 	"auto-bughunter/backend/internal/knowledge"
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/oast"
@@ -73,6 +74,7 @@ type Server struct {
 	eventBus                   *EventBus
 	oast                       *oast.Service
 	attackGraphDB              AttackGraphStore
+	memoryStore                vectorMemoryStore
 	apiRateLimiter             *apiRateLimiter
 	defaultMinROI              float64
 	campaignPoll               time.Duration
@@ -120,6 +122,32 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 
 // SetAttackGraphStore attaches an optional graph database-backed attack graph store.
 func (s *Server) SetAttackGraphStore(store AttackGraphStore) { s.attackGraphDB = store }
+
+// SetVectorMemory attaches an episodic vector memory store.  Nil is safe and
+// disables the feature.
+func (s *Server) SetVectorMemory(store vectorMemoryStore) { s.memoryStore = store }
+
+// vectorMemoryStore is a local interface alias for memory.Store so that the
+// api package can reference the memory package without creating a hard build
+// dependency in test-only code paths.
+type vectorMemoryStore interface {
+	UpsertFinding(ctx context.Context, mem VectorMemoryFinding) error
+	SearchByTarget(ctx context.Context, target string, topK int) ([]VectorMemoryFinding, error)
+	Close() error
+}
+
+// VectorMemoryFinding mirrors memory.FindingMemory for the purposes of the
+// api layer.  The adapter in main.go wraps the concrete memory.Store behind
+// this interface.
+type VectorMemoryFinding struct {
+	ID        string
+	Target    string
+	ScanID    string
+	Category  string
+	Title     string
+	Severity  string
+	Embedding []float32
+}
 
 type AttackGraphStore interface {
 	SaveAttackGraph(ctx context.Context, scanID, target string, graph *model.AttackGraphData) error
@@ -275,6 +303,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
 	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
+	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
+	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(s.authMiddleware(s.rateLimitMiddleware(mux)))
 }
 
@@ -550,11 +580,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.appendAuditEvent(id, "running", "Scan execution started")
 
+	metrics.ScansTotal.Inc()
+	metrics.ActiveScans.Inc()
+	scanStart := time.Now()
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	defer cancel()
 
 	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	completed := time.Now().UTC()
+	metrics.ActiveScans.Dec()
+	metrics.ScanDuration.Observe(time.Since(scanStart).Seconds())
 
 	job.CompletedAt = &completed
 	if err != nil {
@@ -571,6 +607,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	job.Findings = enrichFindings(findings)
+	for _, f := range job.Findings {
+		metrics.FindingRecorded(string(f.Severity))
+	}
 	beforeDedupCount := len(job.Findings)
 	dedupedFindings, dedupSuppressed := deduplicateFindingsCrossAgent(job.Findings)
 	job.Findings = dedupedFindings
@@ -594,6 +633,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.appendAuditEvent(id, "analysis", fmt.Sprintf("Cross-agent dedupe ratio %.2f", 1.0-float64(len(job.Findings))/float64(beforeDedupCount)))
 	}
 	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
+	// Persist finding embeddings to the episodic vector memory store so
+	// future scans against the same target have richer hypothesis context.
+	if s.memoryStore != nil {
+		go s.upsertFindingMemories(id, target, job.Findings)
+	}
 	if previousJob != nil {
 		newItems, changedItems, resolvedItems, deltaFindings := buildDeltaFindings(previousJob.Findings, job.Findings)
 		job.Findings = append(job.Findings, deltaFindings...)
@@ -3846,6 +3890,10 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		orchestrator.CostWeight = input.Options.AutonomyCostWeight
 	}
 	outputs, findings, err := orchestrator.Run(ctx, input)
+	// Emit per-agent metrics from the orchestrator outputs.
+	for _, o := range outputs {
+		metrics.AgentRun(o.AgentName)
+	}
 	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
 		return s.agentRegistry.RunAll(ctx, input)
 	}
@@ -5511,6 +5559,83 @@ func uniqueStrings(items []string) []string {
 		}
 		seen[s] = struct{}{}
 		out = append(out, s)
+	}
+	return out
+}
+
+// upsertFindingMemories persists embeddings for all confirmed findings to the
+// episodic vector memory store.  Runs asynchronously in a goroutine after the
+// scan completes so it does not block the scan result being committed.
+func (s *Server) upsertFindingMemories(scanID, target string, fs []model.Finding) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, f := range fs {
+		sum := sha256.Sum256([]byte(scanID + ":" + f.ID))
+		id := fmt.Sprintf("%x", sum[:8]) // 16-char hex prefix is collision-safe for this use
+		text := f.Category + " " + f.Title + " " + string(f.Severity)
+		mem := VectorMemoryFinding{
+			ID:        id,
+			Target:    target,
+			ScanID:    scanID,
+			Category:  f.Category,
+			Title:     f.Title,
+			Severity:  string(f.Severity),
+			Embedding: encodeMemoryText(text),
+		}
+		if err := s.memoryStore.UpsertFinding(ctx, mem); err != nil {
+			// Episodic memory upsert failures are non-fatal.
+			_ = err
+		}
+	}
+}
+
+// encodeMemoryText produces a 64-dimensional float32 unit vector from text
+// using an FNV-1a random-projection sketch.  This replicates the algorithm
+// from memory.Encode without importing that package to avoid a dependency
+// cycle in the api package's test build tags.
+func encodeMemoryText(text string) []float32 {
+	const dims = 64
+	const offset32 uint32 = 2166136261
+	const prime32 uint32 = 16777619
+	tokens := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !('a' <= r && r <= 'z') && !('0' <= r && r <= '9')
+	})
+	vec := make([]float64, dims)
+	filtered := tokens[:0]
+	for _, t := range tokens {
+		if len(t) >= 2 {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) == 0 {
+		return make([]float32, dims)
+	}
+	for _, tok := range filtered {
+		for d := 0; d < dims; d++ {
+			key := tok + strconv.Itoa(d)
+			h := offset32
+			for i := 0; i < len(key); i++ {
+				h ^= uint32(key[i])
+				h *= prime32
+			}
+			if h%2 == 0 {
+				vec[d] += 1.0
+			} else {
+				vec[d] -= 1.0
+			}
+		}
+	}
+	var sumSq float64
+	for _, v := range vec {
+		sumSq += v * v
+	}
+	if sumSq == 0 {
+		return make([]float32, dims)
+	}
+	norm := math.Sqrt(sumSq)
+	out := make([]float32, dims)
+	for i, v := range vec {
+		out[i] = float32(v / norm)
 	}
 	return out
 }

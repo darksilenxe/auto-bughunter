@@ -68,6 +68,13 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	// novel multi-step attack chains. Registered with nil AI client by default.
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(nil, true) })
 
+	// PentestLoopAgent: drives the iterative hypothesis→verify→chain inner
+	// loop inside a single agent execution. Registered with nil AI client by
+	// default; SetAIClient upgrades it to LLM-powered hypothesis generation.
+	f.Register("pentest_loop", func() Agent {
+		return NewPentestLoopAgent(nil, scanService, defaultInnerRounds, true)
+	})
+
 	return f
 }
 
@@ -87,6 +94,9 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, c) })
 	f.Register("hacktricks_techniques", func() Agent { return NewHackTricksAgent(true, c) })
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })
+	f.Register("pentest_loop", func() Agent {
+		return NewPentestLoopAgent(c, scanService, defaultInnerRounds, true)
+	})
 }
 
 // Register adds or replaces a builder for the given agent name.

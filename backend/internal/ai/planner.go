@@ -1,11 +1,9 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 )
 
@@ -21,8 +19,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	if c == nil {
 		return nil, true, nil
 	}
-	baseURL, apiKey, model := c.planningProvider()
-	if !shouldCallProviderFor(baseURL, apiKey) {
+	if !c.shouldCallProvider() {
 		return nil, true, nil
 	}
 	if len(availableAgents) == 0 {
@@ -44,63 +41,17 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 		return nil, true, err
 	}
 
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": buildPlannerSystemPrompt(target),
-			},
-			{
-				"role":    "user",
-				"content": string(userJSON),
-			},
-		},
-		"temperature":     0.1,
-		"response_format": map[string]string{"type": "json_object"},
+	messages := []Message{
+		{Role: "system", Content: buildPlannerSystemPrompt(target)},
+		{Role: "user", Content: string(userJSON)},
 	}
-
-	body, err := json.Marshal(payload)
+	content, err := c.planningComplete(ctx, messages, 0.1, true)
 	if err != nil {
 		return nil, true, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, true, err
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, true, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, true, fmt.Errorf("ai planner: unexpected status %d", resp.StatusCode)
-	}
-
-	var apiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, true, err
-	}
-	if len(apiResp.Choices) == 0 {
-		return nil, true, nil
-	}
-
-	content := strings.TrimSpace(apiResp.Choices[0].Message.Content)
 	if content == "" {
 		return nil, true, nil
 	}
-	content = stripCodeFence(content)
 
 	var parsed struct {
 		Agents []struct {
