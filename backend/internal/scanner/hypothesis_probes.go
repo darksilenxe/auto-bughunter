@@ -73,6 +73,12 @@ func (s *Service) verifyXSSHypothesis(
 	if err != nil {
 		return nil
 	}
+	// Verify the host and scheme haven't changed after appending the payload
+	// as a query parameter. appendQueryParam uses standard URL encoding, but
+	// this is a defence-in-depth check against unexpected URL mangling.
+	if !sameOrigin(endpoint, probeURL) {
+		return nil
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
@@ -89,10 +95,11 @@ func (s *Service) verifyXSSHypothesis(
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, hypothesisBodyLimit))
 	body := string(bodyBytes)
 
-	// Check for unescaped reflection of the marker or payload characters.
-	markerInBody := strings.Contains(body, payload) ||
-		(strings.Contains(body, "<svg") && strings.Contains(body, "onload"))
-	if !markerInBody {
+	// Check for unescaped reflection of the full payload string in the response
+	// body. This confirms the server is echoing user input verbatim without HTML
+	// encoding. We require the whole payload string (not just substrings like
+	// "<svg") to minimise false positives from unrelated page content.
+	if !strings.Contains(body, payload) {
 		return nil
 	}
 
@@ -142,6 +149,9 @@ func (s *Service) verifySQLiHypothesis(
 
 	probeURL, err := appendQueryParam(endpoint, param, payload)
 	if err != nil {
+		return nil
+	}
+	if !sameOrigin(endpoint, probeURL) {
 		return nil
 	}
 
@@ -222,6 +232,9 @@ func (s *Service) verifyOpenRedirectHypothesis(
 
 	probeURL, err := appendQueryParam(endpoint, param, payload)
 	if err != nil {
+		return nil
+	}
+	if !sameOrigin(endpoint, probeURL) {
 		return nil
 	}
 
@@ -356,4 +369,19 @@ func appendQueryParam(rawURL, param, value string) (string, error) {
 	q.Set(param, value)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// sameOrigin returns true if both rawURLs share the same scheme and host. It
+// is used as a defence-in-depth guard after building probe URLs: the payload
+// is added only as a query parameter and should never change the host/scheme.
+func sameOrigin(a, b string) bool {
+	ua, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	ub, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	return ua.Host == ub.Host && ua.Scheme == ub.Scheme
 }

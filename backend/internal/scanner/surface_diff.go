@@ -139,7 +139,9 @@ func (s *Service) surfaceHashURL(
 	}
 
 	h := sha256.New()
-	_, _ = io.Copy(h, io.LimitReader(resp.Body, 1024*1024))
+	// 256KB is sufficient to detect content changes in schema/sitemap/robots
+	// documents while keeping memory usage bounded during bulk snapshotting.
+	_, _ = io.Copy(h, io.LimitReader(resp.Body, 256*1024))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 

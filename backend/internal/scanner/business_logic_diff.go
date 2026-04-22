@@ -20,13 +20,17 @@ import (
 // authorization and invariant testing: the server must enforce role-based
 // access control and input validation on every mutating operation.
 //
-// The negative lookahead-equivalent here is the word-boundary anchor: the
-// keyword must be followed by '/', end-of-string, or '?' so that e.g.
-// "/api/orders/12345" (plural "orders") does not match the "order" keyword.
+// Generic CRUD verbs (create, update, edit) are intentionally excluded to
+// reduce false positives on standard REST endpoints. The keywords retained
+// here have strong semantic associations with financial or lifecycle state
+// changes where business-logic authorization failures are highest-impact.
+//
+// The word-boundary anchor requires the keyword to be followed by '/',
+// end-of-string, or '?' so that "/orders/12345" does not match "order".
 var workflowTransitionPattern = regexp.MustCompile(
 	`(?i)/(checkout|payment|order|transfer|approve|submit|cancel|confirm|refund|` +
 		`upgrade|subscribe|invite|purchase|transaction|withdraw|deposit|reset|` +
-		`activate|deactivate|promote|demote|create|update|edit|delete)(?:/|$|\?)`,
+		`activate|deactivate|promote|demote|delete)(?:/|$|\?)`,
 )
 
 // bldMaxEndpoints caps how many transition endpoints the business-logic probe

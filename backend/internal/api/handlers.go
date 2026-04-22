@@ -3606,15 +3606,14 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 	// Surface diff probe: compare the current surface fingerprint against the
 	// prior snapshot to detect newly added or changed attack surface.
 	if s.scanService != nil {
+		var priorSnapshot *model.SurfaceSnapshot
+		if persistedState != nil {
+			priorSnapshot = persistedState.SurfaceSnapshot
+		}
 		surfaceFindings, newSnapshot := s.scanService.RunSurfaceDiffProbe(
 			ctx, target, options, authProfile,
 			"", // bodyText not re-fetched here; TakeSurfaceSnapshot probes well-known paths directly
-			func() *model.SurfaceSnapshot {
-				if persistedState != nil {
-					return persistedState.SurfaceSnapshot
-				}
-				return nil
-			}(),
+			priorSnapshot,
 			emit,
 		)
 		findings = append(findings, surfaceFindings...)
