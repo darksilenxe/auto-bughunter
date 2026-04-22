@@ -11,6 +11,12 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
+// SupportedBugBountyPlatforms enumerates the bug-bounty platform identifiers
+// accepted by RenderBugBountyMarkdownForPlatform / RenderBugBountyZipForPlatform.
+// Empty / unknown values fall back to the platform-agnostic format that is
+// portable across HackerOne, Bugcrowd and Intigriti.
+var SupportedBugBountyPlatforms = []string{"hackerone", "bugcrowd", "intigriti"}
+
 // FindingToBugBountySubmission converts a finding into the canonical
 // BugBountySubmission structure, applying enrichment first so that CVSS/CWE/
 // References are populated when available.
@@ -32,13 +38,25 @@ func FindingToBugBountySubmission(f model.Finding, target string) model.BugBount
 }
 
 // RenderBugBountyMarkdown returns a Markdown bug-bounty submission for a
-// single finding. The format follows the structure that HackerOne, Bugcrowd
-// and Intigriti all accept (Summary, Steps to reproduce, Impact, Remediation,
-// References).
+// single finding in the platform-agnostic format that HackerOne, Bugcrowd
+// and Intigriti all accept.
 func RenderBugBountyMarkdown(f model.Finding, target string) string {
-	sub := FindingToBugBountySubmission(f, target)
+	return RenderBugBountyMarkdownForPlatform(f, target, "")
+}
+
+// RenderBugBountyMarkdownForPlatform renders the same submission body as
+// RenderBugBountyMarkdown plus a platform-specific header banner and submission
+// hints when platform is one of SupportedBugBountyPlatforms. Unknown values
+// fall back to the platform-agnostic format.
+func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string) string {
+	enriched := EnrichFinding(f)
+	sub := FindingToBugBountySubmission(enriched, target)
 	var b strings.Builder
 	b.WriteString("# " + sub.Title + "\n\n")
+
+	if banner := platformBanner(platform); banner != "" {
+		b.WriteString(banner)
+	}
 
 	b.WriteString("## Summary\n\n")
 	if sub.Summary != "" {
@@ -54,8 +72,8 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 		{"CVSS", fmtCVSS(sub.CVSSScore, sub.CVSSVector)},
 		{"Asset", sub.Asset},
 	}
-	if f.AffectedParameter != "" {
-		rows = append(rows, [2]string{"Affected Parameter", f.AffectedParameter})
+	if enriched.AffectedParameter != "" {
+		rows = append(rows, [2]string{"Affected Parameter", enriched.AffectedParameter})
 	}
 	for _, row := range rows {
 		if strings.TrimSpace(row[1]) != "" {
@@ -63,6 +81,18 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 		}
 	}
 	b.WriteString("\n")
+
+	// Severity rationale: deterministic explanation of why this severity
+	// rating was chosen, helping triagers cross-check the analyst's call
+	// without re-deriving CVSS/CWE/exploitability themselves.
+	rationale := SeverityRationale(enriched)
+	if len(rationale) > 0 {
+		b.WriteString("## Severity Rationale\n\n")
+		for _, line := range rationale {
+			b.WriteString("- " + line + "\n")
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## Steps to Reproduce\n\n")
 	if len(sub.Steps) == 0 {
@@ -74,14 +104,23 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 		b.WriteString("\n")
 	}
 
-	if f.Evidence != "" {
-		b.WriteString("## Evidence\n\n```\n" + f.Evidence + "\n```\n\n")
+	if enriched.Evidence != "" {
+		b.WriteString("## Evidence\n\n```\n" + enriched.Evidence + "\n```\n\n")
 	}
-	if curl := strings.TrimSpace(f.EvidenceFields["curlReproducer"]); curl != "" {
+	if curl := strings.TrimSpace(enriched.EvidenceFields["curlReproducer"]); curl != "" {
 		b.WriteString("## Reproducer\n\n```bash\n" + curl + "\n```\n\n")
-	} else if f.PoC != "" {
-		b.WriteString("## Proof of Concept\n\n```\n" + f.PoC + "\n```\n\n")
+	} else if enriched.PoC != "" {
+		b.WriteString("## Proof of Concept\n\n```\n" + enriched.PoC + "\n```\n\n")
 	}
+
+	// Reproducibility evidence checklist tells the triager which artefacts
+	// are bundled and which are missing — turning the submission into a
+	// reproducibility bundle by default.
+	b.WriteString("## Reproducibility Evidence\n\n")
+	for _, line := range reproducibilityChecklist(enriched) {
+		b.WriteString("- " + line + "\n")
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## Impact\n\n")
 	if sub.Impact != "" {
@@ -110,6 +149,76 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 	return b.String()
 }
 
+// SeverityRationale returns a short, deterministic, human-readable list of
+// reasons the finding's severity rating was assigned. Reads from CVSS, CWE,
+// confidence, exploitability and business tags so triagers can cross-check
+// analyst severity calls without re-deriving the model themselves.
+func SeverityRationale(f model.Finding) []string {
+	out := []string{
+		"Assigned severity: " + sevDisplay(f.Severity) + ".",
+	}
+	if f.CVSSVector != "" || f.CVSSScore > 0 {
+		out = append(out, fmt.Sprintf("CVSS %s aligns with the assigned severity tier.", fmtCVSS(f.CVSSScore, f.CVSSVector)))
+	}
+	if f.CWE != "" {
+		out = append(out, "Mapped to "+f.CWE+", which is the recognised weakness class for this finding.")
+	}
+	if f.Confidence > 0 {
+		out = append(out, fmt.Sprintf("Detection confidence reported at %.2f.", f.Confidence))
+	}
+	if f.Exploitability != nil {
+		if f.Exploitability.Reachable {
+			out = append(out, "Exploitability analysis confirmed the affected surface is reachable.")
+		}
+		if f.Exploitability.RequiredRole != "" {
+			out = append(out, "Required role for exploitation: "+f.Exploitability.RequiredRole+".")
+		}
+		if status := strings.TrimSpace(f.Exploitability.VerifiedStatus); status != "" {
+			out = append(out, "Operator verification status: "+status+".")
+		}
+	}
+	if len(f.BusinessTags) > 0 {
+		out = append(out, "Business context tags: "+strings.Join(f.BusinessTags, ", ")+".")
+	}
+	return out
+}
+
+// reproducibilityChecklist returns a deterministic evidence checklist (✅/⚠)
+// describing which reproducibility artefacts are bundled with this submission.
+// This makes it obvious to triagers what is and isn't included.
+func reproducibilityChecklist(f model.Finding) []string {
+	mark := func(present bool, label string) string {
+		if present {
+			return "✅ " + label
+		}
+		return "⚠️  " + label + " (not captured)"
+	}
+	out := []string{
+		mark(len(f.ReproductionSteps) > 0, "Step-by-step reproduction"),
+		mark(strings.TrimSpace(f.Evidence) != "", "Raw request/response evidence"),
+		mark(strings.TrimSpace(f.EvidenceFields["curlReproducer"]) != "", "Curl reproducer"),
+		mark(strings.TrimSpace(f.PoC) != "", "Proof-of-concept payload"),
+		mark(f.AffectedURL != "", "Affected URL recorded"),
+		mark(f.AffectedParameter != "", "Affected parameter recorded"),
+	}
+	if f.Exploitability != nil {
+		out = append(out, mark(f.Exploitability.Reachable, "Exploitability reachability analysis"))
+	}
+	return out
+}
+
+func platformBanner(platform string) string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "hackerone":
+		return "> **Submission target:** HackerOne. Paste sections below into the report form; the asset is pre-populated under *Vulnerability Details*.\n\n"
+	case "bugcrowd":
+		return "> **Submission target:** Bugcrowd. Use the *VRT* category that aligns with the CWE listed under *Vulnerability Details*.\n\n"
+	case "intigriti":
+		return "> **Submission target:** Intigriti. Map the CWE listed under *Vulnerability Details* to the matching Intigriti severity guideline.\n\n"
+	}
+	return ""
+}
+
 var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 // safeFilename produces a filesystem-safe filename component from an
@@ -133,6 +242,13 @@ func safeFilename(s string) string {
 // RenderBugBountyZip produces a zip archive containing one Markdown
 // submission file per finding plus a top-level `INDEX.md` summary.
 func RenderBugBountyZip(job *model.ScanJob) ([]byte, error) {
+	return RenderBugBountyZipForPlatform(job, "")
+}
+
+// RenderBugBountyZipForPlatform is the platform-aware variant of
+// RenderBugBountyZip. The platform value is included in the index banner and
+// each submission file when supplied.
+func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
@@ -143,6 +259,9 @@ func RenderBugBountyZip(job *model.ScanJob) ([]byte, error) {
 
 	var index strings.Builder
 	index.WriteString("# Bug Bounty Submission Bundle\n\n")
+	if banner := platformBanner(platform); banner != "" {
+		index.WriteString(banner)
+	}
 	if job != nil {
 		index.WriteString("**Target:** " + job.Target + "  \n")
 		index.WriteString("**Scan ID:** " + job.ID + "  \n")
@@ -153,7 +272,7 @@ func RenderBugBountyZip(job *model.ScanJob) ([]byte, error) {
 	if job != nil {
 		for i, f := range job.Findings {
 			fname := fmt.Sprintf("%02d-%s-%s.md", i+1, strings.ToLower(string(f.Severity)), safeFilename(f.ID))
-			content := RenderBugBountyMarkdown(f, target)
+			content := RenderBugBountyMarkdownForPlatform(f, target, platform)
 			fileWriter, err := zw.Create(fname)
 			if err != nil {
 				return nil, err
@@ -177,3 +296,4 @@ func RenderBugBountyZip(job *model.ScanJob) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+

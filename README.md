@@ -368,8 +368,9 @@ submissions in multiple formats. All endpoints are served under `/api/report/`.
 | `GET /api/report/{scanId}` | Main report. Defaults to PDF for backward compatibility. |
 | `GET /api/report/{scanId}?format=pdf\|md\|html\|json&type=pentest\|executive\|compliance` | Format / report-type negotiation via query string. |
 | `POST /api/report/{scanId}` | Same as GET but accepts `ReportTemplateOptions` (company name, classification, contact, program handle, logo path, report type) in the JSON body for cover-page customization. Query-string parameters take precedence. |
-| `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json` | Single bug-bounty submission for one finding. Defaults to Markdown. |
-| `GET /api/report/{scanId}/bugbounty.zip` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. |
+| `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json&platform=hackerone\|bugcrowd\|intigriti` | Single bug-bounty submission for one finding. Defaults to Markdown. The optional `platform` query adds a platform-specific submission banner. |
+| `GET /api/report/{scanId}/bugbounty.zip?platform=hackerone\|bugcrowd\|intigriti` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. The optional `platform` query is forwarded to every submission file. |
+| `GET /api/findings/duplicates?scanId={scanId}&threshold=0.6&priorLimit=50` | Deterministic duplicate detector: returns prior-scan findings that resemble the current scan's findings (similarity scored on category, CWE, normalized title, affected URL/host+path, and parameter). |
 
 **Report types:**
 

@@ -115,10 +115,10 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - [ ] Add runtime policy-aware model/prompt tuning profiles with audit traces.
 - [ ] Ship planner offline replay harness with baseline comparison output.
 - [ ] Add per-target adaptive strategy policy using historical drift and ROI signals.
-- [ ] Surface “why agent ran” and “why ranked high” in UI and report exports.
-- [ ] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
-- [ ] Add duplicate detection against prior submissions/scans with similarity thresholds.
-- [ ] Close payout-feedback loop into prioritization scoring by program profile.
+- [x] Surface “why agent ran” and “why ranked high” in UI and report exports.
+- [x] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
+- [x] Add duplicate detection against prior submissions/scans with similarity thresholds.
+- [x] Close payout-feedback loop into prioritization scoring by program profile.
 
 ---
 
