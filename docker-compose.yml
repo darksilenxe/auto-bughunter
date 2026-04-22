@@ -198,6 +198,8 @@ services:
         condition: service_started
       wpscan:
         condition: service_started
+      xssmap:
+        condition: service_started
       metasploit:
         condition: service_started
       kiterunner:
@@ -324,6 +326,24 @@ services:
   wpscan:
     image: wpscanteam/wpscan:v3.8.28
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # XSSMap — third-party LLM-assisted XSS scanner
+  # (https://github.com/Sh3llholic/XSSMap, GPL-3.0). Bundled as an external
+  # tool only — its source is **not** vendored into this repository.
+  #
+  # Reuses the existing `ollama` sidecar via XSSMAP_OLLAMA_URL; the model
+  # defaults to OLLAMA_MODEL which is already pre-pulled on container start.
+  # Gated by ALLOW_DESTRUCTIVE_CHECKS in the backend because XSSMap actively
+  # sends XSS payloads at the target.
+  xssmap:
+    build:
+      context: ./sidecars/xssmap
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    environment:
+      XSSMAP_OLLAMA_URL: ${XSSMAP_OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3:mini}
+      XSSMAP_TIMEOUT_SECONDS: ${XSSMAP_TIMEOUT_SECONDS:-120}
     restart: unless-stopped
 
   # Metasploit Framework — optional sidecar for running web exploit modules

@@ -52,6 +52,7 @@ type Config struct {
 	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
+	XSSMapBinary      string
 	SubfinderBinary   string
 	HttpxBinary       string
 	NaabuBinary       string
@@ -93,6 +94,9 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.ZAPBaselineBinary) == "" {
 		cfg.ZAPBaselineBinary = "zap-baseline.py"
+	}
+	if strings.TrimSpace(cfg.XSSMapBinary) == "" {
+		cfg.XSSMapBinary = "xssmap"
 	}
 	if strings.TrimSpace(cfg.SubfinderBinary) == "" {
 		cfg.SubfinderBinary = "subfinder"

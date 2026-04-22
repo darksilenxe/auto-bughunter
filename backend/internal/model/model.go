@@ -142,6 +142,7 @@ type ScanAuthProfileSummary struct {
 type ScanOptions struct {
 	UseNucleiIntegration      bool     `json:"useNucleiIntegration,omitempty"`
 	UseZAPBaselineIntegration bool     `json:"useZapBaselineIntegration,omitempty"`
+	UseXSSMapIntegration      bool     `json:"useXssMapIntegration,omitempty"`
 	UseSubfinderIntegration   bool     `json:"useSubfinderIntegration,omitempty"`
 	UseHttpxIntegration       bool     `json:"useHttpxIntegration,omitempty"`
 	UseNaabuIntegration       bool     `json:"useNaabuIntegration,omitempty"`

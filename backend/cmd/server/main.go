@@ -69,6 +69,7 @@ func main() {
 		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
+		XSSMapBinary:       getenv("XSSMAP_BINARY", "xssmap"),
 		SubfinderBinary:    getenv("SUBFINDER_BINARY", "subfinder"),
 		HttpxBinary:        getenv("HTTPX_BINARY", "httpx"),
 		NaabuBinary:        getenv("NAABU_BINARY", "naabu"),
