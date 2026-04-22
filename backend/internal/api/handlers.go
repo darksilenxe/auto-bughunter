@@ -773,7 +773,7 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	// executes validated CLI tool invocations; ToolBuilderAgent writes and
 	// runs custom Python probes for specialised tasks.
 	reg.Register(agent.NewDynamicCommandAgent(true))
-	reg.Register(agent.NewToolBuilderAgent(true))
+	reg.Register(agent.NewToolBuilderAgent(true, s.aiClient))
 
 	mlTriageEnabled := options.UseMLTriageAgent
 	attackPathEnabled := options.UseAttackPathAgent

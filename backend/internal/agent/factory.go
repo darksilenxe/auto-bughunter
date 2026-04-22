@@ -41,7 +41,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("metasploit", func() Agent { return NewMetasploitAgent(true) })
 	f.Register("burp", func() Agent { return NewBurpAgent(true) })
 	f.Register("wordlist", func() Agent { return NewWordlistAgent(true) })
-	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true) })
+	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, nil) })
 	f.Register("analysis", func() Agent { return NewAnalysisAgent(true) })
 	f.Register("ml_triage", func() Agent { return NewMLTriageAgent(mlService, true) })
 	f.Register("attack_path", func() Agent { return NewAttackPathAgent(mlService, true) })
@@ -62,15 +62,18 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	return f
 }
 
-// SetAIClient re-registers the hypothesis agent with the provided AI client so
-// it can use the configured LLM provider for hypothesis generation. This is
-// called after NewFactory in the server setup once the AI client is available.
-// It is safe to call concurrently with other factory operations.
+// SetAIClient re-registers agents that benefit from an AI client:
+//   - "hypothesis" uses the primary model for hypothesis generation.
+//   - "tool_builder" uses the coding model for on-the-fly Python tool synthesis.
+//
+// This is called after NewFactory once the AI client is available. It is safe
+// to call concurrently with other factory operations.
 func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	if f == nil {
 		return
 	}
 	f.Register("hypothesis", func() Agent { return NewHypothesisAgent(c, scanService, true) })
+	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, c) })
 }
 
 // Register adds or replaces a builder for the given agent name.
