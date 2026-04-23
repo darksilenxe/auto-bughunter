@@ -344,7 +344,10 @@ export default function Dashboard() {
       {job && job.status !== "running" && (
         <>
           <section className="card">
-            <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : job.status === "cancelled" ? "#facc15" : "#ef4444" }}>{job.status}</span></h2>
+            {(() => {
+              const statusColor = { completed: "#4ade80", cancelled: "#facc15" }[job.status] || "#ef4444";
+              return <h2>Status: <span style={{ color: statusColor }}>{job.status}</span></h2>;
+            })()}
             <div className="stats">
               <span className="pill high">High: {sevCounts.high}</span>
               <span className="pill medium">Medium: {sevCounts.medium}</span>

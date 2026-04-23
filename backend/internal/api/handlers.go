@@ -599,7 +599,10 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 	job.Status = "cancelled"
 	job.Error = "scan stopped by operator"
 	job.CompletedAt = &now
-	_ = s.repo.UpdateJob(r.Context(), job)
+	if err := s.repo.UpdateJob(r.Context(), job); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update scan status"})
+		return
+	}
 	s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator before execution")
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "cancelled"})
 }
