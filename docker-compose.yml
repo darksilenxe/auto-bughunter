@@ -90,6 +90,24 @@ services:
       retries: 3
       start_period: 10s
 
+  # ZAP Baseline HTTP wrapper service — eliminates Docker socket requirement by
+  # exposing zap-baseline.py via HTTP instead of `docker compose exec`.
+  zap-service:
+    build:
+      context: ./sidecars/zap-service
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${ZAP_SERVICE_LOG_LEVEL:-INFO}
+    ports:
+      - "8094:8094"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8094/health', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models (~4 GB for dolphin-mistral).
   # Gated behind the `ollama` compose profile so it doesn't start by default
@@ -199,6 +217,8 @@ services:
       agents:
         condition: service_started
       nuclei-service:
+        condition: service_healthy
+      zap-service:
         condition: service_healthy
       zap:
         condition: service_started

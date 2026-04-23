@@ -36,6 +36,15 @@ func (a *MLTriageAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
+	if !input.Options.UseMLTriageAgent {
+		output.DebugNotes = "ML triage agent disabled by scan options"
+		return output, nil
+	}
+	if a.ml == nil {
+		output.DebugNotes = "ML service not configured"
+		return output, nil
+	}
+
 	source := input.AllFindings
 	if len(source) == 0 {
 		output.DebugNotes = "No findings available for ML triage"
@@ -102,6 +111,15 @@ func (a *AttackPathAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 		Status:    "completed",
 	}
 
+	if !input.Options.UseAttackPathAgent {
+		output.DebugNotes = "Attack path agent disabled by scan options"
+		return output, nil
+	}
+	if a.ml == nil {
+		output.DebugNotes = "ML service not configured"
+		return output, nil
+	}
+
 	paths := a.ml.BuildAttackPaths(input.AllFindings)
 	if len(paths) == 0 {
 		output.DebugNotes = "No attack paths inferred"
@@ -149,6 +167,15 @@ func (a *FalsePositiveReviewAgent) Run(ctx context.Context, input AgentInput) (A
 		Findings:  make([]model.Finding, 0),
 		Metadata:  make(map[string]string),
 		Status:    "completed",
+	}
+
+	if !input.Options.UseFalsePositiveReview {
+		output.DebugNotes = "False positive review agent disabled by scan options"
+		return output, nil
+	}
+	if a.ml == nil {
+		output.DebugNotes = "ML service not configured"
+		return output, nil
 	}
 
 	candidates := a.ml.FindPotentialFalsePositives(input.AllFindings)
@@ -201,6 +228,15 @@ func (a *RemediationPlannerAgent) Run(ctx context.Context, input AgentInput) (Ag
 		Findings:  make([]model.Finding, 0),
 		Metadata:  make(map[string]string),
 		Status:    "completed",
+	}
+
+	if !input.Options.UseRemediationPlanner {
+		output.DebugNotes = "Remediation planner agent disabled by scan options"
+		return output, nil
+	}
+	if a.ml == nil {
+		output.DebugNotes = "ML service not configured"
+		return output, nil
 	}
 
 	plan := a.ml.BuildRemediationPlan(input.AllFindings, 5)
