@@ -44,6 +44,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        # GitHub-hosted ubuntu-latest runners ship with ~14 GB of pre-installed
+        # software (Android SDK, .NET, Haskell GHC, large apt packages, swap)
+        # that we never use. Removing it before the Docker build reclaims
+        # enough headroom to build all local images *and* pull third-party ones
+        # (e.g. projectdiscovery/nuclei) without hitting "no space left on device".
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -82,6 +98,13 @@ jobs:
           DOCKER_BUILDKIT: "1"
           COMPOSE_DOCKER_CLI_BUILD: "1"
         run: docker compose build --progress=plain --pull
+
+      - name: Prune Buildx cache before pulling
+        # Release the Buildx layer cache that accumulated during the build step.
+        # This frees several GB of overlay2 storage so the subsequent pull of
+        # large third-party images (e.g. projectdiscovery/nuclei, metasploit)
+        # doesn't exhaust the runner disk.
+        run: docker builder prune -f
 
       - name: Pull all third-party service images
         # Verifies that every `image:` reference (nuclei, zap, chromium,
