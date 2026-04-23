@@ -216,6 +216,10 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewCORSRedirectAgent(true))
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
+	reg.Register(agent.NewMLTriageAgent(mlService, true))
+	reg.Register(agent.NewAttackPathAgent(mlService, true))
+	reg.Register(agent.NewFalsePositiveReviewAgent(mlService, true))
+	reg.Register(agent.NewRemediationPlannerAgent(mlService, true))
 	reg.Register(agent.NewReportingAgent(true))
 	reg.Register(agent.NewLLMChainSynthesisAgent(aiClient, true))
 

@@ -510,6 +510,65 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 }
 
 func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Finding {
+	// Try HTTP service first, fall back to exec mode
+	if useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES"); useHTTPMode == "true" || useHTTPMode == "1" {
+		return s.runZAPBaselineHTTP(ctx, target)
+	}
+	return s.runZAPBaselineExec(ctx, target)
+}
+
+func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model.Finding {
+	client := toolclient.NewZapClient()
+
+	// Check if service is available
+	if !client.IsAvailable(ctx) {
+		serviceURL := os.Getenv("ZAP_SERVICE_URL")
+		if serviceURL == "" {
+			serviceURL = "http://zap-service:8094"
+		}
+		return []model.Finding{{
+			ID:             "zap-baseline-service-unavailable",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ZAP Baseline HTTP service unavailable",
+			Description:    "ZAP Baseline HTTP wrapper service is not reachable.",
+			Evidence:       "service_url=" + serviceURL,
+			Recommendation: "Ensure zap-service container is running and healthy.",
+		}}
+	}
+
+	timeoutSecs := int(s.cfg.IntegrationTimeout.Seconds())
+	args := []string{"-t", target, "-m", "1", "-I"}
+
+	result, err := client.Execute(ctx, args, timeoutSecs)
+	if err != nil {
+		return []model.Finding{{
+			ID:             "zap-baseline-http-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ZAP Baseline HTTP service error",
+			Description:    "Failed to execute zap-baseline.py via HTTP service.",
+			Evidence:       err.Error(),
+			Recommendation: "Check zap-service logs and retry.",
+		}}
+	}
+
+	if result.TimedOut {
+		return []model.Finding{{
+			ID:             "zap-baseline-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "ZAP Baseline integration timed out",
+			Description:    "ZAP Baseline did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	return buildZAPBaselineFinding(result.Stdout, result.Stderr, result.ExitCode, " (via HTTP service)")
+}
+
+func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model.Finding {
 	if _, err := exec.LookPath(s.cfg.ZAPBaselineBinary); err != nil {
 		return []model.Finding{{
 			ID:             "zap-baseline-binary-missing",
@@ -542,18 +601,28 @@ func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Fin
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
-	outText := stdout.String()
+	// zap-baseline.py exits non-zero when it finds WARN/FAIL markers (by design).
+	// buildZAPBaselineFinding parses output content to distinguish a real execution
+	// error (empty stdout) from expected non-zero exit with actual findings.
+	exitCode := 0
+	if err != nil {
+		exitCode = 1
+	}
+	return buildZAPBaselineFinding(stdout.String(), stderr.String(), exitCode, "")
+}
+
+func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuffix string) []model.Finding {
 	upperOut := strings.ToUpper(outText)
 	warns := strings.Count(upperOut, "WARN-")
 	fails := strings.Count(upperOut, "FAIL-")
-	if err != nil && warns == 0 && fails == 0 && strings.TrimSpace(outText) == "" {
+	if exitCode != 0 && warns == 0 && fails == 0 && strings.TrimSpace(outText) == "" {
 		return []model.Finding{{
 			ID:             "zap-baseline-execution-error",
 			Category:       "integration",
 			Severity:       model.SeverityLow,
 			Title:          "ZAP Baseline integration failed",
 			Description:    "ZAP Baseline did not complete successfully.",
-			Evidence:       strings.TrimSpace(stderr.String() + "\n" + outText),
+			Evidence:       strings.TrimSpace(errText + "\n" + outText),
 			Recommendation: "Validate ZAP runtime dependencies and rerun.",
 		}}
 	}
@@ -574,7 +643,7 @@ func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Fin
 		Severity:       severity,
 		Title:          title,
 		Description:    "Optional OWASP ZAP Baseline integration executed in passive mode.",
-		Evidence:       "failMarkers=" + strconv.Itoa(fails) + ", warnMarkers=" + strconv.Itoa(warns),
+		Evidence:       "failMarkers=" + strconv.Itoa(fails) + ", warnMarkers=" + strconv.Itoa(warns) + evidenceSuffix,
 		Recommendation: "Review full ZAP baseline report and verify findings before remediation.",
 	}}
 }
