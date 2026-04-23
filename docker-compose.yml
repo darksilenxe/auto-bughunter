@@ -245,6 +245,12 @@ services:
     # daemon is started on demand by zap-baseline.py itself.
     entrypoint: ["/bin/sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
+    # The upstream image ships a HEALTHCHECK that verifies the ZAP daemon is
+    # running. Because we override the entrypoint to keep the container alive
+    # for `docker compose exec` without starting the daemon, that check would
+    # always fail. Disable it so the container stays healthy.
+    healthcheck:
+      disable: true
 
   # Nuclei vulnerability scanner. Same pattern — kept alive so the
   # backend can `docker compose exec -T nuclei nuclei ...`.

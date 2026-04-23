@@ -105,7 +105,7 @@ def health() -> Response:
             content={
                 "status": "degraded",
                 "service": "nuclei-http-wrapper",
-                "error": str(e),
+                "error": "nuclei binary unavailable",
             },
         )
 
