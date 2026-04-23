@@ -34,7 +34,7 @@ const SCENARIOS = {
 };
 
 export default function Dashboard() {
-  const { startScan, job, loading, error, scanId } = useScan();
+  const { startScan, stopScan, job, loading, error, scanId } = useScan();
   const [scenario, setScenario] = useState("");
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
@@ -331,6 +331,11 @@ export default function Dashboard() {
           </div>
           <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>
         </form>
+        {loading && scanId && (
+          <button type="button" onClick={() => stopScan(scanId)} style={{ marginTop: "0.5rem", background: "#ef4444" }}>
+            ⏹ Stop Scan
+          </button>
+        )}
         {error && <p className="error">{error}</p>}
         {scanId && <p className="meta">Scan ID: {scanId}</p>}
       </section>
@@ -339,7 +344,7 @@ export default function Dashboard() {
       {job && job.status !== "running" && (
         <>
           <section className="card">
-            <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : "#ef4444" }}>{job.status}</span></h2>
+            <h2>Status: <span style={{ color: job.status === "completed" ? "#4ade80" : job.status === "cancelled" ? "#facc15" : "#ef4444" }}>{job.status}</span></h2>
             <div className="stats">
               <span className="pill high">High: {sevCounts.high}</span>
               <span className="pill medium">Medium: {sevCounts.medium}</span>
