@@ -7,7 +7,7 @@ require (
 	github.com/chromedp/chromedp v0.10.0
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.9.0
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.50.0
