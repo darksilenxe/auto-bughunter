@@ -34,6 +34,7 @@ import (
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/scope"
+	"auto-bughunter/backend/internal/toolclient"
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
@@ -4162,7 +4163,41 @@ func collectToolHealth() []toolHealth {
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
 	}
+
+	// In HTTP-service mode the nuclei and zap-baseline binaries live inside
+	// their sidecar containers and are therefore not on PATH inside the backend
+	// container. Use the sidecar health endpoint to determine availability
+	// instead of exec.LookPath so that applyHealthAwareExecutionGating does not
+	// incorrectly disable these integrations.
+	useHTTP := func() bool {
+		v := os.Getenv("USE_HTTP_TOOL_SERVICES")
+		return v == "true" || v == "1"
+	}()
+
+	checkNucleiHTTP := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return toolclient.NewNucleiClient().IsAvailable(ctx)
+	}
+	checkZAPHTTP := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return toolclient.NewZapClient().IsAvailable(ctx)
+	}
+
 	for i := range tools {
+		switch tools[i].Name {
+		case "nuclei":
+			if useHTTP {
+				tools[i].Installed = checkNucleiHTTP()
+				continue
+			}
+		case "zap-baseline":
+			if useHTTP {
+				tools[i].Installed = checkZAPHTTP()
+				continue
+			}
+		}
 		_, err := exec.LookPath(tools[i].Binary)
 		tools[i].Installed = err == nil
 	}
