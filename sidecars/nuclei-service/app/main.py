@@ -19,7 +19,7 @@ import subprocess
 from typing import List, Optional
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("nuclei-service")
@@ -82,7 +82,7 @@ class ExecuteResponse(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict:
+def health() -> Response:
     """Health check endpoint."""
     # Verify nuclei binary is available
     try:
@@ -93,18 +93,21 @@ def health() -> dict:
             timeout=5
         )
         version = result.stdout.strip() if result.returncode == 0 else "unknown"
-        return {
+        return JSONResponse(content={
             "status": "ok",
             "service": "nuclei-http-wrapper",
-            "nuclei_version": version
-        }
+            "nuclei_version": version,
+        })
     except Exception as e:
         logger.warning(f"Health check failed: {e}")
-        return {
-            "status": "degraded",
-            "service": "nuclei-http-wrapper",
-            "error": str(e)
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "service": "nuclei-http-wrapper",
+                "error": str(e),
+            },
+        )
 
 
 @app.post("/v1/execute", response_model=ExecuteResponse)
