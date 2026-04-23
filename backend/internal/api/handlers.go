@@ -4999,7 +4999,7 @@ func diffAssets(previous, current []model.ScanAsset) []string {
 }
 
 func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
-	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes == 0
+	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes > 0
 }
 
 func (s *Server) appendAuditEvent(scanID, stage, message string) {
