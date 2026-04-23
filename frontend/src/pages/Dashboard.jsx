@@ -17,6 +17,10 @@ const SCENARIOS = {
     useFalsePositiveReview: true,
     useRemediationPlanner: false,
     aggressiveExploitation: false,
+    strictReporting: false,
+    minReportConfidence: "",
+    excludeHosts: "",
+    loginSteps: [],
   },
   pentest: {
     label: "🔓 Pen Test",
@@ -30,8 +34,40 @@ const SCENARIOS = {
     useFalsePositiveReview: true,
     useRemediationPlanner: true,
     aggressiveExploitation: true,
+    strictReporting: false,
+    minReportConfidence: "",
+    excludeHosts: "",
+    loginSteps: [],
+  },
+  sso_cookie_consent: {
+    label: "🔐 Microsoft SSO / Cookie Consent",
+    description: "Pre-configured for single-page apps behind a cookie-consent banner + Microsoft Entra ID (Azure AD) login. Excludes Microsoft auth hosts, enables strict reporting and false-positive review to suppress redirect noise.",
+    policyPack: "bugbounty",
+    useNuclei: true,
+    useZap: false,
+    useXSSMap: false,
+    useMLTriage: true,
+    useAttackPath: true,
+    useFalsePositiveReview: true,
+    useRemediationPlanner: false,
+    aggressiveExploitation: false,
+    strictReporting: true,
+    minReportConfidence: "0.80",
+    excludeHosts: "login.microsoftonline.com, *.microsoftonline.com, login.microsoft.com, *.microsoft.com",
+    loginSteps: [
+      { action: "click",  selector: "#cookie-accept-btn", value: "", waitMillis: 0,    optional: true  },
+      { action: "wait",   selector: "",                   value: "", waitMillis: 1500,  optional: false },
+      { action: "fill",   selector: "#i0116",             value: "{{username}}", waitMillis: 0, optional: false },
+      { action: "click",  selector: "#idSIButton9",       value: "", waitMillis: 0,    optional: false },
+      { action: "wait",   selector: "",                   value: "", waitMillis: 2000,  optional: false },
+      { action: "fill",   selector: "#i0118",             value: "{{password}}", waitMillis: 0, optional: false },
+      { action: "click",  selector: "#idSIButton9",       value: "", waitMillis: 0,    optional: false },
+      { action: "wait",   selector: "",                   value: "", waitMillis: 3000,  optional: false },
+    ],
   },
 };
+
+const EMPTY_LOGIN_STEP = { action: "click", selector: "", value: "", waitMillis: 0, optional: false };
 
 export default function Dashboard() {
   const { startScan, stopScan, job, loading, error, scanId } = useScan();
@@ -61,6 +97,9 @@ export default function Dashboard() {
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("internal");
   const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
+  const [strictReporting, setStrictReporting] = useState(false);
+  const [minReportConfidence, setMinReportConfidence] = useState("");
+  const [loginSteps, setLoginSteps] = useState([]);
 
   function applyScenario(key) {
     const preset = SCENARIOS[key];
@@ -75,6 +114,10 @@ export default function Dashboard() {
     setUseFalsePositiveReview(preset.useFalsePositiveReview);
     setUseRemediationPlanner(preset.useRemediationPlanner);
     setAggressiveExploitation(preset.aggressiveExploitation);
+    setStrictReporting(preset.strictReporting ?? false);
+    setMinReportConfidence(preset.minReportConfidence ?? "");
+    if (preset.excludeHosts) setExcludeHosts(preset.excludeHosts);
+    if (preset.loginSteps) setLoginSteps(preset.loginSteps.map((s) => ({ ...s })));
   }
 
   function handleBurpImport(cfg) {
@@ -86,6 +129,18 @@ export default function Dashboard() {
       setHeadersJson(JSON.stringify(cfg.headers, null, 2));
     if (Object.keys(cfg.cookies || {}).length)
       setCookiesJson(JSON.stringify(cfg.cookies, null, 2));
+  }
+
+  function addLoginStep() {
+    setLoginSteps((prev) => [...prev, { ...EMPTY_LOGIN_STEP }]);
+  }
+
+  function removeLoginStep(idx) {
+    setLoginSteps((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function updateLoginStep(idx, field, value) {
+    setLoginSteps((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
   }
 
   function handleSubmit(e) {
@@ -117,6 +172,7 @@ export default function Dashboard() {
         password: password || undefined,
         basicAuthUsername: basicAuthUsername || undefined,
         basicAuthPassword: basicAuthPassword || undefined,
+        loginSteps: loginSteps.length > 0 ? loginSteps : undefined,
       },
       options: {
         useNucleiIntegration: useNuclei,
@@ -127,6 +183,8 @@ export default function Dashboard() {
         useFalsePositiveReview,
         useRemediationPlanner,
         aggressiveExploitation,
+        strictReporting: strictReporting || undefined,
+        minReportConfidence: strictReporting && minReportConfidence.trim() ? Number(minReportConfidence) : undefined,
       },
       scope: {
         includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
@@ -273,6 +331,109 @@ export default function Dashboard() {
               <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
             </label>
           </div>
+
+          {/* ── Login Steps (cookie consent / SSO) ── */}
+          <details style={{ marginTop: "0.75rem" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "0.9rem", userSelect: "none" }}>
+              🔐 Login Steps — Cookie Consent / SSO Flow{loginSteps.length > 0 ? ` (${loginSteps.length} step${loginSteps.length !== 1 ? "s" : ""})` : ""}
+            </summary>
+            <p className="meta" style={{ marginTop: "0.4rem" }}>
+              Define browser automation steps for sites that require a cookie-consent click or redirect to a third-party SSO
+              (e.g. Microsoft Entra ID / Azure AD) before the app is accessible. Use <code>{"{{username}}"}</code> and{" "}
+              <code>{"{{password}}"}</code> in <em>fill</em> values to interpolate the credentials above.
+              Mark steps as <em>optional</em> so they are silently skipped if the element is absent on a given run.
+            </p>
+            {loginSteps.map((step, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr 1fr auto auto",
+                  gap: "0.4rem",
+                  alignItems: "end",
+                  padding: "0.5rem 0",
+                  borderBottom: "1px solid rgba(255,255,255,0.07)",
+                }}
+              >
+                <label style={{ minWidth: "80px" }}>
+                  Action
+                  <select
+                    value={step.action}
+                    onChange={(e) => updateLoginStep(idx, "action", e.target.value)}
+                  >
+                    <option value="click">click</option>
+                    <option value="fill">fill</option>
+                    <option value="wait">wait</option>
+                  </select>
+                </label>
+                <label>
+                  CSS Selector{step.action === "wait" ? " (unused)" : " *"}
+                  <input
+                    value={step.selector}
+                    disabled={step.action === "wait"}
+                    placeholder={step.action === "fill" ? "#email" : step.action === "click" ? "#accept-cookies" : ""}
+                    onChange={(e) => updateLoginStep(idx, "selector", e.target.value)}
+                  />
+                </label>
+                <label>
+                  {step.action === "wait" ? "Wait ms *" : step.action === "fill" ? "Value *" : "Wait ms (after click)"}
+                  {step.action === "wait" ? (
+                    <input
+                      type="number"
+                      min={0}
+                      value={step.waitMillis}
+                      onChange={(e) => updateLoginStep(idx, "waitMillis", Number(e.target.value))}
+                    />
+                  ) : step.action === "fill" ? (
+                    <input
+                      value={step.value}
+                      placeholder='{{username}} or literal'
+                      onChange={(e) => updateLoginStep(idx, "value", e.target.value)}
+                    />
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      value={step.waitMillis}
+                      placeholder="0"
+                      onChange={(e) => updateLoginStep(idx, "waitMillis", Number(e.target.value))}
+                    />
+                  )}
+                </label>
+                <label className="check" style={{ whiteSpace: "nowrap", alignSelf: "end", paddingBottom: "0.3rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={step.optional}
+                    onChange={(e) => updateLoginStep(idx, "optional", e.target.checked)}
+                  />
+                  Optional
+                </label>
+                <button
+                  type="button"
+                  onClick={() => removeLoginStep(idx)}
+                  style={{ alignSelf: "end", background: "#7f1d1d", padding: "0.35rem 0.6rem", fontSize: "0.8rem" }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={addLoginStep}
+              style={{ marginTop: "0.6rem", fontSize: "0.85rem", padding: "0.35rem 0.9rem" }}
+            >
+              + Add Step
+            </button>
+            {loginSteps.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setLoginSteps([])}
+                style={{ marginTop: "0.6rem", marginLeft: "0.5rem", fontSize: "0.85rem", padding: "0.35rem 0.9rem", background: "rgba(0,0,0,0.2)" }}
+              >
+                Clear All
+              </button>
+            )}
+          </details>
           <label>
             Scope — Include Hosts (comma-separated)
             <input value={includeHosts} onChange={(e) => setIncludeHosts(e.target.value)}
@@ -328,6 +489,43 @@ export default function Dashboard() {
               <input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />
               Aggressive Exploitation Mode (Metasploit/Burp priority)
             </label>
+          </div>
+
+          {/* ── Strict Reporting / False-Positive Tuning ── */}
+          <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <p style={{ margin: "0 0 0.5rem", fontWeight: 600, fontSize: "0.9rem" }}>
+              🎯 False-Positive Tuning
+            </p>
+            <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", alignItems: "end" }}>
+              <label className="check" style={{ alignSelf: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={strictReporting}
+                  onChange={(e) => setStrictReporting(e.target.checked)}
+                />
+                Strict Reporting — filter low-confidence findings from output
+              </label>
+              {strictReporting && (
+                <label style={{ minWidth: "180px" }}>
+                  Min Confidence (0.0–1.0)
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={minReportConfidence}
+                    placeholder="0.75"
+                    onChange={(e) => setMinReportConfidence(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
+            <p className="meta" style={{ marginTop: "0.4rem" }}>
+              When enabled, findings below the confidence threshold are hidden from reports and scan output. Useful for
+              sites behind cookie consent or third-party SSO (e.g. Microsoft Entra ID / Azure AD) where redirect-based probes generate
+              noise. Leave blank to use the workspace default of 0.75. Combine with <em>False Positive Review</em> above
+              for best results.
+            </p>
           </div>
           <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>
         </form>
