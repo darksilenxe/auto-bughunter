@@ -63,7 +63,7 @@ export function ScanProvider({ children }) {
 
   // Close SSE when scan ends
   useEffect(() => {
-    if (job?.status === "completed" || job?.status === "failed") {
+    if (job?.status === "completed" || job?.status === "failed" || job?.status === "cancelled") {
       sseRef.current?.close();
       sseRef.current = null;
     }
@@ -83,11 +83,23 @@ export function ScanProvider({ children }) {
         if (!res.ok) continue;
         const data = await res.json();
         setJob(data);
-        if (data.status === "completed" || data.status === "failed") break;
+        if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") break;
       } catch { /* ignore */ }
     }
     setLoading(false);
   }, []);
+
+  // ── Stop a running scan ───────────────────────────────────────────────
+  const stopScan = useCallback(async (id) => {
+    const targetId = id || scanId;
+    if (!targetId) return;
+    try {
+      await fetch(`${API_BASE}/api/scan/${encodeURIComponent(targetId)}/stop`, {
+        method: "POST",
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+    } catch { /* ignore */ }
+  }, [scanId]);
 
   // ── Start a scan ──────────────────────────────────────────────────────
   const startScan = useCallback(async (payload) => {
@@ -131,7 +143,7 @@ export function ScanProvider({ children }) {
       liveEvents, screenshots,
       scanHistory, historyLoading,
       programs, savePrograms,
-      startScan, loadHistory,
+      startScan, stopScan, loadHistory,
     }}>
       {children}
     </ScanContext.Provider>

@@ -82,6 +82,8 @@ type Server struct {
 	defaultDailyScanLimit      int
 	defaultDailyRuntimeMinutes int
 	defaultDailyProbeLimit     int
+	cancelMu                   sync.Mutex
+	cancelFuncs                map[string]context.CancelFunc
 }
 
 const (
@@ -263,6 +265,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyScanLimit:      maxInt(0, intFromEnv("AUTOMATION_DAILY_SCAN_LIMIT", 30)),
 		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
+		cancelFuncs:                map[string]context.CancelFunc{},
 	}
 	go s.runCampaignScheduler()
 	return s
@@ -325,6 +328,10 @@ func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.URL.Path, "/annotations") {
 		s.handleListScanAnnotations(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/stop") {
+		s.handleStopScan(w, r)
 		return
 	}
 	s.handleGetScan(w, r)
@@ -542,6 +549,64 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+// handleStopScan handles POST /api/scan/{id}/stop. It cancels a running scan.
+func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/scan/"), "/stop")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+
+	job, err := s.repo.GetJob(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+		return
+	}
+	if job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+	if job.Status != "running" && job.Status != "queued" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "scan is not running"})
+		return
+	}
+
+	s.cancelMu.Lock()
+	cancel, ok := s.cancelFuncs[id]
+	s.cancelMu.Unlock()
+
+	if ok {
+		cancel()
+		writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "cancelled"})
+		return
+	}
+
+	// Scan is queued but not yet running — mark it cancelled directly.
+	now := time.Now().UTC()
+	job.Status = "cancelled"
+	job.Error = "scan stopped by operator"
+	job.CompletedAt = &now
+	if err := s.repo.UpdateJob(r.Context(), job); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update scan status"})
+		return
+	}
+	s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator before execution")
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "cancelled"})
+}
+
 func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
 	releaseGlobal := s.acquireGlobalSlot(options)
 	defer releaseGlobal()
@@ -590,7 +655,15 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	scanStart := time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
-	defer cancel()
+	s.cancelMu.Lock()
+	s.cancelFuncs[id] = cancel
+	s.cancelMu.Unlock()
+	defer func() {
+		s.cancelMu.Lock()
+		delete(s.cancelFuncs, id)
+		s.cancelMu.Unlock()
+		cancel()
+	}()
 
 	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	completed := time.Now().UTC()
@@ -599,13 +672,23 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.CompletedAt = &completed
 	if err != nil {
-		job.Status = "failed"
-		job.Error = err.Error()
-		emit(model.ScanEvent{
-			Type:    model.ScanEventInfo,
-			Message: "Scan failed: " + err.Error(),
-		})
-		s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
+		if ctx.Err() == context.Canceled {
+			job.Status = "cancelled"
+			job.Error = "scan stopped by operator"
+			emit(model.ScanEvent{
+				Type:    model.ScanEventInfo,
+				Message: "Scan cancelled by operator",
+			})
+			s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator")
+		} else {
+			job.Status = "failed"
+			job.Error = err.Error()
+			emit(model.ScanEvent{
+				Type:    model.ScanEventInfo,
+				Message: "Scan failed: " + err.Error(),
+			})
+			s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
+		}
 		_ = s.repo.UpdateJob(context.Background(), job)
 		return
 	}
@@ -4916,7 +4999,7 @@ func diffAssets(previous, current []model.ScanAsset) []string {
 }
 
 func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
-	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes == 0
+	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes > 0
 }
 
 func (s *Server) appendAuditEvent(scanID, stage, message string) {
