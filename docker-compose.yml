@@ -70,6 +70,26 @@ services:
     volumes:
       - agents_data:/data
 
+  # Nuclei HTTP wrapper service — eliminates Docker socket requirement by
+  # exposing nuclei via HTTP instead of `docker compose exec`.
+  nuclei-service:
+    build:
+      context: ./sidecars/nuclei-service
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${NUCLEI_SERVICE_LOG_LEVEL:-INFO}
+    ports:
+      - "8093:8093"
+    volumes:
+      - nuclei_templates:/root/nuclei-templates
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import requests; requests.get(\"http://localhost:8093/health\", timeout=2).raise_for_status()' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models (~4 GB for dolphin-mistral).
   # Gated behind the `ollama` compose profile so it doesn't start by default
@@ -113,30 +133,26 @@ services:
     ports:
       - "8080:8080"
       - "8081:8081"
-    # The backend image is now slim — it shells out to per-tool sidecars
-    # (zap, nuclei, chromium, projectdiscovery, ffuf, gobuster, sqlmap,
-    # nikto, wpscan) via the shim scripts under /usr/local/bin/. Mounting
-    # the host docker socket lets those shims call
-    # `docker compose exec -T <svc> <tool>` from inside the backend
-    # container.
+    # The backend can communicate with tool sidecars in two modes:
     #
-    # The backend remains the single orchestrator: it is the only service
-    # that talks to the docker socket and the only service that talks to
-    # the `agents`, `ml-service`, and `security-knowledge` HTTP sidecars.
-    # No sidecar talks to another sidecar directly.
+    # 1. HTTP mode (USE_HTTP_TOOL_SERVICES=true): Tools expose HTTP endpoints
+    #    (e.g., nuclei-service:8093). No Docker socket required. Secure and
+    #    production-ready.
     #
-    # Security note: docker-socket access is effectively root-equivalent on
+    # 2. Exec mode (USE_HTTP_TOOL_SERVICES=false, default): Shim scripts call
+    #    `docker compose exec -T <svc> <tool>` using the Docker socket. Requires
+    #    docker-cli in backend image and socket mount below.
+    #
+    # The backend remains the single orchestrator: it is the only service that
+    # talks to tool sidecars. No sidecar talks to another sidecar directly.
+    #
+    # Security note (exec mode only): Docker socket access is root-equivalent on
     # the host. Acceptable for self-hosted scanner usage; not recommended in
-    # multi-tenant deployments. To opt out, set SIDECAR_EXEC_DISABLE=1 — the
-    # scanner will then report the standard `<tool>-binary-missing` finding
-    # for each affected integration.
+    # multi-tenant deployments. HTTP mode eliminates this requirement entirely.
     volumes:
+      # Docker socket - ONLY needed when USE_HTTP_TOOL_SERVICES=false
+      # Comment out these two lines when using HTTP mode:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Compose file mounted read-only so the sidecar-exec shim can run
-      # `docker compose exec -T <svc> <tool>` from inside the backend
-      # container. COMPOSE_FILE below tells docker compose where to find it,
-      # and the top-level `name:` field pins the project name so container
-      # look-ups always succeed regardless of the host working directory.
       - ./docker-compose.yml:/app/docker-compose.yml:ro
       # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
       # sidecars. Mounted at the same path inside both backend and the
@@ -182,6 +198,8 @@ services:
         condition: service_started
       agents:
         condition: service_started
+      nuclei-service:
+        condition: service_healthy
       zap:
         condition: service_started
       nuclei:

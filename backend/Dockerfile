@@ -18,19 +18,27 @@ RUN go build -o /out/server ./cmd/server
 # to ~1 GB and made every backend rebuild also rebuild the tools.
 #
 # Instead, each heavy dependency now lives in its own Docker Compose sidecar
-# (see ../docker-compose.yml: `nuclei`, `zap`, `chromium`). The backend only
-# needs:
-#   * The compiled Go binary
-#   * `ca-certificates` for outbound HTTPS
-#   * The Docker CLI + Compose plugin so the shim scripts under
-#     `/usr/local/bin` can `docker compose exec -T <svc> <tool> ...`
+# (see ../docker-compose.yml: `nuclei`, `zap`, `chromium`).
+#
+# Docker CLI dependencies are OPTIONAL:
+#   * When USE_HTTP_TOOL_SERVICES=true, the backend uses HTTP to communicate
+#     with tool sidecars (nuclei-service, etc), eliminating the Docker socket
+#     requirement entirely.
+#   * When USE_HTTP_TOOL_SERVICES=false (default), the backend falls back to
+#     `docker compose exec` via shim scripts, which requires docker-cli and
+#     the Docker socket mount.
 # ---------------------------------------------------------------------------
 FROM alpine:latest
 
+# Install base dependencies
 RUN apk add --no-cache \
-    ca-certificates \
-    docker-cli \
-    docker-cli-compose
+    ca-certificates
+
+# Optional: Install docker-cli for legacy exec mode (only needed when USE_HTTP_TOOL_SERVICES=false)
+# Uncomment these lines if you need docker compose exec support:
+# RUN apk add --no-cache \
+#     docker-cli \
+#     docker-cli-compose
 
 WORKDIR /app
 

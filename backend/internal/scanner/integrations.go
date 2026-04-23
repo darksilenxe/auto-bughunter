@@ -21,6 +21,7 @@ import (
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/sqlmap"
+	"auto-bughunter/backend/internal/toolclient"
 	"auto-bughunter/backend/internal/wordlist"
 	"auto-bughunter/backend/internal/wpscan"
 )
@@ -358,6 +359,91 @@ func expandTargetsWithScope(target string, state *integrationState, scanScope mo
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
+	// Try HTTP service first, fall back to exec mode
+	if useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES"); useHTTPMode == "true" || useHTTPMode == "1" {
+		return s.runNucleiHTTP(ctx, target)
+	}
+	return s.runNucleiExec(ctx, target)
+}
+
+func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Finding {
+	client := toolclient.NewNucleiClient()
+
+	// Check if service is available
+	if !client.IsAvailable(ctx) {
+		return []model.Finding{{
+			ID:             "nuclei-service-unavailable",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Nuclei HTTP service unavailable",
+			Description:    "Nuclei HTTP wrapper service is not reachable.",
+			Evidence:       "service_url=" + os.Getenv("NUCLEI_SERVICE_URL"),
+			Recommendation: "Ensure nuclei-service container is running and healthy.",
+		}}
+	}
+
+	timeoutSecs := int(s.cfg.IntegrationTimeout.Seconds())
+	args := []string{"-u", target, "-severity", "medium,high,critical", "-silent"}
+
+	result, err := client.Execute(ctx, args, timeoutSecs)
+	if err != nil {
+		return []model.Finding{{
+			ID:             "nuclei-http-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Nuclei HTTP service error",
+			Description:    "Failed to execute nuclei via HTTP service.",
+			Evidence:       err.Error(),
+			Recommendation: "Check nuclei-service logs and retry.",
+		}}
+	}
+
+	if result.TimedOut {
+		return []model.Finding{{
+			ID:             "nuclei-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Nuclei integration timed out",
+			Description:    "Nuclei did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	lines := countNonEmptyLines(result.Stdout)
+	if result.ExitCode != 0 && lines == 0 {
+		return []model.Finding{{
+			ID:             "nuclei-execution-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Nuclei integration failed",
+			Description:    "Nuclei did not complete successfully.",
+			Evidence:       strings.TrimSpace(result.Stderr + "\n" + result.Stdout),
+			Recommendation: "Validate nuclei templates/network access and rerun.",
+		}}
+	}
+
+	severity := model.SeverityInfo
+	title := "Nuclei integration found no reported issues"
+	if lines > 0 {
+		severity = model.SeverityMedium
+		title = "Nuclei integration reported potential issues"
+	}
+
+	evidence := "matches=" + strconv.Itoa(lines) + " (via HTTP service)"
+
+	return []model.Finding{{
+		ID:             "nuclei-summary",
+		Category:       "integration",
+		Severity:       severity,
+		Title:          title,
+		Description:    "Optional Nuclei integration executed with medium/high/critical severity scope via HTTP service.",
+		Evidence:       evidence,
+		Recommendation: "Review raw tool output in logs and validate each reported item before remediation.",
+	}}
+}
+
+func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Finding {
 	if _, err := exec.LookPath(s.cfg.NucleiBinary); err != nil {
 		return []model.Finding{{
 			ID:             "nuclei-binary-missing",

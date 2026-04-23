@@ -154,16 +154,59 @@ Two integration paths:
 
 ### Docker socket requirement
 
-Because the shims call `docker compose exec`, the backend container has
-`/var/run/docker.sock` bind-mounted. **This is effectively
-root-equivalent on the host** — fine for self-hosted single-tenant
-scanner usage, but not appropriate for multi-tenant deployments.
+**NEW: HTTP mode eliminates Docker socket requirement!**
 
-To opt out (e.g. when running the backend binary outside Docker
-Compose), set `SIDECAR_EXEC_DISABLE=1`. The Go scanner will then report
-the standard `<tool>-binary-missing` finding for any integration that
-was enabled but cannot find its tool on `$PATH`, and the rest of the
-scan will run unaffected.
+The backend can communicate with tool sidecars in two modes:
+
+#### 1. HTTP Mode (Recommended, No Docker Socket)
+
+Set `USE_HTTP_TOOL_SERVICES=true` in `.env` to use HTTP wrapper services.
+Tool sidecars (nuclei-service, etc.) expose HTTP endpoints that the backend
+calls directly. This eliminates the need for Docker socket access entirely.
+
+**Benefits:**
+- No root-equivalent Docker socket access required
+- Better security isolation between containers
+- Works in Kubernetes and other orchestrators
+- Easier to scale horizontally
+- Container-orchestration agnostic
+
+**Setup:**
+```bash
+# In .env
+USE_HTTP_TOOL_SERVICES=true
+```
+
+When using HTTP mode, you can comment out the Docker socket mounts in
+`docker-compose.yml` and remove docker-cli from the backend Dockerfile.
+
+#### 2. Exec Mode (Legacy, Requires Docker Socket)
+
+When `USE_HTTP_TOOL_SERVICES=false` (default), shim scripts call
+`docker compose exec -T <svc> <tool>` into CLI tool sidecars. This requires
+the backend container to have `/var/run/docker.sock` bind-mounted.
+
+**This is effectively root-equivalent on the host** — fine for self-hosted
+single-tenant scanner usage, but not appropriate for multi-tenant deployments.
+
+To opt out entirely (disable both modes), set `SIDECAR_EXEC_DISABLE=1`. The
+Go scanner will then report the standard `<tool>-binary-missing` finding for
+any integration that was enabled but cannot find its tool, and the rest of
+the scan will run unaffected.
+
+#### Migration Path
+
+The codebase supports both modes simultaneously for gradual migration:
+
+1. **Phase 1 (current)**: Nuclei HTTP wrapper service is available. Set
+   `USE_HTTP_TOOL_SERVICES=true` to test HTTP mode for nuclei.
+
+2. **Phase 2 (future)**: Additional HTTP wrappers will be added for other
+   tools (zap, ffuf, gobuster, etc.) following the same pattern as
+   `sidecars/nuclei-service/`.
+
+3. **Phase 3 (future)**: Once all critical tools have HTTP wrappers, exec
+   mode can be fully deprecated and Docker socket access removed.
 
 ## API
 
