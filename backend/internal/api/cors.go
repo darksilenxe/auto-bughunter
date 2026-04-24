@@ -50,7 +50,8 @@ func addVaryHeader(w http.ResponseWriter, value string) {
 		return
 	}
 	for _, part := range strings.Split(current, ",") {
-		if strings.EqualFold(strings.TrimSpace(part), value) {
+		part = strings.TrimSpace(part)
+		if strings.EqualFold(part, value) {
 			return
 		}
 	}

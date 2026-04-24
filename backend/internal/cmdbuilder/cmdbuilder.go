@@ -160,10 +160,11 @@ func isSafePythonInvocation(args []string) bool {
 		return false
 	}
 	for _, arg := range args[1:] {
-		if strings.TrimSpace(arg) == "" {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(strings.TrimSpace(arg), "-") {
+		if strings.HasPrefix(trimmed, "-") {
 			return false
 		}
 	}
