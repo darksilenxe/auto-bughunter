@@ -3,20 +3,32 @@ package toolbuilder
 import "testing"
 
 func TestResolveInterpreter_AllowsPythonForms(t *testing.T) {
-	cases := []string{"", "python", "python3", " PYTHON3 "}
-	for _, language := range cases {
-		interp, ext, err := resolveInterpreter(language)
+	cases := []struct {
+		language   string
+		interpWant string
+		extWant    string
+	}{
+		{language: "", interpWant: "python3", extWant: ".py"},
+		{language: "python", interpWant: "python3", extWant: ".py"},
+		{language: "python3", interpWant: "python3", extWant: ".py"},
+		{language: " PYTHON3 ", interpWant: "python3", extWant: ".py"},
+		{language: "node", interpWant: "node", extWant: ".js"},
+		{language: " perl ", interpWant: "perl", extWant: ".pl"},
+		{language: "bash", interpWant: "bash", extWant: ".sh"},
+	}
+	for _, tc := range cases {
+		interp, ext, err := resolveInterpreter(tc.language)
 		if err != nil {
-			t.Fatalf("expected language %q to be allowed, got err: %v", language, err)
+			t.Fatalf("expected language %q to be allowed, got err: %v", tc.language, err)
 		}
-		if interp != "python3" || ext != ".py" {
-			t.Fatalf("expected python3/.py for %q, got %q/%q", language, interp, ext)
+		if interp != tc.interpWant || ext != tc.extWant {
+			t.Fatalf("expected %q/%q for %q, got %q/%q", tc.interpWant, tc.extWant, tc.language, interp, ext)
 		}
 	}
 }
 
-func TestResolveInterpreter_RejectsBashAndUnknown(t *testing.T) {
-	cases := []string{"bash", "sh", "node", "perl"}
+func TestResolveInterpreter_RejectsUnknown(t *testing.T) {
+	cases := []string{"sh", "nodejs", "ruby", "php"}
 	for _, language := range cases {
 		if _, _, err := resolveInterpreter(language); err == nil {
 			t.Fatalf("expected language %q to be rejected", language)

@@ -1,5 +1,5 @@
 // Package toolbuilder lets autonomous agents generate, write, and execute
-// custom Python or Bash tools at runtime.  All generated scripts are:
+// custom Python, Node, Perl, or Bash tools at runtime.  All generated scripts are:
 //   - Written to an isolated /tmp/auto-bughunter/tools/ scratch directory.
 //   - Validated for dangerous patterns before execution.
 //   - Executed under a strict timeout via a context-aware exec.Command.
@@ -31,7 +31,7 @@ const (
 type ToolSpec struct {
 	// Name is a short identifier used as the script filename (no extension).
 	Name string
-	// Language is "python" or "python3".
+	// Language is one of: "python", "python3", "node", "perl", or "bash".
 	Language string
 	// Code is the full script source.
 	Code string
@@ -88,8 +88,14 @@ func resolveInterpreter(language string) (interpreter, extension string, err err
 	switch strings.ToLower(strings.TrimSpace(language)) {
 	case "", "python", "python3":
 		return "python3", ".py", nil
+	case "node":
+		return "node", ".js", nil
+	case "perl":
+		return "perl", ".pl", nil
+	case "bash":
+		return "bash", ".sh", nil
 	default:
-		return "", "", fmt.Errorf("unsupported tool language %q: only python/python3 are allowed", language)
+		return "", "", fmt.Errorf("unsupported tool language %q: only python/python3, node, perl, bash are allowed", language)
 	}
 }
 
