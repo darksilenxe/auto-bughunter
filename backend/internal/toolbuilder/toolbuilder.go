@@ -95,7 +95,7 @@ func resolveInterpreter(language string) (interpreter, extension string, err err
 	case "bash":
 		return "bash", ".sh", nil
 	default:
-		return "", "", fmt.Errorf("unsupported tool language %q: only python/python3, node, perl, bash are allowed", language)
+		return "", "", fmt.Errorf("unsupported tool language %q: allowed values are empty (defaults to python3), python, python3, node, perl, bash", language)
 	}
 }
 
