@@ -31,7 +31,7 @@ const (
 type ToolSpec struct {
 	// Name is a short identifier used as the script filename (no extension).
 	Name string
-	// Language is "python3" or "bash".
+	// Language is "python" or "python3".
 	Language string
 	// Code is the full script source.
 	Code string
@@ -84,6 +84,15 @@ func validateScript(code string) error {
 	return nil
 }
 
+func resolveInterpreter(language string) (interpreter, extension string, err error) {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "", "python", "python3":
+		return "python3", ".py", nil
+	default:
+		return "", "", fmt.Errorf("unsupported tool language %q: only python/python3 are allowed", language)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Builder
 // ────────────────────────────────────────────────────────────────────────────
@@ -98,16 +107,13 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	if err := validateScript(spec.Code); err != nil {
 		return nil, fmt.Errorf("tool %q rejected: %w", spec.Name, err)
 	}
+	interp, ext, err := resolveInterpreter(spec.Language)
+	if err != nil {
+		return nil, fmt.Errorf("tool %q rejected: %w", spec.Name, err)
+	}
 
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create tool scratch dir: %w", err)
-	}
-
-	ext := ".py"
-	interp := "python3"
-	if strings.EqualFold(spec.Language, "bash") {
-		ext = ".sh"
-		interp = "bash"
 	}
 
 	scriptPath := filepath.Join(scratchDir, sanitizeName(spec.Name)+ext)
