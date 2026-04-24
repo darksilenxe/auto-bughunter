@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-const API_KEY = import.meta.env.VITE_API_KEY || "dev-admin-key";
+const API_KEY = import.meta.env.VITE_API_KEY || "";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
 export { API_BASE, API_KEY, WORKSPACE_ID };
 
