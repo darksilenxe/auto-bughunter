@@ -174,9 +174,6 @@ func principalFromContext(ctx context.Context) (principal, bool) {
 
 func (s *Server) authenticatePrincipal(ctx context.Context, rawKey string) (principal, error) {
 	bootstrap := strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_API_KEY"))
-	if bootstrap == "" {
-		bootstrap = "dev-admin-key"
-	}
 	if bootstrap != "" && subtleConstantTimeEq(rawKey, bootstrap) {
 		return principal{
 			KeyID:       "bootstrap-admin",

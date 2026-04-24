@@ -1,5 +1,5 @@
 // Package toolbuilder lets autonomous agents generate, write, and execute
-// custom Python or Bash tools at runtime.  All generated scripts are:
+// custom Python, Node, Perl, or Bash tools at runtime.  All generated scripts are:
 //   - Written to an isolated /tmp/auto-bughunter/tools/ scratch directory.
 //   - Validated for dangerous patterns before execution.
 //   - Executed under a strict timeout via a context-aware exec.Command.
@@ -31,7 +31,7 @@ const (
 type ToolSpec struct {
 	// Name is a short identifier used as the script filename (no extension).
 	Name string
-	// Language is "python3" or "bash".
+	// Language is one of: "python", "python3", "node", "perl", or "bash".
 	Language string
 	// Code is the full script source.
 	Code string
@@ -61,16 +61,18 @@ type Finding struct {
 // ────────────────────────────────────────────────────────────────────────────
 
 var scriptBlockedPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`import\s+subprocess`),       // no spawning sub-processes
-	regexp.MustCompile(`os\.system`),                 // no os.system calls
-	regexp.MustCompile(`__import__`),                 // no dynamic imports
-	regexp.MustCompile(`eval\s*\(`),                  // no eval
-	regexp.MustCompile(`exec\s*\(`),                  // no exec
-	regexp.MustCompile(`open\s*\(['"][/\\\\]`), // no opening absolute paths (allow relative)
-	regexp.MustCompile(`socket\.connect`),             // no raw socket connects (use urllib)
-	regexp.MustCompile(`rm\s+-rf`),                   // no recursive deletes
-	regexp.MustCompile(`/etc/passwd`),                 // no passwd access
-	regexp.MustCompile(`/root`),                       // no /root access
+	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),      // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bfrom\s+subprocess\s+import\b`), // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bsubprocess\.`),                // no subprocess API usage
+	regexp.MustCompile(`(?i)\bos\.system\s*\(`),             // no os.system calls
+	regexp.MustCompile(`(?i)__import__\s*\(`),               // no dynamic imports
+	regexp.MustCompile(`(?i)\beval\s*\(`),                   // no eval
+	regexp.MustCompile(`(?i)\bexec\s*\(`),                   // no exec
+	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),        // no opening absolute paths (allow relative)
+	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),        // no raw socket connects (use urllib)
+	regexp.MustCompile(`(?i)rm\s+-rf`),                      // no recursive deletes
+	regexp.MustCompile(`(?i)/etc/passwd`),                   // no passwd access
+	regexp.MustCompile(`(?i)/root`),                         // no /root access
 }
 
 func validateScript(code string) error {
@@ -80,6 +82,21 @@ func validateScript(code string) error {
 		}
 	}
 	return nil
+}
+
+func resolveInterpreter(language string) (interpreter, extension string, err error) {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "", "python", "python3":
+		return "python3", ".py", nil
+	case "node":
+		return "node", ".js", nil
+	case "perl":
+		return "perl", ".pl", nil
+	case "bash":
+		return "bash", ".sh", nil
+	default:
+		return "", "", fmt.Errorf("unsupported tool language %q: allowed values are empty (defaults to python3), python, python3, node, perl, bash", language)
+	}
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -96,16 +113,13 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	if err := validateScript(spec.Code); err != nil {
 		return nil, fmt.Errorf("tool %q rejected: %w", spec.Name, err)
 	}
+	interp, ext, err := resolveInterpreter(spec.Language)
+	if err != nil {
+		return nil, fmt.Errorf("tool %q rejected: %w", spec.Name, err)
+	}
 
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create tool scratch dir: %w", err)
-	}
-
-	ext := ".py"
-	interp := "python3"
-	if strings.EqualFold(spec.Language, "bash") {
-		ext = ".sh"
-		interp = "bash"
 	}
 
 	scriptPath := filepath.Join(scratchDir, sanitizeName(spec.Name)+ext)

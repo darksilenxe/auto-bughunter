@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -75,7 +76,6 @@ var allowedBinaries = map[string]bool{
 	"qsreplace":       true,
 	"python3":         true,
 	"python":          true,
-	"bash":            true,
 }
 
 // blockedArgPatterns are argument substrings that are never permitted regardless
@@ -97,6 +97,8 @@ var blockedArgPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`~`),            // home directory reference
 }
 
+const pythonToolScratchDir = "/tmp/auto-bughunter/tools"
+
 // Validate checks that a CommandSpec is safe to execute.
 // It returns a non-nil error if the command violates the safety policy.
 func Validate(spec CommandSpec, target string) error {
@@ -104,8 +106,12 @@ func Validate(spec CommandSpec, target string) error {
 	if bin == "" {
 		return fmt.Errorf("empty binary")
 	}
-	if !allowedBinaries[strings.ToLower(bin)] {
+	binLower := strings.ToLower(bin)
+	if !allowedBinaries[binLower] {
 		return fmt.Errorf("binary %q is not on the approved tool list", bin)
+	}
+	if (binLower == "python3" || binLower == "python") && !isSafePythonInvocation(spec.Args) {
+		return fmt.Errorf("python commands must execute a script under %s without interpreter flags", pythonToolScratchDir)
 	}
 
 	for _, arg := range spec.Args {
@@ -118,7 +124,7 @@ func Validate(spec CommandSpec, target string) error {
 
 	// Ensure the target hostname appears in at least one argument when the
 	// command is expected to make network requests.
-	if isNetworkTool(bin) && target != "" {
+	if isNetworkTool(binLower) && target != "" {
 		tHost := extractHost(target)
 		found := false
 		for _, arg := range spec.Args {
@@ -137,8 +143,33 @@ func Validate(spec CommandSpec, target string) error {
 
 func isNetworkTool(bin string) bool {
 	switch strings.ToLower(bin) {
-	case "python3", "python", "bash", "gf", "anew", "qsreplace":
+	case "python3", "python", "gf", "anew", "qsreplace":
 		return false
+	}
+	return true
+}
+
+func isSafePythonInvocation(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	script := strings.TrimSpace(args[0])
+	if script == "" || strings.HasPrefix(script, "-") {
+		return false
+	}
+	script = filepath.Clean(script)
+	scratchPrefix := filepath.Clean(pythonToolScratchDir) + string(os.PathSeparator)
+	if !strings.HasPrefix(script, scratchPrefix) {
+		return false
+	}
+	for _, arg := range args[1:] {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "-") {
+			return false
+		}
 	}
 	return true
 }
@@ -313,7 +344,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasJWT {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/jwt_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "jwt_probe.py"), target},
 			Rationale:   "JWT tokens detected; probing for weak secrets and algorithm confusion",
 			GeneratedBy: agentName,
 			Timeout:     30 * time.Second,
@@ -324,7 +355,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasGraphQL {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/graphql_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "graphql_probe.py"), target},
 			Rationale:   "GraphQL endpoint detected; running introspection and query enumeration",
 			GeneratedBy: agentName,
 			Timeout:     45 * time.Second,
@@ -359,7 +390,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasOpenRedirect {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/redirect_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "redirect_probe.py"), target},
 			Rationale:   "Open redirect indicators; probing redirect chain for token leakage",
 			GeneratedBy: agentName,
 			Timeout:     30 * time.Second,
