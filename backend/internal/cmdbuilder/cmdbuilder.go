@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -75,7 +76,6 @@ var allowedBinaries = map[string]bool{
 	"qsreplace":       true,
 	"python3":         true,
 	"python":          true,
-	"bash":            true,
 }
 
 // blockedArgPatterns are argument substrings that are never permitted regardless
@@ -104,8 +104,12 @@ func Validate(spec CommandSpec, target string) error {
 	if bin == "" {
 		return fmt.Errorf("empty binary")
 	}
-	if !allowedBinaries[strings.ToLower(bin)] {
+	binLower := strings.ToLower(bin)
+	if !allowedBinaries[binLower] {
 		return fmt.Errorf("binary %q is not on the approved tool list", bin)
+	}
+	if (binLower == "python3" || binLower == "python") && !isSafePythonInvocation(spec.Args) {
+		return fmt.Errorf("python commands must execute a script under /tmp/auto-bughunter/tools without interpreter flags")
 	}
 
 	for _, arg := range spec.Args {
@@ -118,7 +122,7 @@ func Validate(spec CommandSpec, target string) error {
 
 	// Ensure the target hostname appears in at least one argument when the
 	// command is expected to make network requests.
-	if isNetworkTool(bin) && target != "" {
+	if isNetworkTool(binLower) && target != "" {
 		tHost := extractHost(target)
 		found := false
 		for _, arg := range spec.Args {
@@ -137,8 +141,31 @@ func Validate(spec CommandSpec, target string) error {
 
 func isNetworkTool(bin string) bool {
 	switch strings.ToLower(bin) {
-	case "python3", "python", "bash", "gf", "anew", "qsreplace":
+	case "python3", "python", "gf", "anew", "qsreplace":
 		return false
+	}
+	return true
+}
+
+func isSafePythonInvocation(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	script := strings.TrimSpace(args[0])
+	if script == "" || strings.HasPrefix(script, "-") {
+		return false
+	}
+	script = filepath.Clean(script)
+	if !strings.HasPrefix(script, "/tmp/auto-bughunter/tools/") {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if strings.TrimSpace(arg) == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(arg), "-") {
+			return false
+		}
 	}
 	return true
 }

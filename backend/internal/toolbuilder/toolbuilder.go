@@ -61,16 +61,18 @@ type Finding struct {
 // ────────────────────────────────────────────────────────────────────────────
 
 var scriptBlockedPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`import\s+subprocess`),       // no spawning sub-processes
-	regexp.MustCompile(`os\.system`),                 // no os.system calls
-	regexp.MustCompile(`__import__`),                 // no dynamic imports
-	regexp.MustCompile(`eval\s*\(`),                  // no eval
-	regexp.MustCompile(`exec\s*\(`),                  // no exec
-	regexp.MustCompile(`open\s*\(['"][/\\\\]`), // no opening absolute paths (allow relative)
-	regexp.MustCompile(`socket\.connect`),             // no raw socket connects (use urllib)
-	regexp.MustCompile(`rm\s+-rf`),                   // no recursive deletes
-	regexp.MustCompile(`/etc/passwd`),                 // no passwd access
-	regexp.MustCompile(`/root`),                       // no /root access
+	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),      // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bfrom\s+subprocess\s+import\b`), // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bsubprocess\.`),                // no subprocess API usage
+	regexp.MustCompile(`(?i)\bos\.system\s*\(`),             // no os.system calls
+	regexp.MustCompile(`(?i)__import__\s*\(`),               // no dynamic imports
+	regexp.MustCompile(`(?i)\beval\s*\(`),                   // no eval
+	regexp.MustCompile(`(?i)\bexec\s*\(`),                   // no exec
+	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),        // no opening absolute paths (allow relative)
+	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),        // no raw socket connects (use urllib)
+	regexp.MustCompile(`(?i)rm\s+-rf`),                      // no recursive deletes
+	regexp.MustCompile(`(?i)/etc/passwd`),                   // no passwd access
+	regexp.MustCompile(`(?i)/root`),                         // no /root access
 }
 
 func validateScript(code string) error {
