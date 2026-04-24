@@ -97,6 +97,8 @@ var blockedArgPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`~`),            // home directory reference
 }
 
+const pythonToolScratchDir = "/tmp/auto-bughunter/tools"
+
 // Validate checks that a CommandSpec is safe to execute.
 // It returns a non-nil error if the command violates the safety policy.
 func Validate(spec CommandSpec, target string) error {
@@ -109,7 +111,7 @@ func Validate(spec CommandSpec, target string) error {
 		return fmt.Errorf("binary %q is not on the approved tool list", bin)
 	}
 	if (binLower == "python3" || binLower == "python") && !isSafePythonInvocation(spec.Args) {
-		return fmt.Errorf("python commands must execute a script under /tmp/auto-bughunter/tools without interpreter flags")
+		return fmt.Errorf("python commands must execute a script under %s without interpreter flags", pythonToolScratchDir)
 	}
 
 	for _, arg := range spec.Args {
@@ -156,7 +158,8 @@ func isSafePythonInvocation(args []string) bool {
 		return false
 	}
 	script = filepath.Clean(script)
-	if !strings.HasPrefix(script, "/tmp/auto-bughunter/tools/") {
+	scratchPrefix := filepath.Clean(pythonToolScratchDir) + string(os.PathSeparator)
+	if !strings.HasPrefix(script, scratchPrefix) {
 		return false
 	}
 	for _, arg := range args[1:] {
@@ -341,7 +344,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasJWT {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/jwt_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "jwt_probe.py"), target},
 			Rationale:   "JWT tokens detected; probing for weak secrets and algorithm confusion",
 			GeneratedBy: agentName,
 			Timeout:     30 * time.Second,
@@ -352,7 +355,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasGraphQL {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/graphql_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "graphql_probe.py"), target},
 			Rationale:   "GraphQL endpoint detected; running introspection and query enumeration",
 			GeneratedBy: agentName,
 			Timeout:     45 * time.Second,
@@ -387,7 +390,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 	if hasOpenRedirect {
 		cmds = append(cmds, CommandSpec{
 			Binary:      "python3",
-			Args:        []string{"/tmp/auto-bughunter/tools/redirect_probe.py", target},
+			Args:        []string{filepath.Join(pythonToolScratchDir, "redirect_probe.py"), target},
 			Rationale:   "Open redirect indicators; probing redirect chain for token leakage",
 			GeneratedBy: agentName,
 			Timeout:     30 * time.Second,
