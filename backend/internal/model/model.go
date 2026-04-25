@@ -145,6 +145,7 @@ type ScanOptions struct {
 	UseXSSMapIntegration      bool     `json:"useXssMapIntegration,omitempty"`
 	UseSubfinderIntegration   bool     `json:"useSubfinderIntegration,omitempty"`
 	UseHttpxIntegration       bool     `json:"useHttpxIntegration,omitempty"`
+	UseCloudlistIntegration   bool     `json:"useCloudlistIntegration,omitempty"`
 	UseNaabuIntegration       bool     `json:"useNaabuIntegration,omitempty"`
 	UseDnsxIntegration        bool     `json:"useDnsxIntegration,omitempty"`
 	UseShuffleDNSIntegration  bool     `json:"useShuffleDnsIntegration,omitempty"`

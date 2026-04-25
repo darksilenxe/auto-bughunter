@@ -45,6 +45,7 @@ func (s *Service) OAST() *oast.Service { return s.oast }
 type Config struct {
 	EnableSubfinder   bool
 	EnableHttpx       bool
+	EnableCloudlist   bool
 	EnableNaabu       bool
 	EnableDnsx        bool
 	EnableShuffleDNS  bool
@@ -65,6 +66,7 @@ type Config struct {
 	XSSMapBinary      string
 	SubfinderBinary   string
 	HttpxBinary       string
+	CloudlistBinary   string
 	NaabuBinary       string
 	DnsxBinary        string
 	ShuffleDNSBinary  string
@@ -113,6 +115,9 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.HttpxBinary) == "" {
 		cfg.HttpxBinary = "httpx"
+	}
+	if strings.TrimSpace(cfg.CloudlistBinary) == "" {
+		cfg.CloudlistBinary = "cloudlist"
 	}
 	if strings.TrimSpace(cfg.NaabuBinary) == "" {
 		cfg.NaabuBinary = "naabu"

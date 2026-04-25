@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ import (
 	"auto-bughunter/backend/internal/toolclient"
 	"auto-bughunter/backend/internal/wordlist"
 	"auto-bughunter/backend/internal/wpscan"
+	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
 
 // integrationState carries context discovered in earlier pipeline phases to later ones.
@@ -44,7 +46,7 @@ const zapBaselineDelayAfterNuclei = 5 * time.Second
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 1 — Discovery:   subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
+//	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
 //	Phase 4 — Crawling:    katana, ffuf, gobuster
@@ -68,6 +70,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	}
 
 	// Phase 1 — Subdomain & DNS discovery.
+	if input.Options.UseCloudlistIntegration {
+		emitCmd("cloudlist", "-silent -host -id "+hostFromTarget(input.Target))
+		findings = append(findings, s.runInstrumentedTool(ctx, "cloudlist", func() []model.Finding {
+			return s.runCloudlist(ctx, input.Target)
+		})...)
+	}
 	if input.Options.UseSubfinderIntegration {
 		emitCmd("subfinder", "-d "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "subfinder", func() []model.Finding {
@@ -1047,7 +1055,7 @@ func (s *Service) runHttpx(ctx context.Context, target string) []model.Finding {
 		title = "httpx probed active HTTP services"
 	}
 
-	return []model.Finding{{
+	findings := []model.Finding{{
 		ID:             "httpx-summary",
 		Category:       "integration",
 		Severity:       severity,
@@ -1055,6 +1063,147 @@ func (s *Service) runHttpx(ctx context.Context, target string) []model.Finding {
 		Description:    "Project Discovery httpx HTTP probing and technology detection executed.",
 		Evidence:       "probed=" + strconv.Itoa(lines),
 		Recommendation: "Review identified technologies and HTTP service metadata for outdated or misconfigured components.",
+	}}
+	findings = append(findings, s.runWappalyzergo(ctx, target))
+	return findings
+}
+
+func (s *Service) runWappalyzergo(ctx context.Context, target string) model.Finding {
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ictx, http.MethodGet, target, nil)
+	if err != nil {
+		return model.Finding{
+			ID:             "wappalyzergo-request-error",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "wappalyzergo request setup failed",
+			Description:    "Technology fingerprinting via wappalyzergo could not initialize request context.",
+			Evidence:       err.Error(),
+			Recommendation: "Validate target URL formatting and retry.",
+		}
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return model.Finding{
+			ID:             "wappalyzergo-http-error",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "wappalyzergo HTTP fetch failed",
+			Description:    "Technology fingerprinting via wappalyzergo could not fetch target content.",
+			Evidence:       err.Error(),
+			Recommendation: "Ensure the target is reachable and in scope before rerunning.",
+		}
+	}
+	defer resp.Body.Close()
+
+	const maxFingerprintBodyBytes = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFingerprintBodyBytes))
+	if err != nil {
+		return model.Finding{
+			ID:             "wappalyzergo-read-error",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "wappalyzergo response read failed",
+			Description:    "Technology fingerprinting via wappalyzergo could not read target response body.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan after confirming target stability.",
+		}
+	}
+
+	client, err := wappalyzer.New()
+	if err != nil {
+		return model.Finding{
+			ID:             "wappalyzergo-init-error",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "wappalyzergo initialization failed",
+			Description:    "Technology fingerprinting database could not be initialized.",
+			Evidence:       err.Error(),
+			Recommendation: "Rebuild backend dependencies and retry.",
+		}
+	}
+
+	fingerprints := client.Fingerprint(resp.Header, body)
+	technologies := make([]string, 0, len(fingerprints))
+	for tech := range fingerprints {
+		technologies = append(technologies, tech)
+	}
+	sort.Strings(technologies)
+
+	title := "wappalyzergo detected no additional technologies"
+	if len(technologies) > 0 {
+		title = "wappalyzergo identified web technologies"
+	}
+	evidence := "technologies=" + strconv.Itoa(len(technologies))
+	if len(technologies) > 0 {
+		limit := min(8, len(technologies))
+		evidence += ", top=" + strings.Join(technologies[:limit], ",")
+	}
+	return model.Finding{
+		ID:             "wappalyzergo-summary",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          title,
+		Description:    "Project Discovery wappalyzergo technology fingerprinting executed alongside httpx -tech-detect.",
+		Evidence:       evidence,
+		Recommendation: "Correlate detected frameworks with version exposure and known CVEs.",
+	}
+}
+
+func (s *Service) runCloudlist(ctx context.Context, target string) []model.Finding {
+	if !s.cfg.EnableCloudlist {
+		return nil
+	}
+	if _, err := exec.LookPath(s.cfg.CloudlistBinary); err != nil {
+		return []model.Finding{{
+			ID:             "cloudlist-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "cloudlist binary not found",
+			Description:    "Cloudlist integration is enabled but binary is missing in the runtime image.",
+			Evidence:       err.Error(),
+			Recommendation: "Install cloudlist in the backend image or set CLOUDLIST_BINARY to a valid path.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ictx, s.cfg.CloudlistBinary, "-silent", "-host", "-id", host)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return []model.Finding{{
+			ID:             "cloudlist-execution-error",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "cloudlist integration did not return scoped assets",
+			Description:    "Cloudlist could not complete provider-backed enumeration for this scoped host filter.",
+			Evidence:       strings.TrimSpace(stderr.String()),
+			Recommendation: "If cloud inventory integration is intended, provide cloudlist provider credentials and rerun.",
+		}}
+	}
+
+	matches := countNonEmptyLines(stdout.String())
+	title := "cloudlist found no cloud assets matching target host"
+	if matches > 0 {
+		title = "cloudlist discovered cloud assets matching target host"
+	}
+	return []model.Finding{{
+		ID:             "cloudlist-summary",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          title,
+		Description:    "Project Discovery cloudlist multi-cloud inventory enumeration executed with host filtering.",
+		Evidence:       "host=" + host + ", assets=" + strconv.Itoa(matches),
+		Recommendation: "Cross-check discovered cloud assets against authorized scope and exposed attack surface.",
 	}}
 }
 
