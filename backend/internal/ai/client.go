@@ -20,7 +20,7 @@ type Client struct {
 	CodingBaseURL string
 	CodingAPIKey  string
 	CodingModel   string
-	HTTP *http.Client
+	HTTP          *http.Client
 
 	// provider and codingProvider are the resolved LLM adapters.  They are
 	// initialised by NewClient and updated by ConfigureCodingModel.  When nil,
@@ -699,7 +699,8 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 		"(2) Replace {{HOST}} with the target hostname. " +
 		"(3) Replace {{PATH}} with the relevant path extracted from the evidence, or / if unknown. " +
 		"(4) Replace {{PARAM}} with the vulnerable parameter name from the evidence, or 'id' if unknown. " +
-		"(5) Only use binaries from this list: sqlmap curl dalfox gobuster ffuf nikto nmap nuclei subfinder httpx python3 wafw00f wpscan arjun. " +
+		"(5) Only use binaries from this list: sqlmap curl dalfox gobuster ffuf nikto nmap nuclei subfinder httpx cloudlist vulnx python3 wafw00f wpscan arjun. " +
+		"(5a) You may choose any tool-specific flags that best fit the finding evidence and target context. " +
 		// NOTE: this list mirrors cmdbuilder.allowedBinaries. If that list
 		// changes, update here too so the LLM prompt stays in sync.
 		"(6) Do NOT add shell operators (&&, ||, ;, |, $(), backticks, or redirects). " +
@@ -909,4 +910,3 @@ func SelectDomainProfile(targetURL string) *DomainProfilePack {
 	}
 	return nil
 }
-

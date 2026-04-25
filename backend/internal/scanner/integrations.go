@@ -54,7 +54,7 @@ const zapBaselineDelayAfterNuclei = 5 * time.Second
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
 //	Phase 6c — SQL inject: SQLMap (native Go; error-based, boolean-blind, time-based blind)
-//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), zap
+//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), vulnx, zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
@@ -326,6 +326,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})...)
 		}
 		nucleiPhaseRan = true
+	}
+	if input.Options.UseVulnxIntegration {
+		emitCmd("vulnx", "search --limit 20 --silent "+hostFromTarget(input.Target))
+		findings = append(findings, s.runInstrumentedTool(ctx, "vulnx", func() []model.Finding {
+			return s.runVulnx(ctx, input.Target)
+		})...)
 	}
 	if input.Options.UseZAPBaselineIntegration {
 		if nucleiPhaseRan && zapBaselineDelayAfterNuclei > 0 {
@@ -1204,6 +1210,68 @@ func (s *Service) runCloudlist(ctx context.Context, target string) []model.Findi
 		Description:    "Project Discovery cloudlist multi-cloud inventory enumeration executed with host filtering.",
 		Evidence:       "host=" + host + ", assets=" + strconv.Itoa(matches),
 		Recommendation: "Cross-check discovered cloud assets against authorized scope and exposed attack surface.",
+	}}
+}
+
+func (s *Service) runVulnx(ctx context.Context, target string) []model.Finding {
+	if !s.cfg.EnableVulnx {
+		return []model.Finding{{
+			ID:             "vulnx-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "vulnx integration requested but disabled",
+			Description:    "The job requested vulnx but ENABLE_VULNX_INTEGRATION is false.",
+			Evidence:       "ENABLE_VULNX_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.VulnxBinary); err != nil {
+		return []model.Finding{{
+			ID:             "vulnx-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "vulnx binary not found",
+			Description:    "vulnx integration is enabled but binary is missing in the runtime image.",
+			Evidence:       err.Error(),
+			Recommendation: "Install vulnx in the backend image or set VULNX_BINARY to a valid path.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ictx, s.cfg.VulnxBinary, "search", "--limit", "20", "--silent", host)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return []model.Finding{{
+			ID:             "vulnx-execution-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "vulnx integration failed",
+			Description:    "vulnx did not complete successfully.",
+			Evidence:       strings.TrimSpace(stderr.String()),
+			Recommendation: "Validate vulnx configuration (including API auth/rate limits) and retry.",
+		}}
+	}
+
+	matches := countNonEmptyLines(stdout.String())
+	title := "vulnx found no vulnerability intelligence matches"
+	if matches > 0 {
+		title = "vulnx correlated vulnerability intelligence"
+	}
+	return []model.Finding{{
+		ID:             "vulnx-summary",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          title,
+		Description:    "Project Discovery vulnx vulnerability intelligence query executed against the target host context.",
+		Evidence:       "host=" + host + ", matches=" + strconv.Itoa(matches),
+		Recommendation: "Review vulnx results and prioritize critical/high entries relevant to detected technologies.",
 	}}
 }
 

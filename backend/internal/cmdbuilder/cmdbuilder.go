@@ -52,49 +52,51 @@ func (c CommandSpec) String() string {
 // allowedBinaries is the strict allow-list of binaries that agents may invoke.
 // Every binary here is a recognised, safe pen testing tool.
 var allowedBinaries = map[string]bool{
-	"nuclei":          true,
-	"subfinder":       true,
-	"httpx":           true,
-	"naabu":           true,
-	"dnsx":            true,
-	"katana":          true,
-	"tlsx":            true,
-	"ffuf":            true,
-	"gobuster":        true,
-	"nikto":           true,
-	"wpscan":          true,
-	"sqlmap":          true,
-	"curl":            true,
-	"wget":            true,
-	"nmap":            true,
-	"whatweb":         true,
-	"wafw00f":         true,
-	"arjun":           true,
-	"dalfox":          true,
-	"gf":              true,
-	"anew":            true,
-	"qsreplace":       true,
-	"python3":         true,
-	"python":          true,
+	"nuclei":    true,
+	"subfinder": true,
+	"httpx":     true,
+	"cloudlist": true,
+	"naabu":     true,
+	"dnsx":      true,
+	"katana":    true,
+	"tlsx":      true,
+	"ffuf":      true,
+	"gobuster":  true,
+	"nikto":     true,
+	"wpscan":    true,
+	"sqlmap":    true,
+	"vulnx":     true,
+	"curl":      true,
+	"wget":      true,
+	"nmap":      true,
+	"whatweb":   true,
+	"wafw00f":   true,
+	"arjun":     true,
+	"dalfox":    true,
+	"gf":        true,
+	"anew":      true,
+	"qsreplace": true,
+	"python3":   true,
+	"python":    true,
 }
 
 // blockedArgPatterns are argument substrings that are never permitted regardless
 // of the binary, e.g. those that would allow command injection or filesystem writes
 // outside safe scratch space.
 var blockedArgPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\$\(`),         // command substitution $(...)
-	regexp.MustCompile("`"),             // backtick substitution
-	regexp.MustCompile(`&&`),           // shell AND chaining
-	regexp.MustCompile(`\|\|`),         // shell OR chaining
-	regexp.MustCompile(`;\s*\w`),       // semicolon command chaining
-	regexp.MustCompile(`>\s*/[a-z]`),         // redirecting to non-tmp absolute path
-	regexp.MustCompile(`rm\s+-`),       // rm flags
+	regexp.MustCompile(`\$\(`),            // command substitution $(...)
+	regexp.MustCompile("`"),               // backtick substitution
+	regexp.MustCompile(`&&`),              // shell AND chaining
+	regexp.MustCompile(`\|\|`),            // shell OR chaining
+	regexp.MustCompile(`;\s*\w`),          // semicolon command chaining
+	regexp.MustCompile(`>\s*/[a-z]`),      // redirecting to non-tmp absolute path
+	regexp.MustCompile(`rm\s+-`),          // rm flags
 	regexp.MustCompile(`chmod\s+[0-7]*7`), // chmod world-writable
-	regexp.MustCompile(`/etc/`),        // /etc access
-	regexp.MustCompile(`/proc/`),       // /proc access
-	regexp.MustCompile(`/sys/`),        // /sys access
-	regexp.MustCompile(`/root/`),       // /root access
-	regexp.MustCompile(`~`),            // home directory reference
+	regexp.MustCompile(`/etc/`),           // /etc access
+	regexp.MustCompile(`/proc/`),          // /proc access
+	regexp.MustCompile(`/sys/`),           // /sys access
+	regexp.MustCompile(`/root/`),          // /root access
+	regexp.MustCompile(`~`),               // home directory reference
 }
 
 const pythonToolScratchDir = "/tmp/auto-bughunter/tools"
@@ -215,11 +217,11 @@ func Run(ctx context.Context, spec CommandSpec, target string, emit func(model.S
 	// Emit the command event so the UI can show what's running.
 	if emit != nil {
 		emit(model.ScanEvent{
-			Type:        model.ScanEventCommand,
-			AgentName:   spec.GeneratedBy,
-			Command:     spec.String(),
-			Message:     spec.Rationale,
-			Timestamp:   time.Now().UTC(),
+			Type:      model.ScanEventCommand,
+			AgentName: spec.GeneratedBy,
+			Command:   spec.String(),
+			Message:   spec.Rationale,
+			Timestamp: time.Now().UTC(),
 		})
 	}
 
