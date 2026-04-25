@@ -19,6 +19,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 # every request other than /health must present `Authorization: Bearer <token>`.
 SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
 _AUTH_EXEMPT_PATHS = {"/health"}
+SCORING_MODE = os.getenv("ML_SCORING_MODE", "blend").strip().lower()
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -160,8 +161,9 @@ async def _require_sidecar_token(request: Request, call_next):
 @app.get("/health")
 def health() -> Dict[str, str]:
     if onnx_scorer.ready:
-        return {"status": "ok", "mode": "onnx", "modelPath": onnx_scorer.model_path}
-    return {"status": "ok", "mode": "heuristic", "reason": onnx_scorer.error or "onnx unavailable"}
+        return {"status": "ok", "mode": "onnx", "modelPath": onnx_scorer.model_path, "scoringMode": SCORING_MODE}
+    # Avoid exposing internal loader/runtime error detail over unauthenticated health probes.
+    return {"status": "ok", "mode": "heuristic", "reason": "onnx unavailable", "scoringMode": SCORING_MODE}
 
 
 @app.post("/v1/score-findings", response_model=ScoreFindingsResponse)
@@ -225,6 +227,7 @@ def false_positive_candidates(req: FalsePositiveCandidatesRequest) -> FalsePosit
 def score_findings_internal(findings: List[Finding]) -> List[ScoredFinding]:
     scored: List[ScoredFinding] = []
     model_scores = onnx_scorer.predict(findings) if findings else None
+    model_shadow_deltas: List[float] = []
 
     for idx, f in enumerate(findings):
         text = normalize(f"{f.title} {f.description} {f.evidence}")
@@ -236,13 +239,22 @@ def score_findings_internal(findings: List[Finding]) -> List[ScoredFinding]:
 
         heuristic_score = clamp01(heuristic_score)
 
+        model_score = None
         if model_scores and idx < len(model_scores):
-            # Blend model probability with current deterministic score for stable behavior.
-            score = clamp01(0.65 * model_scores[idx] + 0.35 * heuristic_score)
-            confidence = clamp01(0.55 + score * 0.40)
-        else:
+            model_score = clamp01(float(model_scores[idx]))
+
+        if SCORING_MODE == "heuristic" or model_score is None:
             score = heuristic_score
             confidence = clamp01(0.45 + score * 0.45)
+        elif SCORING_MODE == "shadow":
+            # Keep production output deterministic while logging model-vs-heuristic drift.
+            score = heuristic_score
+            confidence = clamp01(0.45 + score * 0.45)
+            model_shadow_deltas.append(abs(model_score - heuristic_score))
+        else:
+            # Blend model probability with current deterministic score for stable behavior.
+            score = clamp01(0.65 * model_score + 0.35 * heuristic_score)
+            confidence = clamp01(0.55 + score * 0.40)
 
         exploitability = exploitability_from_score(score)
 
@@ -256,6 +268,15 @@ def score_findings_internal(findings: List[Finding]) -> List[ScoredFinding]:
         )
 
     scored.sort(key=lambda x: (-x.score, -x.confidence, x.finding.title.lower()))
+    if SCORING_MODE == "shadow" and model_shadow_deltas:
+        avg_delta = sum(model_shadow_deltas) / float(len(model_shadow_deltas))
+        logger.info(
+            "ML shadow scoring completed findings=%d avg_abs_delta=%.4f mode=%s model_ready=%s",
+            len(model_shadow_deltas),
+            avg_delta,
+            SCORING_MODE,
+            onnx_scorer.ready,
+        )
     return scored
 
 

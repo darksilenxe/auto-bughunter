@@ -177,6 +177,10 @@ type ScanOptions struct {
 	UseAttackPathAgent     bool `json:"useAttackPathAgent,omitempty"`
 	UseFalsePositiveReview bool `json:"useFalsePositiveReview,omitempty"`
 	UseRemediationPlanner  bool `json:"useRemediationPlanner,omitempty"`
+	// SupplementalResourceURLs allows operators to fetch additional explicit
+	// HTTP(S) resources during a scan (for example, partner-hosted JS or docs)
+	// while still enforcing scan scope and outbound SSRF protections.
+	SupplementalResourceURLs []string `json:"supplementalResourceUrls,omitempty"`
 	// PassiveOnly enables "responsible-disclosure mode": all active
 	// vulnerability probes (XSS, SQLi, OAST SSRF, subdomain takeover,
 	// IDOR role-diff, open-redirect, CORS, SSTI, GraphQL introspection)
@@ -603,12 +607,12 @@ type AutomationMetrics struct {
 	// verified findings across recent jobs in the workspace. It is the
 	// ground-truth measurement used to track strict-mode false-positive
 	// reduction.
-	FalsePositiveRate            float64 `json:"falsePositiveRate"`
-	VerifiedFindingsSampled      int     `json:"verifiedFindingsSampled,omitempty"`
-	StrictReportingSuppressed    int     `json:"strictReportingSuppressed,omitempty"`
-	StrictReportingScansSampled  int     `json:"strictReportingScansSampled,omitempty"`
-	StrictReportingSuppressRate  float64 `json:"strictReportingSuppressRate,omitempty"`
-	Extra                        map[string]float64 `json:"extra,omitempty"`
+	FalsePositiveRate           float64            `json:"falsePositiveRate"`
+	VerifiedFindingsSampled     int                `json:"verifiedFindingsSampled,omitempty"`
+	StrictReportingSuppressed   int                `json:"strictReportingSuppressed,omitempty"`
+	StrictReportingScansSampled int                `json:"strictReportingScansSampled,omitempty"`
+	StrictReportingSuppressRate float64            `json:"strictReportingSuppressRate,omitempty"`
+	Extra                       map[string]float64 `json:"extra,omitempty"`
 }
 
 type ProgramROIOverride struct {

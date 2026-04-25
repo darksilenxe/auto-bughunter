@@ -72,6 +72,7 @@ type EngagementRecord struct {
 	Assets          []SanitizedAsset         `json:"assets"`
 	AuditTrail      []SanitizedEvent         `json:"auditTrail"`
 	ProxySignals    []ProxySignal            `json:"proxySignals"`
+	Feedback        []FeedbackOutcome        `json:"feedback,omitempty"`
 	Dashboard       *model.DecisionDashboard `json:"dashboard,omitempty"`
 	NextActions     []string                 `json:"nextActions,omitempty"`
 	AutomatedReport string                   `json:"automatedReport,omitempty"`
@@ -106,6 +107,15 @@ type ProxySignal struct {
 	ResponseStatus  int    `json:"responseStatus"`
 	HasAuthHeader   bool   `json:"hasAuthHeader"`
 	HasCookieHeader bool   `json:"hasCookieHeader"`
+}
+
+type FeedbackOutcome struct {
+	FindingID string  `json:"findingId"`
+	Category  string  `json:"category,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	Outcome   string  `json:"outcome"`
+	PayoutUSD float64 `json:"payoutUsd,omitempty"`
+	Notes     string  `json:"notes,omitempty"`
 }
 
 type EngagementLabels struct {
@@ -147,12 +157,22 @@ func (s *Service) BuildTrainingDataset(ctx context.Context, repo Repository, pro
 			}
 		}
 	}
+	feedbackByScan := map[string][]model.ReportFeedback{}
+	if entries, err := repo.ListFeedback(ctx, 5000); err == nil {
+		for _, item := range entries {
+			scanID := strings.TrimSpace(item.ScanID)
+			if scanID == "" {
+				continue
+			}
+			feedbackByScan[scanID] = append(feedbackByScan[scanID], item)
+		}
+	}
 	out := &EngagementDataset{Records: make([]EngagementRecord, 0, len(jobs))}
 	for _, job := range jobs {
 		if job == nil {
 			continue
 		}
-		record, err := s.buildRecord(ctx, repo, job, proxySignalsByHost[hostOf(job.Target)])
+		record, err := s.buildRecord(ctx, repo, job, proxySignalsByHost[hostOf(job.Target)], feedbackByScan[job.ID])
 		if err != nil {
 			continue
 		}
@@ -466,7 +486,7 @@ func buildCopilotSuggestion(job *model.ScanJob, history []EngagementRecord) mode
 	}
 }
 
-func (s *Service) buildRecord(ctx context.Context, repo Repository, job *model.ScanJob, proxySignals []ProxySignal) (EngagementRecord, error) {
+func (s *Service) buildRecord(ctx context.Context, repo Repository, job *model.ScanJob, proxySignals []ProxySignal, feedback []model.ReportFeedback) (EngagementRecord, error) {
 	assets, _ := repo.GetAssetsByScanID(ctx, job.ID)
 	events, _ := repo.ListAuditEvents(ctx, job.ID)
 	record := EngagementRecord{
@@ -477,6 +497,7 @@ func (s *Service) buildRecord(ctx context.Context, repo Repository, job *model.S
 		Assets:          sanitizeAssets(s, assets),
 		AuditTrail:      sanitizeEvents(events),
 		ProxySignals:    proxySignals,
+		Feedback:        sanitizeFeedback(feedback),
 		Dashboard:       job.Dashboard,
 		NextActions:     sanitizeStrings(job.NextActions),
 		AutomatedReport: sanitizeText(job.AutomatedReport),
@@ -543,6 +564,25 @@ func sanitizeEvents(events []model.ScanAuditEvent) []SanitizedEvent {
 		out = append(out, SanitizedEvent{
 			Stage:   ev.Stage,
 			Message: sanitizeText(ev.Message),
+		})
+	}
+	return out
+}
+
+func sanitizeFeedback(entries []model.ReportFeedback) []FeedbackOutcome {
+	out := make([]FeedbackOutcome, 0, len(entries))
+	for _, item := range entries {
+		outcome := strings.TrimSpace(strings.ToLower(item.Outcome))
+		if outcome == "" {
+			continue
+		}
+		out = append(out, FeedbackOutcome{
+			FindingID: item.FindingID,
+			Category:  sanitizeText(item.Category),
+			Title:     sanitizeText(item.Title),
+			Outcome:   outcome,
+			PayoutUSD: item.PayoutUSD,
+			Notes:     sanitizeText(item.Notes),
 		})
 	}
 	return out

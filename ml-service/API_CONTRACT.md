@@ -1,5 +1,10 @@
 # API Contract
 
+## GET /health
+
+Response includes runtime mode (`onnx` or `heuristic`) and `scoringMode`
+(`blend`, `shadow`, or `heuristic`).
+
 ## POST /v1/score-findings
 
 Request:

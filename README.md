@@ -255,7 +255,10 @@ Body:
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false,
-    "useXssMapIntegration": false
+    "useXssMapIntegration": false,
+    "supplementalResourceUrls": [
+      "https://docs.example-cdn.com/security.txt"
+    ]
   }
 }
 ```
@@ -268,7 +271,7 @@ Returns job state and findings, including per-agent telemetry (`agentRuns`), str
 
 ### `GET /api/ml/engagements?limit=100`
 
-Returns a sanitized, pseudonymized engagement dataset built from completed scans and related telemetry for offline/shadow ML training and evaluation.
+Returns a sanitized, pseudonymized engagement dataset built from completed scans and related telemetry (including per-scan feedback outcomes) for offline/shadow ML training and evaluation.
 
 ### `POST /api/feedback`
 
@@ -579,6 +582,9 @@ candidate-minus-baseline improvement.
 - ML agents can also be toggled per scan request via scan `options` in the API or frontend form.
 - If `ML_SERVICE_URL` is configured and reachable, ML scoring is delegated to the external service (`/v1/score-findings`, `/v1/attack-paths`, `/v1/remediation-plan`, `/v1/false-positive-candidates`) with automatic fallback to deterministic local logic.
 - Set `ML_MODEL_PATH` (compose env) to enable ONNX-backed scoring in `ml-service`; if model loading or inference fails, the service automatically uses its heuristic scorer.
+- Set `ML_SCORING_MODE` to control inference rollout safety: `blend` (default), `shadow` (serve deterministic output and log model deltas), or `heuristic` (force deterministic only).
+- Use `ml-service/app/training_pipeline.py` to snapshot `/api/ml/engagements`, enforce quality/privacy gates, train and evaluate a candidate ONNX model, and update model registry/promotion artifacts.
+- Scheduled retraining scaffold is provided in `.github/workflows/ml-training.yml` (expects `TRAINING_API_BASE` and optional `TRAINING_API_KEY` secrets).
 - If `KNOWLEDGE_SERVICE_URL` is configured and reachable, the backend retrieves curated PortSwigger/OWASP/CWE context with source URLs and includes that context in AI summaries, next actions, and generated reports.
 - The seed `security-knowledge` corpus stores short manually-authored notes plus citations rather than mirrored third-party article bodies; confirm licensing before importing additional content.
 - Wordlist agent discovers endpoints by HTTP status code (200-399 range) with concurrent checking (5 parallel requests by default).

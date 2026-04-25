@@ -41,6 +41,7 @@ services:
       context: ./ml-service
     environment:
       MODEL_PATH: ${ML_MODEL_PATH:-}
+      ML_SCORING_MODE: ${ML_SCORING_MODE:-blend}
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
     ports:
       - "8090:8090"

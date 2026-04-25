@@ -26,6 +26,16 @@ type Service struct {
 	oast       *oast.Service
 }
 
+const supplementalResourceFetchMaxURLs = 8
+const supplementalResourceFetchMaxReadBytes int64 = 128 * 1024
+const supplementalResourceFetchTextExcerptMaxChars = 220
+
+var (
+	htmlScriptStyleRe = regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</(script|style)>`)
+	htmlTagRe         = regexp.MustCompile(`(?s)<[^>]+>`)
+	htmlWhitespaceRe  = regexp.MustCompile(`\s+`)
+)
+
 // SetOAST attaches an OAST service. Safe to call with nil to disable.
 func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
 
@@ -197,6 +207,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	bodyText := string(bodyBytes)
 
+	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
 	findings = append(findings, s.runOASTHeaderSSRFProbe(ctx, input)...)
@@ -446,6 +457,136 @@ func resolveEndpoint(baseTarget, endpoint string) string {
 		return parsed.String()
 	}
 	return base.ResolveReference(parsed).String()
+}
+
+func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInput) []model.Finding {
+	urls := collectSupplementalResourceURLs(input.Target, input.Options.SupplementalResourceURLs, input.Scope, supplementalResourceFetchMaxURLs)
+	if len(urls) == 0 {
+		return nil
+	}
+	if input.Emit != nil {
+		input.Emit(model.ScanEvent{
+			Type:    model.ScanEventCommand,
+			Command: "supplemental-resource-fetch",
+			Message: fmt.Sprintf("Fetching %d operator-specified supplemental resource(s)", len(urls)),
+		})
+	}
+
+	targetHost := hostFromURL(input.Target)
+	evidence := make([]string, 0, len(urls))
+	skippedAuthHosts := 0
+
+	for _, rawURL := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			continue
+		}
+		rawHost := hostFromURL(rawURL)
+		if strings.EqualFold(rawHost, targetHost) {
+			ApplyAuthProfile(req, input.AuthProfile)
+		} else {
+			skippedAuthHosts++
+		}
+
+		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		if err != nil {
+			evidence = append(evidence, fmt.Sprintf("%s error=%s", rawURL, strings.TrimSpace(err.Error())))
+			continue
+		}
+		contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+		if idx := strings.Index(contentType, ";"); idx >= 0 {
+			contentType = strings.TrimSpace(contentType[:idx])
+		}
+		if contentType == "" {
+			contentType = "unknown"
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, supplementalResourceFetchMaxReadBytes))
+		_ = resp.Body.Close()
+		if strings.Contains(strings.ToLower(contentType), "text/html") {
+			if excerpt := extractPlainTextExcerptFromHTML(string(body), supplementalResourceFetchTextExcerptMaxChars); excerpt != "" {
+				evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s text=%q", rawURL, resp.StatusCode, contentType, excerpt))
+				continue
+			}
+		}
+		evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s bytes=%d", rawURL, resp.StatusCode, contentType, len(body)))
+	}
+
+	if len(evidence) == 0 {
+		return nil
+	}
+	recommendation := "Keep supplemental fetch URLs constrained to assets you are explicitly authorized to assess and keep their hosts in scan scope."
+	if skippedAuthHosts > 0 {
+		recommendation += " Credentials were intentionally not forwarded to cross-host supplemental requests."
+	}
+	return []model.Finding{{
+		ID:             "supplemental-resource-fetch",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          fmt.Sprintf("Fetched %d supplemental web resource(s)", len(evidence)),
+		Description:    "Operator-specified supplemental resources were fetched during this scan; HTML responses are normalized into plain-text excerpts for training context.",
+		Evidence:       strings.Join(limitStrings(evidence, supplementalResourceFetchMaxURLs), "; "),
+		Recommendation: recommendation,
+		EvidenceFields: map[string]string{
+			"validationType": "safe-observation",
+			"reproStep":      "Issue GET requests to each supplementalResourceUrls entry and record status/content type",
+		},
+	}}
+}
+
+func extractPlainTextExcerptFromHTML(html string, max int) string {
+	if max <= 0 {
+		max = supplementalResourceFetchTextExcerptMaxChars
+	}
+	text := strings.TrimSpace(html)
+	if text == "" {
+		return ""
+	}
+	text = htmlScriptStyleRe.ReplaceAllString(text, " ")
+	text = htmlTagRe.ReplaceAllString(text, " ")
+	text = htmlWhitespaceRe.ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) > max {
+		return strings.TrimSpace(string(runes[:max])) + "…"
+	}
+	return text
+}
+
+func collectSupplementalResourceURLs(target string, candidates []string, scanScope model.ScanScope, max int) []string {
+	if max <= 0 {
+		max = supplementalResourceFetchMaxURLs
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		resolved := resolveEndpoint(target, candidate)
+		if resolved == "" {
+			continue
+		}
+		if !scope.IsURLInScope(resolved, scanScope) {
+			continue
+		}
+		if err := safety.ValidateOutboundURL(resolved); err != nil {
+			continue
+		}
+		if _, exists := seen[resolved]; exists {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		out = append(out, resolved)
+	}
+	sort.Strings(out)
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 func filterContains(items []string, keyword string, max int) []string {
