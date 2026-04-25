@@ -1,0 +1,65 @@
+name: ML Training Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Dataset export limit"
+        required: false
+        default: "500"
+  schedule:
+    - cron: "23 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ml-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: ml-service/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run training pipeline
+        env:
+          TRAINING_API_BASE: ${{ secrets.TRAINING_API_BASE }}
+          TRAINING_API_KEY: ${{ secrets.TRAINING_API_KEY }}
+          TRAINING_LIMIT: ${{ github.event.inputs.limit || '500' }}
+        run: |
+          if [ -z "${TRAINING_API_BASE}" ]; then
+            echo "TRAINING_API_BASE secret is not configured; skipping scheduled training run."
+            mkdir -p /tmp/auto-bughunter-training/skip
+            echo '{"skipped":"missing TRAINING_API_BASE"}' > /tmp/auto-bughunter-training/skip/status.json
+            exit 0
+          fi
+          python app/training_pipeline.py \
+            --api-base "${TRAINING_API_BASE}" \
+            --api-key "${TRAINING_API_KEY}" \
+            --limit "${TRAINING_LIMIT}" \
+            --output-dir /tmp/auto-bughunter-training \
+            --models-dir /tmp/auto-bughunter-models \
+            --allow-quality-warnings
+
+      - name: Upload training artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-training-artifacts
+          path: |
+            /tmp/auto-bughunter-training
+            /tmp/auto-bughunter-models
+          if-no-files-found: ignore
