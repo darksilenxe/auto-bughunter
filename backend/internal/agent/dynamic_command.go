@@ -54,6 +54,7 @@ func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentO
 	}
 
 	output.Metadata["commands_generated"] = fmt.Sprintf("%d", len(specs))
+	output.Metadata["unsafe_flag_mode"] = fmt.Sprintf("%t", input.Options.UnsafeDynamicCommandFlags)
 	ran := 0
 	failed := 0
 
@@ -65,7 +66,9 @@ func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentO
 		default:
 		}
 
-		result := cmdbuilder.Run(ctx, spec, input.Target, input.Emit)
+		result := cmdbuilder.RunWithPolicy(ctx, spec, input.Target, cmdbuilder.ValidationPolicy{
+			UnsafeMode: input.Options.UnsafeDynamicCommandFlags,
+		}, input.Emit)
 		if result.Error != nil {
 			failed++
 			Emit(input.Emit, model.ScanEvent{

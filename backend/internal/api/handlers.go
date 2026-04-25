@@ -4238,6 +4238,7 @@ func collectToolHealth() []toolHealth {
 		{Name: "zap-baseline", Binary: envOrDefault("ZAP_BASELINE_BINARY", "zap-baseline.py"), Category: "vuln-scanning"},
 		{Name: "subfinder", Binary: envOrDefault("SUBFINDER_BINARY", "subfinder"), Category: "recon"},
 		{Name: "httpx", Binary: envOrDefault("HTTPX_BINARY", "httpx"), Category: "recon"},
+		{Name: "cloudlist", Binary: envOrDefault("CLOUDLIST_BINARY", "cloudlist"), Category: "recon"},
 		{Name: "naabu", Binary: envOrDefault("NAABU_BINARY", "naabu"), Category: "recon"},
 		{Name: "dnsx", Binary: envOrDefault("DNSX_BINARY", "dnsx"), Category: "recon"},
 		{Name: "shuffledns", Binary: envOrDefault("SHUFFLEDNS_BINARY", "shuffledns"), Category: "recon"},
@@ -4247,6 +4248,7 @@ func collectToolHealth() []toolHealth {
 		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
+		{Name: "vulnx", Binary: envOrDefault("VULNX_BINARY", "vulnx"), Category: "vuln-scanning"},
 	}
 
 	// In HTTP-service mode the nuclei and zap-baseline binaries live inside
@@ -4295,6 +4297,7 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"zap-baseline": options.UseZAPBaselineIntegration,
 		"subfinder":    options.UseSubfinderIntegration,
 		"httpx":        options.UseHttpxIntegration,
+		"cloudlist":    options.UseCloudlistIntegration,
 		"naabu":        options.UseNaabuIntegration,
 		"dnsx":         options.UseDnsxIntegration,
 		"shuffledns":   options.UseShuffleDNSIntegration,
@@ -4304,6 +4307,7 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
 	missing := make([]string, 0)
@@ -4394,6 +4398,7 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"zap-baseline": options.UseZAPBaselineIntegration,
 		"subfinder":    options.UseSubfinderIntegration,
 		"httpx":        options.UseHttpxIntegration,
+		"cloudlist":    options.UseCloudlistIntegration,
 		"naabu":        options.UseNaabuIntegration,
 		"dnsx":         options.UseDnsxIntegration,
 		"shuffledns":   options.UseShuffleDNSIntegration,
@@ -4403,6 +4408,7 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
 	disabled := make([]string, 0)
@@ -4419,6 +4425,8 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseSubfinderIntegration = false
 		case "httpx":
 			options.UseHttpxIntegration = false
+		case "cloudlist":
+			options.UseCloudlistIntegration = false
 		case "naabu":
 			options.UseNaabuIntegration = false
 		case "dnsx":
@@ -4437,6 +4445,8 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseFFUFIntegration = false
 		case "gobuster":
 			options.UseGobusterIntegration = false
+		case "vulnx":
+			options.UseVulnxIntegration = false
 		}
 		disabled = append(disabled, item.Name)
 	}
@@ -5483,6 +5493,8 @@ func inferCommandsForFinding(f model.Finding) []string {
 		return []string{"subfinder -d <host> -silent"}
 	case strings.Contains(id, "httpx"):
 		return []string{"httpx -u <target> -silent -status-code -title -tech-detect"}
+	case strings.Contains(id, "cloudlist"):
+		return []string{"cloudlist -silent -host -id <host>"}
 	case strings.Contains(id, "naabu"):
 		return []string{"naabu -host <host> -silent -top-ports 1000"}
 	case strings.Contains(id, "dnsx"):
@@ -5503,6 +5515,8 @@ func inferCommandsForFinding(f model.Finding) []string {
 		return []string{"native-go-nikto"}
 	case strings.Contains(id, "sqlmap"):
 		return []string{"native-go-sqlmap"}
+	case strings.Contains(id, "vulnx"):
+		return []string{"vulnx search --limit 20 --silent <host>"}
 	default:
 		return nil
 	}

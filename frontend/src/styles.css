@@ -1,16 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Auto BugHunter — Black / Purple Theme
-   Background: deep black-purple  |  Cards: dark charcoal  |  Text: light
+   Auto BugHunter — Dark Cyber Green Theme
+   Background: deep black-teal  |  Cards: dark glass  |  Borders: neon green
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  --bg-body:    #0d0b14;      /* near-black with purple undertone */
-  --bg-card:    #16131f;      /* dark charcoal card background */
-  --ink:        #e2d9f3;      /* soft lavender-white text */
-  --ink-muted:  #8b7faa;      /* muted purple text */
-  --accent:     #7c3aed;      /* violet accent */
-  --accent-lit: #9d5ff5;      /* brighter violet for hover */
-  --border:     rgba(124,58,237,0.22);
+  --bg-body:    #040b0c;
+  --bg-card:    #0a1517;
+  --ink:        #dff8f3;
+  --ink-muted:  #8db7ac;
+  --accent:     #20d6a5;
+  --accent-lit: #67f2ca;
+  --border:     rgba(32, 214, 165, 0.45);
   --sev-high:   #ef4444;
   --sev-medium: #f97316;
   --sev-low:    #eab308;
@@ -29,7 +29,7 @@ html, body {
   font-family: "Inter", "Segoe UI", Arial, sans-serif;
   font-size: 15px;
   color: var(--ink);
-  background: radial-gradient(ellipse at top left, #1a1030 0%, #0d0b14 55%, #060410 100%);
+  background: radial-gradient(ellipse at top left, #0f2a2a 0%, #061113 52%, #020708 100%);
   background-attachment: fixed;
 }
 
@@ -46,8 +46,8 @@ html, body {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(800px 400px at 95% -10%, rgba(167,139,250,0.15), transparent 60%),
-    radial-gradient(700px 350px at -10% 10%, rgba(124,58,237,0.16), transparent 60%);
+    radial-gradient(820px 430px at 95% -10%, rgba(99, 255, 217, 0.11), transparent 60%),
+    radial-gradient(720px 360px at -10% 10%, rgba(32, 214, 165, 0.14), transparent 60%);
   z-index: 0;
 }
 
@@ -102,7 +102,7 @@ header p {
   margin: 0 0 1rem;
   font-size: 1.1rem;
   font-weight: 700;
-  color: #a78bfa;
+  color: var(--accent-lit);
   border-bottom: 2px solid var(--border);
   padding-bottom: 0.5rem;
 }
@@ -144,11 +144,11 @@ input[type="email"],
 input[type="url"],
 select,
 textarea {
-  border: 1.5px solid rgba(124,58,237,0.35);
+  border: 1.5px solid var(--border);
   border-radius: 7px;
   padding: 0.45rem 0.7rem;
   font-size: 0.9rem;
-  background: #1e1a2e;
+  background: #0f1d1f;
   color: var(--ink);
   outline: none;
   font-family: inherit;
@@ -158,7 +158,7 @@ textarea {
 input:focus,
 textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.2);
+  box-shadow: 0 0 0 3px rgba(32, 214, 165, 0.22);
 }
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
@@ -201,7 +201,7 @@ button:disabled {
 }
 
 .findings li {
-  background: #1e1a2e;
+  background: #0f1d1f;
   border-left: 4px solid var(--border);
   border-radius: 0 8px 8px 0;
   padding: 0.85rem 1rem;
@@ -251,8 +251,8 @@ button:disabled {
 }
 
 pre.summary {
-  background: #0d0b14;
-  color: #c4b5fd;
+  background: #061113;
+  color: #bdfbe9;
   border-radius: 8px;
   padding: 1rem 1.2rem;
   font-size: 0.82rem;
@@ -261,7 +261,7 @@ pre.summary {
   word-break: break-word;
   line-height: 1.7;
   margin: 0.5rem 0 0;
-  border: 1px solid rgba(124,58,237,0.2);
+  border: 1px solid var(--border);
 }
 
 /* ── Tables ─────────────────────────────────────────────────────────────── */
@@ -271,7 +271,7 @@ table {
 }
 
 th {
-  color: #a78bfa;
+  color: var(--accent-lit);
   font-size: 0.85rem;
 }
 
@@ -296,8 +296,8 @@ td {
 }
 
 .knowledge-reference {
-  background: #1e1a2e;
-  border: 1px solid rgba(124,58,237,0.2);
+  background: #0f1d1f;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
 }
@@ -327,15 +327,15 @@ td {
   align-items: center;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
-  background: rgba(124,58,237,0.14);
-  border: 1px solid rgba(124,58,237,0.24);
-  color: #c4b5fd;
+  background: rgba(32, 214, 165, 0.14);
+  border: 1px solid var(--border);
+  color: #bdfbe9;
   font-size: 0.72rem;
   font-weight: 700;
 }
 
 .knowledge-link {
-  color: #c4b5fd;
+  color: var(--accent-lit);
   font-size: 0.82rem;
   font-weight: 700;
   text-decoration: none;
@@ -343,7 +343,7 @@ td {
 }
 
 .knowledge-link:hover {
-  color: #ddd6fe;
+  color: #dffff4;
   text-decoration: underline;
 }
 
@@ -370,6 +370,6 @@ td {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(124,58,237,0.4);
+  background: rgba(32, 214, 165, 0.45);
   border-radius: 99px;
 }

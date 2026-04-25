@@ -305,8 +305,8 @@ services:
       start_period: 10s
 
   # Shared ProjectDiscovery suite. A single sidecar built locally that
-  # bundles subfinder, httpx, naabu, dnsx, shuffledns, katana, tlsx,
-  # cdncheck and asnmap by COPYing each binary out of its official
+  # bundles subfinder, httpx, cloudlist, naabu, dnsx, shuffledns, katana,
+  # tlsx, cdncheck, asnmap and vulnx by COPYing each binary out of its official
   # upstream image. The matching shims under backend/scripts/shims/
   # `docker compose exec`s the right tool by name.
   projectdiscovery:

@@ -512,6 +512,7 @@ func optionsMap(o model.ScanOptions) map[string]bool {
 		"zap_baseline": o.UseZAPBaselineIntegration,
 		"subfinder":    o.UseSubfinderIntegration,
 		"httpx":        o.UseHttpxIntegration,
+		"cloudlist":    o.UseCloudlistIntegration,
 		"naabu":        o.UseNaabuIntegration,
 		"dnsx":         o.UseDnsxIntegration,
 		"shuffledns":   o.UseShuffleDNSIntegration,
@@ -526,6 +527,7 @@ func optionsMap(o model.ScanOptions) map[string]bool {
 		"sqlmap":       o.UseSQLMapIntegration,
 		"ffuf":         o.UseFFUFIntegration,
 		"gobuster":     o.UseGobusterIntegration,
+		"vulnx":        o.UseVulnxIntegration,
 	}
 }
 

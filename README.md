@@ -120,7 +120,7 @@ Docker Compose sidecar:
 | `zap`              | `zaproxy/zap-stable:2.17.0`        | OWASP ZAP daemon + `zap-baseline.py` passive scan                                       |
 | `nuclei`           | `projectdiscovery/nuclei:v3.8.0`   | Nuclei templated vulnerability scanning                                                 |
 | `chromium`         | `chromedp/headless-shell:latest`   | Headless browser crawl/screenshot via DevTools (9222)                                   |
-| `projectdiscovery` | local build (see `sidecars/`)      | Shared suite: `subfinder` v2.13.0, `httpx` v1.9.0, `naabu` v2.5.0, `dnsx` v1.2.3, `shuffledns` v1.2.1, `katana` v1.5.0, `tlsx` v1.2.2, `cdncheck` v1.2.31, `asnmap` v1.1.1 |
+| `projectdiscovery` | local build (see `sidecars/`)      | Shared suite: `subfinder` v2.13.0, `httpx` v1.9.0, `cloudlist` v1.4.0, `naabu` v2.5.0, `dnsx` v1.2.3, `shuffledns` v1.2.1, `katana` v1.5.0, `tlsx` v1.2.2, `cdncheck` v1.2.31, `asnmap` v1.1.1, `vulnx` v2.0.1 |
 | `ffuf`             | `secsi/ffuf:2.1.0`                 | Web content fuzzing (consumes wordlist via the `shared_tmp` volume; also has read-only `/wordlists` from the kiterunner sidecar) |
 | `gobuster`         | `ghcr.io/oj/gobuster`              | Directory brute-forcing (consumes wordlist via the `shared_tmp` volume; also has read-only `/wordlists` from the kiterunner sidecar) |
 | `kiterunner`       | local build (see `sidecars/`)      | Assetnote `kr` API content discovery — pre-downloads every wordlist from `wordlists.assetnote.io` into the shared `assetnote_wordlists` volume on first start |

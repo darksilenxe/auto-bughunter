@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs vulnx inside the shared `projectdiscovery` sidecar.
+exec /usr/local/bin/sidecar-exec projectdiscovery vulnx "$@"

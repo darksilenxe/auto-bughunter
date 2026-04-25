@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,9 +27,9 @@ type Counter struct {
 	value  atomic.Uint64
 }
 
-func (c *Counter) Inc()               { c.value.Add(1) }
-func (c *Counter) Add(n uint64)       { c.value.Add(n) }
-func (c *Counter) Value() uint64      { return c.value.Load() }
+func (c *Counter) Inc()          { c.value.Add(1) }
+func (c *Counter) Add(n uint64)  { c.value.Add(n) }
+func (c *Counter) Value() uint64 { return c.value.Load() }
 
 // ---------------------------------------------------------------------------
 // Gauge
@@ -42,9 +43,9 @@ type Gauge struct {
 	bits   atomic.Uint64 // stores math.Float64bits
 }
 
-func (g *Gauge) Set(v float64)  { g.bits.Store(math.Float64bits(v)) }
-func (g *Gauge) Inc()           { g.add(1) }
-func (g *Gauge) Dec()           { g.add(-1) }
+func (g *Gauge) Set(v float64) { g.bits.Store(math.Float64bits(v)) }
+func (g *Gauge) Inc()          { g.add(1) }
+func (g *Gauge) Dec()          { g.add(-1) }
 func (g *Gauge) add(d float64) {
 	for {
 		old := g.bits.Load()
@@ -63,14 +64,14 @@ func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 // Histogram observes float64 values and accumulates them in configurable
 // buckets.  Suitable for latency (use seconds as unit).
 type Histogram struct {
-	name    string
-	help    string
-	labels  map[string]string
-	bounds  []float64 // upper bounds, sorted ascending
-	mu      sync.Mutex
-	counts  []uint64 // len == len(bounds)+1, last bucket is +Inf
-	sum     float64
-	total   uint64
+	name   string
+	help   string
+	labels map[string]string
+	bounds []float64 // upper bounds, sorted ascending
+	mu     sync.Mutex
+	counts []uint64 // len == len(bounds)+1, last bucket is +Inf
+	sum    float64
+	total  uint64
 }
 
 // Observe records one observation.
@@ -252,6 +253,10 @@ var (
 
 	agentsByName   = map[string]*Counter{}
 	agentsByNameMu sync.Mutex
+
+	toolRunsByKey     = map[string]*Counter{}
+	toolDurationByKey = map[string]*Histogram{}
+	toolMetricsMu     sync.Mutex
 )
 
 // FindingRecorded increments the findings counter for the given severity label.
@@ -286,6 +291,56 @@ func AgentRun(agentName string) {
 	}
 	agentsByNameMu.Unlock()
 	c.Inc()
+}
+
+// ToolRun records one scanner-tool execution with tool/agent/status labels and duration.
+func ToolRun(toolName, agentName, status string, duration time.Duration) {
+	tool := strings.TrimSpace(toolName)
+	if tool == "" {
+		tool = "unknown"
+	}
+	agent := strings.TrimSpace(agentName)
+	if agent == "" {
+		agent = "unknown"
+	}
+	state := strings.TrimSpace(status)
+	if state == "" {
+		state = "unknown"
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	key := tool + "|" + agent + "|" + state
+	labels := map[string]string{
+		"tool":   tool,
+		"agent":  agent,
+		"status": state,
+	}
+
+	toolMetricsMu.Lock()
+	runCounter, ok := toolRunsByKey[key]
+	if !ok {
+		runCounter = DefaultRegistry.NewCounter(
+			"autobughunter_tool_runs_total",
+			"Scanner tool runs broken down by tool, agent, and status.",
+			labels,
+		)
+		toolRunsByKey[key] = runCounter
+	}
+	durationHistogram, ok := toolDurationByKey[key]
+	if !ok {
+		durationHistogram = DefaultRegistry.NewHistogram(
+			"autobughunter_tool_duration_seconds",
+			"Scanner tool execution duration broken down by tool, agent, and status.",
+			labels,
+			nil,
+		)
+		toolDurationByKey[key] = durationHistogram
+	}
+	toolMetricsMu.Unlock()
+
+	runCounter.Inc()
+	durationHistogram.Observe(duration.Seconds())
 }
 
 // ---------------------------------------------------------------------------

@@ -55,6 +55,7 @@ COPY scripts/shims/zap-baseline.py   /usr/local/bin/zap-baseline.py
 # sidecar (see ../sidecars/projectdiscovery/Dockerfile).
 COPY scripts/shims/subfinder         /usr/local/bin/subfinder
 COPY scripts/shims/httpx             /usr/local/bin/httpx
+COPY scripts/shims/cloudlist         /usr/local/bin/cloudlist
 COPY scripts/shims/naabu             /usr/local/bin/naabu
 COPY scripts/shims/dnsx              /usr/local/bin/dnsx
 COPY scripts/shims/shuffledns        /usr/local/bin/shuffledns
@@ -62,6 +63,7 @@ COPY scripts/shims/katana            /usr/local/bin/katana
 COPY scripts/shims/tlsx              /usr/local/bin/tlsx
 COPY scripts/shims/cdncheck          /usr/local/bin/cdncheck
 COPY scripts/shims/asnmap            /usr/local/bin/asnmap
+COPY scripts/shims/vulnx             /usr/local/bin/vulnx
 # Fuzzing / dirbusting — each in its own sidecar; both rely on the shared
 # tmp volume mounted at $SHARED_TMP_DIR so that the wordlist file the
 # backend writes is visible inside the sidecar at the same path.
@@ -83,6 +85,7 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/zap-baseline.py \
              /usr/local/bin/subfinder \
              /usr/local/bin/httpx \
+             /usr/local/bin/cloudlist \
              /usr/local/bin/naabu \
              /usr/local/bin/dnsx \
              /usr/local/bin/shuffledns \
@@ -90,6 +93,7 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/tlsx \
              /usr/local/bin/cdncheck \
              /usr/local/bin/asnmap \
+             /usr/local/bin/vulnx \
              /usr/local/bin/ffuf \
              /usr/local/bin/gobuster \
              /usr/local/bin/kr \

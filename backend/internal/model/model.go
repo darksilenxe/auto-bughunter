@@ -145,6 +145,8 @@ type ScanOptions struct {
 	UseXSSMapIntegration      bool     `json:"useXssMapIntegration,omitempty"`
 	UseSubfinderIntegration   bool     `json:"useSubfinderIntegration,omitempty"`
 	UseHttpxIntegration       bool     `json:"useHttpxIntegration,omitempty"`
+	UseCloudlistIntegration   bool     `json:"useCloudlistIntegration,omitempty"`
+	UseVulnxIntegration       bool     `json:"useVulnxIntegration,omitempty"`
 	UseNaabuIntegration       bool     `json:"useNaabuIntegration,omitempty"`
 	UseDnsxIntegration        bool     `json:"useDnsxIntegration,omitempty"`
 	UseShuffleDNSIntegration  bool     `json:"useShuffleDnsIntegration,omitempty"`
@@ -233,6 +235,11 @@ type ScanOptions struct {
 	// 0.75 is applied.
 	StrictReporting     bool    `json:"strictReporting,omitempty"`
 	MinReportConfidence float64 `json:"minReportConfidence,omitempty"`
+	// UnsafeDynamicCommandFlags disables only per-tool command-flag allow-list
+	// checks for cmdbuilder-executed dynamic commands. Core protections remain:
+	// binary allow-list, blocked injection/path patterns, python sandboxing, and
+	// target host scoping. Default is false and usage is audit-logged.
+	UnsafeDynamicCommandFlags bool `json:"unsafeDynamicCommandFlags,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

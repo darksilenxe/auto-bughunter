@@ -53,6 +53,8 @@ func main() {
 	scanService := scanner.NewService(scanner.Config{
 		EnableSubfinder:    getbool("ENABLE_SUBFINDER_INTEGRATION", false),
 		EnableHttpx:        getbool("ENABLE_HTTPX_INTEGRATION", false),
+		EnableCloudlist:    getbool("ENABLE_CLOUDLIST_INTEGRATION", false),
+		EnableVulnx:        getbool("ENABLE_VULNX_INTEGRATION", false),
 		EnableNaabu:        getbool("ENABLE_NAABU_INTEGRATION", false),
 		EnableDnsx:         getbool("ENABLE_DNSX_INTEGRATION", false),
 		EnableShuffleDNS:   getbool("ENABLE_SHUFFLEDNS_INTEGRATION", false),
@@ -73,6 +75,8 @@ func main() {
 		XSSMapBinary:       getenv("XSSMAP_BINARY", "xssmap"),
 		SubfinderBinary:    getenv("SUBFINDER_BINARY", "subfinder"),
 		HttpxBinary:        getenv("HTTPX_BINARY", "httpx"),
+		CloudlistBinary:    getenv("CLOUDLIST_BINARY", "cloudlist"),
+		VulnxBinary:        getenv("VULNX_BINARY", "vulnx"),
 		NaabuBinary:        getenv("NAABU_BINARY", "naabu"),
 		DnsxBinary:         getenv("DNSX_BINARY", "dnsx"),
 		ShuffleDNSBinary:   getenv("SHUFFLEDNS_BINARY", "shuffledns"),

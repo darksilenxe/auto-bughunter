@@ -125,7 +125,9 @@ func (a *HackTricksAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 						tech.Category, spec.String(), tech.HackTricksURL),
 				})
 
-				result := cmdbuilder.Run(ctx, spec, target, input.Emit)
+				result := cmdbuilder.RunWithPolicy(ctx, spec, target, cmdbuilder.ValidationPolicy{
+					UnsafeMode: input.Options.UnsafeDynamicCommandFlags,
+				}, input.Emit)
 				if result.Error != nil {
 					cmdsSkipped++
 					Emit(input.Emit, model.ScanEvent{
