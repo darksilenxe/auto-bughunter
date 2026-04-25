@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/metrics"
+	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/nikto"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"

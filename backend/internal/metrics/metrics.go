@@ -27,9 +27,9 @@ type Counter struct {
 	value  atomic.Uint64
 }
 
-func (c *Counter) Inc()               { c.value.Add(1) }
-func (c *Counter) Add(n uint64)       { c.value.Add(n) }
-func (c *Counter) Value() uint64      { return c.value.Load() }
+func (c *Counter) Inc()          { c.value.Add(1) }
+func (c *Counter) Add(n uint64)  { c.value.Add(n) }
+func (c *Counter) Value() uint64 { return c.value.Load() }
 
 // ---------------------------------------------------------------------------
 // Gauge
@@ -43,9 +43,9 @@ type Gauge struct {
 	bits   atomic.Uint64 // stores math.Float64bits
 }
 
-func (g *Gauge) Set(v float64)  { g.bits.Store(math.Float64bits(v)) }
-func (g *Gauge) Inc()           { g.add(1) }
-func (g *Gauge) Dec()           { g.add(-1) }
+func (g *Gauge) Set(v float64) { g.bits.Store(math.Float64bits(v)) }
+func (g *Gauge) Inc()          { g.add(1) }
+func (g *Gauge) Dec()          { g.add(-1) }
 func (g *Gauge) add(d float64) {
 	for {
 		old := g.bits.Load()
@@ -64,14 +64,14 @@ func (g *Gauge) Value() float64 { return math.Float64frombits(g.bits.Load()) }
 // Histogram observes float64 values and accumulates them in configurable
 // buckets.  Suitable for latency (use seconds as unit).
 type Histogram struct {
-	name    string
-	help    string
-	labels  map[string]string
-	bounds  []float64 // upper bounds, sorted ascending
-	mu      sync.Mutex
-	counts  []uint64 // len == len(bounds)+1, last bucket is +Inf
-	sum     float64
-	total   uint64
+	name   string
+	help   string
+	labels map[string]string
+	bounds []float64 // upper bounds, sorted ascending
+	mu     sync.Mutex
+	counts []uint64 // len == len(bounds)+1, last bucket is +Inf
+	sum    float64
+	total  uint64
 }
 
 // Observe records one observation.
