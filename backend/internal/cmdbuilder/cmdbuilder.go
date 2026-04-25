@@ -131,7 +131,7 @@ var allowedFlagsByBinary = map[string]map[string]bool{
 		"-threads": true, "-follow-redirects": true, "-probe": true,
 	},
 	"cloudlist": {
-		"-silent": true, "-provider": true, "-o": true, "-json": true,
+		"-silent": true, "-provider": true, "-host": true, "-id": true, "-o": true, "-json": true,
 	},
 	"naabu": {
 		"-host": true, "-list": true, "-p": true, "-rate": true, "-c": true, "-silent": true,
@@ -174,7 +174,7 @@ var allowedFlagsByBinary = map[string]map[string]bool{
 		"--headers": true, "--data": true, "--output-dir": true, "--forms": true,
 	},
 	"vulnx": {
-		"--url": true, "--target": true, "--search": true, "--limit": true, "--silent": true,
+		"--url": true, "--target": true, "--limit": true, "--silent": true,
 		"--json": true, "--output": true,
 	},
 	"curl": {

@@ -84,3 +84,23 @@ func TestValidate_UnsafeModeStillBlocksInjectionPatterns(t *testing.T) {
 		t.Fatalf("expected blocked pattern rejection in unsafe mode, got %v", err)
 	}
 }
+
+func TestValidate_AllowsCloudlistHostScopedFlags(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "cloudlist",
+		Args:   []string{"-silent", "-host", "-id", "example.com"},
+	}, "https://example.com", ValidationPolicy{})
+	if err != nil {
+		t.Fatalf("expected cloudlist host-scoped flags to pass validation, got %v", err)
+	}
+}
+
+func TestValidate_AllowsVulnxSearchSubcommand(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "vulnx",
+		Args:   []string{"search", "--limit", "20", "--silent", "example.com"},
+	}, "https://example.com", ValidationPolicy{})
+	if err != nil {
+		t.Fatalf("expected vulnx search command to pass validation, got %v", err)
+	}
+}
