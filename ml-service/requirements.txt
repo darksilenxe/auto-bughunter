@@ -3,4 +3,4 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 onnxruntime==1.19.2
 numpy==2.1.2
-onnx==1.16.2
+onnx==1.21.0
