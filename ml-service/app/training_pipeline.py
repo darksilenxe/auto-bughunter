@@ -272,18 +272,18 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
 def train_logreg(x: np.ndarray, y: np.ndarray, *, epochs: int = 400, lr: float = 0.08, l2: float = 1e-3) -> Tuple[np.ndarray, float]:
     if len(x) == 0:
         return np.zeros((FEATURE_DIMS,), dtype=np.float32), 0.0
-    w = np.zeros((x.shape[1],), dtype=np.float64)
-    b = 0.0
+    weights = np.zeros((x.shape[1],), dtype=np.float64)
+    bias = 0.0
     n = float(len(x))
     for _ in range(epochs):
-        logits = x @ w + b
+        logits = x @ weights + bias
         probs = sigmoid(logits)
         err = probs - y
-        grad_w = (x.T @ err) / n + (l2 * w)
-        grad_b = float(np.sum(err) / n)
-        w -= lr * grad_w
-        b -= lr * grad_b
-    return w.astype(np.float32), float(b)
+        grad_weights = (x.T @ err) / n + (l2 * weights)
+        grad_bias = float(np.sum(err) / n)
+        weights -= lr * grad_weights
+        bias -= lr * grad_bias
+    return weights.astype(np.float32), float(bias)
 
 
 def baseline_probs(x: np.ndarray) -> np.ndarray:
@@ -317,10 +317,10 @@ def roc_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
 
 def export_onnx(weights: np.ndarray, bias: float, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    x = helper.make_tensor_value_info("input", TensorProto.FLOAT, ["N", FEATURE_DIMS])
-    y = helper.make_tensor_value_info("output", TensorProto.FLOAT, ["N", 1])
-    w = numpy_helper.from_array(weights.reshape((FEATURE_DIMS, 1)).astype(np.float32), name="W")
-    b = numpy_helper.from_array(np.asarray([bias], dtype=np.float32), name="B")
+    input_tensor_info = helper.make_tensor_value_info("input", TensorProto.FLOAT, ["N", FEATURE_DIMS])
+    output_tensor_info = helper.make_tensor_value_info("output", TensorProto.FLOAT, ["N", 1])
+    weights_initializer = numpy_helper.from_array(weights.reshape((FEATURE_DIMS, 1)).astype(np.float32), name="W")
+    bias_initializer = numpy_helper.from_array(np.asarray([bias], dtype=np.float32), name="B")
     graph = helper.make_graph(
         nodes=[
             helper.make_node("MatMul", ["input", "W"], ["matmul_out"]),
@@ -328,9 +328,9 @@ def export_onnx(weights: np.ndarray, bias: float, out_path: Path) -> None:
             helper.make_node("Sigmoid", ["logits"], ["output"]),
         ],
         name="risk_logreg",
-        inputs=[x],
-        outputs=[y],
-        initializer=[w, b],
+        inputs=[input_tensor_info],
+        outputs=[output_tensor_info],
+        initializer=[weights_initializer, bias_initializer],
     )
     model = helper.make_model(graph, producer_name="auto-bughunter-training-pipeline", opset_imports=[helper.make_opsetid("", 13)])
     onnx.checker.check_model(model)

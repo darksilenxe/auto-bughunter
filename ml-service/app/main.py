@@ -162,7 +162,8 @@ async def _require_sidecar_token(request: Request, call_next):
 def health() -> Dict[str, str]:
     if onnx_scorer.ready:
         return {"status": "ok", "mode": "onnx", "modelPath": onnx_scorer.model_path, "scoringMode": SCORING_MODE}
-    return {"status": "ok", "mode": "heuristic", "reason": onnx_scorer.error or "onnx unavailable", "scoringMode": SCORING_MODE}
+    # Avoid exposing internal loader/runtime error detail over unauthenticated health probes.
+    return {"status": "ok", "mode": "heuristic", "reason": "onnx unavailable", "scoringMode": SCORING_MODE}
 
 
 @app.post("/v1/score-findings", response_model=ScoreFindingsResponse)
