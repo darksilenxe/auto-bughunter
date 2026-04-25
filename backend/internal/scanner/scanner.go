@@ -27,6 +27,14 @@ type Service struct {
 }
 
 const supplementalResourceFetchMaxURLs = 8
+const supplementalResourceFetchMaxReadBytes int64 = 128 * 1024
+const supplementalResourceFetchTextExcerptMaxChars = 220
+
+var (
+	htmlScriptStyleRe = regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</(script|style)>`)
+	htmlTagRe         = regexp.MustCompile(`(?s)<[^>]+>`)
+	htmlWhitespaceRe  = regexp.MustCompile(`\s+`)
+)
 
 // SetOAST attaches an OAST service. Safe to call with nil to disable.
 func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
@@ -473,7 +481,8 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 		if err != nil {
 			continue
 		}
-		if strings.EqualFold(hostFromURL(rawURL), targetHost) {
+		rawHost := hostFromURL(rawURL)
+		if strings.EqualFold(rawHost, targetHost) {
 			ApplyAuthProfile(req, input.AuthProfile)
 		} else {
 			skippedAuthHosts++
@@ -491,9 +500,15 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 		if contentType == "" {
 			contentType = "unknown"
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, supplementalResourceFetchMaxReadBytes))
 		_ = resp.Body.Close()
-		evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s", rawURL, resp.StatusCode, contentType))
+		if strings.Contains(strings.ToLower(contentType), "text/html") {
+			if excerpt := extractPlainTextExcerptFromHTML(string(body), supplementalResourceFetchTextExcerptMaxChars); excerpt != "" {
+				evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s text=%q", rawURL, resp.StatusCode, contentType, excerpt))
+				continue
+			}
+		}
+		evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s bytes=%d", rawURL, resp.StatusCode, contentType, len(body)))
 	}
 
 	if len(evidence) == 0 {
@@ -508,14 +523,36 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 		Category:       "discovery",
 		Severity:       model.SeverityInfo,
 		Title:          fmt.Sprintf("Fetched %d supplemental web resource(s)", len(evidence)),
-		Description:    "Operator-specified supplemental resources were fetched during this scan to gather additional context alongside primary target analysis.",
+		Description:    "Operator-specified supplemental resources were fetched during this scan; HTML responses are normalized into plain-text excerpts for training context.",
 		Evidence:       strings.Join(limitStrings(evidence, supplementalResourceFetchMaxURLs), "; "),
 		Recommendation: recommendation,
 		EvidenceFields: map[string]string{
 			"validationType": "safe-observation",
-			"reproStep":      "Issue GET requests to each supplementalResourceUrls entry and record status/content-type",
+			"reproStep":      "Issue GET requests to each supplementalResourceUrls entry and record status/content type",
 		},
 	}}
+}
+
+func extractPlainTextExcerptFromHTML(html string, max int) string {
+	if max <= 0 {
+		max = supplementalResourceFetchTextExcerptMaxChars
+	}
+	text := strings.TrimSpace(html)
+	if text == "" {
+		return ""
+	}
+	text = htmlScriptStyleRe.ReplaceAllString(text, " ")
+	text = htmlTagRe.ReplaceAllString(text, " ")
+	text = htmlWhitespaceRe.ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) > max {
+		return strings.TrimSpace(string(runes[:max])) + "…"
+	}
+	return text
 }
 
 func collectSupplementalResourceURLs(target string, candidates []string, scanScope model.ScanScope, max int) []string {
