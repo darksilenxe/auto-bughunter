@@ -255,7 +255,10 @@ Body:
   "options": {
     "useNucleiIntegration": false,
     "useZapBaselineIntegration": false,
-    "useXssMapIntegration": false
+    "useXssMapIntegration": false,
+    "supplementalResourceUrls": [
+      "https://docs.example-cdn.com/security.txt"
+    ]
   }
 }
 ```
