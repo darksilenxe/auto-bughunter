@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,10 @@ var (
 
 	agentsByName   = map[string]*Counter{}
 	agentsByNameMu sync.Mutex
+
+	toolRunsByKey     = map[string]*Counter{}
+	toolDurationByKey = map[string]*Histogram{}
+	toolMetricsMu     sync.Mutex
 )
 
 // FindingRecorded increments the findings counter for the given severity label.
@@ -286,6 +291,56 @@ func AgentRun(agentName string) {
 	}
 	agentsByNameMu.Unlock()
 	c.Inc()
+}
+
+// ToolRun records one scanner-tool execution with tool/agent/status labels and duration.
+func ToolRun(toolName, agentName, status string, duration time.Duration) {
+	tool := strings.TrimSpace(toolName)
+	if tool == "" {
+		tool = "unknown"
+	}
+	agent := strings.TrimSpace(agentName)
+	if agent == "" {
+		agent = "unknown"
+	}
+	state := strings.TrimSpace(status)
+	if state == "" {
+		state = "unknown"
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	key := tool + "|" + agent + "|" + state
+	labels := map[string]string{
+		"tool":   tool,
+		"agent":  agent,
+		"status": state,
+	}
+
+	toolMetricsMu.Lock()
+	runCounter, ok := toolRunsByKey[key]
+	if !ok {
+		runCounter = DefaultRegistry.NewCounter(
+			"autobughunter_tool_runs_total",
+			"Scanner tool runs broken down by tool, agent, and status.",
+			labels,
+		)
+		toolRunsByKey[key] = runCounter
+	}
+	durationHistogram, ok := toolDurationByKey[key]
+	if !ok {
+		durationHistogram = DefaultRegistry.NewHistogram(
+			"autobughunter_tool_duration_seconds",
+			"Scanner tool execution duration broken down by tool, agent, and status.",
+			labels,
+			nil,
+		)
+		toolDurationByKey[key] = durationHistogram
+	}
+	toolMetricsMu.Unlock()
+
+	runCounter.Inc()
+	durationHistogram.Observe(duration.Seconds())
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
   "title": "Auto BugHunter",
   "uid": "auto-bughunter",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
   "panels": [
@@ -70,6 +70,43 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "targets": [
         { "expr": "rate(autobughunter_agent_runs_total[5m])", "legendFormat": "{{agent}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tool Runs by Tool/Status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "rate(autobughunter_tool_runs_total[5m])", "legendFormat": "{{tool}} {{status}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Tool Error + Timeout Rate",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        { "expr": "sum by (tool, status) (rate(autobughunter_tool_runs_total{status=~\"error|timeout\"}[5m]))", "legendFormat": "{{tool}} {{status}}" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Tool Duration p50/p95 by Tool (seconds)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}} p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}} p95" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Top Tool Throughput (runs/min)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        { "expr": "topk(10, sum by (tool) (rate(autobughunter_tool_runs_total[1m]) * 60))", "legendFormat": "{{tool}}" }
       ]
     }
   ]

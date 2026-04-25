@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/nikto"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
@@ -69,23 +70,33 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseSubfinderIntegration {
 		emitCmd("subfinder", "-d "+input.Target)
-		findings = append(findings, s.runSubfinder(ctx, input.Target, state)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "subfinder", func() []model.Finding {
+			return s.runSubfinder(ctx, input.Target, state)
+		})...)
 	}
 	if input.Options.UseDnsxIntegration {
 		emitCmd("dnsx", "-d "+input.Target)
-		findings = append(findings, s.runDnsx(ctx, input.Target)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "dnsx", func() []model.Finding {
+			return s.runDnsx(ctx, input.Target)
+		})...)
 	}
 	if input.Options.UseShuffleDNSIntegration {
 		emitCmd("shuffledns", "-d "+input.Target)
-		findings = append(findings, s.runShuffleDNS(ctx, input.Target, state, input.Scope)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "shuffledns", func() []model.Finding {
+			return s.runShuffleDNS(ctx, input.Target, state, input.Scope)
+		})...)
 	}
 	if input.Options.UseCertTransparency {
 		emitCmd("cert-transparency", input.Target)
-		findings = append(findings, s.runCertificateTransparency(ctx, input.Target, state, input.Scope)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "cert-transparency", func() []model.Finding {
+			return s.runCertificateTransparency(ctx, input.Target, state, input.Scope)
+		})...)
 	}
 	if input.Options.UseAmassIntegration {
 		emitCmd("amass", "enum -d "+input.Target)
-		findings = append(findings, s.runAmassNative(ctx, input.Target, state, input.Scope)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "amass", func() []model.Finding {
+			return s.runAmassNative(ctx, input.Target, state, input.Scope)
+		})...)
 	}
 
 	// Phase 2 — Port scanning (primary target + any subdomains found in phase 1).
@@ -98,7 +109,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 		for _, t := range targets {
 			emitCmd("naabu", "-host "+t)
-			findings = append(findings, s.runNaabu(ctx, t)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "naabu", func() []model.Finding {
+				return s.runNaabu(ctx, t)
+			})...)
 		}
 	}
 
@@ -112,7 +125,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 		for _, t := range targets {
 			emitCmd("httpx", "-u "+t)
-			findings = append(findings, s.runHttpx(ctx, t)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "httpx", func() []model.Finding {
+				return s.runHttpx(ctx, t)
+			})...)
 		}
 	}
 
@@ -123,29 +138,41 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			katanaDepth = 3
 		}
 		emitCmd("katana", fmt.Sprintf("-u %s -depth %d", input.Target, katanaDepth))
-		findings = append(findings, s.runKatana(ctx, input.Target, katanaDepth)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "katana", func() []model.Finding {
+			return s.runKatana(ctx, input.Target, katanaDepth)
+		})...)
 	}
 	if input.Options.UseFFUFIntegration {
 		emitCmd("ffuf", "-u "+input.Target+"/FUZZ")
-		findings = append(findings, s.runFFUF(ctx, input.Target, input.Scope)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "ffuf", func() []model.Finding {
+			return s.runFFUF(ctx, input.Target, input.Scope)
+		})...)
 	}
 	if input.Options.UseGobusterIntegration {
 		emitCmd("gobuster", "dir -u "+input.Target)
-		findings = append(findings, s.runGobuster(ctx, input.Target, input.Scope)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
+			return s.runGobuster(ctx, input.Target, input.Scope)
+		})...)
 	}
 
 	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {
 		emitCmd("tlsx", "-u "+input.Target)
-		findings = append(findings, s.runTlsx(ctx, input.Target)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "tlsx", func() []model.Finding {
+			return s.runTlsx(ctx, input.Target)
+		})...)
 	}
 	if input.Options.UseCdncheckIntegration {
 		emitCmd("cdncheck", "-i "+input.Target)
-		findings = append(findings, s.runCdncheck(ctx, input.Target)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "cdncheck", func() []model.Finding {
+			return s.runCdncheck(ctx, input.Target)
+		})...)
 	}
 	if input.Options.UseAsnmapIntegration {
 		emitCmd("asnmap", "-i "+input.Target)
-		findings = append(findings, s.runAsnmap(ctx, input.Target)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "asnmap", func() []model.Finding {
+			return s.runAsnmap(ctx, input.Target)
+		})...)
 	}
 
 	// Phase 6 — CMS scanning.
@@ -154,10 +181,14 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// • auto-trigger:    EnableWPScan=true in config → probe silently; only run if WP detected
 	if input.Options.UseWPScanIntegration {
 		emitCmd("wpscan", "--url "+input.Target)
-		findings = append(findings, s.runWPScan(ctx, input.Target, input.AuthProfile)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "wpscan", func() []model.Finding {
+			return s.runWPScan(ctx, input.Target, input.AuthProfile)
+		})...)
 	} else if s.cfg.EnableWPScan {
-		result := wpscan.Scan(ctx, input.Target, input.AuthProfile)
-		if result.IsWordPress {
+		toolFindings := s.runInstrumentedTool(ctx, "wpscan", func() []model.Finding {
+			return s.runWPScan(ctx, input.Target, input.AuthProfile)
+		})
+		if !hasFindingID(toolFindings, "wpscan-not-wordpress") {
 			findings = append(findings, model.Finding{
 				ID:             "wpscan-auto-triggered",
 				Category:       "integration",
@@ -167,7 +198,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the WPScan findings below for WordPress-specific vulnerabilities.",
 			})
-			findings = append(findings, result.Findings...)
+			findings = append(findings, toolFindings...)
 		}
 	}
 
@@ -176,6 +207,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// • auto-trigger:    EnableNikto=true in config → run silently and prepend an info finding
 	if input.Options.UseNiktoIntegration {
 		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("nikto", "scanner", "skipped", 0)
 			findings = append(findings, model.Finding{
 				ID:             "nikto-blocked-by-safety-policy",
 				Category:       "safety",
@@ -187,10 +219,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 		} else {
 			emitCmd("nikto", "-h "+input.Target)
-			findings = append(findings, s.runNikto(ctx, input.Target, input.AuthProfile)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "nikto", func() []model.Finding {
+				return s.runNikto(ctx, input.Target, input.AuthProfile)
+			})...)
 		}
 	} else if s.cfg.EnableNikto {
 		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("nikto", "scanner", "skipped", 0)
 			findings = append(findings, model.Finding{
 				ID:             "nikto-auto-blocked-by-safety-policy",
 				Category:       "safety",
@@ -210,14 +245,16 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the Nikto findings below for web application security issues.",
 			})
-			result := nikto.Scan(ctx, input.Target, input.AuthProfile)
-			findings = append(findings, result.Findings...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "nikto", func() []model.Finding {
+				return s.runNikto(ctx, input.Target, input.AuthProfile)
+			})...)
 		}
 	}
 
 	// Phase 6c — SQL injection scanning (SQLMap).
 	if input.Options.UseSQLMapIntegration {
 		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("sqlmap", "scanner", "skipped", 0)
 			findings = append(findings, model.Finding{
 				ID:             "sqlmap-blocked-by-safety-policy",
 				Category:       "safety",
@@ -229,10 +266,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 		} else {
 			emitCmd("sqlmap", "-u "+input.Target)
-			findings = append(findings, s.runSQLMap(ctx, input.Target, input.AuthProfile)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+				return s.runSQLMap(ctx, input.Target, input.AuthProfile)
+			})...)
 		}
 	} else if s.cfg.EnableSQLMap {
 		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("sqlmap", "scanner", "skipped", 0)
 			findings = append(findings, model.Finding{
 				ID:             "sqlmap-auto-blocked-by-safety-policy",
 				Category:       "safety",
@@ -252,8 +292,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the SQLMap findings below for SQL injection vulnerabilities.",
 			})
-			result := sqlmap.Scan(ctx, input.Target, input.AuthProfile)
-			findings = append(findings, result.Findings...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+				return s.runSQLMap(ctx, input.Target, input.AuthProfile)
+			})...)
 		}
 	}
 
@@ -268,7 +309,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 		for _, t := range targets {
 			emitCmd("nuclei", "-u "+t)
-			findings = append(findings, s.runNuclei(ctx, t)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "nuclei", func() []model.Finding {
+				return s.runNuclei(ctx, t)
+			})...)
 		}
 		nucleiPhaseRan = true
 	}
@@ -282,6 +325,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			}
 			select {
 			case <-ctx.Done():
+				metrics.ToolRun("zap-baseline", "scanner", "skipped", 0)
 				findings = append(findings, model.Finding{
 					ID:             "zap-baseline-skipped-context-ended",
 					Category:       "integration",
@@ -297,10 +341,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			}
 		}
 		emitCmd("zap-baseline.py", "-t "+input.Target)
-		findings = append(findings, s.runZAPBaseline(ctx, input.Target)...)
+		findings = append(findings, s.runInstrumentedTool(ctx, "zap-baseline", func() []model.Finding {
+			return s.runZAPBaseline(ctx, input.Target)
+		})...)
 	}
 	if input.Options.UseXSSMapIntegration {
 		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("xssmap", "scanner", "skipped", 0)
 			findings = append(findings, model.Finding{
 				ID:             "xssmap-blocked-by-safety-policy",
 				Category:       "safety",
@@ -312,7 +359,9 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 		} else {
 			emitCmd("xssmap", "scan --url "+input.Target)
-			findings = append(findings, s.runXSSMap(ctx, input.Target)...)
+			findings = append(findings, s.runInstrumentedTool(ctx, "xssmap", func() []model.Finding {
+				return s.runXSSMap(ctx, input.Target)
+			})...)
 		}
 	}
 	findings = append(findings, buildIntegrationCoverageFinding(state))
@@ -656,6 +705,55 @@ func countNonEmptyLines(s string) int {
 		}
 	}
 	return count
+}
+
+func (s *Service) runInstrumentedTool(ctx context.Context, tool string, fn func() []model.Finding) []model.Finding {
+	startedAt := time.Now()
+	findings := fn()
+	metrics.ToolRun(tool, "scanner", classifyToolStatus(ctx, findings), time.Since(startedAt))
+	return findings
+}
+
+func classifyToolStatus(ctx context.Context, findings []model.Finding) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return "cancelled"
+	}
+	status := "success"
+	for _, f := range findings {
+		id := strings.ToLower(strings.TrimSpace(f.ID))
+		switch {
+		case strings.Contains(id, "timeout"):
+			return "timeout"
+		case strings.Contains(id, "execution-error"),
+			strings.Contains(id, "http-error"),
+			strings.Contains(id, "wordlist-error"),
+			strings.Contains(id, "service-unavailable"),
+			strings.Contains(id, "binary-missing"),
+			strings.Contains(id, "parse-error"),
+			strings.Contains(id, "failed"):
+			status = "error"
+		case strings.Contains(id, "disabled"),
+			strings.Contains(id, "blocked"),
+			strings.Contains(id, "skipped"),
+			strings.Contains(id, "not-wordpress"):
+			if status == "success" {
+				status = "skipped"
+			}
+		}
+	}
+	return status
+}
+
+func hasFindingID(findings []model.Finding, id string) bool {
+	for _, f := range findings {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // xssmapResult mirrors the JSON contract emitted by the `xssmap` CLI in the
