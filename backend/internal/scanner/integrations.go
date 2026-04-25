@@ -185,10 +185,14 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			return s.runWPScan(ctx, input.Target, input.AuthProfile)
 		})...)
 	} else if s.cfg.EnableWPScan {
-		toolFindings := s.runInstrumentedTool(ctx, "wpscan", func() []model.Finding {
-			return s.runWPScan(ctx, input.Target, input.AuthProfile)
-		})
-		if !hasFindingID(toolFindings, "wpscan-not-wordpress") {
+		startedAt := time.Now()
+		result := wpscan.Scan(ctx, input.Target, input.AuthProfile)
+		status := "skipped"
+		if result.IsWordPress {
+			status = "success"
+		}
+		metrics.ToolRun("wpscan", "scanner", status, time.Since(startedAt))
+		if result.IsWordPress {
 			findings = append(findings, model.Finding{
 				ID:             "wpscan-auto-triggered",
 				Category:       "integration",
@@ -198,7 +202,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the WPScan findings below for WordPress-specific vulnerabilities.",
 			})
-			findings = append(findings, toolFindings...)
+			findings = append(findings, result.Findings...)
 		}
 	}
 
@@ -715,6 +719,7 @@ func (s *Service) runInstrumentedTool(ctx context.Context, tool string, fn func(
 }
 
 func classifyToolStatus(ctx context.Context, findings []model.Finding) string {
+	// Precedence: timeout/cancelled > error > skipped > success.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "timeout"
 	}
@@ -745,15 +750,6 @@ func classifyToolStatus(ctx context.Context, findings []model.Finding) string {
 		}
 	}
 	return status
-}
-
-func hasFindingID(findings []model.Finding, id string) bool {
-	for _, f := range findings {
-		if f.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 // xssmapResult mirrors the JSON contract emitted by the `xssmap` CLI in the
