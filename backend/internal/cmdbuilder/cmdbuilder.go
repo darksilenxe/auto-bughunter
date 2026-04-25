@@ -39,6 +39,14 @@ type CommandSpec struct {
 	Timeout time.Duration
 }
 
+// ValidationPolicy controls command validation behavior.
+type ValidationPolicy struct {
+	// UnsafeMode relaxes only per-tool flag allow-list checks. Core guardrails
+	// (binary allow-list, blocked injection/path patterns, target scoping, and
+	// python script sandboxing) remain enforced.
+	UnsafeMode bool
+}
+
 // String returns a human-readable representation of the command.
 func (c CommandSpec) String() string {
 	parts := append([]string{c.Binary}, c.Args...)
@@ -99,11 +107,118 @@ var blockedArgPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`~`),               // home directory reference
 }
 
+var genericAllowedFlags = map[string]bool{
+	"-h":       true,
+	"--help":   true,
+	"-v":       true,
+	"--version": true,
+}
+
+var allowedFlagsByBinary = map[string]map[string]bool{
+	"nuclei": {
+		"-u": true, "-l": true, "-t": true, "-tags": true, "-severity": true, "-rl": true, "-c": true,
+		"-silent": true, "-json": true, "-o": true, "-H": true, "-timeout": true,
+		"--validate": true, "--no-color": true, "--proxy": true, "--retries": true,
+	},
+	"subfinder": {
+		"-d": true, "-dL": true, "-silent": true, "-all": true, "-recursive": true, "-o": true,
+		"-oJ": true, "-proxy": true, "-timeout": true, "-rl": true, "-cs": true,
+	},
+	"httpx": {
+		"-u": true, "-l": true, "-silent": true, "-status-code": true, "-title": true,
+		"-tech-detect": true, "-server": true, "-cdn": true, "-ip": true, "-json": true,
+		"-o": true, "-H": true, "-path": true, "-method": true, "-timeout": true,
+		"-threads": true, "-follow-redirects": true, "-probe": true,
+	},
+	"cloudlist": {
+		"-silent": true, "-provider": true, "-o": true, "-json": true,
+	},
+	"naabu": {
+		"-host": true, "-list": true, "-p": true, "-rate": true, "-c": true, "-silent": true,
+		"-json": true, "-o": true, "-exclude-ports": true, "-scan-all-ips": true, "-timeout": true,
+	},
+	"dnsx": {
+		"-l": true, "-d": true, "-silent": true, "-a": true, "-aaaa": true, "-cname": true,
+		"-resp": true, "-json": true, "-o": true, "-retries": true, "-rcode": true,
+	},
+	"katana": {
+		"-u": true, "-list": true, "-silent": true, "-depth": true, "-jc": true, "-js-crawl": true,
+		"-jsonl": true, "-o": true, "-strategy": true, "-H": true, "-timeout": true,
+	},
+	"tlsx": {
+		"-u": true, "-l": true, "-silent": true, "-json": true, "-o": true, "-jarm": true,
+		"-san": true, "-cn": true, "-hash": true, "-expiry": true,
+	},
+	"ffuf": {
+		"-u": true, "-w": true, "-X": true, "-H": true, "-d": true, "-t": true, "-mc": true,
+		"-fc": true, "-fs": true, "-fw": true, "-s": true, "-ac": true, "-r": true,
+		"-timeout": true, "-o": true, "-of": true,
+	},
+	"gobuster": {
+		"-u": true, "-w": true, "-t": true, "-q": true, "-x": true, "-s": true, "-k": true,
+		"-H": true, "-o": true, "-b": true, "-e": true, "-r": true, "--timeout": true,
+	},
+	"nikto": {
+		"-h": true, "-port": true, "-ssl": true, "-Tuning": true, "-timeout": true, "-output": true,
+		"-Format": true, "-id": true, "-Plugins": true, "-maxtime": true,
+	},
+	"wpscan": {
+		"--url": true, "--enumerate": true, "--no-banner": true, "--api-token": true,
+		"--plugins-detection": true, "--random-user-agent": true, "--ignore-main-redirect": true,
+		"--disable-tls-checks": true, "--force": true, "--output": true, "--format": true,
+	},
+	"sqlmap": {
+		"-u": true, "-r": true, "-p": true, "--batch": true, "--level": true, "--risk": true,
+		"--dbs": true, "--tables": true, "--threads": true, "--random-agent": true,
+		"--tamper": true, "--technique": true, "--time-sec": true, "--cookie": true,
+		"--headers": true, "--data": true, "--output-dir": true, "--forms": true,
+	},
+	"vulnx": {
+		"--url": true, "--target": true, "--search": true, "--limit": true, "--silent": true,
+		"--json": true, "--output": true,
+	},
+	"curl": {
+		"-A": true, "-b": true, "-c": true, "-d": true, "-D": true, "-H": true, "-I": true,
+		"-k": true, "-L": true, "-m": true, "-o": true, "-s": true, "-S": true, "-u": true,
+		"-w": true, "-X": true, "--connect-timeout": true, "--max-time": true, "--path-as-is": true,
+		"--retry": true, "--retry-delay": true, "--retry-max-time": true,
+	},
+	"wget": {
+		"-O": true, "-q": true, "-S": true, "--header": true, "--timeout": true, "--tries": true,
+		"--no-check-certificate": true, "--server-response": true, "--output-document": true,
+	},
+	"nmap": {
+		"-sV": true, "-sC": true, "-sS": true, "-p": true, "-Pn": true, "-T4": true, "-T3": true,
+		"-A": true, "-oN": true, "-oX": true, "-oG": true, "--script": true, "--script-args": true,
+		"--open": true, "--reason": true, "--max-rate": true, "--host-timeout": true,
+	},
+	"whatweb": {
+		"-a": true, "-v": true, "--log-json": true, "--no-errors": true, "--color": true, "--user-agent": true,
+	},
+	"wafw00f": {
+		"--no-colors": true, "-a": true, "-v": true, "-o": true, "-f": true,
+	},
+	"arjun": {
+		"-u": true, "-m": true, "-oJ": true, "-oT": true, "-t": true, "-d": true, "-H": true,
+		"--include": true, "--exclude": true, "--stable": true, "--passive": true,
+	},
+	"dalfox": {
+		"--silence": true, "--no-color": true, "--cookie": true, "--header": true, "--method": true,
+		"--data": true, "--param": true, "--worker": true, "--timeout": true, "--skip-mining-all": true,
+	},
+}
+
 const pythonToolScratchDir = "/tmp/auto-bughunter/tools"
 
 // Validate checks that a CommandSpec is safe to execute.
 // It returns a non-nil error if the command violates the safety policy.
 func Validate(spec CommandSpec, target string) error {
+	return ValidateWithPolicy(spec, target, ValidationPolicy{})
+}
+
+// ValidateWithPolicy checks that a CommandSpec is safe to execute under the
+// given policy.
+func ValidateWithPolicy(spec CommandSpec, target string, policy ValidationPolicy) error {
 	bin := strings.TrimSpace(spec.Binary)
 	if bin == "" {
 		return fmt.Errorf("empty binary")
@@ -114,6 +229,12 @@ func Validate(spec CommandSpec, target string) error {
 	}
 	if (binLower == "python3" || binLower == "python") && !isSafePythonInvocation(spec.Args) {
 		return fmt.Errorf("python commands must execute a script under %s without interpreter flags", pythonToolScratchDir)
+	}
+
+	if !policy.UnsafeMode {
+		if err := validateToolFlags(binLower, spec.Args); err != nil {
+			return err
+		}
 	}
 
 	for _, arg := range spec.Args {
@@ -141,6 +262,78 @@ func Validate(spec CommandSpec, target string) error {
 	}
 
 	return nil
+}
+
+func validateToolFlags(binary string, args []string) error {
+	allowed := allowedFlagsByBinary[binary]
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, arg := range args {
+		flag, ok := extractFlagToken(arg)
+		if !ok {
+			continue
+		}
+		if genericAllowedFlags[flag] || allowed[flag] {
+			continue
+		}
+		if strings.HasPrefix(flag, "-") && !strings.HasPrefix(flag, "--") {
+			if isAllowedShortFlagVariant(flag, allowed) {
+				continue
+			}
+		}
+		return fmt.Errorf("flag %q is not permitted for tool %q in safe mode", flag, binary)
+	}
+	return nil
+}
+
+func extractFlagToken(arg string) (string, bool) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" || trimmed == "-" || !strings.HasPrefix(trimmed, "-") {
+		return "", false
+	}
+	// Negative numeric values are treated as values, not flags.
+	if len(trimmed) > 1 && trimmed[1] >= '0' && trimmed[1] <= '9' {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "--") {
+		if eq := strings.IndexByte(trimmed, '='); eq >= 0 {
+			return trimmed[:eq], true
+		}
+		return trimmed, true
+	}
+	if eq := strings.IndexByte(trimmed, '='); eq >= 0 {
+		return trimmed[:eq], true
+	}
+	return trimmed, true
+}
+
+func isAllowedShortFlagVariant(flag string, allowed map[string]bool) bool {
+	if len(flag) <= 2 {
+		return allowed[flag]
+	}
+	// Single-dash long style (e.g. -status-code) must be explicitly allow-listed.
+	if strings.Contains(flag[1:], "-") {
+		return allowed[flag]
+	}
+	// Combined short flags: -sk => -s -k
+	allLetters := true
+	for _, r := range flag[1:] {
+		if r < 'A' || (r > 'Z' && r < 'a') || r > 'z' {
+			allLetters = false
+			break
+		}
+	}
+	if allLetters {
+		for _, r := range flag[1:] {
+			if !allowed["-"+string(r)] {
+				return false
+			}
+		}
+		return true
+	}
+	// Attached value form: -p443 => allow when -p is allowed.
+	return allowed[flag[:2]]
 }
 
 func isNetworkTool(bin string) bool {
@@ -207,11 +400,32 @@ type RunResult struct {
 // Run validates and executes a CommandSpec.  It emits a command event before
 // running, and respects the context deadline in addition to spec.Timeout.
 func Run(ctx context.Context, spec CommandSpec, target string, emit func(model.ScanEvent)) RunResult {
+	return RunWithPolicy(ctx, spec, target, ValidationPolicy{}, emit)
+}
+
+// RunWithPolicy validates and executes a CommandSpec under the given policy.
+func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy ValidationPolicy, emit func(model.ScanEvent)) RunResult {
 	result := RunResult{Spec: spec}
 
-	if err := Validate(spec, target); err != nil {
+	if err := ValidateWithPolicy(spec, target, policy); err != nil {
 		result.Error = fmt.Errorf("safety validation failed: %w", err)
 		return result
+	}
+
+	if policy.UnsafeMode && emit != nil {
+		emit(model.ScanEvent{
+			Type:      model.ScanEventInfo,
+			AgentName: spec.GeneratedBy,
+			Command:   spec.String(),
+			Message:   "Unsafe command-flag mode enabled: per-tool flag allow-list bypassed; core safety checks remain enforced",
+			Timestamp: time.Now().UTC(),
+			Metadata: map[string]string{
+				"audit":             "true",
+				"unsafe_mode":       "true",
+				"policy_component":  "cmdbuilder",
+				"policy_bypass":     "tool_flag_allowlist_only",
+			},
+		})
 	}
 
 	// Emit the command event so the UI can show what's running.
