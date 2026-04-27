@@ -12,7 +12,7 @@
     { "name": "tlsx",        "repo": "projectdiscovery/tlsx",        "current": "v1.2.2"  },
     { "name": "cdncheck",    "repo": "projectdiscovery/cdncheck",    "current": "v1.2.31" },
     { "name": "asnmap",      "repo": "projectdiscovery/asnmap",      "current": "v1.1.1"  },
-    { "name": "vulnx",       "repo": "projectdiscovery/vulnx",       "current": "v2.0.1"  },
+    { "name": "vulnx",       "repo": "projectdiscovery/vulnx",       "current": "v1.0.0"  },
     { "name": "ffuf",        "repo": "ffuf/ffuf",                    "current": "v2.1.0"  },
     { "name": "gobuster",    "repo": "OJ/gobuster",                  "current": "v3.6.0"  },
     { "name": "kiterunner",  "repo": "assetnote/kiterunner",         "current": "v1.0.2"  },
