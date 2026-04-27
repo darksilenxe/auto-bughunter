@@ -26,7 +26,7 @@ FROM projectdiscovery/katana:v1.5.0       AS katana
 FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
 FROM projectdiscovery/cdncheck:v1.1.36    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
-FROM projectdiscovery/vulnx:v2.0.1        AS vulnx
+FROM projectdiscovery/vulnx:v1.0.0        AS vulnx
 
 FROM alpine:3.20
 
