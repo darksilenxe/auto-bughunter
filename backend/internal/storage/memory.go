@@ -56,6 +56,7 @@ func NewMemoryStore() *MemoryStore {
 		jobs:                map[string]model.ScanJob{},
 		assetsByScanID:      map[string][]model.ScanAsset{},
 		auditByScanID:       map[string][]model.ScanAuditEvent{},
+		feedback:            []model.ReportFeedback{},
 		verifications:       map[string][]model.FindingVerification{},
 		scanStates:          map[string]model.PersistentScanState{},
 		idempotency:         map[string]memoryIdempotencyRecord{},
@@ -64,6 +65,7 @@ func NewMemoryStore() *MemoryStore {
 		campaigns:           map[string]model.AutomationCampaign{},
 		roiOverrides:        map[string]model.ProgramROIOverride{},
 		policyPacks:         map[string]model.AutomationPolicyPack{},
+		policyAudit:         []model.AutomationPolicyAuditEvent{},
 		apiKeys:             map[string]memoryAPIKey{},
 		annotations:         map[string][]model.ScanAnnotation{},
 	}

@@ -176,6 +176,9 @@ func openStandaloneListener() (net.Listener, string, error) {
 	return listener, "http://" + listener.Addr().String(), nil
 }
 
+// generateEphemeralAPIKey returns an in-process bootstrap token in the same
+// abh_<48 hex chars> format used elsewhere in the backend, giving 24 bytes of
+// randomness for the temporary embedded server lifetime.
 func generateEphemeralAPIKey() (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
