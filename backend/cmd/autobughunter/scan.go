@@ -249,4 +249,3 @@ scan run flags:
   -poll-interval <duration>   Poll interval while waiting (default 5s)
   -wait-timeout <duration>    Max wait time (default 30m)`)
 }
-
