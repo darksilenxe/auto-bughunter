@@ -106,6 +106,8 @@ It is focused on tool readiness/updates plus ML dataset and inference
 workflows, and acts as a thin client over the existing backend and ML service
 HTTP contracts.
 
+### Running it from source
+
 Build or run it from the backend module:
 
 ```bash
@@ -114,6 +116,45 @@ go build ./cmd/autobughunter
 # or:
 go run ./cmd/autobughunter --help
 ```
+
+### Using it as a standalone binary
+
+Yes — you can run it as a standalone command-line binary after building or
+installing it. For example:
+
+```bash
+cd ./backend
+mkdir -p ../bin
+go build -o ../bin/autobughunter ./cmd/autobughunter
+../bin/autobughunter help
+```
+
+Or install it into your Go bin directory:
+
+```bash
+cd ./backend
+go install ./cmd/autobughunter
+autobughunter help
+```
+
+The binary is standalone in the sense that it does not need the frontend, but
+it is still a thin client:
+
+- `tools health`
+- `tools updates`
+- `ml dataset export`
+
+require a reachable backend API.
+
+- `ml score-findings`
+- `ml attack-paths`
+- `ml remediation-plan`
+- `ml false-positive-candidates`
+
+require a reachable ML service API.
+
+So you can copy the binary anywhere and run it directly, as long as the target
+backend and/or ML service URLs, auth, and network access are available.
 
 ### Supported commands
 
@@ -153,6 +194,14 @@ AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter tools health -format text
 ```
 
+Check tool readiness with a previously built standalone binary:
+
+```bash
+AUTOBUGHUNTER_BACKEND_URL="http://localhost:8080" \
+AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
+./bin/autobughunter tools health -format text
+```
+
 Fetch the sidecar-generated tool update report:
 
 ```bash
@@ -169,6 +218,15 @@ AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter ml dataset export -limit 250 > /tmp/engagements.dataset.json
 ```
 
+Call the backend directly from a standalone binary installed on your `PATH`:
+
+```bash
+AUTOBUGHUNTER_BACKEND_URL="https://backend.example.internal" \
+AUTOBUGHUNTER_API_KEY="your-api-key" \
+AUTOBUGHUNTER_WORKSPACE_ID="workspace-a" \
+autobughunter ml dataset export -limit 100
+```
+
 Score findings by piping JSON directly to the ML service:
 
 ```bash
@@ -178,6 +236,14 @@ cat findings.json | \
     -ml-base http://localhost:8090 \
     -sidecar-token "$SIDECAR_AUTH_TOKEN" \
     -input -)
+```
+
+Call the ML service directly with a standalone binary:
+
+```bash
+AUTOBUGHUNTER_ML_URL="http://localhost:8090" \
+AUTOBUGHUNTER_SIDECAR_AUTH_TOKEN="$SIDECAR_AUTH_TOKEN" \
+./bin/autobughunter ml score-findings -input findings.json
 ```
 
 Generate attack paths or remediation guidance from a file containing either a
