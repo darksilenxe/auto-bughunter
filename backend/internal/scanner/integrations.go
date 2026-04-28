@@ -426,11 +426,25 @@ func expandTargetsWithScope(target string, state *integrationState, scanScope mo
 }
 
 func (s *Service) runNuclei(ctx context.Context, target string) []model.Finding {
-	// Try HTTP service first, fall back to exec mode
-	if useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES"); useHTTPMode == "true" || useHTTPMode == "1" {
+	// Try HTTP service first when explicitly enabled, and also auto-fallback to
+	// the HTTP wrapper when the local exec path is unavailable but the service
+	// is healthy. This keeps the default sidecar-based deployment working even
+	// when the backend image omits docker-cli for legacy exec-mode shims.
+	if s.shouldRunNucleiViaHTTP(ctx) {
 		return s.runNucleiHTTP(ctx, target)
 	}
 	return s.runNucleiExec(ctx, target)
+}
+
+func (s *Service) shouldRunNucleiViaHTTP(ctx context.Context) bool {
+	if httpToolServicesEnabled() {
+		return true
+	}
+	if commandPreflight(ctx, s.cfg.NucleiBinary, "-version") {
+		return false
+	}
+	client := toolclient.NewNucleiClient()
+	return serviceHealthCheck(ctx, client.IsAvailable)
 }
 
 func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Finding {
@@ -577,11 +591,25 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 }
 
 func (s *Service) runZAPBaseline(ctx context.Context, target string) []model.Finding {
-	// Try HTTP service first, fall back to exec mode
-	if useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES"); useHTTPMode == "true" || useHTTPMode == "1" {
+	// Try HTTP service first when explicitly enabled, and also auto-fallback to
+	// the HTTP wrapper when the local exec path is unavailable but the service
+	// is healthy. This avoids false runtime failures from shim binaries that are
+	// present on PATH but cannot reach docker compose from the backend image.
+	if s.shouldRunZAPBaselineViaHTTP(ctx) {
 		return s.runZAPBaselineHTTP(ctx, target)
 	}
 	return s.runZAPBaselineExec(ctx, target)
+}
+
+func (s *Service) shouldRunZAPBaselineViaHTTP(ctx context.Context) bool {
+	if httpToolServicesEnabled() {
+		return true
+	}
+	if commandPreflight(ctx, s.cfg.ZAPBaselineBinary, "-h") {
+		return false
+	}
+	client := toolclient.NewZapClient()
+	return serviceHealthCheck(ctx, client.IsAvailable)
 }
 
 func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model.Finding {
@@ -713,6 +741,29 @@ func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuff
 		Evidence:       "failMarkers=" + strconv.Itoa(fails) + ", warnMarkers=" + strconv.Itoa(warns) + evidenceSuffix,
 		Recommendation: "Review full ZAP baseline report and verify findings before remediation.",
 	}}
+}
+
+func httpToolServicesEnabled() bool {
+	useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES")
+	return useHTTPMode == "true" || useHTTPMode == "1"
+}
+
+func commandPreflight(parent context.Context, binary string, args ...string) bool {
+	if strings.TrimSpace(binary) == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
+
+func serviceHealthCheck(parent context.Context, check func(context.Context) bool) bool {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	return check(ctx)
 }
 
 func countNonEmptyLines(s string) int {

@@ -2,6 +2,9 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -63,6 +66,28 @@ func writeFakeZAPBaseline(t *testing.T, outputBody string, exitCode int) string 
 	return path
 }
 
+func writeBrokenTool(t *testing.T, name, stderr string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake binary stub uses /bin/sh which is unavailable on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\n"
+	if stderr != "" {
+		script += "echo " + shellQuote(stderr) + " >&2\n"
+	}
+	script += "exit 127\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write broken tool stub: %v", err)
+	}
+	return path
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 // ---- Nuclei exec-mode tests ----
 
 func TestRunNucleiExec_BinaryMissing(t *testing.T) {
@@ -119,6 +144,43 @@ func TestRunNucleiExec_ExecutionError(t *testing.T) {
 	findings := svc.runNucleiExec(context.Background(), "https://example.com/")
 	if len(findings) != 1 || findings[0].ID != "nuclei-execution-error" {
 		t.Fatalf("expected nuclei-execution-error finding, got %+v", findings)
+	}
+}
+
+func TestRunNuclei_FallsBackToHTTPWhenExecUnavailable(t *testing.T) {
+	t.Setenv("USE_HTTP_TOOL_SERVICES", "false")
+	mockSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/execute":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "[medium] [http] [test] https://example.com/\n",
+				"stderr":    "",
+				"exit_code": 0,
+				"timed_out": false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockSvc.Close()
+	t.Setenv("NUCLEI_SERVICE_URL", mockSvc.URL)
+
+	svc := NewService(Config{
+		NucleiBinary:       writeBrokenTool(t, "nuclei", "sidecar-exec: docker CLI not found"),
+		IntegrationTimeout: 10 * time.Second,
+	})
+	findings := svc.runNuclei(context.Background(), "https://example.com/")
+	if len(findings) != 1 || findings[0].ID != "nuclei-summary" {
+		t.Fatalf("expected nuclei-summary finding, got %+v", findings)
+	}
+	if findings[0].Severity != model.SeverityMedium {
+		t.Fatalf("expected medium severity from HTTP fallback, got %v", findings[0].Severity)
+	}
+	if !strings.Contains(findings[0].Evidence, "(via HTTP service)") {
+		t.Fatalf("expected HTTP fallback evidence, got %q", findings[0].Evidence)
 	}
 }
 
@@ -197,5 +259,42 @@ func TestRunZAPBaselineExec_ExecutionError(t *testing.T) {
 	findings := svc.runZAPBaselineExec(context.Background(), "https://example.com/")
 	if len(findings) != 1 || findings[0].ID != "zap-baseline-execution-error" {
 		t.Fatalf("expected zap-baseline-execution-error finding, got %+v", findings)
+	}
+}
+
+func TestRunZAPBaseline_FallsBackToHTTPWhenExecUnavailable(t *testing.T) {
+	t.Setenv("USE_HTTP_TOOL_SERVICES", "false")
+	mockSvc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/execute":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"stdout":    "WARN-NEW: Missing CSP [10038]\n",
+				"stderr":    "",
+				"exit_code": 1,
+				"timed_out": false,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockSvc.Close()
+	t.Setenv("ZAP_SERVICE_URL", mockSvc.URL)
+
+	svc := NewService(Config{
+		ZAPBaselineBinary:  writeBrokenTool(t, "zap-baseline.py", "sidecar-exec: docker CLI not found"),
+		IntegrationTimeout: 10 * time.Second,
+	})
+	findings := svc.runZAPBaseline(context.Background(), "https://example.com/")
+	if len(findings) != 1 || findings[0].ID != "zap-baseline-summary" {
+		t.Fatalf("expected zap-baseline-summary finding, got %+v", findings)
+	}
+	if findings[0].Severity != model.SeverityMedium {
+		t.Fatalf("expected medium severity from HTTP fallback, got %v", findings[0].Severity)
+	}
+	if !strings.Contains(findings[0].Evidence, "(via HTTP service)") {
+		t.Fatalf("expected HTTP fallback evidence, got %q", findings[0].Evidence)
 	}
 }
