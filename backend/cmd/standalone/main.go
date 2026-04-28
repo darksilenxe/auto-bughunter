@@ -44,7 +44,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 
-	srv, restoreEnv, err := startStandaloneServer(stderr, quiet)
+	runtimeCfg, err := parseStandaloneRuntimeConfig(args)
+	if err != nil {
+		return err
+	}
+	srv, restoreEnv, err := startStandaloneServer(stderr, quiet, runtimeCfg)
 	if err != nil {
 		return err
 	}
@@ -61,7 +65,132 @@ type standaloneServer struct {
 	httpServer *http.Server
 }
 
-func startStandaloneServer(stderr io.Writer, quiet bool) (*standaloneServer, func(), error) {
+type standaloneRuntimeConfig struct {
+	EnableSubfinder  bool
+	EnableHttpx      bool
+	EnableCloudlist  bool
+	EnableVulnx      bool
+	EnableNaabu      bool
+	EnableDnsx       bool
+	EnableShuffleDNS bool
+	EnableCertTrans  bool
+	EnableAmass      bool
+	EnableKatana     bool
+	EnableTlsx       bool
+	EnableCdncheck   bool
+	EnableAsnmap     bool
+	EnableNikto      bool
+	EnableWPScan     bool
+	EnableSQLMap     bool
+	EnableFFUF       bool
+	EnableGobuster   bool
+	AllowDestructive bool
+}
+
+func defaultStandaloneRuntimeConfig() standaloneRuntimeConfig {
+	return standaloneRuntimeConfig{
+		EnableSubfinder:  getbool("ENABLE_SUBFINDER_INTEGRATION", false),
+		EnableHttpx:      getbool("ENABLE_HTTPX_INTEGRATION", false),
+		EnableCloudlist:  getbool("ENABLE_CLOUDLIST_INTEGRATION", false),
+		EnableVulnx:      getbool("ENABLE_VULNX_INTEGRATION", false),
+		EnableNaabu:      getbool("ENABLE_NAABU_INTEGRATION", false),
+		EnableDnsx:       getbool("ENABLE_DNSX_INTEGRATION", false),
+		EnableShuffleDNS: getbool("ENABLE_SHUFFLEDNS_INTEGRATION", false),
+		EnableCertTrans:  getbool("ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION", false),
+		EnableAmass:      getbool("ENABLE_AMASS_INTEGRATION", false),
+		EnableKatana:     getbool("ENABLE_KATANA_INTEGRATION", false),
+		EnableTlsx:       getbool("ENABLE_TLSX_INTEGRATION", false),
+		EnableCdncheck:   getbool("ENABLE_CDNCHECK_INTEGRATION", false),
+		EnableAsnmap:     getbool("ENABLE_ASNMAP_INTEGRATION", false),
+		EnableNikto:      getbool("ENABLE_NIKTO_INTEGRATION", false),
+		EnableWPScan:     getbool("ENABLE_WPSCAN_INTEGRATION", false),
+		EnableSQLMap:     getbool("ENABLE_SQLMAP_INTEGRATION", false),
+		EnableFFUF:       getbool("ENABLE_FFUF_INTEGRATION", false),
+		EnableGobuster:   getbool("ENABLE_GOBUSTER_INTEGRATION", false),
+		AllowDestructive: getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
+	}
+}
+
+func parseStandaloneRuntimeConfig(args []string) (standaloneRuntimeConfig, error) {
+	cfg := defaultStandaloneRuntimeConfig()
+	boolFlags := map[string]func(bool){
+		"allow-destructive":     func(v bool) { cfg.AllowDestructive = v },
+		"use-subfinder":         func(v bool) { cfg.EnableSubfinder = v },
+		"use-httpx":             func(v bool) { cfg.EnableHttpx = v },
+		"use-cloudlist":         func(v bool) { cfg.EnableCloudlist = v },
+		"use-vulnx":             func(v bool) { cfg.EnableVulnx = v },
+		"use-naabu":             func(v bool) { cfg.EnableNaabu = v },
+		"use-dnsx":              func(v bool) { cfg.EnableDnsx = v },
+		"use-shuffledns":        func(v bool) { cfg.EnableShuffleDNS = v },
+		"use-cert-transparency": func(v bool) { cfg.EnableCertTrans = v },
+		"use-amass":             func(v bool) { cfg.EnableAmass = v },
+		"use-katana":            func(v bool) { cfg.EnableKatana = v },
+		"use-tlsx":              func(v bool) { cfg.EnableTlsx = v },
+		"use-cdncheck":          func(v bool) { cfg.EnableCdncheck = v },
+		"use-asnmap":            func(v bool) { cfg.EnableAsnmap = v },
+		"use-nikto":             func(v bool) { cfg.EnableNikto = v },
+		"use-wpscan":            func(v bool) { cfg.EnableWPScan = v },
+		"use-sqlmap":            func(v bool) { cfg.EnableSQLMap = v },
+		"use-ffuf":              func(v bool) { cfg.EnableFFUF = v },
+		"use-gobuster":          func(v bool) { cfg.EnableGobuster = v },
+		"all-go-tools": func(v bool) {
+			if v {
+				enableAllGoRuntimeTools(&cfg)
+			}
+		},
+		"full-scan": func(v bool) {
+			if v {
+				enableAllGoRuntimeTools(&cfg)
+			}
+		},
+	}
+	for i := 0; i < len(args); i++ {
+		name, value, hasValue, ok := parseFlagArg(args, i)
+		if !ok {
+			continue
+		}
+		apply, exists := boolFlags[name]
+		if !exists {
+			continue
+		}
+		if !hasValue {
+			value = "true"
+			if i+1 < len(args) && isBoolToken(args[i+1]) {
+				i++
+				value = args[i]
+			}
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return standaloneRuntimeConfig{}, fmt.Errorf("invalid boolean for -%s: %q", name, value)
+		}
+		apply(parsed)
+	}
+	return cfg, nil
+}
+
+func enableAllGoRuntimeTools(cfg *standaloneRuntimeConfig) {
+	cfg.EnableSubfinder = true
+	cfg.EnableHttpx = true
+	cfg.EnableCloudlist = true
+	cfg.EnableVulnx = true
+	cfg.EnableNaabu = true
+	cfg.EnableDnsx = true
+	cfg.EnableShuffleDNS = true
+	cfg.EnableCertTrans = true
+	cfg.EnableAmass = true
+	cfg.EnableKatana = true
+	cfg.EnableTlsx = true
+	cfg.EnableCdncheck = true
+	cfg.EnableAsnmap = true
+	cfg.EnableNikto = true
+	cfg.EnableWPScan = true
+	cfg.EnableSQLMap = true
+	cfg.EnableFFUF = true
+	cfg.EnableGobuster = true
+}
+
+func startStandaloneServer(stderr io.Writer, quiet bool, runtimeCfg standaloneRuntimeConfig) (*standaloneServer, func(), error) {
 	listener, baseURL, err := openStandaloneListener()
 	if err != nil {
 		return nil, func() {}, err
@@ -77,25 +206,25 @@ func startStandaloneServer(stderr io.Writer, quiet bool) (*standaloneServer, fun
 	repo := storage.NewMemoryStore()
 	proxyStore := proxy.NewMemStore()
 	scanService := scanner.NewService(scanner.Config{
-		EnableSubfinder:    getbool("ENABLE_SUBFINDER_INTEGRATION", false),
-		EnableHttpx:        getbool("ENABLE_HTTPX_INTEGRATION", false),
-		EnableCloudlist:    getbool("ENABLE_CLOUDLIST_INTEGRATION", false),
-		EnableVulnx:        getbool("ENABLE_VULNX_INTEGRATION", false),
-		EnableNaabu:        getbool("ENABLE_NAABU_INTEGRATION", false),
-		EnableDnsx:         getbool("ENABLE_DNSX_INTEGRATION", false),
-		EnableShuffleDNS:   getbool("ENABLE_SHUFFLEDNS_INTEGRATION", false),
-		EnableCertTrans:    getbool("ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION", false),
-		EnableAmass:        getbool("ENABLE_AMASS_INTEGRATION", false),
-		EnableKatana:       getbool("ENABLE_KATANA_INTEGRATION", false),
-		EnableTlsx:         getbool("ENABLE_TLSX_INTEGRATION", false),
-		EnableCdncheck:     getbool("ENABLE_CDNCHECK_INTEGRATION", false),
-		EnableAsnmap:       getbool("ENABLE_ASNMAP_INTEGRATION", false),
-		EnableNikto:        getbool("ENABLE_NIKTO_INTEGRATION", false),
-		EnableWPScan:       getbool("ENABLE_WPSCAN_INTEGRATION", false),
-		EnableSQLMap:       getbool("ENABLE_SQLMAP_INTEGRATION", false),
-		EnableFFUF:         getbool("ENABLE_FFUF_INTEGRATION", false),
-		EnableGobuster:     getbool("ENABLE_GOBUSTER_INTEGRATION", false),
-		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
+		EnableSubfinder:    runtimeCfg.EnableSubfinder,
+		EnableHttpx:        runtimeCfg.EnableHttpx,
+		EnableCloudlist:    runtimeCfg.EnableCloudlist,
+		EnableVulnx:        runtimeCfg.EnableVulnx,
+		EnableNaabu:        runtimeCfg.EnableNaabu,
+		EnableDnsx:         runtimeCfg.EnableDnsx,
+		EnableShuffleDNS:   runtimeCfg.EnableShuffleDNS,
+		EnableCertTrans:    runtimeCfg.EnableCertTrans,
+		EnableAmass:        runtimeCfg.EnableAmass,
+		EnableKatana:       runtimeCfg.EnableKatana,
+		EnableTlsx:         runtimeCfg.EnableTlsx,
+		EnableCdncheck:     runtimeCfg.EnableCdncheck,
+		EnableAsnmap:       runtimeCfg.EnableAsnmap,
+		EnableNikto:        runtimeCfg.EnableNikto,
+		EnableWPScan:       runtimeCfg.EnableWPScan,
+		EnableSQLMap:       runtimeCfg.EnableSQLMap,
+		EnableFFUF:         runtimeCfg.EnableFFUF,
+		EnableGobuster:     runtimeCfg.EnableGobuster,
+		AllowDestructive:   runtimeCfg.AllowDestructive,
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
 		XSSMapBinary:       getenv("XSSMAP_BINARY", "xssmap"),
@@ -245,6 +374,229 @@ type httpError struct {
 	StatusCode int
 	Message    string
 	Body       []byte
+}
+
+type scanFlagValues struct {
+	inputPath                 string
+	target                    string
+	idempotencyKey            string
+	automationMode            string
+	passiveOnly               bool
+	aggressive                bool
+	fullScan                  bool
+	allGoTools                bool
+	allowDestructive          bool
+	useNuclei                 bool
+	useZAPBaseline            bool
+	useXSSMap                 bool
+	useSubfinder              bool
+	useHttpx                  bool
+	useCloudlist              bool
+	useVulnx                  bool
+	useNaabu                  bool
+	useDnsx                   bool
+	useShuffleDNS             bool
+	useCertTransparency       bool
+	useAmass                  bool
+	useKatana                 bool
+	useTlsx                   bool
+	useCdncheck               bool
+	useAsnmap                 bool
+	useNikto                  bool
+	useWPScan                 bool
+	useSQLMap                 bool
+	useFFUF                   bool
+	useGobuster               bool
+	useMLTriage               bool
+	useAttackPath             bool
+	useFalsePositiveReview    bool
+	useRemediationPlanner     bool
+	wafBypass                 bool
+	strictReporting           bool
+	minReportConfidence       float64
+	unsafeDynamicCommandFlags bool
+}
+
+func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Duration, stderr io.Writer) *string {
+	fs.SetOutput(stderr)
+	format := fs.String("format", "json", "output format: json|text")
+	fs.StringVar(&values.inputPath, "input", "", "JSON file containing a scan request (use '-' for stdin)")
+	fs.StringVar(&values.target, "target", "", "target URL to scan")
+	fs.StringVar(&values.idempotencyKey, "idempotency-key", "", "optional idempotency key")
+	fs.StringVar(&values.automationMode, "automation-mode", "", "optional automation mode override")
+	fs.BoolVar(&values.passiveOnly, "passive-only", false, "enable passive-only scan mode")
+	fs.BoolVar(&values.aggressive, "aggressive-exploitation", false, "enable aggressive exploitation mode")
+	fs.BoolVar(&values.fullScan, "full-scan", false, "enable all supported standalone scan integrations")
+	fs.BoolVar(&values.allGoTools, "all-go-tools", false, "enable all Go-based standalone scan integrations")
+	fs.BoolVar(&values.allowDestructive, "allow-destructive", false, "allow destructive checks for this standalone run")
+	fs.BoolVar(&values.useNuclei, "use-nuclei", false, "enable Nuclei integration")
+	fs.BoolVar(&values.useZAPBaseline, "use-zap-baseline", false, "enable ZAP Baseline integration")
+	fs.BoolVar(&values.useXSSMap, "use-xssmap", false, "enable XSSMap integration")
+	fs.BoolVar(&values.useSubfinder, "use-subfinder", false, "enable Subfinder integration")
+	fs.BoolVar(&values.useHttpx, "use-httpx", false, "enable Httpx integration")
+	fs.BoolVar(&values.useCloudlist, "use-cloudlist", false, "enable Cloudlist integration")
+	fs.BoolVar(&values.useVulnx, "use-vulnx", false, "enable Vulnx integration")
+	fs.BoolVar(&values.useNaabu, "use-naabu", false, "enable Naabu integration")
+	fs.BoolVar(&values.useDnsx, "use-dnsx", false, "enable Dnsx integration")
+	fs.BoolVar(&values.useShuffleDNS, "use-shuffledns", false, "enable ShuffleDNS integration")
+	fs.BoolVar(&values.useCertTransparency, "use-cert-transparency", false, "enable certificate transparency integration")
+	fs.BoolVar(&values.useAmass, "use-amass", false, "enable Amass integration")
+	fs.BoolVar(&values.useKatana, "use-katana", false, "enable Katana integration")
+	fs.BoolVar(&values.useTlsx, "use-tlsx", false, "enable Tlsx integration")
+	fs.BoolVar(&values.useCdncheck, "use-cdncheck", false, "enable Cdncheck integration")
+	fs.BoolVar(&values.useAsnmap, "use-asnmap", false, "enable Asnmap integration")
+	fs.BoolVar(&values.useNikto, "use-nikto", false, "enable native Go Nikto integration")
+	fs.BoolVar(&values.useWPScan, "use-wpscan", false, "enable native Go WPScan integration")
+	fs.BoolVar(&values.useSQLMap, "use-sqlmap", false, "enable native Go SQLMap integration")
+	fs.BoolVar(&values.useFFUF, "use-ffuf", false, "enable FFUF integration")
+	fs.BoolVar(&values.useGobuster, "use-gobuster", false, "enable Gobuster integration")
+	fs.BoolVar(&values.useMLTriage, "use-ml-triage", false, "enable ML triage agent")
+	fs.BoolVar(&values.useAttackPath, "use-attack-paths", false, "enable attack path agent")
+	fs.BoolVar(&values.useFalsePositiveReview, "use-false-positive-review", false, "enable false positive review agent")
+	fs.BoolVar(&values.useRemediationPlanner, "use-remediation-planner", false, "enable remediation planner agent")
+	fs.BoolVar(&values.wafBypass, "waf-bypass", false, "enable WAF bypass payload variants")
+	fs.BoolVar(&values.strictReporting, "strict-reporting", false, "filter low-confidence findings from scan output")
+	fs.Float64Var(&values.minReportConfidence, "min-report-confidence", 0, "minimum confidence for strict reporting")
+	fs.BoolVar(&values.unsafeDynamicCommandFlags, "unsafe-dynamic-command-flags", false, "disable only per-tool dynamic command flag allow-list checks")
+	fs.DurationVar(timeout, "timeout", *timeout, "request timeout")
+	return format
+}
+
+func enableAllGoScanOptions(options *model.ScanOptions) {
+	options.UseNucleiIntegration = true
+	options.UseSubfinderIntegration = true
+	options.UseHttpxIntegration = true
+	options.UseCloudlistIntegration = true
+	options.UseVulnxIntegration = true
+	options.UseNaabuIntegration = true
+	options.UseDnsxIntegration = true
+	options.UseShuffleDNSIntegration = true
+	options.UseCertTransparency = true
+	options.UseAmassIntegration = true
+	options.UseKatanaIntegration = true
+	options.UseTlsxIntegration = true
+	options.UseCdncheckIntegration = true
+	options.UseAsnmapIntegration = true
+	options.UseNiktoIntegration = true
+	options.UseWPScanIntegration = true
+	options.UseSQLMapIntegration = true
+	options.UseFFUFIntegration = true
+	options.UseGobusterIntegration = true
+}
+
+func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
+	if trimmed := strings.TrimSpace(values.target); trimmed != "" {
+		req.Target = trimmed
+	}
+	if trimmed := strings.TrimSpace(values.idempotencyKey); trimmed != "" {
+		req.IdempotencyKey = trimmed
+	}
+	if trimmed := strings.TrimSpace(values.automationMode); trimmed != "" {
+		req.Options.AutomationMode = trimmed
+	}
+	if values.passiveOnly {
+		req.Options.PassiveOnly = true
+	}
+	if values.aggressive {
+		req.Options.AggressiveExploitation = true
+	}
+	if values.allGoTools || values.fullScan {
+		enableAllGoScanOptions(&req.Options)
+	}
+	if values.fullScan {
+		req.Options.UseZAPBaselineIntegration = true
+		req.Options.UseXSSMapIntegration = true
+	}
+	if values.useNuclei {
+		req.Options.UseNucleiIntegration = true
+	}
+	if values.useZAPBaseline {
+		req.Options.UseZAPBaselineIntegration = true
+	}
+	if values.useXSSMap {
+		req.Options.UseXSSMapIntegration = true
+	}
+	if values.useSubfinder {
+		req.Options.UseSubfinderIntegration = true
+	}
+	if values.useHttpx {
+		req.Options.UseHttpxIntegration = true
+	}
+	if values.useCloudlist {
+		req.Options.UseCloudlistIntegration = true
+	}
+	if values.useVulnx {
+		req.Options.UseVulnxIntegration = true
+	}
+	if values.useNaabu {
+		req.Options.UseNaabuIntegration = true
+	}
+	if values.useDnsx {
+		req.Options.UseDnsxIntegration = true
+	}
+	if values.useShuffleDNS {
+		req.Options.UseShuffleDNSIntegration = true
+	}
+	if values.useCertTransparency {
+		req.Options.UseCertTransparency = true
+	}
+	if values.useAmass {
+		req.Options.UseAmassIntegration = true
+	}
+	if values.useKatana {
+		req.Options.UseKatanaIntegration = true
+	}
+	if values.useTlsx {
+		req.Options.UseTlsxIntegration = true
+	}
+	if values.useCdncheck {
+		req.Options.UseCdncheckIntegration = true
+	}
+	if values.useAsnmap {
+		req.Options.UseAsnmapIntegration = true
+	}
+	if values.useNikto {
+		req.Options.UseNiktoIntegration = true
+	}
+	if values.useWPScan {
+		req.Options.UseWPScanIntegration = true
+	}
+	if values.useSQLMap {
+		req.Options.UseSQLMapIntegration = true
+	}
+	if values.useFFUF {
+		req.Options.UseFFUFIntegration = true
+	}
+	if values.useGobuster {
+		req.Options.UseGobusterIntegration = true
+	}
+	if values.useMLTriage {
+		req.Options.UseMLTriageAgent = true
+	}
+	if values.useAttackPath {
+		req.Options.UseAttackPathAgent = true
+	}
+	if values.useFalsePositiveReview {
+		req.Options.UseFalsePositiveReview = true
+	}
+	if values.useRemediationPlanner {
+		req.Options.UseRemediationPlanner = true
+	}
+	if values.wafBypass {
+		req.Options.WAFBypass = true
+	}
+	if values.strictReporting {
+		req.Options.StrictReporting = true
+	}
+	if values.minReportConfidence > 0 {
+		req.Options.MinReportConfidence = values.minReportConfidence
+		if !values.strictReporting {
+			req.Options.StrictReporting = true
+		}
+	}
+	if values.unsafeDynamicCommandFlags {
+		req.Options.UnsafeDynamicCommandFlags = true
+	}
 }
 
 func (e *httpError) Error() string {
@@ -430,19 +782,12 @@ func runScan(args []string, cfg clientConfig, stdout, stderr io.Writer) error {
 
 func runScanStart(args []string, cfg clientConfig, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("scan start", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "json", "output format: json|text")
-	inputPath := fs.String("input", "", "JSON file containing a scan request (use '-' for stdin)")
-	target := fs.String("target", "", "target URL to scan")
-	idempotencyKey := fs.String("idempotency-key", "", "optional idempotency key")
-	automationMode := fs.String("automation-mode", "", "optional automation mode override")
-	passiveOnly := fs.Bool("passive-only", false, "enable passive-only scan mode")
-	aggressive := fs.Bool("aggressive-exploitation", false, "enable aggressive exploitation mode")
-	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "request timeout")
+	var values scanFlagValues
+	format := addScanFlags(fs, &values, &cfg.timeout, stderr)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	body, err := buildScanRequestBody(*inputPath, *target, *idempotencyKey, *automationMode, *passiveOnly, *aggressive)
+	body, err := buildScanRequestBody(values)
 	if err != nil {
 		return err
 	}
@@ -474,21 +819,14 @@ func runScanGet(args []string, cfg clientConfig, stdout, stderr io.Writer) error
 
 func runScanRun(args []string, cfg clientConfig, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("scan run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "json", "output format: json|text")
-	inputPath := fs.String("input", "", "JSON file containing a scan request (use '-' for stdin)")
-	target := fs.String("target", "", "target URL to scan")
-	idempotencyKey := fs.String("idempotency-key", "", "optional idempotency key")
-	automationMode := fs.String("automation-mode", "", "optional automation mode override")
-	passiveOnly := fs.Bool("passive-only", false, "enable passive-only scan mode")
-	aggressive := fs.Bool("aggressive-exploitation", false, "enable aggressive exploitation mode")
+	var values scanFlagValues
+	format := addScanFlags(fs, &values, &cfg.timeout, stderr)
 	pollInterval := fs.Duration("poll-interval", 5*time.Second, "poll interval while waiting for completion")
 	waitTimeout := fs.Duration("wait-timeout", 30*time.Minute, "maximum time to wait for scan completion")
-	fs.DurationVar(&cfg.timeout, "timeout", cfg.timeout, "request timeout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	body, err := buildScanRequestBody(*inputPath, *target, *idempotencyKey, *automationMode, *passiveOnly, *aggressive)
+	body, err := buildScanRequestBody(values)
 	if err != nil {
 		return err
 	}
@@ -525,10 +863,10 @@ func runScanRun(args []string, cfg clientConfig, stdout, stderr io.Writer) error
 	}
 }
 
-func buildScanRequestBody(inputPath, target, idempotencyKey, automationMode string, passiveOnly, aggressive bool) ([]byte, error) {
+func buildScanRequestBody(values scanFlagValues) ([]byte, error) {
 	var req model.ScanRequest
-	if strings.TrimSpace(inputPath) != "" {
-		input, err := readInput(inputPath)
+	if strings.TrimSpace(values.inputPath) != "" {
+		input, err := readInput(values.inputPath)
 		if err != nil {
 			return nil, err
 		}
@@ -536,21 +874,7 @@ func buildScanRequestBody(inputPath, target, idempotencyKey, automationMode stri
 			return nil, fmt.Errorf("invalid scan request JSON: %w", err)
 		}
 	}
-	if trimmed := strings.TrimSpace(target); trimmed != "" {
-		req.Target = trimmed
-	}
-	if trimmed := strings.TrimSpace(idempotencyKey); trimmed != "" {
-		req.IdempotencyKey = trimmed
-	}
-	if trimmed := strings.TrimSpace(automationMode); trimmed != "" {
-		req.Options.AutomationMode = trimmed
-	}
-	if passiveOnly {
-		req.Options.PassiveOnly = true
-	}
-	if aggressive {
-		req.Options.AggressiveExploitation = true
-	}
+	applyScanFlagValues(&req, values)
 	if strings.TrimSpace(req.Target) == "" {
 		return nil, fmt.Errorf("scan target is required (set -target or provide target in -input)")
 	}
@@ -833,6 +1157,29 @@ func normalizeHelpArg(arg string) string {
 	}
 }
 
+func parseFlagArg(args []string, index int) (name, value string, hasValue, ok bool) {
+	if index < 0 || index >= len(args) {
+		return "", "", false, false
+	}
+	arg := strings.TrimSpace(args[index])
+	if arg == "" || arg == "--" || !strings.HasPrefix(arg, "-") {
+		return "", "", false, false
+	}
+	trimmed := strings.TrimLeft(arg, "-")
+	if trimmed == "" {
+		return "", "", false, false
+	}
+	if eq := strings.Index(trimmed, "="); eq >= 0 {
+		return trimmed[:eq], trimmed[eq+1:], true, true
+	}
+	return trimmed, "", false, true
+}
+
+func isBoolToken(value string) bool {
+	_, err := strconv.ParseBool(strings.TrimSpace(value))
+	return err == nil
+}
+
 func printMainUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   abh [-quiet] scan <start|get|run> [flags]
@@ -868,6 +1215,38 @@ Flags:
   -automation-mode <mode>        Optional automation mode override
   -passive-only                  Enable passive-only scan mode
   -aggressive-exploitation       Enable deeper exploitation paths
+  -full-scan                     Enable all supported standalone scan integrations
+  -all-go-tools                  Enable all Go-based standalone scan integrations
+  -allow-destructive             Allow destructive checks for this standalone run
+  -use-nuclei                    Enable Nuclei integration
+  -use-zap-baseline              Enable ZAP Baseline integration
+  -use-xssmap                    Enable XSSMap integration
+  -use-subfinder                 Enable Subfinder integration
+  -use-httpx                     Enable Httpx integration
+  -use-cloudlist                 Enable Cloudlist integration
+  -use-vulnx                     Enable Vulnx integration
+  -use-naabu                     Enable Naabu integration
+  -use-dnsx                      Enable Dnsx integration
+  -use-shuffledns                Enable ShuffleDNS integration
+  -use-cert-transparency         Enable certificate transparency integration
+  -use-amass                     Enable Amass integration
+  -use-katana                    Enable Katana integration
+  -use-tlsx                      Enable Tlsx integration
+  -use-cdncheck                  Enable Cdncheck integration
+  -use-asnmap                    Enable Asnmap integration
+  -use-nikto                     Enable native Go Nikto integration
+  -use-wpscan                    Enable native Go WPScan integration
+  -use-sqlmap                    Enable native Go SQLMap integration
+  -use-ffuf                      Enable FFUF integration
+  -use-gobuster                  Enable Gobuster integration
+  -use-ml-triage                 Enable ML triage agent
+  -use-attack-paths              Enable attack path agent
+  -use-false-positive-review     Enable false positive review agent
+  -use-remediation-planner       Enable remediation planner agent
+  -waf-bypass                    Enable WAF bypass payload variants
+  -strict-reporting              Filter low-confidence findings from output
+  -min-report-confidence <n>     Minimum confidence for strict reporting
+  -unsafe-dynamic-command-flags  Disable only per-tool dynamic flag allow-lists
   -format <json|text>            Output format
   -timeout <duration>            Request timeout
 

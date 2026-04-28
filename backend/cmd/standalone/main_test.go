@@ -2,8 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"auto-bughunter/backend/internal/model"
 )
 
 func TestRunToolsHealthTextQuiet(t *testing.T) {
@@ -33,5 +38,67 @@ func TestRunHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "abh [-quiet] scan") {
 		t.Fatalf("expected help output, got %q", stdout.String())
+	}
+}
+
+func TestParseStandaloneRuntimeConfigEnablesGoToolPreset(t *testing.T) {
+	cfg, err := parseStandaloneRuntimeConfig([]string{"scan", "run", "-all-go-tools", "-allow-destructive"})
+	if err != nil {
+		t.Fatalf("parseStandaloneRuntimeConfig returned error: %v", err)
+	}
+	if !cfg.AllowDestructive {
+		t.Fatal("expected allow destructive to be enabled")
+	}
+	if !cfg.EnableSubfinder || !cfg.EnableAmass || !cfg.EnableNikto || !cfg.EnableSQLMap || !cfg.EnableGobuster {
+		t.Fatalf("expected Go tool preset to enable integrations, got %#v", cfg)
+	}
+}
+
+func TestBuildScanRequestBodyAppliesFullScanFlags(t *testing.T) {
+	inputDir := t.TempDir()
+	inputPath := filepath.Join(inputDir, "scan-request.json")
+	if err := os.WriteFile(inputPath, []byte(`{"target":"https://old.example","options":{"passiveOnly":true}}`), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	body, err := buildScanRequestBody(scanFlagValues{
+		inputPath:              inputPath,
+		target:                 "https://override.example",
+		idempotencyKey:         "scan-key",
+		automationMode:         "conservative",
+		fullScan:               true,
+		useMLTriage:            true,
+		useAttackPath:          true,
+		useFalsePositiveReview: true,
+		useRemediationPlanner:  true,
+		wafBypass:              true,
+		strictReporting:        true,
+		minReportConfidence:    0.9,
+	})
+	if err != nil {
+		t.Fatalf("buildScanRequestBody returned error: %v", err)
+	}
+
+	var req model.ScanRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if req.Target != "https://override.example" {
+		t.Fatalf("expected target override, got %q", req.Target)
+	}
+	if req.IdempotencyKey != "scan-key" || req.Options.AutomationMode != "conservative" {
+		t.Fatalf("expected CLI overrides, got %#v", req)
+	}
+	if !req.Options.UseNucleiIntegration || !req.Options.UseZAPBaselineIntegration || !req.Options.UseXSSMapIntegration {
+		t.Fatalf("expected full scan to enable primary integrations, got %#v", req.Options)
+	}
+	if !req.Options.UseSubfinderIntegration || !req.Options.UseAmassIntegration || !req.Options.UseNiktoIntegration || !req.Options.UseSQLMapIntegration || !req.Options.UseGobusterIntegration {
+		t.Fatalf("expected full scan to enable Go tool integrations, got %#v", req.Options)
+	}
+	if !req.Options.UseMLTriageAgent || !req.Options.UseAttackPathAgent || !req.Options.UseFalsePositiveReview || !req.Options.UseRemediationPlanner {
+		t.Fatalf("expected ML/reporting flags to be applied, got %#v", req.Options)
+	}
+	if !req.Options.WAFBypass || !req.Options.StrictReporting || req.Options.MinReportConfidence != 0.9 {
+		t.Fatalf("expected reporting/security flags to be applied, got %#v", req.Options)
 	}
 }

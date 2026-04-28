@@ -231,6 +231,26 @@ AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
   -format text
 ```
 
+Run the embedded standalone utility directly from the Go main package and enable
+the full scan toolset in one command:
+
+```bash
+cd ./backend
+go run ./cmd/standalone scan run \
+  -target "https://demo.owasp-juice.shop" \
+  -full-scan \
+  -allow-destructive \
+  -use-ml-triage \
+  -use-attack-paths \
+  -use-false-positive-review \
+  -use-remediation-planner \
+  -format text
+```
+
+For a Go-only toolchain preset, replace `-full-scan` with `-all-go-tools`.
+`-allow-destructive` is required for destructive native Go checks such as
+Nikto and SQLMap, and for XSSMap when `-full-scan` is used.
+
 Submit a richer automated scan request from JSON and fetch it later:
 
 ```bash
