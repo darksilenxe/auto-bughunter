@@ -33,6 +33,8 @@ export default function Settings() {
   const { programs, savePrograms } = useScan();
   const [editing, setEditing] = useState(null); // null | index | "new"
   const [form, setForm] = useState(EMPTY_PROGRAM);
+  const [runtimeApiKey, setRuntimeApiKey] = useState(() => localStorage.getItem("api_key") || "");
+  const [apiKeyStatus, setApiKeyStatus] = useState("");
   const [aiConfig, setAIConfig] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("ai_model_preferences") || "{}");
@@ -81,6 +83,24 @@ export default function Settings() {
     setAIConfigStatus(message);
     if (aiStatusTimerRef.current) clearTimeout(aiStatusTimerRef.current);
     aiStatusTimerRef.current = setTimeout(() => setAIConfigStatus(""), 4000);
+  }
+
+  function saveApiKey() {
+    const trimmed = runtimeApiKey.trim();
+    if (trimmed) {
+      localStorage.setItem("api_key", trimmed);
+    } else {
+      localStorage.removeItem("api_key");
+    }
+    setApiKeyStatus("API key saved. Reloading…");
+    setTimeout(() => window.location.reload(), 800);
+  }
+
+  function clearApiKey() {
+    localStorage.removeItem("api_key");
+    setRuntimeApiKey("");
+    setApiKeyStatus("API key cleared. Reloading…");
+    setTimeout(() => window.location.reload(), 800);
   }
 
   function openNew() {
@@ -260,6 +280,31 @@ export default function Settings() {
         <h1>⚙️ Settings</h1>
         <p>Manage bug bounty program configurations</p>
       </header>
+
+      {/* API Key configuration */}
+      <section className="card">
+        <h2>API Key</h2>
+        <p className="meta">
+          Set the API key used by the browser to authenticate against the backend (<code>/api/*</code> routes).
+          This must match the <code>BOOTSTRAP_ADMIN_API_KEY</code> (or any provisioned API key) on the backend.
+          The value is stored in your browser&apos;s local storage and overrides the build-time <code>VITE_API_KEY</code>.
+        </p>
+        <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="password"
+            placeholder="Paste your API key here"
+            value={runtimeApiKey}
+            onChange={(e) => setRuntimeApiKey(e.target.value)}
+            style={{ flex: "1", minWidth: "240px" }}
+          />
+          <button type="button" onClick={saveApiKey}>Save &amp; Reload</button>
+          <button type="button" onClick={clearApiKey} style={{ background: "rgba(0,0,0,0.25)", color: "#000" }}>Clear</button>
+        </div>
+        {apiKeyStatus && <p className="meta" style={{ marginTop: "0.5rem" }}>{apiKeyStatus}</p>}
+        {!runtimeApiKey && !import.meta.env.VITE_API_KEY && (
+          <p className="error" style={{ marginTop: "0.5rem" }}>⚠️ No API key configured — all backend requests will be rejected.</p>
+        )}
+      </section>
 
       {/* Program list */}
       <section className="card">
