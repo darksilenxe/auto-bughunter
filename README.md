@@ -101,7 +101,7 @@ OLLAMA_SECONDARY_MODEL=codellama
 ## Command-line interface
 
 The backend now includes a small operator CLI under
-`/home/runner/work/auto-bughunter/auto-bughunter/backend/cmd/autobughunter`.
+`./backend/cmd/autobughunter`.
 It is focused on tool readiness/updates plus ML dataset and inference
 workflows, and acts as a thin client over the existing backend and ML service
 HTTP contracts.
@@ -109,7 +109,7 @@ HTTP contracts.
 Build or run it from the backend module:
 
 ```bash
-cd /home/runner/work/auto-bughunter/auto-bughunter/backend
+cd ./backend
 go build ./cmd/autobughunter
 # or:
 go run ./cmd/autobughunter --help
@@ -133,7 +133,7 @@ Flags are available per command, and these environment variables provide
 defaults:
 
 - `AUTOBUGHUNTER_BACKEND_URL` (default `http://localhost:8080`)
-- `AUTOBUGHUNTER_ML_URL` (default `http://localhost:8090`)
+- `AUTOBUGHUNTER_ML_URL` (falls back to `ML_SERVICE_URL`, then defaults to `http://localhost:8090`)
 - `AUTOBUGHUNTER_API_KEY` (falls back to `BOOTSTRAP_ADMIN_API_KEY`)
 - `AUTOBUGHUNTER_WORKSPACE_ID`
 - `AUTOBUGHUNTER_SIDECAR_AUTH_TOKEN` (falls back to `SIDECAR_AUTH_TOKEN`)
@@ -148,7 +148,7 @@ token is configured.
 Check tool readiness from a local stack:
 
 ```bash
-cd /home/runner/work/auto-bughunter/auto-bughunter/backend
+cd ./backend
 AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter tools health -format text
 ```
@@ -156,7 +156,7 @@ go run ./cmd/autobughunter tools health -format text
 Fetch the sidecar-generated tool update report:
 
 ```bash
-cd /home/runner/work/auto-bughunter/auto-bughunter/backend
+cd ./backend
 AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter tools updates
 ```
@@ -164,7 +164,7 @@ go run ./cmd/autobughunter tools updates
 Export a sanitized ML training dataset from the backend:
 
 ```bash
-cd /home/runner/work/auto-bughunter/auto-bughunter/backend
+cd ./backend
 AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter ml dataset export -limit 250 > /tmp/engagements.dataset.json
 ```
@@ -173,22 +173,22 @@ Score findings by piping JSON directly to the ML service:
 
 ```bash
 cat findings.json | \
-  go run /home/runner/work/auto-bughunter/auto-bughunter/backend/cmd/autobughunter \
+  (cd ./backend && go run ./cmd/autobughunter \
     ml score-findings \
     -ml-base http://localhost:8090 \
     -sidecar-token "$SIDECAR_AUTH_TOKEN" \
-    -input -
+    -input -)
 ```
 
 Generate attack paths or remediation guidance from a file containing either a
 full request object or a bare findings array:
 
 ```bash
-go run /home/runner/work/auto-bughunter/auto-bughunter/backend/cmd/autobughunter \
-  ml attack-paths -ml-base http://localhost:8090 -input findings.json
+(cd ./backend && go run ./cmd/autobughunter \
+  ml attack-paths -ml-base http://localhost:8090 -input ../findings.json)
 
-go run /home/runner/work/auto-bughunter/auto-bughunter/backend/cmd/autobughunter \
-  ml remediation-plan -ml-base http://localhost:8090 -input findings.json -limit 3 -format text
+(cd ./backend && go run ./cmd/autobughunter \
+  ml remediation-plan -ml-base http://localhost:8090 -input ../findings.json -limit 3 -format text)
 ```
 
 ## Metasploit RPC customization

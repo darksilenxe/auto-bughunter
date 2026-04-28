@@ -192,7 +192,7 @@ func printMainUsage(w io.Writer) {
 
 Environment:
   AUTOBUGHUNTER_BACKEND_URL       Backend API base URL (default: http://localhost:8080)
-  AUTOBUGHUNTER_ML_URL            ML service base URL (default: http://localhost:8090)
+  AUTOBUGHUNTER_ML_URL            ML service base URL (falls back to ML_SERVICE_URL, then http://localhost:8090)
   AUTOBUGHUNTER_API_KEY           Backend API key (falls back to BOOTSTRAP_ADMIN_API_KEY)
   AUTOBUGHUNTER_WORKSPACE_ID      Backend workspace ID header
   AUTOBUGHUNTER_SIDECAR_AUTH_TOKEN ML service bearer token (falls back to SIDECAR_AUTH_TOKEN)`)
