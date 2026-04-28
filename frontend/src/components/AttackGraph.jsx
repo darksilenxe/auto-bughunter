@@ -126,7 +126,10 @@ function findingGraphID(finding, index) {
 }
 
 function findingSignature(title = "", affectedUrl = "") {
-  return `${String(title || "").trim()}\u0000${String(affectedUrl || "").trim()}`;
+  return JSON.stringify([
+    String(title || "").trim(),
+    String(affectedUrl || "").trim(),
+  ]);
 }
 
 function resolveBackendNodeFinding(node, findings = []) {
