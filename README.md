@@ -182,7 +182,7 @@ When using HTTP mode, you can comment out the Docker socket mounts in
 
 #### 2. Exec Mode (Legacy, Requires Docker Socket)
 
-When `USE_HTTP_TOOL_SERVICES=false` (default), shim scripts call
+When `USE_HTTP_TOOL_SERVICES=false`, shim scripts call
 `docker compose exec -T <svc> <tool>` into CLI tool sidecars. This requires
 the backend container to have `/var/run/docker.sock` bind-mounted.
 
@@ -198,8 +198,8 @@ the scan will run unaffected.
 
 The codebase supports both modes simultaneously for gradual migration:
 
-1. **Phase 1 (current)**: Nuclei HTTP wrapper service is available. Set
-   `USE_HTTP_TOOL_SERVICES=true` to test HTTP mode for nuclei.
+1. **Phase 1 (current)**: Nuclei and ZAP HTTP wrapper services are available.
+   `USE_HTTP_TOOL_SERVICES=true` uses HTTP mode for those integrations.
 
 2. **Phase 2 (future)**: Additional HTTP wrappers will be added for other
    tools (zap, ffuf, gobuster, etc.) following the same pattern as

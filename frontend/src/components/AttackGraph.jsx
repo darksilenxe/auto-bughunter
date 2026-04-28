@@ -120,10 +120,47 @@ function classifyFinding(title, category, severity, exploitability) {
   return "finding";
 }
 
+function findingGraphID(finding, index) {
+  const id = String(finding?.id || "").trim();
+  return id || `__f${index}__`;
+}
+
+function findingSignature(title = "", affectedUrl = "") {
+  return JSON.stringify([
+    String(title || "").trim(),
+    String(affectedUrl || "").trim(),
+  ]);
+}
+
+function resolveBackendNodeFinding(node, findings = []) {
+  if (!["finding", "credential", "compromise"].includes(String(node?.type || "").toLowerCase())) {
+    return null;
+  }
+  const findingByID = new Map();
+  const findingBySignature = new Map();
+  const findingByTitle = new Map();
+
+  findings.forEach((finding, index) => {
+    findingByID.set(findingGraphID(finding, index), finding);
+    findingBySignature.set(findingSignature(finding.title, finding.affectedUrl), finding);
+    const title = String(finding.title || "").trim();
+    if (!title) return;
+    const matches = findingByTitle.get(title) || [];
+    matches.push(finding);
+    findingByTitle.set(title, matches);
+  });
+
+  const titleMatches = findingByTitle.get(String(node.label || "").trim()) || [];
+  return (
+    findingByID.get(node.id) ||
+    findingBySignature.get(findingSignature(node.label, node.sublabel)) ||
+    (titleMatches.length === 1 ? titleMatches[0] : null)
+  );
+}
+
 function buildGraphFromBackend(job, scanStart, scanEnd) {
   const data = job?.attackGraph;
   if (!data || !Array.isArray(data.nodes) || data.nodes.length === 0) return null;
-  const findingByID = Object.fromEntries((job.findings || []).map((f) => [f.id, f]));
   const nodes = data.nodes
     .filter((n) => n?.id)
     .map((n) => ({
@@ -133,7 +170,7 @@ function buildGraphFromBackend(job, scanStart, scanEnd) {
       label: n.label || n.id,
       sublabel: n.sublabel || "",
       ts: Math.max(scanStart, Math.min(Number(n.ts) || scanStart, scanEnd)),
-      finding: findingByID[n.id] || null,
+      finding: resolveBackendNodeFinding(n, job.findings || []),
     }));
   const nodeSet = new Set(nodes.map((n) => n.id));
   const edges = (data.edges || [])
