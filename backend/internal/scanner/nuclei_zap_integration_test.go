@@ -84,10 +84,6 @@ func writeBrokenTool(t *testing.T, name, stderr string) string {
 	return path
 }
 
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
 // ---- Nuclei exec-mode tests ----
 
 func TestRunNucleiExec_BinaryMissing(t *testing.T) {
