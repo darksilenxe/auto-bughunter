@@ -140,6 +140,9 @@ autobughunter help
 The binary is standalone in the sense that it does not need the frontend, but
 it is still a thin client:
 
+- `scan start`
+- `scan get`
+- `scan run`
 - `tools health`
 - `tools updates`
 - `ml dataset export`
@@ -156,9 +159,16 @@ require a reachable ML service API.
 So you can copy the binary anywhere and run it directly, as long as the target
 backend and/or ML service URLs, auth, and network access are available.
 
+The new `scan` commands make the standalone binary usable as a GUI-less,
+automation-friendly scanner by submitting jobs directly to the backend API and,
+for `scan run`, polling until a terminal status is reached.
+
 ### Supported commands
 
 ```text
+autobughunter scan start
+autobughunter scan get
+autobughunter scan run
 autobughunter tools health
 autobughunter tools updates
 autobughunter ml dataset export
@@ -184,6 +194,21 @@ The backend-facing commands send `X-API-Key` and optional
 Direct ML-service commands send `Authorization: Bearer <token>` when a sidecar
 token is configured.
 
+For standalone scans, use either:
+
+- `-target <url>` for simple CLI-driven runs
+- `-input <request.json|->` to submit a full `ScanRequest` payload from a file
+  or stdin
+
+Common scan flags:
+
+- `-idempotency-key`
+- `-automation-mode`
+- `-passive-only`
+- `-aggressive-exploitation`
+- `-poll-interval` (scan run)
+- `-wait-timeout` (scan run)
+
 ### Examples
 
 Check tool readiness from a local stack:
@@ -192,6 +217,38 @@ Check tool readiness from a local stack:
 cd ./backend
 AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
 go run ./cmd/autobughunter tools health -format text
+```
+
+Run a simple GUI-less standalone scan and wait for completion:
+
+```bash
+AUTOBUGHUNTER_BACKEND_URL="http://localhost:8080" \
+AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
+./bin/autobughunter scan run \
+  -target "https://demo.owasp-juice.shop" \
+  -automation-mode conservative \
+  -passive-only \
+  -format text
+```
+
+Submit a richer automated scan request from JSON and fetch it later:
+
+```bash
+cat > /tmp/scan-request.json <<'EOF'
+{
+  "target": "https://demo.owasp-juice.shop",
+  "options": {
+    "automationMode": "conservative",
+    "passiveOnly": true
+  }
+}
+EOF
+
+AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
+./bin/autobughunter scan start -input /tmp/scan-request.json -format text
+
+AUTOBUGHUNTER_API_KEY="$BOOTSTRAP_ADMIN_API_KEY" \
+./bin/autobughunter scan get -id <scan-id> -format text
 ```
 
 Check tool readiness with a previously built standalone binary:

@@ -23,6 +23,27 @@ type mlDatasetResponse struct {
 	Records []json.RawMessage `json:"records"`
 }
 
+type scanCreateResponse struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Deduplicated string `json:"deduplicated,omitempty"`
+}
+
+type scanJobResponse struct {
+	ID          string        `json:"id"`
+	Target      string        `json:"target"`
+	Status      string        `json:"status"`
+	Error       string        `json:"error,omitempty"`
+	Findings    []scanFinding `json:"findings,omitempty"`
+	CompletedAt string        `json:"completedAt,omitempty"`
+}
+
+type scanFinding struct {
+	Severity string `json:"severity"`
+	Category string `json:"category"`
+	Title    string `json:"title"`
+}
+
 type scoredFindingsResponse struct {
 	ScoredFindings []scoredFinding `json:"scoredFindings"`
 }
@@ -107,6 +128,57 @@ func writeMLDatasetText(w io.Writer, raw []byte) error {
 	return nil
 }
 
+func writeScanCreateText(w io.Writer, raw []byte) error {
+	resp, err := parseScanCreateResponse(raw)
+	if err != nil {
+		return err
+	}
+	line := fmt.Sprintf("Queued scan %s (status=%s)", strings.TrimSpace(resp.ID), strings.TrimSpace(resp.Status))
+	if strings.EqualFold(strings.TrimSpace(resp.Deduplicated), "true") {
+		line += " [deduplicated]"
+	}
+	_, err = fmt.Fprintln(w, line)
+	return err
+}
+
+func writeScanJobText(w io.Writer, raw []byte) error {
+	resp, err := parseScanJobResponse(raw)
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{
+		"high":   0,
+		"medium": 0,
+		"low":    0,
+		"info":   0,
+	}
+	for _, finding := range resp.Findings {
+		counts[strings.ToLower(strings.TrimSpace(finding.Severity))]++
+	}
+	if _, err := fmt.Fprintf(w, "Scan %s for %s: %s\n", strings.TrimSpace(resp.ID), strings.TrimSpace(resp.Target), strings.TrimSpace(resp.Status)); err != nil {
+		return err
+	}
+	if strings.TrimSpace(resp.CompletedAt) != "" {
+		if _, err := fmt.Fprintf(w, "Completed: %s\n", strings.TrimSpace(resp.CompletedAt)); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(resp.Error) != "" {
+		if _, err := fmt.Fprintf(w, "Error: %s\n", strings.TrimSpace(resp.Error)); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "Findings: %d (high=%d medium=%d low=%d info=%d)\n", len(resp.Findings), counts["high"], counts["medium"], counts["low"], counts["info"]); err != nil {
+		return err
+	}
+	for idx, finding := range resp.Findings {
+		if _, err := fmt.Fprintf(w, "%d. [%s] %s - %s\n", idx+1, strings.TrimSpace(finding.Severity), strings.TrimSpace(finding.Category), strings.TrimSpace(finding.Title)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func writeMLScoreText(w io.Writer, raw []byte) error {
 	var resp scoredFindingsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -164,4 +236,20 @@ func writeMLListText(title, key string) func(io.Writer, []byte) error {
 		}
 		return nil
 	}
+}
+
+func parseScanCreateResponse(raw []byte) (scanCreateResponse, error) {
+	var resp scanCreateResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return scanCreateResponse{}, err
+	}
+	return resp, nil
+}
+
+func parseScanJobResponse(raw []byte) (scanJobResponse, error) {
+	var resp scanJobResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return scanJobResponse{}, err
+	}
+	return resp, nil
 }

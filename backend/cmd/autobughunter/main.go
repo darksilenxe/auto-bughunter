@@ -29,6 +29,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "help":
 		printMainUsage(stdout)
 		return nil
+	case "scan":
+		return runScan(args[1:], stdout, stderr)
 	case "tools":
 		return runTools(args[1:], stdout, stderr)
 	case "ml":
@@ -186,6 +188,7 @@ func runMLInference(command, path string, args []string, stdout, stderr io.Write
 
 func printMainUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
+  autobughunter scan <start|get|run> [flags]
   autobughunter tools <health|updates> [flags]
   autobughunter ml dataset export [flags]
   autobughunter ml <score-findings|attack-paths|remediation-plan|false-positive-candidates> [flags]
