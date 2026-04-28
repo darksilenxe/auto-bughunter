@@ -75,7 +75,7 @@ func writeBrokenTool(t *testing.T, name, stderr string) string {
 	path := filepath.Join(dir, name)
 	script := "#!/bin/sh\n"
 	if stderr != "" {
-		script += "echo " + shellQuote(stderr) + " >&2\n"
+		script += "cat <<'STDERR_EOF' >&2\n" + stderr + "\nSTDERR_EOF\n"
 	}
 	script += "exit 127\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {

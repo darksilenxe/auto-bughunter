@@ -44,6 +44,8 @@ type integrationState struct {
 // transient network/socket pressure before launching ZAP Baseline.
 const zapBaselineDelayAfterNuclei = 5 * time.Second
 
+const integrationPreflightTimeout = 3 * time.Second
+
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
 //	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
@@ -752,7 +754,7 @@ func commandPreflight(parent context.Context, binary string, args ...string) boo
 	if strings.TrimSpace(binary) == "" {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	ctx, cancel := context.WithTimeout(parent, integrationPreflightTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Stdout = io.Discard
@@ -761,7 +763,7 @@ func commandPreflight(parent context.Context, binary string, args ...string) boo
 }
 
 func serviceHealthCheck(parent context.Context, check func(context.Context) bool) bool {
-	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	ctx, cancel := context.WithTimeout(parent, integrationPreflightTimeout)
 	defer cancel()
 	return check(ctx)
 }
