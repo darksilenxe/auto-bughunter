@@ -442,6 +442,8 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
+        VITE_API_KEY: ${VITE_API_KEY:-}
+        VITE_WORKSPACE_ID: ${VITE_WORKSPACE_ID:-default}
     ports:
       - "3000:80"
     depends_on:
