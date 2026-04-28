@@ -138,7 +138,7 @@ func startStandaloneServer(stderr io.Writer, quiet bool) (*standaloneServer, fun
 		_ = httpServer.Serve(listener)
 	}()
 
-	if err := waitForHealth(baseURL); err != nil {
+	if err := waitForHealth(baseURL, key); err != nil {
 		restoreEnv()
 		_ = httpServer.Shutdown(context.Background())
 		_ = listener.Close()
@@ -196,11 +196,18 @@ func setEnvForLifetime(key, value string) func() {
 	}
 }
 
-func waitForHealth(baseURL string) error {
+func waitForHealth(baseURL, apiKey string) error {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		resp, err := client.Get(baseURL + "/api/health")
+		req, reqErr := http.NewRequest(http.MethodGet, baseURL+"/api/health", nil)
+		if reqErr != nil {
+			return reqErr
+		}
+		if strings.TrimSpace(apiKey) != "" {
+			req.Header.Set("X-API-Key", apiKey)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
