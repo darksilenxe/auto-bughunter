@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
-	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/wordlist"
 
@@ -684,9 +683,6 @@ func captureURLStateWithClient(ctx context.Context, client *http.Client, rawURL 
 	// Rebuild and validate the request URL at the sink so the outbound safety
 	// guarantee stays explicit for both reviewers and static taint analysis.
 	if !scope.IsURLInScope(safeRawURL, scanScope) {
-		return pathStateFingerprint{}
-	}
-	if err := safety.ValidateOutboundURL(safeRawURL); err != nil {
 		return pathStateFingerprint{}
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, timeoutPerCheck)
