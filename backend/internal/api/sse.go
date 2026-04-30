@@ -48,20 +48,20 @@ func (s *Server) handleScanEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 1. Replay all historical events so that clients connecting after a scan
-	//    has already started still see the full picture.
-	for _, evt := range s.eventBus.History(id) {
+	// 1. Atomically replay all historical events and subscribe for future ones
+	// in a single lock acquisition so no events published between the two
+	// operations are lost.
+	history, ch, unsub := s.eventBus.SubscribeWithHistory(id)
+	defer unsub()
+
+	for _, evt := range history {
 		b, err := json.Marshal(evt)
 		if err == nil {
 			sendEvent(b)
 		}
 	}
 
-	// 2. Subscribe for future events.
-	ch, unsub := s.eventBus.Subscribe(id)
-	defer unsub()
-
-	// 3. Keep-alive ticker so that reverse proxies and browsers do not time out
+	// 2. Keep-alive ticker so that reverse proxies and browsers do not time out
 	//    the connection while waiting for the next event.
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()

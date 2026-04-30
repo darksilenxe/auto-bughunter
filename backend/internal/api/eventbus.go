@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -38,11 +39,20 @@ func (b *EventBus) Publish(scanID string, event model.ScanEvent) {
 	b.mu.Unlock()
 
 	for _, ch := range subs {
-		select {
-		case ch <- event:
-		default:
-			// Subscriber is slow; drop rather than block.
-		}
+		// Use a closure with recover so that sending to a channel closed by
+		// Cleanup does not panic; treat it the same as a slow subscriber.
+		func(c chan model.ScanEvent) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("eventbus: recovered panic publishing to subscriber: %v", r)
+				}
+			}()
+			select {
+			case c <- event:
+			default:
+				// Subscriber is slow; drop rather than block.
+			}
+		}(ch)
 	}
 }
 
@@ -51,8 +61,20 @@ func (b *EventBus) Publish(scanID string, event model.ScanEvent) {
 // caller when done (e.g., when the SSE connection closes).
 // History events are NOT replayed here; call History first.
 func (b *EventBus) Subscribe(scanID string) (<-chan model.ScanEvent, func()) {
+	_, ch, unsub := b.SubscribeWithHistory(scanID)
+	return ch, unsub
+}
+
+// SubscribeWithHistory atomically returns the full event history for scanID
+// and registers a new live subscriber in a single lock acquisition.  This
+// eliminates the race between a separate History+Subscribe call pair where
+// events published between the two calls would otherwise be missed.
+func (b *EventBus) SubscribeWithHistory(scanID string) ([]model.ScanEvent, <-chan model.ScanEvent, func()) {
 	ch := make(chan model.ScanEvent, 64)
 	b.mu.Lock()
+	events := b.history[scanID]
+	out := make([]model.ScanEvent, len(events))
+	copy(out, events)
 	b.subscribers[scanID] = append(b.subscribers[scanID], ch)
 	b.mu.Unlock()
 
@@ -68,7 +90,7 @@ func (b *EventBus) Subscribe(scanID string) (<-chan model.ScanEvent, func()) {
 		}
 		b.subscribers[scanID] = newSubs
 	}
-	return ch, unsub
+	return out, ch, unsub
 }
 
 // History returns a copy of all events recorded for scanID so far.
@@ -82,11 +104,15 @@ func (b *EventBus) History(scanID string) []model.ScanEvent {
 	return out
 }
 
-// Cleanup removes all history and subscribers for scanID. Call after the scan
-// is fully complete and all SSE subscribers have disconnected.
+// Cleanup removes all history and subscribers for scanID. It closes all
+// subscriber channels so that SSE handler goroutines can exit cleanly rather
+// than waiting indefinitely for events that will never arrive.
 func (b *EventBus) Cleanup(scanID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	for _, ch := range b.subscribers[scanID] {
+		close(ch)
+	}
 	delete(b.history, scanID)
 	delete(b.subscribers, scanID)
 }
