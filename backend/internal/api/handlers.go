@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -645,6 +646,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if err != nil || job == nil {
 		return
 	}
+	// The scan may have been cancelled while waiting for a global execution slot.
+	// Re-check status here so we don't execute a job that was already stopped.
+	if job.Status == "cancelled" {
+		return
+	}
 	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
 	persistedState, _ := s.repo.GetScanState(context.Background(), target)
 	if persistedState != nil && len(persistedState.KnownRuntimeEndpoints) > 0 {
@@ -989,48 +995,6 @@ func hasOperatorOverrides(options model.ScanOptions) bool {
 		options.AutonomyFallbackRerun
 }
 
-func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
-	reg := agent.NewRegistry()
-
-	reg.Register(agent.NewReconnaissanceAgent(true))
-	reg.Register(agent.NewScanningAgent(s.scanService, true))
-	reg.Register(agent.NewInputValidationAgent(true))
-	reg.Register(agent.NewInformationDisclosureAgent(true))
-	reg.Register(agent.NewAccessControlAgent(true))
-	reg.Register(agent.NewAPISecurityAgent(true))
-	reg.Register(agent.NewCORSRedirectAgent(true))
-	reg.Register(agent.NewWordlistAgent(true))
-	reg.Register(agent.NewAnalysisAgent(true))
-	reg.Register(agent.NewAIToolCallingAgent(s.aiClient, options.UseAIToolCalling))
-
-	// Autonomous tool-building agents — run after core scanning so they have
-	// rich findings context to work from.  DynamicCommandAgent composes and
-	// executes validated CLI tool invocations; ToolBuilderAgent writes and
-	// runs custom Python probes for specialised tasks.
-	reg.Register(agent.NewDynamicCommandAgent(true))
-	reg.Register(agent.NewToolBuilderAgent(true, s.aiClient))
-
-	mlTriageEnabled := options.UseMLTriageAgent
-	attackPathEnabled := options.UseAttackPathAgent
-	falsePositiveEnabled := options.UseFalsePositiveReview
-	remediationEnabled := options.UseRemediationPlanner
-
-	reg.Register(agent.NewMLTriageAgent(s.mlService, mlTriageEnabled))
-	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
-	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
-	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
-	reg.Register(agent.NewImpactVerifierAgent(true))
-	reg.Register(agent.NewReportingAgent(true))
-
-	// Attach the neural learner as the autonomous spawner so it can augment
-	// the static orchestration rules with learned Q-values.
-	if s.agentLearner != nil {
-		reg.SetSpawner(s.agentLearner)
-	}
-
-	return reg
-}
-
 func normalizeAndValidateTarget(raw string) (string, string, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -1247,7 +1211,19 @@ func (s *Server) handleListScanAnnotations(w http.ResponseWriter, r *http.Reques
 	}
 
 	job, err := s.repo.GetJob(r.Context(), scanID)
-	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+		return
+	}
+	if job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -3521,18 +3497,18 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int, int, int, []model.Finding) {
 	prevByKey := map[string]model.Finding{}
 	for _, f := range previousFindings {
-		prevByKey[fingerprintFindingBase(f)] = f
+		prevByKey[fingerprintFindingForDrift(f)] = f
 	}
 	currByKey := map[string]model.Finding{}
 	for _, f := range currentFindings {
-		currByKey[fingerprintFindingBase(f)] = f
+		currByKey[fingerprintFindingForDrift(f)] = f
 	}
 
 	newItems := make([]string, 0)
 	changedItems := make([]string, 0)
 	resolvedItems := make([]string, 0)
 	for _, current := range currentFindings {
-		key := fingerprintFindingBase(current)
+		key := fingerprintFindingForDrift(current)
 		prev, ok := prevByKey[key]
 		if !ok {
 			newItems = append(newItems, fmt.Sprintf("[%s] %s", current.Severity, current.Title))
@@ -3543,7 +3519,7 @@ func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int,
 		}
 	}
 	for _, prev := range previousFindings {
-		if _, ok := currByKey[fingerprintFindingBase(prev)]; !ok {
+		if _, ok := currByKey[fingerprintFindingForDrift(prev)]; !ok {
 			resolvedItems = append(resolvedItems, fmt.Sprintf("[%s] %s", prev.Severity, prev.Title))
 		}
 	}
@@ -3777,6 +3753,14 @@ func dedupeStrings(items []string) []string {
 func fingerprintFindingBase(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title))
+}
+
+// fingerprintFindingForDrift extends fingerprintFindingBase with the target
+// host extracted from AffectedURL so that the same category+title pair on
+// different URLs is tracked as distinct drift entries.
+func fingerprintFindingForDrift(f model.Finding) string {
+	host := strings.ToLower(strings.TrimSpace(hostFromTarget(strings.TrimSpace(f.AffectedURL))))
+	return fingerprintFindingBase(f) + "|" + host
 }
 
 func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {
@@ -4187,11 +4171,7 @@ func (s *Server) acquireGlobalSlot(options model.ScanOptions) func() {
 	if s.globalSem == nil {
 		return func() {}
 	}
-	select {
-	case s.globalSem <- struct{}{}:
-	default:
-		s.globalSem <- struct{}{}
-	}
+	s.globalSem <- struct{}{}
 	return func() { <-s.globalSem }
 }
 
@@ -4210,17 +4190,24 @@ func (s *Server) enforceTargetRateLimit(target string, options model.ScanOptions
 	}
 	s.rateMu.Lock()
 	last := s.targetLastRun[host]
-	wait := time.Duration(0)
+	now := time.Now()
+	var wait time.Duration
 	if !last.IsZero() {
-		wait = minGap - time.Since(last)
+		elapsed := now.Sub(last)
+		if elapsed < minGap {
+			wait = minGap - elapsed
+		}
 	}
-	if wait > 0 {
-		s.rateMu.Unlock()
-		time.Sleep(wait)
-		s.rateMu.Lock()
-	}
-	s.targetLastRun[host] = time.Now()
+	// Stamp the intended run time before releasing the lock. Concurrent
+	// goroutines for the same host will observe this future timestamp and
+	// compute their own wait, preventing the unlock/sleep/reacquire race where
+	// two goroutines could both conclude they need to wait and then both proceed
+	// simultaneously after sleeping.
+	s.targetLastRun[host] = now.Add(wait)
 	s.rateMu.Unlock()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
 }
 
 func redactSensitiveFindings(findings []model.Finding) []model.Finding {
@@ -4237,14 +4224,22 @@ func redactSensitiveFindings(findings []model.Finding) []model.Finding {
 	return out
 }
 
+// sensitiveTextRegexps is compiled once and used by redactSensitiveText to
+// perform case-insensitive replacement of credential-like patterns in evidence
+// strings.  Each pattern captures the keyword prefix (up to and including the
+// delimiter) in group 1 so the original casing is preserved in the output.
+var sensitiveTextRegexps = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(authorization:)\S*`),
+	regexp.MustCompile(`(?i)(cookie:)\S*`),
+	regexp.MustCompile(`(?i)(token=)\S*`),
+	regexp.MustCompile(`(?i)(password=)\S*`),
+}
+
 func redactSensitiveText(value string) string {
-	replacer := strings.NewReplacer(
-		"authorization:", "authorization:[redacted]",
-		"cookie:", "cookie:[redacted]",
-		"token=", "token=[redacted]",
-		"password=", "password=[redacted]",
-	)
-	return replacer.Replace(value)
+	for _, re := range sensitiveTextRegexps {
+		value = re.ReplaceAllString(value, "${1}[redacted]")
+	}
+	return value
 }
 
 func (s *Server) applySuppressions(target string, findings []model.Finding) []model.Finding {
@@ -5047,6 +5042,9 @@ func sendWebhookJSON(target string, payload any) {
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{
 		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: safety.SafeDialContext,
+		},
 		CheckRedirect: func(redirReq *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")

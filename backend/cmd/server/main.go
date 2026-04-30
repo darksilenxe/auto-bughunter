@@ -18,6 +18,7 @@ import (
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
+	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
 	"auto-bughunter/backend/internal/storage"
 	"auto-bughunter/backend/internal/wordlist"
@@ -89,6 +90,9 @@ func main() {
 		IntegrationTimeout: time.Duration(getint("INTEGRATION_TIMEOUT_SECONDS", 90)) * time.Second,
 		DefaultMaxRetries:  getint("DEFAULT_MAX_RETRIES", 1),
 		DefaultBackoff:     time.Duration(getint("DEFAULT_BACKOFF_MILLIS", 400)) * time.Millisecond,
+		HTTPTransport: &http.Transport{
+			DialContext: safety.SafeDialContext,
+		},
 	})
 	aiClient := ai.NewClient(
 		os.Getenv("AI_API_BASE"),

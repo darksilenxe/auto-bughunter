@@ -83,6 +83,12 @@ type Config struct {
 	IntegrationTimeout time.Duration
 	DefaultMaxRetries  int
 	DefaultBackoff     time.Duration
+
+	// HTTPTransport is the RoundTripper used for outbound HTTP probe requests.
+	// When nil the default transport is used.  Production deployments should
+	// supply a transport built with safety.SafeDialContext to prevent
+	// DNS-rebinding SSRF attacks.
+	HTTPTransport http.RoundTripper
 }
 
 type RunInput struct {
@@ -153,9 +159,16 @@ func NewService(cfg Config) *Service {
 		cfg.GobusterBinary = "gobuster"
 	}
 
+	transport := cfg.HTTPTransport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
 	return &Service{
-		httpClient: &http.Client{Timeout: 15 * time.Second},
-		cfg:        cfg,
+		httpClient: &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: transport,
+		},
+		cfg: cfg,
 	}
 }
 

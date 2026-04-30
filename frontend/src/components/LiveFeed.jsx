@@ -66,7 +66,7 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
 
       <div ref={ref} className="terminal live-feed__stream">
         {events.map((evt, idx) => (
-          <div key={idx} className="live-feed__item">
+          <div key={`${evt.timestamp || "live"}_${evt.type}_${idx}`} className="live-feed__item">
             <span className="meta">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : "live"}</span>
             <span>{ICON[evt.type] || "·"}</span>
             <span style={{ color: evt.type === "finding" ? SEV_COLOR[evt.severity] || "#dff1ff" : "#dff1ff" }}>

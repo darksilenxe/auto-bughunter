@@ -83,7 +83,21 @@ var sensitiveEnvPatterns = []string{
 	"key", "password", "secret", "token", "credential", "pass",
 }
 
+// sensitiveEnvNames lists exact environment variable names whose values must
+// always be redacted regardless of name-pattern matching.  These are variables
+// that carry connection strings or URIs that may embed credentials.
+var sensitiveEnvNames = map[string]struct{}{
+	"DATABASE_URL": {},
+	"NEO4J_URI":    {},
+}
+
 func redactEnvValue(name, value string) string {
+	if _, ok := sensitiveEnvNames[name]; ok {
+		if value == "" {
+			return ""
+		}
+		return "[REDACTED]"
+	}
 	lower := strings.ToLower(name)
 	for _, pattern := range sensitiveEnvPatterns {
 		if strings.Contains(lower, pattern) {
