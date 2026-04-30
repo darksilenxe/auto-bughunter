@@ -730,7 +730,7 @@ func extractHTMLTitle(body string) string {
 	if len(matches) < 2 {
 		return ""
 	}
-	return htmlWhitespaceRe.ReplaceAllString(strings.TrimSpace(matches[1]), " ")
+	return pathStateWhitespaceRe.ReplaceAllString(strings.TrimSpace(matches[1]), " ")
 }
 
 func hasSPAMarkers(body string) bool {
