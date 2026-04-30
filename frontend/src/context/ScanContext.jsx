@@ -99,14 +99,15 @@ export function ScanProvider({ children }) {
   }, []);
 
   const scheduleBackgroundPoll = useCallback((id) => {
-    bgPollRef.current = setTimeout(async () => {
+    const tick = async () => {
       const terminal = await fetchJobStatus(id);
       if (terminal) {
         clearBackgroundPoll();
         return;
       }
-      scheduleBackgroundPoll(id);
-    }, 30000);
+      bgPollRef.current = setTimeout(tick, 30000);
+    };
+    bgPollRef.current = setTimeout(tick, 30000);
   }, [clearBackgroundPoll, fetchJobStatus]);
 
   const pollScan = useCallback(async (id) => {
