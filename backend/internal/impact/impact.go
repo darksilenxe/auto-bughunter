@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -432,7 +433,16 @@ func prettyLabel(s string) string {
 	}
 	s = strings.ReplaceAll(s, "_", " ")
 	s = strings.ReplaceAll(s, "-", " ")
-	return strings.Title(s)
+	parts := strings.Fields(strings.ToLower(s))
+	for i, part := range parts {
+		runes := []rune(part)
+		if len(runes) == 0 {
+			continue
+		}
+		runes[0] = unicode.ToUpper(runes[0])
+		parts[i] = string(runes)
+	}
+	return strings.Join(parts, " ")
 }
 
 func joinGoals(goals []model.ImpactGoal) string {
