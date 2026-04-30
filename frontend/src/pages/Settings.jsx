@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
 
 const EMPTY_PROGRAM = {
@@ -29,12 +29,23 @@ Provide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporti
   plannerInstructionTemplate: `Pick zero or more agents to run next from the available_agents list. You may repeat agents from history when new findings warrant it. Set done=true once additional agents are unlikely to surface new value. Reply with strict JSON only: {"agents":[{"name":string,"reason":string}],"done":bool}`,
 };
 
+const RECOMMENDED_LOCAL_DEFAULTS = [
+  { label: "AI provider", value: "Local Ollama via AI_API_BASE=http://ollama:11434/v1", hint: "No external API key required for the default path." },
+  { label: "Coding model", value: "AI_CODING_MODEL=codellama", hint: "Used for planning/orchestration when configured." },
+  { label: "Tool sidecars", value: "USE_HTTP_TOOL_SERVICES=true", hint: "Avoids Docker socket requirements in the backend container." },
+  { label: "Bootstrap auth", value: "Set BOOTSTRAP_ADMIN_API_KEY explicitly", hint: "The frontend no longer relies on a dev default key." },
+];
+
 export default function Settings() {
   const { programs, savePrograms } = useScan();
-  const [editing, setEditing] = useState(null); // null | index | "new"
+  const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY_PROGRAM);
   const [runtimeApiKey, setRuntimeApiKey] = useState(() => localStorage.getItem("api_key") || "");
   const [apiKeyStatus, setApiKeyStatus] = useState("");
+  const [backendHealth, setBackendHealth] = useState(null);
+  const [toolsHealth, setToolsHealth] = useState([]);
+  const [proxyHealth, setProxyHealth] = useState(null);
+  const [environmentError, setEnvironmentError] = useState("");
   const [aiConfig, setAIConfig] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("ai_model_preferences") || "{}");
@@ -73,6 +84,7 @@ export default function Settings() {
     loadPolicyPacks();
     loadPolicyAudit();
     loadPolicyDefaults();
+    loadEnvironmentHealth();
   }, []);
 
   useEffect(() => () => {
@@ -83,6 +95,28 @@ export default function Settings() {
     setAIConfigStatus(message);
     if (aiStatusTimerRef.current) clearTimeout(aiStatusTimerRef.current);
     aiStatusTimerRef.current = setTimeout(() => setAIConfigStatus(""), 4000);
+  }
+
+  async function loadEnvironmentHealth() {
+    setEnvironmentError("");
+    try {
+      const [healthRes, toolsRes, proxyRes] = await Promise.all([
+        fetch(`${API_BASE}/api/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
+        fetch(`${API_BASE}/api/tools/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
+        fetch(`${API_BASE}/api/proxy/settings`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
+      ]);
+      const healthData = await healthRes.json().catch(() => null);
+      const toolsData = await toolsRes.json().catch(() => null);
+      const proxyData = await proxyRes.json().catch(() => null);
+      if (healthRes.ok) setBackendHealth(healthData);
+      if (toolsRes.ok) setToolsHealth(Array.isArray(toolsData?.tools) ? toolsData.tools : []);
+      if (proxyRes.ok) setProxyHealth(proxyData);
+      if (!healthRes.ok || !toolsRes.ok || !proxyRes.ok) {
+        setEnvironmentError("Some environment health checks could not be loaded.");
+      }
+    } catch (err) {
+      setEnvironmentError(err.message || "Failed to load environment health.");
+    }
   }
 
   function saveApiKey() {
@@ -141,8 +175,8 @@ export default function Settings() {
     flashAIConfigStatus("Reset to defaults.");
   }
 
-  async function submitEnrichmentFeedback(e) {
-    e.preventDefault();
+  async function submitEnrichmentFeedback(event) {
+    event.preventDefault();
     setFeedStatus("");
     const payload = {
       scanId: feedForm.scanId.trim(),
@@ -158,11 +192,7 @@ export default function Settings() {
     try {
       const res = await fetch(`${API_BASE}/api/feedback`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": API_KEY,
-          "X-Workspace-ID": WORKSPACE_ID,
-        },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -230,17 +260,13 @@ export default function Settings() {
     }
   }
 
-  async function savePolicyPack(e) {
-    e.preventDefault();
+  async function savePolicyPack(event) {
+    event.preventDefault();
     setPolicyStatus("");
     try {
       const res = await fetch(`${API_BASE}/api/automation/policy-packs`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": API_KEY,
-          "X-Workspace-ID": WORKSPACE_ID,
-        },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(policyForm),
       });
       const data = await res.json();
@@ -261,269 +287,333 @@ export default function Settings() {
       <label key={key}>
         {label}
         {rows ? (
-          <textarea rows={rows} value={form[key] || ""} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))} />
+          <textarea rows={rows} value={form[key] || ""} onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))} />
         ) : type === "checkbox" ? (
-          <label className="check" style={{ marginTop: "4px" }}>
-            <input type="checkbox" checked={!!form[key]} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.checked }))} />
+          <label className="check" style={{ marginTop: 4 }}>
+            <input type="checkbox" checked={!!form[key]} onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.checked }))} />
             {label}
           </label>
         ) : (
-          <input type={type} value={form[key] || ""} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))} />
+          <input type={type} value={form[key] || ""} onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))} />
         )}
       </label>
     );
   }
 
+  const configuredApiKey = runtimeApiKey.trim() || import.meta.env.VITE_API_KEY || "";
+  const toolsSummary = useMemo(() => {
+    const installed = toolsHealth.filter((tool) => tool.installed).length;
+    return { installed, total: toolsHealth.length };
+  }, [toolsHealth]);
+  const onboardingSteps = useMemo(() => ([
+    {
+      title: "Authenticate the console",
+      done: Boolean(configuredApiKey),
+      detail: configuredApiKey ? "Browser API key configured." : "Save the runtime API key first.",
+    },
+    {
+      title: "Reach the backend",
+      done: backendHealth?.status === "ok",
+      detail: backendHealth?.status === "ok" ? "Backend API health endpoint responded." : "Backend health has not been confirmed yet.",
+    },
+    {
+      title: "Verify tool sidecars",
+      done: toolsSummary.total > 0 && toolsSummary.installed > 0,
+      detail: toolsSummary.total > 0 ? `${toolsSummary.installed}/${toolsSummary.total} tools reported installed.` : "Tool health data not loaded yet.",
+    },
+    {
+      title: "Confirm local AI defaults",
+      done: Boolean(aiConfig.summaryModel && aiConfig.plannerModel),
+      detail: `${aiConfig.summaryModel || "n/a"} / ${aiConfig.plannerModel || "n/a"} configured locally.`,
+    },
+  ]), [configuredApiKey, backendHealth, toolsSummary, aiConfig]);
+  const completedSteps = onboardingSteps.filter((step) => step.done).length;
+
   return (
-    <div className="page">
-      <header>
-        <h1>⚙️ Settings</h1>
-        <p>Manage bug bounty program configurations</p>
-      </header>
+    <div className="page page--wide">
+      <section className="hero-panel">
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <div className="eyebrow">First-boot operator setup</div>
+            <header style={{ marginBottom: 0 }}>
+              <h1>Environment & onboarding</h1>
+              <p>Guide the operator through auth, sidecars, AI preferences, and deployment defaults so Docker feels turnkey.</p>
+            </header>
+          </div>
+          <div className="filter-row">
+            <span className={`status-badge ${completedSteps === onboardingSteps.length ? "success" : "warning"}`}>{completedSteps}/{onboardingSteps.length} ready</span>
+            <button type="button" className="button-secondary" onClick={loadEnvironmentHealth}>Refresh health</button>
+          </div>
+        </div>
 
-      {/* API Key configuration */}
+        <div className="metrics-grid" style={{ marginTop: 18 }}>
+          <article className="stat-card">
+            <span className="stat-card__label">Backend API</span>
+            <div className="stat-card__value">{backendHealth?.status || "unknown"}</div>
+            <div className="stat-card__hint">Live backend health status from <code>/api/health</code>.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Tool sidecars</span>
+            <div className="stat-card__value">{toolsSummary.installed}/{toolsSummary.total || "0"}</div>
+            <div className="stat-card__hint">Installed tools reported by <code>/api/tools/health</code>.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Proxy mode</span>
+            <div className="stat-card__value">{proxyHealth?.enabled ? "enabled" : "disabled"}</div>
+            <div className="stat-card__hint">{proxyHealth?.mitmEnabled ? "HTTPS interception enabled." : "MITM disabled or not configured."}</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">AI model profile</span>
+            <div className="stat-card__value">{aiConfig.summaryModel || "n/a"}</div>
+            <div className="stat-card__hint">Planner: {aiConfig.plannerModel || "n/a"} · Triage: {aiConfig.triageModel || "n/a"}</div>
+          </article>
+        </div>
+      </section>
+
+      <div className="two-column-grid">
+        <section className="card">
+          <div className="toolbar" style={{ alignItems: "flex-start" }}>
+            <div>
+              <h2>Onboarding wizard</h2>
+              <p className="meta">Use this checklist on first boot to get a local operator environment into a healthy ready state.</p>
+            </div>
+            <span className="chip chip--goal">{completedSteps} complete</span>
+          </div>
+          <div className="findings" style={{ marginTop: 14 }}>
+            {onboardingSteps.map((step, idx) => (
+              <div key={step.title} className="finding-card">
+                <div className="finding-card__header">
+                  <div>
+                    <div className="meta">Step {idx + 1}</div>
+                    <h3 className="finding-card__title">{step.title}</h3>
+                  </div>
+                  <span className={`status-badge ${step.done ? "success" : "warning"}`}>{step.done ? "Ready" : "Pending"}</span>
+                </div>
+                <p className="meta">{step.detail}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card">
+          <h2>Recommended local defaults</h2>
+          <p className="meta">These match the safe local-first Docker path already wired into <code>.env.example</code> and Compose fallback behavior.</p>
+          <div className="findings" style={{ marginTop: 14 }}>
+            {RECOMMENDED_LOCAL_DEFAULTS.map((item) => (
+              <div key={item.label} className="finding-card">
+                <div className="finding-card__header">
+                  <h3 className="finding-card__title">{item.label}</h3>
+                  <span className="chip chip--muted">local-first</span>
+                </div>
+                <pre className="summary">{item.value}</pre>
+                <p className="meta" style={{ marginTop: 10 }}>{item.hint}</p>
+              </div>
+            ))}
+          </div>
+          {environmentError && <p className="error" style={{ marginTop: 12 }}>{environmentError}</p>}
+        </section>
+      </div>
+
       <section className="card">
-        <h2>API Key</h2>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Environment health</h2>
+            <p className="meta">Real-time auth, sidecar, proxy, and local model preference status for this operator browser session.</p>
+          </div>
+        </div>
+        <div className="three-column-grid" style={{ marginTop: 14 }}>
+          <article className="meta-block">
+            <b>Auth</b>
+            <div>{configuredApiKey ? "Runtime API key configured" : "No browser API key configured"}</div>
+            <div className="meta">Stored in localStorage key <code>api_key</code>.</div>
+          </article>
+          <article className="meta-block">
+            <b>Backend API</b>
+            <div>{backendHealth?.status || "unknown"}</div>
+            <div className="meta">Health endpoint used: <code>/api/health</code>.</div>
+          </article>
+          <article className="meta-block">
+            <b>Proxy</b>
+            <div>{proxyHealth ? `${proxyHealth.host}:${proxyHealth.port}` : "unavailable"}</div>
+            <div className="meta">{proxyHealth?.enabled ? "Listener enabled" : "Listener disabled"} · {proxyHealth?.mitmEnabled ? "MITM on" : "MITM off"}</div>
+          </article>
+        </div>
+        {toolsHealth.length > 0 && (
+          <div className="table-wrap" style={{ marginTop: 14 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Tool</th>
+                  <th>Binary</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolsHealth.map((tool) => (
+                  <tr key={tool.name}>
+                    <td>{tool.name}</td>
+                    <td><code>{tool.binary}</code></td>
+                    <td>{tool.category}</td>
+                    <td><span className={`status-badge ${tool.installed ? "success" : "warning"}`}>{tool.installed ? "installed" : "missing"}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Browser API key</h2>
         <p className="meta">
-          Set the API key used by the browser to authenticate against the backend (<code>/api/*</code> routes).
-          This must match the <code>BOOTSTRAP_ADMIN_API_KEY</code> (or any provisioned API key) on the backend.
-          The value is stored in your browser&apos;s local storage and overrides the build-time <code>VITE_API_KEY</code>.
+          Set the key used by the browser against the backend <code>/api/*</code> routes. This overrides build-time <code>VITE_API_KEY</code>.
         </p>
-        <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="password"
-            placeholder="Paste your API key here"
-            value={runtimeApiKey}
-            onChange={(e) => setRuntimeApiKey(e.target.value)}
-            style={{ flex: "1", minWidth: "240px" }}
-          />
-          <button type="button" onClick={saveApiKey}>Save &amp; Reload</button>
-          <button type="button" onClick={clearApiKey} style={{ background: "rgba(0,0,0,0.25)", color: "#000" }}>Clear</button>
+        <div className="toolbar">
+          <input type="password" placeholder="Paste your API key here" value={runtimeApiKey} onChange={(e) => setRuntimeApiKey(e.target.value)} style={{ flex: "1 1 280px" }} />
+          <div className="button-row">
+            <button type="button" onClick={saveApiKey}>Save &amp; reload</button>
+            <button type="button" className="button-secondary" onClick={clearApiKey}>Clear</button>
+          </div>
         </div>
-        {apiKeyStatus && <p className="meta" style={{ marginTop: "0.5rem" }}>{apiKeyStatus}</p>}
-        {!runtimeApiKey && !import.meta.env.VITE_API_KEY && (
-          <p className="error" style={{ marginTop: "0.5rem" }}>⚠️ No API key configured — all backend requests will be rejected.</p>
-        )}
+        {apiKeyStatus && <p className="meta" style={{ marginTop: 12 }}>{apiKeyStatus}</p>}
+        {!runtimeApiKey && !import.meta.env.VITE_API_KEY && <p className="error" style={{ marginTop: 12 }}>No API key configured — backend requests from the browser will fail.</p>}
       </section>
 
-      {/* Program list */}
       <section className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-          <h2 style={{ margin: 0 }}>Bug Bounty Programs</h2>
-          <button onClick={openNew}>+ New Program</button>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Bug bounty programs</h2>
+            <p className="meta">Store reusable target scope, exclusions, and notes to pre-fill operator workflows.</p>
+          </div>
+          <button type="button" onClick={openNew}>New program</button>
         </div>
 
-        {programs.length === 0 && (
-          <p className="meta">No programs configured. Add one to pre-fill scan settings.</p>
+        {programs.length === 0 ? (
+          <div className="empty-state">No programs configured yet.</div>
+        ) : (
+          <ul className="findings" style={{ marginTop: 14 }}>
+            {programs.map((program, idx) => (
+              <li key={idx} className="finding-card">
+                <div className="finding-card__header">
+                  <div>
+                    <h3 className="finding-card__title">{program.name}</h3>
+                    {program.description && <p className="meta">{program.description}</p>}
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="button-secondary" onClick={() => openEdit(idx)}>Edit</button>
+                    <button type="button" className="button-danger" onClick={() => handleDelete(idx)}>Delete</button>
+                  </div>
+                </div>
+                <div className="filter-row">
+                  {program.allowedTargets && <span className="chip chip--muted">Targets: {program.allowedTargets}</span>}
+                  {program.excludeHosts && <span className="chip chip--muted">Excluded hosts: {program.excludeHosts}</span>}
+                  {program.allowDestructive && <span className="chip">destructive ok</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
-
-        <ul className="findings" style={{ marginTop: "0.5rem" }}>
-          {programs.map((p, i) => (
-            <li key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "8px" }}>
-              <div>
-                <strong>{p.name}</strong>
-                {p.description && <p style={{ margin: "2px 0", color: "#555", fontSize: "0.85rem" }}>{p.description}</p>}
-                {p.allowedTargets && (
-                  <p style={{ margin: "2px 0", fontSize: "0.8rem" }}>
-                    <b>Targets:</b> {p.allowedTargets}
-                  </p>
-                )}
-                {p.excludeHosts && (
-                  <p style={{ margin: "2px 0", fontSize: "0.8rem" }}>
-                    <b>Excluded:</b> {p.excludeHosts}
-                  </p>
-                )}
-                {p.allowDestructive && (
-                  <span style={{ fontSize: "0.75rem", background: "#dc2626", color: "#fff", padding: "1px 6px", borderRadius: "999px" }}>
-                    destructive ok
-                  </span>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <button onClick={() => openEdit(i)} style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem" }}>Edit</button>
-                <button
-                  onClick={() => handleDelete(i)}
-                  style={{ fontSize: "0.8rem", padding: "0.3rem 0.7rem", background: "#7f1d1d" }}
-                >
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
       </section>
 
-      {/* Edit / create form */}
       {editing !== null && (
         <section className="card">
-          <h2>{editing === "new" ? "New Program" : `Edit: ${programs[editing]?.name}`}</h2>
+          <h2>{editing === "new" ? "New program" : `Edit: ${programs[editing]?.name}`}</h2>
           <form onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
-            {field("name", "Program Name *")}
-            {field("description", "Description", "text")}
-            {field("allowedTargets", "Allowed Targets (comma-separated)", "text")}
-            {field("excludeHosts", "Excluded Hosts (comma-separated)", "text")}
-            {field("excludePaths", "Excluded Paths (comma-separated)", "text")}
-            {field("programRules", "Program Rules (one per line)", "text", 4)}
+            <div className="form-grid form-grid--wide">
+              {field("name", "Program name *")}
+              {field("description", "Description", "text")}
+              {field("allowedTargets", "Allowed targets (comma-separated)", "text")}
+              {field("excludeHosts", "Excluded hosts (comma-separated)", "text")}
+              {field("excludePaths", "Excluded paths (comma-separated)", "text")}
+            </div>
+            {field("programRules", "Program rules (one per line)", "text", 4)}
             <label className="check">
-              <input type="checkbox" checked={!!form.allowDestructive}
-                onChange={(e) => setForm((p) => ({ ...p, allowDestructive: e.target.checked }))} />
-              Allow destructive checks (SQLMap, Nikto active scanning)
+              <input type="checkbox" checked={!!form.allowDestructive} onChange={(e) => setForm((prev) => ({ ...prev, allowDestructive: e.target.checked }))} />
+              Allow destructive checks
             </label>
-            {field("notes", "Private Notes", "text", 3)}
-            <div style={{ display: "flex", gap: "0.75rem" }}>
-              <button type="submit">💾 Save</button>
-              <button type="button" onClick={() => setEditing(null)}
-                style={{ background: "rgba(0,0,0,0.25)", color: "#000" }}>
-                Cancel
-              </button>
+            {field("notes", "Private notes", "text", 3)}
+            <div className="button-row">
+              <button type="submit">Save</button>
+              <button type="button" className="button-secondary" onClick={() => setEditing(null)}>Cancel</button>
             </div>
           </form>
         </section>
       )}
 
-      {/* Info section */}
       <section className="card">
-        <h2>Local AI Configuration</h2>
-        <p className="meta">
-          The system uses local Ollama models (<code>phi3:mini</code> by default for summaries/triage, with <code>codellama</code> for planner/coding assistance).
-          No external API key is required. The model is downloaded automatically on first start.
-        </p>
-        <p className="meta">
-          The neural agent learner (<code>agents</code> service) learns from each completed scan and automatically
-          improves agent spawn decisions over time.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "0.75rem" }}>
-          <label>Summary model
-            <input value={aiConfig.summaryModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, summaryModel: e.target.value }))} />
-          </label>
-          <label>Triage model
-            <input value={aiConfig.triageModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, triageModel: e.target.value }))} />
-          </label>
-          <label>Planner model
-            <input value={aiConfig.plannerModel || ""} onChange={(e) => setAIConfig((p) => ({ ...p, plannerModel: e.target.value }))} />
-          </label>
-          <label>Temperature
-            <input value={aiConfig.temperature || ""} onChange={(e) => setAIConfig((p) => ({ ...p, temperature: e.target.value }))} />
-          </label>
-          <label>Planner temperature
-            <input value={aiConfig.plannerTemperature || ""} onChange={(e) => setAIConfig((p) => ({ ...p, plannerTemperature: e.target.value }))} />
-          </label>
-          <label>Max tokens
-            <input value={aiConfig.maxTokens || ""} onChange={(e) => setAIConfig((p) => ({ ...p, maxTokens: e.target.value }))} />
-          </label>
-          <label>Top P
-            <input value={aiConfig.topP || ""} onChange={(e) => setAIConfig((p) => ({ ...p, topP: e.target.value }))} />
-          </label>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Local AI configuration</h2>
+            <p className="meta">Operator-side model preferences stored locally in this browser to match your workflow and local inference setup.</p>
+          </div>
+          <span className="chip chip--goal">{aiConfig.summaryModel} / {aiConfig.plannerModel}</span>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.6rem", marginTop: "0.75rem" }}>
-          <label>Summary system prompt
-            <textarea
-              rows={3}
-              value={aiConfig.summarySystemPrompt || ""}
-              onChange={(e) => setAIConfig((p) => ({ ...p, summarySystemPrompt: e.target.value }))}
-            />
-          </label>
-          <label>Summary user prompt template
-            <textarea
-              rows={5}
-              value={aiConfig.summaryUserPromptTemplate || ""}
-              onChange={(e) => setAIConfig((p) => ({ ...p, summaryUserPromptTemplate: e.target.value }))}
-            />
-          </label>
-          <label>Planner system prompt
-            <textarea
-              rows={3}
-              value={aiConfig.plannerSystemPrompt || ""}
-              onChange={(e) => setAIConfig((p) => ({ ...p, plannerSystemPrompt: e.target.value }))}
-            />
-          </label>
-          <label>Planner instruction template
-            <textarea
-              rows={4}
-              value={aiConfig.plannerInstructionTemplate || ""}
-              onChange={(e) => setAIConfig((p) => ({ ...p, plannerInstructionTemplate: e.target.value }))}
-            />
-          </label>
+        <div className="form-grid" style={{ marginTop: 14 }}>
+          <label>Summary model<input value={aiConfig.summaryModel || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, summaryModel: e.target.value }))} /></label>
+          <label>Triage model<input value={aiConfig.triageModel || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, triageModel: e.target.value }))} /></label>
+          <label>Planner model<input value={aiConfig.plannerModel || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, plannerModel: e.target.value }))} /></label>
+          <label>Temperature<input value={aiConfig.temperature || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, temperature: e.target.value }))} /></label>
+          <label>Planner temperature<input value={aiConfig.plannerTemperature || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, plannerTemperature: e.target.value }))} /></label>
+          <label>Max tokens<input value={aiConfig.maxTokens || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, maxTokens: e.target.value }))} /></label>
+          <label>Top P<input value={aiConfig.topP || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, topP: e.target.value }))} /></label>
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+        <div style={{ marginTop: 14 }}>
+          <label>Summary system prompt<textarea rows={3} value={aiConfig.summarySystemPrompt || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, summarySystemPrompt: e.target.value }))} /></label>
+          <label>Summary user prompt template<textarea rows={5} value={aiConfig.summaryUserPromptTemplate || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, summaryUserPromptTemplate: e.target.value }))} /></label>
+          <label>Planner system prompt<textarea rows={3} value={aiConfig.plannerSystemPrompt || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, plannerSystemPrompt: e.target.value }))} /></label>
+          <label>Planner instruction template<textarea rows={4} value={aiConfig.plannerInstructionTemplate || ""} onChange={(e) => setAIConfig((prev) => ({ ...prev, plannerInstructionTemplate: e.target.value }))} /></label>
+        </div>
+        <div className="button-row" style={{ marginTop: 14 }}>
           <button type="button" onClick={saveAIConfig}>Save local AI preferences</button>
-          <button type="button" onClick={resetAIConfig}>Reset AI defaults</button>
-          <button type="button" onClick={loadDatasetPreview}>Load enrichment dataset preview</button>
+          <button type="button" className="button-secondary" onClick={resetAIConfig}>Reset AI defaults</button>
+          <button type="button" className="button-secondary" onClick={loadDatasetPreview}>Load enrichment dataset preview</button>
         </div>
-        <p className="meta">These preferences are saved locally in your browser for operator workflows.</p>
-        {aiConfigStatus && <p className="meta">{aiConfigStatus}</p>}
-        {datasetError && <p className="error">{datasetError}</p>}
-        {datasetPreview.length > 0 && <pre className="summary">{JSON.stringify(datasetPreview, null, 2)}</pre>}
+        {aiConfigStatus && <p className="meta" style={{ marginTop: 10 }}>{aiConfigStatus}</p>}
+        {datasetError && <p className="error" style={{ marginTop: 10 }}>{datasetError}</p>}
+        {datasetPreview.length > 0 && <pre className="summary" style={{ marginTop: 14 }}>{JSON.stringify(datasetPreview, null, 2)}</pre>}
       </section>
 
-      <section className="card">
-        <h2>AI Enrichment Data Feed</h2>
-        <p className="meta">
-          Feed analyst outcomes into the enrichment loop by posting finding feedback labels.
-        </p>
-        <form onSubmit={submitEnrichmentFeedback}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
-            <label>Scan ID
-              <input value={feedForm.scanId} onChange={(e) => setFeedForm((p) => ({ ...p, scanId: e.target.value }))} />
-            </label>
-            <label>Finding ID
-              <input value={feedForm.findingId} onChange={(e) => setFeedForm((p) => ({ ...p, findingId: e.target.value }))} />
-            </label>
-            <label>Outcome
-              <select value={feedForm.outcome} onChange={(e) => setFeedForm((p) => ({ ...p, outcome: e.target.value }))}>
-                <option value="accepted">accepted</option>
-                <option value="rejected">rejected</option>
-                <option value="duplicate">duplicate</option>
-                <option value="informative">informative</option>
-              </select>
-            </label>
-            <label>Payout USD
-              <input value={feedForm.payoutUsd} onChange={(e) => setFeedForm((p) => ({ ...p, payoutUsd: e.target.value }))} />
-            </label>
-          </div>
-          <label>Analyst Notes
-            <textarea rows={3} value={feedForm.notes} onChange={(e) => setFeedForm((p) => ({ ...p, notes: e.target.value }))} />
-          </label>
-          <button type="submit">Submit enrichment feedback</button>
-        </form>
-        {feedStatus && <p className="meta">{feedStatus}</p>}
-      </section>
+      <div className="two-column-grid">
+        <section className="card">
+          <h2>AI enrichment data feed</h2>
+          <p className="meta">Push analyst outcomes back into the enrichment loop with acceptance, duplicate, and payout context.</p>
+          <form onSubmit={submitEnrichmentFeedback}>
+            <div className="form-grid">
+              <label>Scan ID<input value={feedForm.scanId} onChange={(e) => setFeedForm((prev) => ({ ...prev, scanId: e.target.value }))} /></label>
+              <label>Finding ID<input value={feedForm.findingId} onChange={(e) => setFeedForm((prev) => ({ ...prev, findingId: e.target.value }))} /></label>
+              <label>Outcome<select value={feedForm.outcome} onChange={(e) => setFeedForm((prev) => ({ ...prev, outcome: e.target.value }))}><option value="accepted">accepted</option><option value="rejected">rejected</option><option value="duplicate">duplicate</option><option value="informative">informative</option></select></label>
+              <label>Payout USD<input value={feedForm.payoutUsd} onChange={(e) => setFeedForm((prev) => ({ ...prev, payoutUsd: e.target.value }))} /></label>
+            </div>
+            <label>Analyst notes<textarea rows={3} value={feedForm.notes} onChange={(e) => setFeedForm((prev) => ({ ...prev, notes: e.target.value }))} /></label>
+            <button type="submit">Submit enrichment feedback</button>
+          </form>
+          {feedStatus && <p className="meta" style={{ marginTop: 10 }}>{feedStatus}</p>}
+        </section>
 
-      <section className="card">
-        <h2>Automation Policy Governance</h2>
-        <p className="meta">Manage per-workspace automation policy packs and audit changes.</p>
-        <form onSubmit={savePolicyPack}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem" }}>
-            <label>Pack name
-              <input value={policyForm.name} onChange={(e) => setPolicyForm((p) => ({ ...p, name: e.target.value }))} />
-            </label>
-            <label>Strategy version
-              <input type="number" value={policyForm.strategyVersion} onChange={(e) => setPolicyForm((p) => ({ ...p, strategyVersion: Number(e.target.value || 1) }))} />
-            </label>
-            <label>Canary percent
-              <input type="number" value={policyForm.canaryPercent} onChange={(e) => setPolicyForm((p) => ({ ...p, canaryPercent: Number(e.target.value || 0) }))} />
-            </label>
-            <label>Automation mode
-              <select value={policyForm.automationMode} onChange={(e) => setPolicyForm((p) => ({ ...p, automationMode: e.target.value }))}>
-                <option value="safe">safe</option>
-                <option value="autonomous">autonomous</option>
-                <option value="aggressive">aggressive</option>
-                <option value="canary">canary</option>
-              </select>
-            </label>
-          </div>
-          <button type="submit">Save policy pack</button>
-        </form>
-        {policyStatus && <p className="meta">{policyStatus}</p>}
-        {policyDefaults.length > 0 && (
-          <details style={{ marginTop: "0.6rem" }}>
-            <summary className="meta">Profile budget envelopes (enforced on save)</summary>
-            <pre className="summary">{JSON.stringify(policyDefaults, null, 2)}</pre>
-          </details>
-        )}
-        {policyPacks.length > 0 && <pre className="summary">{JSON.stringify(policyPacks, null, 2)}</pre>}
-        {policyAudit.length > 0 && <pre className="summary">{JSON.stringify(policyAudit.slice(0, 10), null, 2)}</pre>}
-      </section>
+        <section className="card">
+          <h2>Automation policy governance</h2>
+          <p className="meta">Manage automation budgets, rollout strategies, and audit visibility for each workspace policy pack.</p>
+          <form onSubmit={savePolicyPack}>
+            <div className="form-grid">
+              <label>Pack name<input value={policyForm.name} onChange={(e) => setPolicyForm((prev) => ({ ...prev, name: e.target.value }))} /></label>
+              <label>Strategy version<input type="number" value={policyForm.strategyVersion} onChange={(e) => setPolicyForm((prev) => ({ ...prev, strategyVersion: Number(e.target.value || 1) }))} /></label>
+              <label>Canary percent<input type="number" value={policyForm.canaryPercent} onChange={(e) => setPolicyForm((prev) => ({ ...prev, canaryPercent: Number(e.target.value || 0) }))} /></label>
+              <label>Automation mode<select value={policyForm.automationMode} onChange={(e) => setPolicyForm((prev) => ({ ...prev, automationMode: e.target.value }))}><option value="safe">safe</option><option value="autonomous">autonomous</option><option value="aggressive">aggressive</option><option value="canary">canary</option></select></label>
+            </div>
+            <button type="submit">Save policy pack</button>
+          </form>
+          {policyStatus && <p className="meta" style={{ marginTop: 10 }}>{policyStatus}</p>}
+          {policyDefaults.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary>Profile budget envelopes</summary>
+              <pre className="summary" style={{ marginTop: 10 }}>{JSON.stringify(policyDefaults, null, 2)}</pre>
+            </details>
+          )}
+          {policyPacks.length > 0 && <pre className="summary" style={{ marginTop: 14 }}>{JSON.stringify(policyPacks, null, 2)}</pre>}
+          {policyAudit.length > 0 && <pre className="summary" style={{ marginTop: 14 }}>{JSON.stringify(policyAudit.slice(0, 10), null, 2)}</pre>}
+        </section>
+      </div>
     </div>
   );
 }

@@ -5,9 +5,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"auto-bughunter/backend/internal/model"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type Playbook struct {
@@ -24,6 +25,8 @@ var playbooks = []Playbook{
 	{Name: "ssrf-to-internal-or-metadata-access", Goal: model.ImpactGoalSSRFInternalAccess, Summary: "SSRF to cloud metadata, internal services, or privileged control planes."},
 	{Name: "tenant-breakout-or-admin-action", Goal: model.ImpactGoalTenantBreakout, Summary: "Privilege escalation or tenant breakout causing unauthorized admin actions."},
 }
+
+var impactLabelCaser = cases.Title(language.Und)
 
 func DefaultGoals() []model.ImpactGoal {
 	return []model.ImpactGoal{
@@ -108,8 +111,8 @@ func EnrichFinding(f model.Finding, goals []model.ImpactGoal) model.Finding {
 		f.ImpactGoals = dedupeGoals(append(f.ImpactGoals, matchedGoals...))
 	}
 	f.ProofArtifacts = mergeArtifacts(f.ProofArtifacts, deriveArtifacts(f))
-	f.ImpactScore = maxFloat(f.ImpactScore, scoreImpact(f, matchedGoals))
-	f.BountyScore = maxFloat(f.BountyScore, scoreBounty(f, matchedGoals))
+	f.ImpactScore = MaxFloat(f.ImpactScore, scoreImpact(f, matchedGoals))
+	f.BountyScore = MaxFloat(f.BountyScore, scoreBounty(f, matchedGoals))
 	f.ProofState = maxProofState(f.ProofState, deriveProofState(f))
 	if strings.TrimSpace(f.Impact) == "" {
 		f.Impact = deriveImpactNarrative(f, matchedGoals)
@@ -433,16 +436,7 @@ func prettyLabel(s string) string {
 	}
 	s = strings.ReplaceAll(s, "_", " ")
 	s = strings.ReplaceAll(s, "-", " ")
-	parts := strings.Fields(strings.ToLower(s))
-	for i, part := range parts {
-		runes := []rune(part)
-		if len(runes) == 0 {
-			continue
-		}
-		runes[0] = unicode.ToUpper(runes[0])
-		parts[i] = string(runes)
-	}
-	return strings.Join(parts, " ")
+	return impactLabelCaser.String(strings.ToLower(strings.Join(strings.Fields(s), " ")))
 }
 
 func joinGoals(goals []model.ImpactGoal) string {
@@ -520,7 +514,7 @@ func containsAny(text string, values ...string) bool {
 	return false
 }
 
-func maxFloat(a, b float64) float64 {
+func MaxFloat(a, b float64) float64 {
 	if b > a {
 		return b
 	}

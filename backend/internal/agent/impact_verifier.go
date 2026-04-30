@@ -127,7 +127,7 @@ func buildImpactVerificationFinding(source model.Finding) model.Finding {
 		Description:       description,
 		Evidence:          evidence,
 		Recommendation:    source.Recommendation,
-		Confidence:        max(source.Confidence, source.BountyScore),
+		Confidence:        impact.MaxFloat(source.Confidence, source.BountyScore),
 		Sources:           appendUnique(source.Sources, "impact-verifier"),
 		EvidenceFields:    fields,
 		BusinessTags:      appendUnique(source.BusinessTags, "impact:verified"),
@@ -158,11 +158,4 @@ func promotedSeverity(source model.Finding) model.Severity {
 		return model.SeverityHigh
 	}
 	return model.SeverityMedium
-}
-
-func max(a, b float64) float64 {
-	if b > a {
-		return b
-	}
-	return a
 }

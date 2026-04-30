@@ -13,6 +13,8 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
+const toolCallDecisionSchema = `{"action":"stop|run_command|run_hacktricks|generate_tool","binary":string,"args":[string],"category":string,"findingId":string,"task":string,"rationale":string,"stopReason":string}`
+
 type Client struct {
 	BaseURL string
 	APIKey  string
@@ -706,20 +708,7 @@ func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCal
 		return nil
 	}
 
-	systemPrompt := "You are an autonomous bug bounty operator. " +
-		"Your overarching theme is IMPACT-FIRST validation, not generic vulnerability counting. " +
-		"Prioritize exploitability, account takeover, auth bypass, sensitive data access, payment abuse, tenant breakout, meaningful escalation, or other bug-bounty-relevant impact. " +
-		"Current scan goals: " + strings.TrimSpace(strings.Join(req.ImpactGoals, ", ")) + ". " +
-		"Reusable impact playbooks: " + strings.TrimSpace(req.ImpactPlaybooks) + ". " +
-		"Choose exactly one next action using this strict JSON schema: " +
-		`{"action":"stop|run_command|run_hacktricks|generate_tool","binary":string,"args":[string],"category":string,"findingId":string,"task":string,"rationale":string,"stopReason":string}` +
-		". Rules: " +
-		"(1) Prefer the smallest next action that increases confidence in real-world impact. " +
-		"(2) For run_command, choose only from allowedBinaries and include concrete args. " +
-		"(3) For run_hacktricks, choose a category from hacktricksTopics and optionally a findingId. " +
-		"(4) For generate_tool, request a focused sandboxed probe task tied to a concrete impact hypothesis. " +
-		"(5) If recent results show low value or the evidence is already sufficient, return stop. " +
-		"(6) Never emit markdown or extra text."
+	systemPrompt := buildToolCallSystemPrompt(req)
 
 	userJSON, err := json.Marshal(req)
 	if err != nil {
@@ -771,6 +760,33 @@ func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCal
 	default:
 		return nil
 	}
+}
+
+func buildToolCallSystemPrompt(req ToolCallRequest) string {
+	goals := strings.TrimSpace(strings.Join(req.ImpactGoals, ", "))
+	if goals == "" {
+		goals = impact.GoalPrompt(impact.DefaultGoals())
+	}
+	playbooks := strings.TrimSpace(req.ImpactPlaybooks)
+	if playbooks == "" {
+		playbooks = "none provided"
+	}
+
+	return strings.Join([]string{
+		"You are an autonomous bug bounty operator.",
+		"Your overarching theme is IMPACT-FIRST validation, not generic vulnerability counting.",
+		"Prioritize exploitability, account takeover, auth bypass, sensitive data access, payment abuse, tenant breakout, meaningful escalation, or other bug-bounty-relevant impact.",
+		"Current scan goals: " + goals + ".",
+		"Reusable impact playbooks: " + playbooks + ".",
+		"Choose exactly one next action using this strict JSON schema: " + toolCallDecisionSchema + ".",
+		"Rules:",
+		"(1) Prefer the smallest next action that increases confidence in real-world impact.",
+		"(2) For run_command, choose only from allowedBinaries and include concrete args.",
+		"(3) For run_hacktricks, choose a category from hacktricksTopics and optionally a findingId.",
+		"(4) For generate_tool, request a focused sandboxed probe task tied to a concrete impact hypothesis.",
+		"(5) If recent results show low value or the evidence is already sufficient, return stop.",
+		"(6) Never emit markdown or extra text.",
+	}, " ")
 }
 
 // AdaptedCommand is a single concrete command that the coding LLM has adapted
