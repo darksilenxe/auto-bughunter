@@ -597,6 +597,35 @@ type GeneratedToolSpec struct {
 	Rationale string
 }
 
+// ToolCallHistory summarizes one prior tool-calling round for the AI model.
+type ToolCallHistory struct {
+	Action  string `json:"action"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+}
+
+// ToolCallRequest is the bounded JSON contract for the AI tool-calling loop.
+type ToolCallRequest struct {
+	Target            string            `json:"target"`
+	Findings          []map[string]any  `json:"findings,omitempty"`
+	RecentToolOutputs []ToolCallHistory `json:"recentToolOutputs,omitempty"`
+	AllowedBinaries   []string          `json:"allowedBinaries,omitempty"`
+	HackTricksTopics  []string          `json:"hacktricksTopics,omitempty"`
+	BuiltInTools      []string          `json:"builtInTools,omitempty"`
+}
+
+// ToolCallDecision is the next bounded action chosen by the AI tool-calling planner.
+type ToolCallDecision struct {
+	Action     string   `json:"action"`
+	Binary     string   `json:"binary,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	Category   string   `json:"category,omitempty"`
+	FindingID  string   `json:"findingId,omitempty"`
+	Task       string   `json:"task,omitempty"`
+	Rationale  string   `json:"rationale,omitempty"`
+	StopReason string   `json:"stopReason,omitempty"`
+}
+
 // GenerateTool asks the configured coding LLM to write a Python 3 pen testing
 // tool for the described task on the given target. The script must:
 //   - accept a target URL as sys.argv[1]
@@ -660,6 +689,82 @@ func (c *Client) GenerateTool(ctx context.Context, taskDescription string, targe
 		Name:      name,
 		Code:      code,
 		Rationale: strings.TrimSpace(parsed.Rationale),
+	}
+}
+
+// PlanToolCall asks the configured planning model to choose the next bounded
+// tool action. It returns nil when no provider is configured, the response is
+// invalid, or the model does not choose an actionable step.
+func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCallDecision {
+	if c == nil {
+		return nil
+	}
+	if !c.shouldCallProvider() {
+		return nil
+	}
+
+	systemPrompt := "You are an autonomous bug bounty operator. " +
+		"Your overarching theme is IMPACT-FIRST validation, not generic vulnerability counting. " +
+		"Prioritize exploitability, account takeover, auth bypass, sensitive data access, payment abuse, tenant breakout, meaningful escalation, or other bug-bounty-relevant impact. " +
+		"Choose exactly one next action using this strict JSON schema: " +
+		`{"action":"stop|run_command|run_hacktricks|generate_tool","binary":string,"args":[string],"category":string,"findingId":string,"task":string,"rationale":string,"stopReason":string}` +
+		". Rules: " +
+		"(1) Prefer the smallest next action that increases confidence in real-world impact. " +
+		"(2) For run_command, choose only from allowedBinaries and include concrete args. " +
+		"(3) For run_hacktricks, choose a category from hacktricksTopics and optionally a findingId. " +
+		"(4) For generate_tool, request a focused sandboxed probe task tied to a concrete impact hypothesis. " +
+		"(5) If recent results show low value or the evidence is already sufficient, return stop. " +
+		"(6) Never emit markdown or extra text."
+
+	userJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil
+	}
+
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: string(userJSON)},
+	}
+	content, err := c.planningComplete(ctx, messages, 0.1, true)
+	if err != nil || content == "" {
+		return nil
+	}
+
+	var parsed ToolCallDecision
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil
+	}
+	parsed.Action = strings.ToLower(strings.TrimSpace(parsed.Action))
+	parsed.Binary = strings.TrimSpace(parsed.Binary)
+	parsed.Category = strings.TrimSpace(parsed.Category)
+	parsed.FindingID = strings.TrimSpace(parsed.FindingID)
+	parsed.Task = strings.TrimSpace(parsed.Task)
+	parsed.Rationale = strings.TrimSpace(parsed.Rationale)
+	parsed.StopReason = strings.TrimSpace(parsed.StopReason)
+
+	switch parsed.Action {
+	case "stop":
+		if parsed.StopReason == "" {
+			parsed.StopReason = "model requested stop"
+		}
+		return &parsed
+	case "run_command":
+		if parsed.Binary == "" || len(parsed.Args) == 0 {
+			return nil
+		}
+		return &parsed
+	case "run_hacktricks":
+		if parsed.Category == "" {
+			return nil
+		}
+		return &parsed
+	case "generate_tool":
+		if parsed.Task == "" {
+			return nil
+		}
+		return &parsed
+	default:
+		return nil
 	}
 }
 

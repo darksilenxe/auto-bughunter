@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -86,6 +87,17 @@ var allowedBinaries = map[string]bool{
 	"qsreplace": true,
 	"python3":   true,
 	"python":    true,
+}
+
+// ApprovedBinaries returns the sorted allow-list of binaries that agents may
+// execute through cmdbuilder.
+func ApprovedBinaries() []string {
+	out := make([]string, 0, len(allowedBinaries))
+	for name := range allowedBinaries {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // blockedArgPatterns are argument substrings that are never permitted regardless

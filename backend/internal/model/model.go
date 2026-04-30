@@ -240,6 +240,11 @@ type ScanOptions struct {
 	// binary allow-list, blocked injection/path patterns, python sandboxing, and
 	// target host scoping. Default is false and usage is audit-logged.
 	UnsafeDynamicCommandFlags bool `json:"unsafeDynamicCommandFlags,omitempty"`
+	// UseAIToolCalling opt-ins a scan to a bounded model-driven tool-calling
+	// loop. The model may choose only from the backend's approved JSON tool
+	// contract; command execution still flows through existing cmdbuilder,
+	// HackTricks, and toolbuilder safety controls.
+	UseAIToolCalling bool `json:"useAiToolCalling,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

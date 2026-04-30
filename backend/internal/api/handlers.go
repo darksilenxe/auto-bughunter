@@ -219,6 +219,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewCORSRedirectAgent(true))
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
+	reg.Register(agent.NewAIToolCallingAgent(aiClient, false))
 	reg.Register(agent.NewMLTriageAgent(mlService, true))
 	reg.Register(agent.NewAttackPathAgent(mlService, true))
 	reg.Register(agent.NewFalsePositiveReviewAgent(mlService, true))
@@ -941,6 +942,7 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewCORSRedirectAgent(true))
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
+	reg.Register(agent.NewAIToolCallingAgent(s.aiClient, options.UseAIToolCalling))
 
 	// Autonomous tool-building agents — run after core scanning so they have
 	// rich findings context to work from.  DynamicCommandAgent composes and
@@ -3942,6 +3944,15 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		return s.agentRegistry.RunAll(ctx, input)
 	}
 	available := s.agentFactory.Names()
+	if !input.Options.UseAIToolCalling {
+		filtered := make([]string, 0, len(available))
+		for _, name := range available {
+			if name != "ai_tool_calling" {
+				filtered = append(filtered, name)
+			}
+		}
+		available = filtered
+	}
 	staticOrder := s.agentRegistry.Order()
 	fallback := agent.NewStaticPlanner(staticOrder)
 	var planner agent.Planner = fallback
