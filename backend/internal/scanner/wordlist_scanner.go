@@ -170,7 +170,6 @@ done:
 
 type pathStateFingerprint struct {
 	status      int
-	finalURL    string
 	contentType string
 	bodySample  string
 	accessible  bool
@@ -249,7 +248,6 @@ func capturePathState(ctx context.Context, client *http.Client, target, path str
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return pathStateFingerprint{
 		status:      resp.StatusCode,
-		finalURL:    normalizePathStateText(resp.Request.URL.String()),
 		contentType: normalizePathStateText(resp.Header.Get("Content-Type")),
 		bodySample:  normalizePathStateText(string(bodyBytes)),
 		accessible:  resp.StatusCode >= 200 && resp.StatusCode < 400,
@@ -258,7 +256,6 @@ func capturePathState(ctx context.Context, client *http.Client, target, path str
 
 func stateMeaningfullyChanged(baseline, candidate pathStateFingerprint) bool {
 	return baseline.status != candidate.status ||
-		baseline.finalURL != candidate.finalURL ||
 		baseline.contentType != candidate.contentType ||
 		baseline.bodySample != candidate.bodySample
 }
