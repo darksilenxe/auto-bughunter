@@ -933,7 +933,7 @@ func (s *Service) FindPotentialFalsePositives(findings []model.Finding) []Scored
 	return out
 }
 
-func (s *Service) postJSON(path string, payload any, out any) bool {
+func (s *Service) postJSON(ctx context.Context, path string, payload any, out any) bool {
 	if s.externalURL == "" || s.httpClient == nil {
 		return false
 	}
@@ -941,7 +941,7 @@ func (s *Service) postJSON(path string, payload any, out any) bool {
 	if err != nil {
 		return false
 	}
-	req, err := http.NewRequest(http.MethodPost, s.externalURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.externalURL+path, bytes.NewReader(body))
 	if err != nil {
 		return false
 	}

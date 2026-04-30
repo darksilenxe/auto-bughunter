@@ -709,6 +709,10 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "completed"
 	postProcessStart := time.Now()
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: fmt.Sprintf("Post-processing %d findings…", len(findings)),
+	})
 	job.Findings = enrichFindings(findings)
 	for _, f := range job.Findings {
 		metrics.FindingRecorded(string(f.Severity))
@@ -792,17 +796,30 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.Dashboard = buildDecisionDashboard(job)
+	// Create a bounded context for external service calls (knowledge, AI, ML).
+	// These calls should complete within a reasonable time and must not block
+	// the scan result from being persisted indefinitely.
+	postCtx, postCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer postCancel()
 	knowledgeCtx := (*model.SecurityKnowledgeContext)(nil)
 	if s.knowledgeSvc != nil {
-		knowledgeCtx = s.knowledgeSvc.RetrieveForJob(context.Background(), "ai-summary", job, 5)
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Retrieving security knowledge context…",
+		})
+		knowledgeCtx = s.knowledgeSvc.RetrieveForJob(postCtx, "ai-summary", job, 5)
 		if knowledgeCtx != nil {
 			s.appendAuditEvent(id, "security-knowledge", fmt.Sprintf("Retrieved %d curated references", len(knowledgeCtx.References)))
 		}
 	}
-	job.AISummary = s.aiClient.SummarizeWithKnowledge(context.Background(), target, job.Findings, knowledgeCtx)
+	emit(model.ScanEvent{
+		Type:    model.ScanEventInfo,
+		Message: "Generating AI summary…",
+	})
+	job.AISummary = s.aiClient.SummarizeWithKnowledge(postCtx, target, job.Findings, knowledgeCtx)
 	// Generate domain-aware narrative report enriching the AI summary.
 	if s.aiClient != nil && len(job.Findings) > 0 {
-		narrative := s.aiClient.GenerateNarrativeReport(context.Background(), target, job.Findings)
+		narrative := s.aiClient.GenerateNarrativeReport(postCtx, target, job.Findings)
 		if strings.TrimSpace(narrative.ExecutiveSummary) != "" && strings.TrimSpace(job.AISummary) != "" {
 			// Prepend the narrative executive summary and attack narrative to the AI summary.
 			enhancedSummary := narrative.ExecutiveSummary
@@ -824,7 +841,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 	job.NextActions = buildNextActions(job)
 	if s.mlService != nil {
-		job.ModelRecommendations = s.mlService.RecommendFromHistory(context.Background(), s.repo, s.proxyServer.Store(), job)
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Computing ML recommendations…",
+		})
+		job.ModelRecommendations = s.mlService.RecommendFromHistory(postCtx, s.repo, s.proxyServer.Store(), job)
 		if job.ModelRecommendations != nil {
 			job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
 			s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))

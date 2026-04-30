@@ -462,6 +462,9 @@ func minInt(a, b int) int {
 }
 
 func (c *Client) SummarizeWithKnowledge(ctx context.Context, target string, findings []model.Finding, knowledge *model.SecurityKnowledgeContext) string {
+	if c == nil {
+		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
+	}
 	if !c.shouldCallProvider() {
 		return localReasonerSummaryWithKnowledge(target, findings, knowledge)
 	}

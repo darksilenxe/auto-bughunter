@@ -1,6 +1,7 @@
 package ml
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ func TestPostJSONSendsBearerTokenWhenConfigured(t *testing.T) {
 
 	s := NewService(Config{ExternalURL: srv.URL, AuthToken: "secret-token"})
 	var out map[string]string
-	if ok := s.postJSON("/v1/whatever", map[string]string{"x": "y"}, &out); !ok {
+	if ok := s.postJSON(context.Background(), "/v1/whatever", map[string]string{"x": "y"}, &out); !ok {
 		t.Fatal("postJSON returned false")
 	}
 	if want := "Bearer secret-token"; gotAuth != want {
@@ -42,7 +43,7 @@ func TestPostJSONOmitsAuthHeaderWhenTokenEmpty(t *testing.T) {
 
 	s := NewService(Config{ExternalURL: srv.URL})
 	var out map[string]string
-	if ok := s.postJSON("/v1/whatever", map[string]string{"x": "y"}, &out); !ok {
+	if ok := s.postJSON(context.Background(), "/v1/whatever", map[string]string{"x": "y"}, &out); !ok {
 		t.Fatal("postJSON returned false")
 	}
 	if gotAuth != "" {
@@ -53,7 +54,7 @@ func TestPostJSONOmitsAuthHeaderWhenTokenEmpty(t *testing.T) {
 func TestPostJSONReturnsFalseWhenExternalURLEmpty(t *testing.T) {
 	s := NewService(Config{})
 	var out map[string]string
-	if ok := s.postJSON("/v1/whatever", map[string]string{}, &out); ok {
+	if ok := s.postJSON(context.Background(), "/v1/whatever", map[string]string{}, &out); ok {
 		t.Fatal("postJSON should return false when no external URL is configured")
 	}
 }
