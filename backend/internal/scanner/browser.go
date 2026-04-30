@@ -35,6 +35,20 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	return ctx, cancel
 }
 
+// spaDetectJS is the JavaScript snippet evaluated in the live (JS-rendered) DOM
+// to identify the client-side SPA framework. It checks for Angular, Vue,
+// Next.js, React, and generic SPA mount points in that order of specificity.
+const spaDetectJS = `(function() {
+	var h = document.documentElement;
+	if (h.hasAttribute('ng-app') || h.querySelector('[ng-app]') || h.querySelector('[ng-version]')) return 'angular';
+	if (document.querySelector('[data-v-app]')) return 'vue';
+	if (document.getElementById('__next')) return 'next.js';
+	var root = document.getElementById('root');
+	if (root && (root.hasAttribute('data-reactroot') || document.querySelector('script[src*="react"]'))) return 'react';
+	if (root || document.getElementById('app')) return 'spa';
+	return '';
+})()`
+
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
@@ -48,6 +62,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 	var links []string
 	var currentURL string
 	var screenshotBuf []byte
+	var spaFramework string
 	u, _ := url.Parse(target)
 	host := ""
 	if u != nil {
@@ -90,6 +105,9 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			const html = f.innerHTML.toLowerCase();
 			return html.includes('csrf') || html.includes('_token') || html.includes('xsrf');
 		}).length`, &csrfLikeCount),
+		// Detect SPA framework from the live (JS-rendered) DOM so the result
+		// reflects the actual runtime rather than the static HTML skeleton.
+		chromedp.Evaluate(spaDetectJS, &spaFramework),
 		chromedp.CaptureScreenshot(&screenshotBuf),
 	)
 
@@ -183,6 +201,20 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			Evidence:       fmt.Sprintf("title=%q links=%d forms=%d pagesVisited=%d", title, len(links), totalForms, visitedPages),
 			Recommendation: "Review exposed routes and forms; reduce unnecessary attack surface.",
 		},
+	}
+
+	// Emit a finding when the headless browser detects a client-side SPA
+	// framework so subsequent phases can adapt their strategy.
+	if fw := strings.TrimSpace(spaFramework); fw != "" {
+		findings = append(findings, model.Finding{
+			ID:             "browser-spa-detected",
+			Category:       "discovery",
+			Severity:       model.SeverityInfo,
+			Title:          fmt.Sprintf("Single Page Application detected (%s)", fw),
+			Description:    "The headless browser identified a client-side SPA framework after JavaScript execution. Traditional path-based crawling and static HTML analysis are less effective against SPAs; the scanner will rely on JavaScript-rendered DOM data and API endpoint discovery.",
+			Evidence:       fmt.Sprintf("framework=%s title=%q", fw, title),
+			Recommendation: "Ensure API endpoints backing the SPA are in scope and tested. Use authenticated sessions so the SPA loads its full route tree.",
+		})
 	}
 
 	if totalForms > 0 && totalCSRFLike == 0 {
