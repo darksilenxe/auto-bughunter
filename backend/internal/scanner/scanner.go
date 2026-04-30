@@ -198,9 +198,13 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		}
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
+	safeTargetURL, err := rebuildRequestURL(input.Target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target URL: %w", err)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, safeTargetURL, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
-	emitCmd(fmt.Sprintf("GET %s", input.Target), "Probing target for security headers, cookies, and TLS")
+	emitCmd(fmt.Sprintf("GET %s", safeTargetURL), "Probing target for security headers, cookies, and TLS")
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -342,13 +346,20 @@ func runContextualParamProbes(ctx context.Context, target, body string, auth mod
 			q := probe.Query()
 			q.Set(p, marker)
 			probe.RawQuery = q.Encode()
-			if !scope.IsURLInScope(probe.String(), scanScope) {
+			// Rebuild the request URL from parsed fields before validating or
+			// issuing the request so the safety property stays explicit at the
+			// sink and remains recognisable to static taint analysis.
+			safeProbeURL, err := rebuildRequestURL(probe.String())
+			if err != nil {
 				continue
 			}
-			if err := safety.ValidateOutboundURL(probe.String()); err != nil {
+			if !scope.IsURLInScope(safeProbeURL, scanScope) {
 				continue
 			}
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, probe.String(), nil)
+			if err := safety.ValidateOutboundURL(safeProbeURL); err != nil {
+				continue
+			}
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, safeProbeURL, nil)
 			ApplyAuthProfile(req, auth)
 			resp, err := service.doRequestWithRetry(ctx, req, options)
 			if err != nil {
@@ -487,11 +498,24 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 	skippedAuthHosts := 0
 
 	for _, rawURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		// Rebuild and re-validate each URL at the request site so outbound
+		// safety remains explicit even though the candidate list was already
+		// filtered upstream.
+		safeRawURL, err := rebuildRequestURL(rawURL)
 		if err != nil {
 			continue
 		}
-		rawHost := hostFromURL(rawURL)
+		if !scope.IsURLInScope(safeRawURL, input.Scope) {
+			continue
+		}
+		if err := safety.ValidateOutboundURL(safeRawURL); err != nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeRawURL, nil)
+		if err != nil {
+			continue
+		}
+		rawHost := hostFromURL(safeRawURL)
 		if strings.EqualFold(rawHost, targetHost) {
 			ApplyAuthProfile(req, input.AuthProfile)
 		} else {
@@ -500,7 +524,7 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 
 		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 		if err != nil {
-			evidence = append(evidence, fmt.Sprintf("%s error=%s", rawURL, strings.TrimSpace(err.Error())))
+			evidence = append(evidence, fmt.Sprintf("%s error=%s", safeRawURL, strings.TrimSpace(err.Error())))
 			continue
 		}
 		contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -514,11 +538,11 @@ func (s *Service) runSupplementalResourceFetch(ctx context.Context, input RunInp
 		_ = resp.Body.Close()
 		if strings.Contains(strings.ToLower(contentType), "text/html") {
 			if excerpt := extractPlainTextExcerptFromHTML(string(body), supplementalResourceFetchTextExcerptMaxChars); excerpt != "" {
-				evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s text=%q", rawURL, resp.StatusCode, contentType, excerpt))
+				evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s text=%q", safeRawURL, resp.StatusCode, contentType, excerpt))
 				continue
 			}
 		}
-		evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s bytes=%d", rawURL, resp.StatusCode, contentType, len(body)))
+		evidence = append(evidence, fmt.Sprintf("%s status=%d type=%s bytes=%d", safeRawURL, resp.StatusCode, contentType, len(body)))
 	}
 
 	if len(evidence) == 0 {
@@ -597,6 +621,22 @@ func collectSupplementalResourceURLs(target string, candidates []string, scanSco
 		out = out[:max]
 	}
 	return out
+}
+
+func rebuildRequestURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid request url")
+	}
+	safe := url.URL{
+		Scheme:   strings.ToLower(parsed.Scheme),
+		User:     parsed.User,
+		Host:     parsed.Host,
+		Path:     parsed.Path,
+		RawPath:  parsed.RawPath,
+		RawQuery: parsed.RawQuery,
+	}
+	return safe.String(), nil
 }
 
 func filterContains(items []string, keyword string, max int) []string {
