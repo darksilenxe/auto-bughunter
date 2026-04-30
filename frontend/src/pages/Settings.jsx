@@ -113,7 +113,7 @@ export default function Settings() {
       },
       appConfig: {
         apiBase: API_BASE,
-        apiKeyConfigured: Boolean(localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY),
+        authConfigured: Boolean(localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY),
         workspaceId: WORKSPACE_ID,
         currentUrl: window.location.href,
       },

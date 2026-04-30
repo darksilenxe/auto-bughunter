@@ -139,15 +139,18 @@ func (s *Server) handleDiagLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Collect recent scan summaries (no findings — IDs + status only).
 	type scanDigest struct {
-		ID          string `json:"id"`
-		Target      string `json:"target"`
-		Status      string `json:"status"`
-		StartedAt   string `json:"startedAt"`
-		CompletedAt string `json:"completedAt,omitempty"`
-		FindingCount int   `json:"findingCount"`
+		ID           string `json:"id"`
+		Target       string `json:"target"`
+		Status       string `json:"status"`
+		StartedAt    string `json:"startedAt"`
+		CompletedAt  string `json:"completedAt,omitempty"`
+		FindingCount int    `json:"findingCount"`
 	}
 	recentScans := []scanDigest{}
-	if jobs, err := s.repo.ListCompletedJobs(r.Context(), 10); err == nil {
+	var recentScansError string
+	if jobs, err := s.repo.ListCompletedJobs(r.Context(), 10); err != nil {
+		recentScansError = "failed to list recent scans: " + err.Error()
+	} else {
 		for _, j := range jobs {
 			d := scanDigest{
 				ID:           j.ID,
@@ -169,11 +172,12 @@ func (s *Server) handleDiagLogs(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 
 	bundle := map[string]any{
-		"generatedAt": time.Now().UTC().Format(time.RFC3339),
-		"runtime":     collectRuntimeInfo(),
-		"environment": envMap,
-		"toolsHealth": tools,
-		"recentScans": recentScans,
+		"generatedAt":      time.Now().UTC().Format(time.RFC3339),
+		"runtime":          collectRuntimeInfo(),
+		"environment":      envMap,
+		"toolsHealth":      tools,
+		"recentScans":      recentScans,
+		"recentScansError": recentScansError,
 	}
 
 	writeJSON(w, http.StatusOK, bundle)

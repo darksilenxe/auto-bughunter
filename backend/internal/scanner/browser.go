@@ -35,6 +35,20 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	return ctx, cancel
 }
 
+// spaDetectJS is the JavaScript snippet evaluated in the live (JS-rendered) DOM
+// to identify the client-side SPA framework. It checks for Angular, Vue,
+// Next.js, React, and generic SPA mount points in that order of specificity.
+const spaDetectJS = `(function() {
+	var h = document.documentElement;
+	if (h.hasAttribute('ng-app') || h.querySelector('[ng-app]') || h.querySelector('[ng-version]')) return 'angular';
+	if (document.querySelector('[data-v-app]')) return 'vue';
+	if (document.getElementById('__next')) return 'next.js';
+	var root = document.getElementById('root');
+	if (root && (root.hasAttribute('data-reactroot') || document.querySelector('script[src*="react"]'))) return 'react';
+	if (root || document.getElementById('app')) return 'spa';
+	return '';
+})()`
+
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
@@ -93,16 +107,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 		}).length`, &csrfLikeCount),
 		// Detect SPA framework from the live (JS-rendered) DOM so the result
 		// reflects the actual runtime rather than the static HTML skeleton.
-		chromedp.Evaluate(`(function() {
-			var h = document.documentElement;
-			if (h.hasAttribute('ng-app') || h.querySelector('[ng-app]') || h.querySelector('[ng-version]')) return 'angular';
-			if (document.querySelector('[data-v-app]')) return 'vue';
-			if (document.getElementById('__next')) return 'next.js';
-			var root = document.getElementById('root');
-			if (root && (root.hasAttribute('data-reactroot') || document.querySelector('script[src*="react"]'))) return 'react';
-			if (root || document.getElementById('app')) return 'spa';
-			return '';
-		})()`, &spaFramework),
+		chromedp.Evaluate(spaDetectJS, &spaFramework),
 		chromedp.CaptureScreenshot(&screenshotBuf),
 	)
 
