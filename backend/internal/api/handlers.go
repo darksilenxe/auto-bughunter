@@ -719,7 +719,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan failed: " + job.Error,
 			})
 			s.appendAuditEvent(id, "failed", "Scan execution panicked: "+job.Error)
-			_ = s.repo.UpdateJob(context.Background(), job)
+			recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer recoveryCancel()
+			_ = s.repo.UpdateJob(recoveryCtx, job)
 		}
 	}()
 
