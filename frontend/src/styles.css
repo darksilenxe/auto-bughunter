@@ -41,9 +41,12 @@ body {
   line-height: 1.5;
   color: var(--ink);
   background:
+    linear-gradient(rgba(89, 208, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(89, 208, 255, 0.025) 1px, transparent 1px),
     radial-gradient(900px 520px at 100% -5%, rgba(124, 92, 255, 0.16), transparent 52%),
     radial-gradient(860px 520px at -10% 0%, rgba(89, 208, 255, 0.15), transparent 55%),
     linear-gradient(180deg, #07101b 0%, #050b15 44%, #04070f 100%);
+  background-size: 64px 64px, 64px 64px, auto, auto, auto;
   background-attachment: fixed;
 }
 
@@ -96,6 +99,7 @@ header h1 {
   line-height: 1.05;
   font-weight: 800;
   letter-spacing: -0.04em;
+  animation: text-glow-pulse 5s ease-in-out infinite;
 }
 
 header p {
@@ -147,6 +151,7 @@ header p {
 .card {
   padding: 20px;
   margin-bottom: 18px;
+  transition: border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
 .card--compact {
@@ -183,6 +188,8 @@ header p {
   background: linear-gradient(180deg, rgba(19, 31, 51, 0.82), rgba(9, 17, 29, 0.82));
   border: 1px solid rgba(115, 146, 194, 0.16);
   box-shadow: var(--shadow-soft);
+  position: relative;
+  overflow: hidden;
 }
 
 .stat-card__label {
@@ -609,6 +616,8 @@ button.surface {
   border: 1px solid rgba(115, 146, 194, 0.18);
   border-radius: 18px;
   padding: 14px 16px;
+  position: relative;
+  overflow: hidden;
 }
 
 pre.summary {
@@ -889,6 +898,176 @@ details summary {
 ::-webkit-scrollbar-thumb {
   background: rgba(115, 146, 194, 0.32);
   border-radius: 999px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Futuristic UI enhancements                                                   */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+@keyframes scanline-sweep {
+  0%   { top: -2px; }
+  100% { top: 100vh; }
+}
+
+@keyframes float-orb {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+  33%       { transform: translate(18px, -12px) scale(1.08); opacity: 0.8; }
+  66%       { transform: translate(-12px, 18px) scale(0.95); opacity: 0.55; }
+}
+
+@keyframes shimmer-slide {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes text-glow-pulse {
+  0%, 100% { text-shadow: none; }
+  50%       { text-shadow: 0 0 40px rgba(89, 208, 255, 0.18), 0 0 80px rgba(124, 92, 255, 0.1); }
+}
+
+@keyframes terminal-scan {
+  0%   { left: -80%; opacity: 0; }
+  15%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { left: 160%; opacity: 0; }
+}
+
+@keyframes cyber-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(0.65); }
+}
+
+@keyframes border-glow {
+  0%, 100% { box-shadow: var(--shadow-soft); }
+  50%       { box-shadow: var(--shadow-soft), 0 0 28px rgba(89, 208, 255, 0.07), 0 0 60px rgba(124, 92, 255, 0.04); }
+}
+
+/* Thin scanline sweeping down the viewport */
+.app-shell::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 2px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(89, 208, 255, 0.18) 40%,
+    rgba(124, 92, 255, 0.22) 60%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 999;
+  animation: scanline-sweep 14s linear infinite;
+  opacity: 0.7;
+}
+
+/* Floating ambient orb behind the hero panel content */
+.hero-panel::before {
+  content: "";
+  position: absolute;
+  top: -45%;
+  left: -8%;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(124, 92, 255, 0.09), transparent 65%);
+  pointer-events: none;
+  animation: float-orb 10s ease-in-out infinite;
+}
+
+/* Hero panel breathing border glow */
+.hero-panel {
+  animation: border-glow 7s ease-in-out infinite;
+}
+
+/* Stat card shimmer sweep */
+.stat-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 35%,
+    rgba(89, 208, 255, 0.04) 50%,
+    transparent 65%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-slide 4s linear infinite;
+  pointer-events: none;
+}
+
+/* Pulsing cyan accent dot appended to eyebrow labels */
+.eyebrow::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: cyber-dot-pulse 2.2s ease-in-out infinite;
+}
+
+/* Card subtle border glow on hover */
+.card:hover {
+  border-color: rgba(89, 208, 255, 0.2);
+  box-shadow: var(--shadow-soft), 0 0 32px rgba(89, 208, 255, 0.05);
+}
+
+/* Terminal horizontal scan-sweep */
+.terminal::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -80%;
+  width: 60%;
+  background: linear-gradient(90deg, transparent, rgba(89, 208, 255, 0.04), transparent);
+  animation: terminal-scan 5s linear infinite;
+  pointer-events: none;
+}
+
+/* ── Attack Graph fullscreen overlay ──────────────────────────────── */
+
+.graph-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.94);
+  backdrop-filter: blur(14px);
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-fullscreen-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graph-fullscreen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(9, 16, 30, 0.98);
+  flex-shrink: 0;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.graph-fullscreen-body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 @media (max-width: 900px) {

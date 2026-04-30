@@ -294,3 +294,94 @@ func TestRunZAPBaseline_FallsBackToHTTPWhenExecUnavailable(t *testing.T) {
 		t.Fatalf("expected HTTP fallback evidence, got %q", findings[0].Evidence)
 	}
 }
+
+// ---- Centralized post-Nuclei cooldown tests ----
+
+// TestCooldownAfterNuclei_ContextCancelledDuringCooldown verifies that when the
+// scan context is cancelled while the post-Nuclei cooldown is active the
+// function returns early with the expected informational finding and does not
+// attempt to run Vulnx, ZAP Baseline, or XSSMap.
+func TestCooldownAfterNuclei_ContextCancelledDuringCooldown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake binary stub uses /bin/sh which is unavailable on Windows")
+	}
+	nucleiBin := writeFakeNuclei(t, "", 0)
+
+	svc := NewService(Config{
+		NucleiBinary:       nucleiBin,
+		IntegrationTimeout: 5 * time.Second,
+	})
+
+	// Create a context that we cancel immediately after starting the scan so
+	// that it expires during the cooldown window (which is 5s by default).
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		// A tiny sleep ensures the Nuclei stub has time to "run" before we
+		// cancel; the cooldown fires after Nuclei returns so this is safe.
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	input := RunInput{
+		Target: "https://example.com/",
+		Options: model.ScanOptions{
+			UseNucleiIntegration:      true,
+			UseZAPBaselineIntegration: true,
+			UseVulnxIntegration:       true,
+		},
+	}
+
+	findings := svc.runOptionalIntegrations(ctx, input)
+
+	// We must see the context-ended finding, meaning the cooldown fired and
+	// the remaining Phase 7 tools were skipped.
+	foundSkipped := false
+	for _, f := range findings {
+		if f.ID == "phase7-skipped-nuclei-cooldown-context-ended" {
+			foundSkipped = true
+			if f.Severity != model.SeverityInfo {
+				t.Errorf("expected info severity for skipped finding, got %v", f.Severity)
+			}
+			break
+		}
+	}
+	if !foundSkipped {
+		ids := make([]string, 0, len(findings))
+		for _, f := range findings {
+			ids = append(ids, f.ID)
+		}
+		t.Errorf("expected phase7-skipped-nuclei-cooldown-context-ended finding; got IDs: %v", ids)
+	}
+}
+
+// TestCooldownAfterNuclei_NotAppliedWithoutNuclei confirms that the post-Nuclei
+// cooldown is not inserted when Nuclei was not part of the scan (i.e. only ZAP
+// is requested).
+func TestCooldownAfterNuclei_NotAppliedWithoutNuclei(t *testing.T) {
+	svc := NewService(Config{
+		ZAPBaselineBinary:  "/nonexistent/zap-baseline.py",
+		IntegrationTimeout: 5 * time.Second,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	input := RunInput{
+		Target: "https://example.com/",
+		Options: model.ScanOptions{
+			UseZAPBaselineIntegration: true,
+		},
+	}
+
+	svc.runOptionalIntegrations(ctx, input)
+	elapsed := time.Since(start)
+
+	// The cooldown is 5s; if it were applied incorrectly the test context
+	// would time out (2 s) and elapsed would be >= 2 s.  Without the cooldown
+	// the ZAP binary-missing path returns almost instantly.
+	if elapsed >= 1500*time.Millisecond {
+		t.Errorf("cooldown was applied even though Nuclei did not run (elapsed %v)", elapsed)
+	}
+}

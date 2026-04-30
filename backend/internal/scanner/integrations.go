@@ -40,9 +40,11 @@ type integrationState struct {
 	SkippedReasons   map[string]int
 }
 
-// Small cooldown to let Nuclei fully tear down child processes and release
-// transient network/socket pressure before launching ZAP Baseline.
-const zapBaselineDelayAfterNuclei = 5 * time.Second
+// cooldownAfterNuclei is a brief pause inserted after Nuclei finishes to let
+// it fully tear down child processes and release transient network/socket
+// pressure before any subsequent Phase 7 tool (vulnx, zap-baseline, xssmap)
+// starts.
+const cooldownAfterNuclei = 5 * time.Second
 
 const integrationPreflightTimeout = 3 * time.Second
 
@@ -329,6 +331,32 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 		nucleiPhaseRan = true
 	}
+	// One-time cooldown: give Nuclei time to fully tear down its child
+	// processes and release network/socket pressure before any subsequent
+	// Phase 7 agent (vulnx, zap-baseline, xssmap) starts.
+	if nucleiPhaseRan && cooldownAfterNuclei > 0 {
+		if input.Emit != nil {
+			input.Emit(model.ScanEvent{
+				Type:    model.ScanEventInfo,
+				Message: fmt.Sprintf("Waiting %s for Nuclei to fully finish before starting remaining Phase 7 integrations", cooldownAfterNuclei),
+			})
+		}
+		select {
+		case <-ctx.Done():
+			findings = append(findings, model.Finding{
+				ID:             "phase7-skipped-nuclei-cooldown-context-ended",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "Phase 7 integrations skipped: scan context ended during post-Nuclei cooldown",
+				Description:    "The scan context ended during the post-Nuclei cooldown window, so remaining Phase 7 integrations (vulnx, zap-baseline, xssmap) were not started.",
+				Evidence:       "delay=" + cooldownAfterNuclei.String(),
+				Recommendation: "Retry the scan with a longer SCAN_TIMEOUT_SECONDS (or a smaller target scope) so the post-Nuclei cooldown and remaining Phase 7 tools can complete.",
+			})
+			findings = append(findings, buildIntegrationCoverageFinding(state))
+			return findings
+		case <-time.After(cooldownAfterNuclei):
+		}
+	}
 	if input.Options.UseVulnxIntegration {
 		emitCmd("vulnx", "search --limit 20 --silent "+hostFromTarget(input.Target))
 		findings = append(findings, s.runInstrumentedTool(ctx, "vulnx", func() []model.Finding {
@@ -336,30 +364,6 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		})...)
 	}
 	if input.Options.UseZAPBaselineIntegration {
-		if nucleiPhaseRan && zapBaselineDelayAfterNuclei > 0 {
-			if input.Emit != nil {
-				input.Emit(model.ScanEvent{
-					Type:    model.ScanEventInfo,
-					Message: fmt.Sprintf("Delaying ZAP Baseline start by %s until Nuclei phase has fully finished", zapBaselineDelayAfterNuclei),
-				})
-			}
-			select {
-			case <-ctx.Done():
-				metrics.ToolRun("zap-baseline", "scanner", "skipped", 0)
-				findings = append(findings, model.Finding{
-					ID:             "zap-baseline-skipped-context-ended",
-					Category:       "integration",
-					Severity:       model.SeverityInfo,
-					Title:          "ZAP Baseline skipped after Nuclei because scan context ended",
-					Description:    "The scan context ended during the post-Nuclei delay window, so ZAP Baseline was not started.",
-					Evidence:       "delay=" + zapBaselineDelayAfterNuclei.String(),
-					Recommendation: "Retry the scan with a longer SCAN_TIMEOUT_SECONDS (or a smaller target scope) so the post-Nuclei delay and ZAP Baseline phase can complete.",
-				})
-				findings = append(findings, buildIntegrationCoverageFinding(state))
-				return findings
-			case <-time.After(zapBaselineDelayAfterNuclei):
-			}
-		}
 		emitCmd("zap-baseline.py", "-t "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "zap-baseline", func() []model.Finding {
 			return s.runZAPBaseline(ctx, input.Target)
