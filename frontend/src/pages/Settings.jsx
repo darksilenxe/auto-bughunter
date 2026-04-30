@@ -129,6 +129,7 @@ export default function Settings() {
   }
 
 
+  const [policyPacks, setPolicyPacks] = useState([]);
   const [policyAudit, setPolicyAudit] = useState([]);
   const [policyForm, setPolicyForm] = useState({
     name: "internal",
