@@ -102,3 +102,37 @@ func TestAIToolCallingAgent_GeneratedToolProducesFinding(t *testing.T) {
 		t.Fatalf("generated_tool_actions = %q, want 1", got)
 	}
 }
+
+func TestAIToolCallingAgent_StopsWhenImpactAlreadyDemonstrated(t *testing.T) {
+	agent := NewAIToolCallingAgent(&fakeAIToolCaller{
+		decisions: []*ai.ToolCallDecision{
+			{Action: "run_command", Binary: "curl", Args: []string{"-I", "http://example.com"}, Rationale: "should never execute"},
+		},
+	}, true)
+
+	out, err := agent.Run(context.Background(), AgentInput{
+		Target: "http://example.com",
+		Options: model.ScanOptions{
+			UseAIToolCalling: true,
+		},
+		AllFindings: []model.Finding{
+			{
+				ID:          "impact-1",
+				Title:       "Account takeover already proven",
+				Severity:    model.SeverityHigh,
+				Impact:      "Account takeover demonstrated end-to-end.",
+				ProofState:  model.ProofStateImpactDemonstrated,
+				BountyScore: 0.93,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := out.Metadata["executed_actions"]; got != "0" {
+		t.Fatalf("executed_actions = %q, want 0", got)
+	}
+	if out.DebugNotes == "" {
+		t.Fatal("expected non-empty debug notes")
+	}
+}

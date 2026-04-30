@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"auto-bughunter/backend/internal/impact"
+	"auto-bughunter/backend/internal/model"
 )
 
 // Plan asks the configured AI provider which agents should run next given the
@@ -15,7 +18,7 @@ import (
 // The method always returns done=true with a nil error when the AI provider
 // is not configured so callers can fall back to a deterministic planner
 // without needing to special-case the offline mode.
-func (c *Client) Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string) ([]map[string]string, bool, error) {
+func (c *Client) Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal) ([]map[string]string, bool, error) {
 	if c == nil {
 		return nil, true, nil
 	}
@@ -31,8 +34,11 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 		"findings":         findings,
 		"history":          history,
 		"available_agents": availableAgents,
+		"impact_goals":     impact.GoalPrompt(goals),
+		"impact_playbooks": impact.PlaybookPrompt(goals),
 		"instructions": "Pick zero or more agents to run next from the available_agents list. " +
 			"You may repeat agents from history when new findings warrant it. " +
+			"Bias toward agents that can prove business impact matching impact_goals. " +
 			"Set done=true once additional agents are unlikely to surface new value. " +
 			"Reply with strict JSON only: {\"agents\":[{\"name\":string,\"reason\":string}],\"done\":bool}",
 	}
@@ -42,7 +48,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	}
 
 	messages := []Message{
-		{Role: "system", Content: buildPlannerSystemPrompt(target)},
+		{Role: "system", Content: buildPlannerSystemPrompt(target, goals)},
 		{Role: "user", Content: string(userJSON)},
 	}
 	content, err := c.planningComplete(ctx, messages, 0.1, true)
@@ -80,8 +86,12 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 
 // buildPlannerSystemPrompt builds the AI planner system prompt, injecting a
 // domain-specific profile pack when the target URL matches a known domain.
-func buildPlannerSystemPrompt(target string) string {
+func buildPlannerSystemPrompt(target string, goals []model.ImpactGoal) string {
 	base := "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON."
+	base += "\n\nCurrent impact goals: " + impact.GoalPrompt(goals) + "."
+	if playbooks := impact.PlaybookPrompt(goals); playbooks != "" {
+		base += "\nReusable impact playbooks: " + playbooks
+	}
 	if pack := SelectDomainProfile(target); pack != nil {
 		base += "\n\nDOMAIN CONTEXT (" + pack.Name + "): " + pack.SystemInstruction
 	}

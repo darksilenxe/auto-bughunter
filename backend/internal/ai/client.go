@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/impact"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -612,6 +613,8 @@ type ToolCallRequest struct {
 	AllowedBinaries   []string          `json:"allowedBinaries,omitempty"`
 	HackTricksTopics  []string          `json:"hacktricksTopics,omitempty"`
 	BuiltInTools      []string          `json:"builtInTools,omitempty"`
+	ImpactGoals       []string          `json:"impactGoals,omitempty"`
+	ImpactPlaybooks   string            `json:"impactPlaybooks,omitempty"`
 }
 
 // ToolCallDecision is the next bounded action chosen by the AI tool-calling planner.
@@ -706,6 +709,8 @@ func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCal
 	systemPrompt := "You are an autonomous bug bounty operator. " +
 		"Your overarching theme is IMPACT-FIRST validation, not generic vulnerability counting. " +
 		"Prioritize exploitability, account takeover, auth bypass, sensitive data access, payment abuse, tenant breakout, meaningful escalation, or other bug-bounty-relevant impact. " +
+		"Current scan goals: " + strings.TrimSpace(strings.Join(req.ImpactGoals, ", ")) + ". " +
+		"Reusable impact playbooks: " + strings.TrimSpace(req.ImpactPlaybooks) + ". " +
 		"Choose exactly one next action using this strict JSON schema: " +
 		`{"action":"stop|run_command|run_hacktricks|generate_tool","binary":string,"args":[string],"category":string,"findingId":string,"task":string,"rationale":string,"stopReason":string}` +
 		". Rules: " +
@@ -873,7 +878,7 @@ type SynthesizedChain struct {
 // low-quality hallucinations are suppressed before they become findings.
 //
 // Falls back to nil when no AI provider is configured.
-func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet []map[string]string) []SynthesizedChain {
+func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet []map[string]string, goals []model.ImpactGoal) []SynthesizedChain {
 	if c == nil {
 		return nil
 	}
@@ -887,9 +892,12 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 	userPayload := map[string]any{
 		"target":   target,
 		"findings": findingSet,
+		"impact_goals": impact.GoalPrompt(goals),
+		"impact_playbooks": impact.PlaybookPrompt(goals),
 		"instructions": "You are an elite penetration tester. Analyse the provided finding set and reason about " +
 			"novel multi-step attack chains NOT already represented in the findings. " +
 			"Focus on chaining 2–4 findings together to achieve a higher-impact outcome than any individual finding. " +
+			"Prefer business outcomes that match the supplied impact_goals and impact_playbooks. " +
 			"For each chain: assign a short machine-readable id, a one-line title, ordered exploitation steps (3–6), " +
 			"a one-sentence impact statement, list the source finding IDs involved, and a confidence score (0.0–1.0). " +
 			"Reply with strict JSON only: " +

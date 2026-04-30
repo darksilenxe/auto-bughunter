@@ -147,6 +147,8 @@ services:
     build:
       context: ./backend
     env_file:
+      - path: .env.example
+        required: true
       - path: .env
         required: false
     ports:
@@ -442,7 +444,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
-        VITE_API_KEY: ${VITE_API_KEY:-}
+        VITE_API_KEY: ${VITE_API_KEY:-change-this-bootstrap-key}
         VITE_WORKSPACE_ID: ${VITE_WORKSPACE_ID:-default}
     ports:
       - "3000:80"

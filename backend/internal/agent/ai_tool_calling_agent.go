@@ -10,6 +10,7 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/cmdbuilder"
 	"auto-bughunter/backend/internal/hacktricks"
+	"auto-bughunter/backend/internal/impact"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/toolbuilder"
 )
@@ -72,6 +73,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	})
 
 	allFindings := append([]model.Finding(nil), input.AllFindings...)
+	goals := impact.GoalsOrDefault(input.Options)
 	history := make([]ai.ToolCallHistory, 0, maxAIToolCallHistory)
 	commandCalls := 0
 	hacktricksCalls := 0
@@ -95,6 +97,24 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		}
 		roundsCompleted++
 
+		if stop, reason := impact.ShouldStopForDemonstratedImpact(allFindings, goals); stop {
+			history = appendToolHistory(history, ai.ToolCallHistory{
+				Action:  "stop",
+				Status:  "completed",
+				Summary: reason,
+			})
+			Emit(input.Emit, model.ScanEvent{
+				Type:      model.ScanEventInfo,
+				AgentName: a.Name(),
+				Message:   "AI tool-calling loop stopped: " + reason,
+				Metadata: map[string]string{
+					"tool_action": "stop",
+					"reason":      reason,
+				},
+			})
+			break
+		}
+
 		req := ai.ToolCallRequest{
 			Target:            input.Target,
 			Findings:          summarizeToolCallFindings(allFindings),
@@ -102,6 +122,8 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			AllowedBinaries:   cmdbuilder.ApprovedBinaries(),
 			HackTricksTopics:  hacktricksCategories(),
 			BuiltInTools:      builtInToolNames(),
+			ImpactGoals:       impactGoalNames(goals),
+			ImpactPlaybooks:   impact.PlaybookPrompt(goals),
 		}
 		decision := a.aiClient.PlanToolCall(ctx, req)
 		if decision == nil {
@@ -326,14 +348,19 @@ func summarizeToolCallFindings(findings []model.Finding) []map[string]any {
 		if len(out) >= 12 {
 			break
 		}
+		enriched := impact.EnrichFinding(f, nil)
 		out = append(out, map[string]any{
-			"id":          f.ID,
-			"title":       f.Title,
-			"category":    f.Category,
-			"severity":    string(f.Severity),
-			"affectedUrl": f.AffectedURL,
-			"confidence":  f.Confidence,
-			"evidence":    truncate(f.Evidence, 180),
+			"id":           enriched.ID,
+			"title":        enriched.Title,
+			"category":     enriched.Category,
+			"severity":     string(enriched.Severity),
+			"affectedUrl":  enriched.AffectedURL,
+			"confidence":   enriched.Confidence,
+			"evidence":     truncate(enriched.Evidence, 180),
+			"proofState":   string(enriched.ProofState),
+			"impactScore":  enriched.ImpactScore,
+			"bountyScore":  enriched.BountyScore,
+			"impactGoals":  impactGoalNames(enriched.ImpactGoals),
 		})
 	}
 	return out
@@ -346,6 +373,16 @@ func builtInToolNames() []string {
 		out = append(out, name)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func impactGoalNames(goals []model.ImpactGoal) []string {
+	out := make([]string, 0, len(goals))
+	for _, goal := range goals {
+		if goal != "" {
+			out = append(out, string(goal))
+		}
+	}
 	return out
 }
 

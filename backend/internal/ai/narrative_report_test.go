@@ -99,12 +99,15 @@ func TestComplianceFrameworkForTarget(t *testing.T) {
 // TestBuildPlannerSystemPromptInjectsDomainContext verifies that the domain
 // context is injected into the planner system prompt for matching targets.
 func TestBuildPlannerSystemPromptInjectsDomainContext(t *testing.T) {
-	fintechPrompt := buildPlannerSystemPrompt("https://pay.example.com/checkout")
+	fintechPrompt := buildPlannerSystemPrompt("https://pay.example.com/checkout", []model.ImpactGoal{model.ImpactGoalPaymentAbuse})
 	if !contains(fintechPrompt, "fintech") {
 		t.Errorf("buildPlannerSystemPrompt for fintech target: expected 'fintech' in prompt, got: %s", fintechPrompt)
 	}
+	if !contains(fintechPrompt, "payment abuse") {
+		t.Errorf("buildPlannerSystemPrompt for fintech target: expected impact goal context, got: %s", fintechPrompt)
+	}
 
-	genericPrompt := buildPlannerSystemPrompt("https://unknown.example.com")
+	genericPrompt := buildPlannerSystemPrompt("https://unknown.example.com", nil)
 	if contains(genericPrompt, "DOMAIN CONTEXT") {
 		t.Errorf("buildPlannerSystemPrompt for generic target: did not expect domain context injection, got: %s", genericPrompt)
 	}

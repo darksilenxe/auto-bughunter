@@ -48,6 +48,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("attack_path", func() Agent { return NewAttackPathAgent(mlService, true) })
 	f.Register("false_positive_review", func() Agent { return NewFalsePositiveReviewAgent(mlService, true) })
 	f.Register("remediation_planner", func() Agent { return NewRemediationPlannerAgent(mlService, true) })
+	f.Register("impact_verifier", func() Agent { return NewImpactVerifierAgent(true) })
 	f.Register("reporting", func() Agent { return NewReportingAgent(true) })
 
 	// Exploit-chain agent: deterministic multi-step attack-chain analysis.

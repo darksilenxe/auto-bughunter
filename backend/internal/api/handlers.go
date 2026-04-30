@@ -224,6 +224,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewAttackPathAgent(mlService, true))
 	reg.Register(agent.NewFalsePositiveReviewAgent(mlService, true))
 	reg.Register(agent.NewRemediationPlannerAgent(mlService, true))
+	reg.Register(agent.NewImpactVerifierAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
 	reg.Register(agent.NewLLMChainSynthesisAgent(aiClient, true))
 
@@ -960,6 +961,7 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
 	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
 	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
+	reg.Register(agent.NewImpactVerifierAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
 
 	// Attach the neural learner as the autonomous spawner so it can augment
