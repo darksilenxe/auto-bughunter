@@ -3,7 +3,7 @@ package scanner
 import (
 	"reflect"
 	"testing"
- 
+
 	"auto-bughunter/backend/internal/model"
 )
 
