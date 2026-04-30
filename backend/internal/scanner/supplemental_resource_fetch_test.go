@@ -36,3 +36,22 @@ func TestExtractPlainTextExcerptFromHTML(t *testing.T) {
 		t.Fatalf("unexpected plain text excerpt\ngot:  %q\nwant: %q", got, want)
 	}
 }
+
+func TestRebuildRequestURL(t *testing.T) {
+	t.Run("preserves supported http target structure", func(t *testing.T) {
+		got, err := rebuildRequestURL("HTTPS://Example.com/api/v1/users?id=7")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "https://Example.com/api/v1/users?id=7"
+		if got != want {
+			t.Fatalf("unexpected rebuilt URL\ngot:  %q\nwant: %q", got, want)
+		}
+	})
+
+	t.Run("rejects invalid outbound target", func(t *testing.T) {
+		if _, err := rebuildRequestURL("javascript:alert(1)"); err == nil {
+			t.Fatal("expected invalid URL error")
+		}
+	})
+}

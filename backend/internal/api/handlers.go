@@ -4756,6 +4756,14 @@ func (s *Server) persistScanState(target string, findings []model.Finding, outpu
 				}
 			}
 		}
+		if raw := strings.TrimSpace(f.EvidenceFields["seedRuntimeEndpoints"]); raw != "" {
+			for _, p := range strings.Split(raw, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					refs = append(refs, p)
+				}
+			}
+		}
 	}
 	sort.Strings(refs)
 	state.KnownRuntimeEndpoints = limitStrings(mergeActions(state.KnownRuntimeEndpoints, refs), 25)

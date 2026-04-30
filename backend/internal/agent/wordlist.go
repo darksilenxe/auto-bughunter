@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
@@ -47,12 +48,12 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	apis := a.wordlistScanner.ScanAPIEndpoints(ctx, input.Target, input.AuthProfile, input.Scope)
 	output.Findings = append(output.Findings, apis...)
 
-	output.Metadata["directories_found"] = fmt.Sprintf("%d", len(dirs))
+	output.Metadata["directories_found"] = fmt.Sprintf("%d", acceptedWordlistCount(dirs))
 	output.Metadata["subdomains_found"] = fmt.Sprintf("%d", len(subs))
-	output.Metadata["api_endpoints_found"] = fmt.Sprintf("%d", len(apis))
+	output.Metadata["api_endpoints_found"] = fmt.Sprintf("%d", acceptedWordlistCount(apis))
 	output.Metadata["total_found"] = fmt.Sprintf("%d", len(output.Findings))
-	output.Metadata["targets_attempted"] = fmt.Sprintf("%d", len(dirs)+len(subs)+len(apis))
-	output.Metadata["targets_skipped"] = "0"
+	output.Metadata["targets_attempted"] = fmt.Sprintf("%d", acceptedWordlistCount(dirs)+len(subs)+acceptedWordlistCount(apis))
+	output.Metadata["targets_skipped"] = fmt.Sprintf("%d", suppressedWordlistCount(dirs)+suppressedWordlistCount(apis))
 
 	prioritized := prioritizeLikelyHighRiskEndpoints(output.Findings)
 	if len(prioritized) > 0 {
@@ -111,4 +112,28 @@ func prioritizeLikelyHighRiskEndpoints(findings []model.Finding) []string {
 		out = out[:8]
 	}
 	return out
+}
+
+func acceptedWordlistCount(findings []model.Finding) int {
+	total := 0
+	for _, f := range findings {
+		if raw := strings.TrimSpace(f.EvidenceFields["acceptedCount"]); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				total += n
+			}
+		}
+	}
+	return total
+}
+
+func suppressedWordlistCount(findings []model.Finding) int {
+	total := 0
+	for _, f := range findings {
+		if raw := strings.TrimSpace(f.EvidenceFields["suppressedCount"]); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil {
+				total += n
+			}
+		}
+	}
+	return total
 }
