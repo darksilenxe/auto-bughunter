@@ -60,7 +60,75 @@ export default function Settings() {
   const [feedStatus, setFeedStatus] = useState("");
   const [datasetPreview, setDatasetPreview] = useState([]);
   const [datasetError, setDatasetError] = useState("");
-  const [policyPacks, setPolicyPacks] = useState([]);
+  const [diagLogs, setDiagLogs] = useState(null);
+  const [diagStatus, setDiagStatus] = useState("");
+
+  async function fetchDiagLogs() {
+    setDiagStatus("Fetching…");
+    setDiagLogs(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/diag/logs`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDiagStatus(data.error || "Failed to fetch diagnostic logs.");
+        return;
+      }
+      setDiagLogs(data);
+      setDiagStatus("Loaded.");
+    } catch (err) {
+      setDiagStatus(err.message || "Failed to fetch diagnostic logs.");
+    }
+  }
+
+  function downloadDiagLogs() {
+    const payload = diagLogs || {};
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `auto-bughunter-diag-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadBrowserDiagLogs() {
+    const localStorageKeys = (() => {
+      try { return Object.keys(localStorage); } catch { return []; }
+    })();
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      browser: {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        platform: navigator.platform,
+        onLine: navigator.onLine,
+        cookieEnabled: navigator.cookieEnabled,
+        screenWidth: window.screen.width,
+        screenHeight: window.screen.height,
+        devicePixelRatio: window.devicePixelRatio,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+      },
+      appConfig: {
+        apiBase: API_BASE,
+        apiKeyConfigured: Boolean(localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY),
+        workspaceId: WORKSPACE_ID,
+        currentUrl: window.location.href,
+      },
+      localStorageKeys,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `auto-bughunter-browser-diag-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+
   const [policyAudit, setPolicyAudit] = useState([]);
   const [policyForm, setPolicyForm] = useState({
     name: "internal",
@@ -614,6 +682,37 @@ export default function Settings() {
           {policyAudit.length > 0 && <pre className="summary" style={{ marginTop: 14 }}>{JSON.stringify(policyAudit.slice(0, 10), null, 2)}</pre>}
         </section>
       </div>
+
+      <section className="card" style={{ marginTop: 24 }}>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Troubleshooting logs</h2>
+            <p className="meta">
+              Download a diagnostic bundle to attach to bug reports. The backend bundle includes runtime metrics,
+              redacted environment config, tool availability, and recent scan summaries.
+              The browser bundle captures client environment info, local config, and storage keys (no secrets).
+            </p>
+          </div>
+        </div>
+        <div className="button-row" style={{ marginTop: 14 }}>
+          <button type="button" onClick={fetchDiagLogs}>Fetch backend diagnostics</button>
+          <button type="button" className="button-secondary" onClick={downloadBrowserDiagLogs}>Download browser diagnostics</button>
+          {diagLogs && (
+            <button type="button" className="button-secondary" onClick={downloadDiagLogs}>Download backend bundle</button>
+          )}
+        </div>
+        {diagStatus && <p className="meta" style={{ marginTop: 10 }}>{diagStatus}</p>}
+        {diagLogs && (
+          <details style={{ marginTop: 14 }}>
+            <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.7)", fontSize: "0.85rem" }}>
+              View backend diagnostic bundle
+            </summary>
+            <pre className="summary" style={{ marginTop: 10, maxHeight: 400, overflowY: "auto" }}>
+              {JSON.stringify(diagLogs, null, 2)}
+            </pre>
+          </details>
+        )}
+      </section>
     </div>
   );
 }
