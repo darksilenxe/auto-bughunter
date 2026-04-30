@@ -470,7 +470,16 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 	}
 
 	timeoutSecs := int(s.cfg.IntegrationTimeout.Seconds())
-	args := []string{"-u", target, "-severity", "medium,high,critical", "-silent"}
+	args := []string{
+		"-u", target,
+		"-severity", "medium,high,critical",
+		"-silent",
+		"-no-interactsh",
+		"-timeout", "10",
+		"-rl", "150",
+		"-c", "10",
+		"-bulk-size", "10",
+	}
 
 	result, err := client.Execute(ctx, args, timeoutSecs)
 	if err != nil {
@@ -546,7 +555,16 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ictx, s.cfg.NucleiBinary, "-u", target, "-severity", "medium,high,critical", "-silent")
+	cmd := exec.CommandContext(ictx, s.cfg.NucleiBinary,
+		"-u", target,
+		"-severity", "medium,high,critical",
+		"-silent",
+		"-no-interactsh",
+		"-timeout", "10",
+		"-rl", "150",
+		"-c", "10",
+		"-bulk-size", "10",
+	)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

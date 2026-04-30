@@ -96,7 +96,7 @@ type RunInput struct {
 
 func NewService(cfg Config) *Service {
 	if cfg.IntegrationTimeout <= 0 {
-		cfg.IntegrationTimeout = 90 * time.Second
+		cfg.IntegrationTimeout = 300 * time.Second
 	}
 	if cfg.DefaultMaxRetries < 0 {
 		cfg.DefaultMaxRetries = 0
