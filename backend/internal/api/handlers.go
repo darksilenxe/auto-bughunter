@@ -673,6 +673,10 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	metrics.ScansTotal.Inc()
 	metrics.ActiveScans.Inc()
 	scanStart := time.Now()
+	defer func() {
+		metrics.ActiveScans.Dec()
+		metrics.ScanDuration.Observe(time.Since(scanStart).Seconds())
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.scanTimeout)
 	s.cancelMu.Lock()
@@ -684,11 +688,23 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.cancelMu.Unlock()
 		cancel()
 	}()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			completed := time.Now().UTC()
+			job.Status = "failed"
+			job.Error = fmt.Sprintf("scan panicked: %v", recovered)
+			job.CompletedAt = &completed
+			emit(model.ScanEvent{
+				Type:    model.ScanEventInfo,
+				Message: "Scan failed: " + job.Error,
+			})
+			s.appendAuditEvent(id, "failed", "Scan execution panicked: "+job.Error)
+			_ = s.repo.UpdateJob(context.Background(), job)
+		}
+	}()
 
 	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	completed := time.Now().UTC()
-	metrics.ActiveScans.Dec()
-	metrics.ScanDuration.Observe(time.Since(scanStart).Seconds())
 
 	job.CompletedAt = &completed
 	if err != nil {
