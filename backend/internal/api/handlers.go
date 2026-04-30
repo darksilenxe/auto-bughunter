@@ -107,6 +107,12 @@ const (
 	// maxAnnotationTextLength caps the size of an operator mid-scan annotation
 	// to avoid overly large payloads that could degrade hypothesis agent context.
 	maxAnnotationTextLength = 4096
+	// postProcessTimeout bounds the time spent on post-scan external service
+	// calls (knowledge retrieval, AI summarisation, ML recommendations).
+	// Each individual HTTP call has its own shorter deadline from the service's
+	// http.Client.Timeout; this top-level budget prevents a total hang when
+	// multiple services are slow or unreachable.
+	postProcessTimeout = 2 * time.Minute
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -799,7 +805,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	// Create a bounded context for external service calls (knowledge, AI, ML).
 	// These calls should complete within a reasonable time and must not block
 	// the scan result from being persisted indefinitely.
-	postCtx, postCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	postCtx, postCancel := context.WithTimeout(context.Background(), postProcessTimeout)
 	defer postCancel()
 	knowledgeCtx := (*model.SecurityKnowledgeContext)(nil)
 	if s.knowledgeSvc != nil {

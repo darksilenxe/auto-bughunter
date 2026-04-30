@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -41,7 +42,11 @@ func (b *EventBus) Publish(scanID string, event model.ScanEvent) {
 		// Use a closure with recover so that sending to a channel closed by
 		// Cleanup does not panic; treat it the same as a slow subscriber.
 		func(c chan model.ScanEvent) {
-			defer func() { recover() }() //nolint:errcheck
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("eventbus: recovered panic publishing to subscriber: %v", r)
+				}
+			}()
 			select {
 			case c <- event:
 			default:
