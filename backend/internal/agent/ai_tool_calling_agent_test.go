@@ -104,11 +104,12 @@ func TestAIToolCallingAgent_GeneratedToolProducesFinding(t *testing.T) {
 }
 
 func TestAIToolCallingAgent_StopsWhenImpactAlreadyDemonstrated(t *testing.T) {
-	agent := NewAIToolCallingAgent(&fakeAIToolCaller{
+	caller := &fakeAIToolCaller{
 		decisions: []*ai.ToolCallDecision{
 			{Action: "run_command", Binary: "curl", Args: []string{"-I", "http://example.com"}, Rationale: "should never execute"},
 		},
-	}, true)
+	}
+	agent := NewAIToolCallingAgent(caller, true)
 
 	out, err := agent.Run(context.Background(), AgentInput{
 		Target: "http://example.com",
@@ -129,8 +130,8 @@ func TestAIToolCallingAgent_StopsWhenImpactAlreadyDemonstrated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if got := out.Metadata["executed_actions"]; got != "0" {
-		t.Fatalf("executed_actions = %q, want 0", got)
+	if caller.planned != 0 {
+		t.Fatalf("planned = %d, want 0", caller.planned)
 	}
 	if out.DebugNotes == "" {
 		t.Fatal("expected non-empty debug notes")

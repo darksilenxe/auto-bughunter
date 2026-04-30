@@ -14,24 +14,24 @@ const (
 type ImpactGoal string
 
 const (
-	ImpactGoalAccountTakeover      ImpactGoal = "account_takeover"
-	ImpactGoalCrossTenantAccess    ImpactGoal = "cross_tenant_access"
+	ImpactGoalAccountTakeover       ImpactGoal = "account_takeover"
+	ImpactGoalCrossTenantAccess     ImpactGoal = "cross_tenant_access"
 	ImpactGoalSensitiveDataExposure ImpactGoal = "sensitive_data_exposure"
-	ImpactGoalPaymentAbuse         ImpactGoal = "payment_abuse"
-	ImpactGoalAuthBypass           ImpactGoal = "auth_bypass"
-	ImpactGoalStoredXSS            ImpactGoal = "stored_xss"
-	ImpactGoalSSRFInternalAccess   ImpactGoal = "ssrf_internal_access"
-	ImpactGoalTenantBreakout       ImpactGoal = "tenant_breakout"
+	ImpactGoalPaymentAbuse          ImpactGoal = "payment_abuse"
+	ImpactGoalAuthBypass            ImpactGoal = "auth_bypass"
+	ImpactGoalStoredXSS             ImpactGoal = "stored_xss"
+	ImpactGoalSSRFInternalAccess    ImpactGoal = "ssrf_internal_access"
+	ImpactGoalTenantBreakout        ImpactGoal = "tenant_breakout"
 )
 
 type ProofState string
 
 const (
-	ProofStateSuspected         ProofState = "suspected"
-	ProofStateValidated         ProofState = "validated"
-	ProofStateExploited         ProofState = "exploited"
+	ProofStateSuspected          ProofState = "suspected"
+	ProofStateValidated          ProofState = "validated"
+	ProofStateExploited          ProofState = "exploited"
 	ProofStateImpactDemonstrated ProofState = "impact_demonstrated"
-	ProofStateSubmissionReady   ProofState = "submission_ready"
+	ProofStateSubmissionReady    ProofState = "submission_ready"
 )
 
 type ProofArtifact struct {

@@ -81,8 +81,8 @@ func TestBuildLocalNarrativeReportEmpty(t *testing.T) {
 // mapping.
 func TestComplianceFrameworkForTarget(t *testing.T) {
 	cases := []struct {
-		url   string
-		want  string
+		url  string
+		want string
 	}{
 		{"https://pay.example.com", "PCI-DSS"},
 		{"https://hospital-ehr.health.org", "HIPAA"},

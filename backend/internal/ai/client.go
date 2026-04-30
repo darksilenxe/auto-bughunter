@@ -890,9 +890,9 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 	}
 
 	userPayload := map[string]any{
-		"target":   target,
-		"findings": findingSet,
-		"impact_goals": impact.GoalPrompt(goals),
+		"target":           target,
+		"findings":         findingSet,
+		"impact_goals":     impact.GoalPrompt(goals),
 		"impact_playbooks": impact.PlaybookPrompt(goals),
 		"instructions": "You are an elite penetration tester. Analyse the provided finding set and reason about " +
 			"novel multi-step attack chains NOT already represented in the findings. " +

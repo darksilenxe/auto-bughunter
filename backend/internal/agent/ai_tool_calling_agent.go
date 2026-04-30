@@ -350,17 +350,17 @@ func summarizeToolCallFindings(findings []model.Finding) []map[string]any {
 		}
 		enriched := impact.EnrichFinding(f, nil)
 		out = append(out, map[string]any{
-			"id":           enriched.ID,
-			"title":        enriched.Title,
-			"category":     enriched.Category,
-			"severity":     string(enriched.Severity),
-			"affectedUrl":  enriched.AffectedURL,
-			"confidence":   enriched.Confidence,
-			"evidence":     truncate(enriched.Evidence, 180),
-			"proofState":   string(enriched.ProofState),
-			"impactScore":  enriched.ImpactScore,
-			"bountyScore":  enriched.BountyScore,
-			"impactGoals":  impactGoalNames(enriched.ImpactGoals),
+			"id":          enriched.ID,
+			"title":       enriched.Title,
+			"category":    enriched.Category,
+			"severity":    string(enriched.Severity),
+			"affectedUrl": enriched.AffectedURL,
+			"confidence":  enriched.Confidence,
+			"evidence":    truncate(enriched.Evidence, 180),
+			"proofState":  string(enriched.ProofState),
+			"impactScore": enriched.ImpactScore,
+			"bountyScore": enriched.BountyScore,
+			"impactGoals": impactGoalNames(enriched.ImpactGoals),
 		})
 	}
 	return out
