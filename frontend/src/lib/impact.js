@@ -138,10 +138,11 @@ export function topGoals(findings = []) {
 }
 
 export function impactGoalMeta(goal) {
+  const fallbackLabel = (goal || "").replaceAll("_", " ");
   return IMPACT_GOALS.find((item) => item.id === goal) || {
     id: goal,
-    label: (goal || "").replaceAll("_", " "),
-    shortLabel: (goal || "").replaceAll("_", " "),
+    label: fallbackLabel,
+    shortLabel: fallbackLabel,
     description: "",
   };
 }
