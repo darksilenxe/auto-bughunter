@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -184,6 +185,8 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 			Error:       output.Error,
 			Metadata:    output.Metadata,
 		}
+
+		metrics.AgentCompleted(output.AgentName, output.Status, completedAt.Sub(startedAt).Seconds(), len(output.Findings))
 
 		// Emit individual finding events so the frontend can show them live.
 		for _, f := range output.Findings {

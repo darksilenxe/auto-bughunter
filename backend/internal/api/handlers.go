@@ -610,7 +610,9 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
+	metrics.ScanQueueDepth.Inc()
 	releaseGlobal := s.acquireGlobalSlot(options)
+	metrics.ScanQueueDepth.Dec()
 	defer releaseGlobal()
 	s.enforceTargetRateLimit(target, options)
 	release := s.acquireTargetSlot(target, options)
@@ -696,6 +698,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 
 	job.Status = "completed"
+	postProcessStart := time.Now()
 	job.Findings = enrichFindings(findings)
 	for _, f := range job.Findings {
 		metrics.FindingRecorded(string(f.Severity))
@@ -882,6 +885,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.persistScanState(target, job.Findings, outputs, options, surfaceSnapshot)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
+	metrics.PostProcessDuration.Observe(time.Since(postProcessStart).Seconds())
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
 	// Teach the neural agent learner from this scan's results so future
