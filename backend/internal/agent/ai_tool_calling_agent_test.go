@@ -40,7 +40,7 @@ func TestAIToolCallingAgent_SkipsWhenNotOptedIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if out.DebugNotes == "" || out.DebugNotes != "AI tool-calling disabled for this scan" {
+	if out.DebugNotes != "AI tool-calling disabled for this scan" {
 		t.Fatalf("unexpected debug notes: %q", out.DebugNotes)
 	}
 }
