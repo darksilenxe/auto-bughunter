@@ -1,13 +1,14 @@
-import { useState } from "react";
-import { useScan } from "../context/ScanContext";
+import { useMemo, useState } from "react";
 import BurpImport from "../components/BurpImport";
+import LiveFeed from "../components/LiveFeed";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
+import { useScan } from "../context/ScanContext";
+import { DEFAULT_IMPACT_GOALS, IMPACT_GOALS, impactGoalMeta, summarizeFindings, topGoals } from "../lib/impact";
 
-// Scenario presets — each defines the opinionated defaults for a scan mode.
 const SCENARIOS = {
   bugbounty: {
-    label: "🏆 Bug Bounty",
-    description: "Cautious scan tuned for bug-bounty programs: no destructive checks, focuses on high-signal findings.",
+    label: "Bug bounty",
+    description: "Cautious, reportability-focused scan tuned for real-world submissions.",
     policyPack: "bugbounty",
     useNuclei: true,
     useZap: false,
@@ -21,10 +22,11 @@ const SCENARIOS = {
     minReportConfidence: "",
     excludeHosts: "",
     loginSteps: [],
+    impactGoals: DEFAULT_IMPACT_GOALS,
   },
   pentest: {
-    label: "🔓 Pen Test",
-    description: "Full-depth engagement: aggressive exploitation, all integrations, remediation planning.",
+    label: "Internal pentest",
+    description: "Full-depth engagement with stronger validation and remediation context.",
     policyPack: "internal",
     useNuclei: true,
     useZap: true,
@@ -38,10 +40,11 @@ const SCENARIOS = {
     minReportConfidence: "",
     excludeHosts: "",
     loginSteps: [],
+    impactGoals: DEFAULT_IMPACT_GOALS,
   },
   sso_cookie_consent: {
-    label: "🔐 Microsoft SSO / Cookie Consent",
-    description: "Pre-configured for single-page apps behind a cookie-consent banner + Microsoft Entra ID (Azure AD) login. Excludes Microsoft auth hosts, enables strict reporting and false-positive review to suppress redirect noise.",
+    label: "SSO / cookie consent",
+    description: "Pre-tuned for enterprise apps behind consent banners and external IdPs.",
     policyPack: "bugbounty",
     useNuclei: true,
     useZap: false,
@@ -55,23 +58,24 @@ const SCENARIOS = {
     minReportConfidence: "0.80",
     excludeHosts: "login.microsoftonline.com, *.microsoftonline.com, login.microsoft.com, *.microsoft.com",
     loginSteps: [
-      { action: "click",  selector: "#cookie-accept-btn", value: "", waitMillis: 0,    optional: true  },
-      { action: "wait",   selector: "",                   value: "", waitMillis: 1500,  optional: false },
-      { action: "fill",   selector: "#i0116",             value: "{{username}}", waitMillis: 0, optional: false },
-      { action: "click",  selector: "#idSIButton9",       value: "", waitMillis: 0,    optional: false },
-      { action: "wait",   selector: "",                   value: "", waitMillis: 2000,  optional: false },
-      { action: "fill",   selector: "#i0118",             value: "{{password}}", waitMillis: 0, optional: false },
-      { action: "click",  selector: "#idSIButton9",       value: "", waitMillis: 0,    optional: false },
-      { action: "wait",   selector: "",                   value: "", waitMillis: 3000,  optional: false },
+      { action: "click", selector: "#cookie-accept-btn", value: "", waitMillis: 0, optional: true },
+      { action: "wait", selector: "", value: "", waitMillis: 1500, optional: false },
+      { action: "fill", selector: "#i0116", value: "{{username}}", waitMillis: 0, optional: false },
+      { action: "click", selector: "#idSIButton9", value: "", waitMillis: 0, optional: false },
+      { action: "wait", selector: "", value: "", waitMillis: 2000, optional: false },
+      { action: "fill", selector: "#i0118", value: "{{password}}", waitMillis: 0, optional: false },
+      { action: "click", selector: "#idSIButton9", value: "", waitMillis: 0, optional: false },
+      { action: "wait", selector: "", value: "", waitMillis: 3000, optional: false },
     ],
+    impactGoals: DEFAULT_IMPACT_GOALS,
   },
 };
 
 const EMPTY_LOGIN_STEP = { action: "click", selector: "", value: "", waitMillis: 0, optional: false };
 
 export default function Dashboard() {
-  const { startScan, stopScan, job, loading, error, scanId } = useScan();
-  const [scenario, setScenario] = useState("");
+  const { startScan, stopScan, job, loading, error, scanId, liveEvents } = useScan();
+  const [scenario, setScenario] = useState("bugbounty");
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
   const [customHeaderName, setCustomHeaderName] = useState("");
@@ -87,19 +91,20 @@ export default function Dashboard() {
   const [excludeHosts, setExcludeHosts] = useState("");
   const [excludePaths, setExcludePaths] = useState("");
   const [programRules, setProgramRules] = useState("");
-  const [useNuclei, setUseNuclei] = useState(false);
+  const [useNuclei, setUseNuclei] = useState(true);
   const [useZap, setUseZap] = useState(false);
   const [useXSSMap, setUseXSSMap] = useState(false);
-  const [useMLTriage, setUseMLTriage] = useState(false);
-  const [useAttackPath, setUseAttackPath] = useState(false);
-  const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(false);
+  const [useMLTriage, setUseMLTriage] = useState(true);
+  const [useAttackPath, setUseAttackPath] = useState(true);
+  const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(true);
   const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("default");
-  const [policyPack, setPolicyPack] = useState("internal");
+  const [policyPack, setPolicyPack] = useState("bugbounty");
   const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
   const [strictReporting, setStrictReporting] = useState(false);
   const [minReportConfidence, setMinReportConfidence] = useState("");
   const [loginSteps, setLoginSteps] = useState([]);
+  const [impactGoals, setImpactGoals] = useState(DEFAULT_IMPACT_GOALS);
 
   function applyScenario(key) {
     const preset = SCENARIOS[key];
@@ -116,19 +121,27 @@ export default function Dashboard() {
     setAggressiveExploitation(preset.aggressiveExploitation);
     setStrictReporting(preset.strictReporting ?? false);
     setMinReportConfidence(preset.minReportConfidence ?? "");
-    if (preset.excludeHosts) setExcludeHosts(preset.excludeHosts);
-    if (preset.loginSteps) setLoginSteps(preset.loginSteps.map((s) => ({ ...s })));
+    setImpactGoals(preset.impactGoals ?? DEFAULT_IMPACT_GOALS);
+    if (preset.excludeHosts !== undefined) setExcludeHosts(preset.excludeHosts);
+    if (preset.loginSteps) setLoginSteps(preset.loginSteps.map((step) => ({ ...step })));
   }
 
   function handleBurpImport(cfg) {
-    if (cfg.target)       setTarget(cfg.target);
+    if (cfg.target) setTarget(cfg.target);
     if (cfg.includeHosts?.length) setIncludeHosts(cfg.includeHosts.join(", "));
     if (cfg.excludeHosts?.length) setExcludeHosts(cfg.excludeHosts.join(", "));
     if (cfg.excludePaths?.length) setExcludePaths(cfg.excludePaths.join(", "));
-    if (Object.keys(cfg.headers || {}).length)
-      setHeadersJson(JSON.stringify(cfg.headers, null, 2));
-    if (Object.keys(cfg.cookies || {}).length)
-      setCookiesJson(JSON.stringify(cfg.cookies, null, 2));
+    if (Object.keys(cfg.headers || {}).length) setHeadersJson(JSON.stringify(cfg.headers, null, 2));
+    if (Object.keys(cfg.cookies || {}).length) setCookiesJson(JSON.stringify(cfg.cookies, null, 2));
+  }
+
+  function toggleImpactGoal(goalId) {
+    setImpactGoals((prev) => {
+      if (prev.includes(goalId)) {
+        return prev.length === 1 ? prev : prev.filter((goal) => goal !== goalId);
+      }
+      return [...prev, goalId];
+    });
   }
 
   function addLoginStep() {
@@ -140,39 +153,38 @@ export default function Dashboard() {
   }
 
   function updateLoginStep(idx, field, value) {
-    setLoginSteps((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
+    setLoginSteps((prev) => prev.map((step, i) => (i === idx ? { ...step, [field]: value } : step)));
   }
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  function handleSubmit(event) {
+    event.preventDefault();
     let headers = {};
     let cookies = {};
     try { if (headersJson.trim()) headers = JSON.parse(headersJson); } catch { /* ignore */ }
     try { if (cookiesJson.trim()) cookies = JSON.parse(cookiesJson); } catch { /* ignore */ }
+
     const trimmedCustomHeaderName = customHeaderName.trim();
     if (trimmedCustomHeaderName) headers[trimmedCustomHeaderName] = customHeaderValue.trim();
 
-    const scopeRules = [];
-    if (programRules.trim()) {
-      for (const line of programRules.split("\n")) {
-        const t = line.trim();
-        if (t) scopeRules.push(t);
-      }
-    }
+    const scopeRules = programRules
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
 
     startScan({
       target,
       workspaceId,
       programPolicyVersion: policyPack,
       authProfile: {
-        headers, cookies,
+        headers,
+        cookies,
         userAgent: userAgent || undefined,
         loginUrl: loginUrl || undefined,
         username: username || undefined,
         password: password || undefined,
         basicAuthUsername: basicAuthUsername || undefined,
         basicAuthPassword: basicAuthPassword || undefined,
-        loginSteps: loginSteps.length > 0 ? loginSteps : undefined,
+        loginSteps: loginSteps.length ? loginSteps : undefined,
       },
       options: {
         useNucleiIntegration: useNuclei,
@@ -185,6 +197,7 @@ export default function Dashboard() {
         aggressiveExploitation,
         strictReporting: strictReporting || undefined,
         minReportConfidence: strictReporting && minReportConfidence.trim() ? Number(minReportConfidence) : undefined,
+        impactGoals,
       },
       scope: {
         includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
@@ -195,374 +208,345 @@ export default function Dashboard() {
     });
   }
 
+  const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
   const isRunning = job?.status === "running" || loading;
-  const sevCounts = { high: 0, medium: 0, low: 0, info: 0 };
-  if (job?.findings) {
-    for (const f of job.findings) {
-      if (sevCounts[f.severity] !== undefined) sevCounts[f.severity]++;
-    }
-  }
+  const highlightedGoals = useMemo(() => topGoals(job?.findings || []), [job?.findings]);
 
   return (
-    <div className="page">
-      <header>
-        <h1>🐛 Auto BugHunter</h1>
-        <p>Fully autonomous bug bounty scanning with local AI</p>
-      </header>
-
-      {/* Scan form */}
-      <section className="card">
-        <h2>Start Autonomous Scan</h2>
-        <p className="meta">Authentication is optional. Leave the auth fields empty to run an unauthenticated attack-surface scan.</p>
-
-        {/* ── Scenario selector ── */}
-        <div style={{ marginBottom: "1.25rem" }}>
-          <p style={{ marginBottom: "0.5rem", fontWeight: 600, fontSize: "0.9rem" }}>Scan Scenario</p>
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            {Object.entries(SCENARIOS).map(([key, s]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => applyScenario(key)}
-                style={{
-                  padding: "0.5rem 1.1rem",
-                  borderRadius: "8px",
-                  border: scenario === key ? "2px solid #60a5fa" : "2px solid rgba(255,255,255,0.15)",
-                  background: scenario === key ? "rgba(96,165,250,0.15)" : "rgba(255,255,255,0.05)",
-                  color: scenario === key ? "#93c5fd" : "inherit",
-                  fontWeight: scenario === key ? 700 : 400,
-                  cursor: "pointer",
-                  fontSize: "0.9rem",
-                  transition: "all 0.15s",
-                }}
-              >
-                {s.label}
-              </button>
-            ))}
-            {scenario && (
-              <button
-                type="button"
-                onClick={() => setScenario("")}
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderRadius: "8px",
-                  border: "2px solid rgba(255,255,255,0.1)",
-                  background: "transparent",
-                  color: "#6b7280",
-                  cursor: "pointer",
-                  fontSize: "0.8rem",
-                }}
-              >
-                ✕ Clear
-              </button>
-            )}
+    <div className="page page--wide">
+      <section className="hero-panel">
+        <div className="eyebrow">Premium AI operator console</div>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <header style={{ marginBottom: 0 }}>
+              <h1>Impact-first web pentest command</h1>
+              <p>
+                Launch agentic scans optimized for demonstrated impact, bug bounty reportability, and proof-grade evidence.
+              </p>
+            </header>
           </div>
-          {scenario && (
-            <p className="meta" style={{ marginTop: "0.4rem" }}>
-              {SCENARIOS[scenario].description}
-            </p>
-          )}
+          <div className="filter-row">
+            <span className={`status-badge ${job?.status === "completed" ? "success" : isRunning ? "" : "warning"}`}>
+              {job?.status || (isRunning ? "running" : "ready")}
+            </span>
+            <span className="chip">AI tool loop</span>
+            <span className="chip chip--goal">Impact goals active</span>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <label>
-            Target URL *
-            <input value={target} onChange={(e) => setTarget(e.target.value)}
-              placeholder="https://example.com" required />
-          </label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            <label>Workspace ID
-              <input value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} placeholder="default" />
-            </label>
-            <label>Policy Pack
-              <select value={policyPack} onChange={(e) => setPolicyPack(e.target.value)}>
-                <option value="internal">internal</option>
-                <option value="bugbounty">bugbounty</option>
-                <option value="regulated">regulated</option>
-              </select>
-            </label>
-          </div>
-          <label>
-            Auth Headers (JSON)
-            <textarea rows={2} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)}
-              placeholder='{"Authorization": "Bearer token"}' />
-          </label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            <label>Custom Header Name
-              <input value={customHeaderName} onChange={(e) => setCustomHeaderName(e.target.value)}
-                placeholder="X-Bug-Bounty" />
-            </label>
-            <label>Custom Header Value
-              <input value={customHeaderValue} onChange={(e) => setCustomHeaderValue(e.target.value)}
-                placeholder="your-hackerone-username" />
-            </label>
-          </div>
-          <p className="meta" style={{ marginTop: "0.25rem" }}>
-            This custom header overrides any Auth Headers JSON entry with the same name.
-          </p>
-          <label>
-            Auth Cookies (JSON)
-            <textarea rows={2} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)}
-              placeholder='{"session": "abc123"}' />
-          </label>
-          <label>
-            User-Agent
-            <input value={userAgent} onChange={(e) => setUserAgent(e.target.value)}
-              placeholder="Mozilla/5.0 ..." />
-          </label>
-          <label>
-            Standard Login URL (optional)
-            <input value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)}
-              placeholder="https://example.com/login" />
-          </label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            <label>App Username
-              <input value={username} onChange={(e) => setUsername(e.target.value)} />
-            </label>
-            <label>App Password
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            </label>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-            <label>HTTP Basic Auth Username
-              <input value={basicAuthUsername} onChange={(e) => setBasicAuthUsername(e.target.value)} />
-            </label>
-            <label>HTTP Basic Auth Password
-              <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
-            </label>
-          </div>
-
-          {/* ── Login Steps (cookie consent / SSO) ── */}
-          <details style={{ marginTop: "0.75rem" }}>
-            <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "0.9rem", userSelect: "none" }}>
-              🔐 Login Steps — Cookie Consent / SSO Flow{loginSteps.length > 0 ? ` (${loginSteps.length} step${loginSteps.length !== 1 ? "s" : ""})` : ""}
-            </summary>
-            <p className="meta" style={{ marginTop: "0.4rem" }}>
-              Define browser automation steps for sites that require a cookie-consent click or redirect to a third-party SSO
-              (e.g. Microsoft Entra ID / Azure AD) before the app is accessible. Use <code>{"{{username}}"}</code> and{" "}
-              <code>{"{{password}}"}</code> in <em>fill</em> values to interpolate the credentials above.
-              Mark steps as <em>optional</em> so they are silently skipped if the element is absent on a given run.
-            </p>
-            {loginSteps.map((step, idx) => (
-              <div
-                key={idx}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr 1fr auto auto",
-                  gap: "0.4rem",
-                  alignItems: "end",
-                  padding: "0.5rem 0",
-                  borderBottom: "1px solid rgba(255,255,255,0.07)",
-                }}
-              >
-                <label style={{ minWidth: "80px" }}>
-                  Action
-                  <select
-                    value={step.action}
-                    onChange={(e) => updateLoginStep(idx, "action", e.target.value)}
-                  >
-                    <option value="click">click</option>
-                    <option value="fill">fill</option>
-                    <option value="wait">wait</option>
-                  </select>
-                </label>
-                <label>
-                  CSS Selector{step.action === "wait" ? " (unused)" : " *"}
-                  <input
-                    value={step.selector}
-                    disabled={step.action === "wait"}
-                    placeholder={step.action === "fill" ? "#email" : step.action === "click" ? "#accept-cookies" : ""}
-                    onChange={(e) => updateLoginStep(idx, "selector", e.target.value)}
-                  />
-                </label>
-                <label>
-                  {step.action === "wait" ? "Wait ms *" : step.action === "fill" ? "Value *" : "Wait ms (after click)"}
-                  {step.action === "wait" ? (
-                    <input
-                      type="number"
-                      min={0}
-                      value={step.waitMillis}
-                      onChange={(e) => updateLoginStep(idx, "waitMillis", Number(e.target.value))}
-                    />
-                  ) : step.action === "fill" ? (
-                    <input
-                      value={step.value}
-                      placeholder='{{username}} or literal'
-                      onChange={(e) => updateLoginStep(idx, "value", e.target.value)}
-                    />
-                  ) : (
-                    <input
-                      type="number"
-                      min={0}
-                      value={step.waitMillis}
-                      placeholder="0"
-                      onChange={(e) => updateLoginStep(idx, "waitMillis", Number(e.target.value))}
-                    />
-                  )}
-                </label>
-                <label className="check" style={{ whiteSpace: "nowrap", alignSelf: "end", paddingBottom: "0.3rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={step.optional}
-                    onChange={(e) => updateLoginStep(idx, "optional", e.target.checked)}
-                  />
-                  Optional
-                </label>
-                <button
-                  type="button"
-                  onClick={() => removeLoginStep(idx)}
-                  style={{ alignSelf: "end", background: "#7f1d1d", padding: "0.35rem 0.6rem", fontSize: "0.8rem" }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={addLoginStep}
-              style={{ marginTop: "0.6rem", fontSize: "0.85rem", padding: "0.35rem 0.9rem" }}
-            >
-              + Add Step
-            </button>
-            {loginSteps.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setLoginSteps([])}
-                style={{ marginTop: "0.6rem", marginLeft: "0.5rem", fontSize: "0.85rem", padding: "0.35rem 0.9rem", background: "rgba(0,0,0,0.2)" }}
-              >
-                Clear All
-              </button>
-            )}
-          </details>
-          <label>
-            Scope — Include Hosts (comma-separated)
-            <input value={includeHosts} onChange={(e) => setIncludeHosts(e.target.value)}
-              placeholder="example.com,api.example.com" />
-          </label>
-          <label>
-            Scope — Exclude Hosts
-            <input value={excludeHosts} onChange={(e) => setExcludeHosts(e.target.value)} />
-          </label>
-          <label>
-            Scope — Exclude Paths
-            <input value={excludePaths} onChange={(e) => setExcludePaths(e.target.value)}
-              placeholder="/logout,/admin" />
-          </label>
-          <label>
-            Program Rules (one per line)
-            <textarea rows={3} value={programRules} onChange={(e) => setProgramRules(e.target.value)}
-              placeholder="in_scope: example.com&#10;no_dos_testing&#10;no_account_takeover" />
-          </label>
-          <BurpImport onImport={handleBurpImport} />
-          <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
-            <label className="check">
-              <input type="checkbox" checked={useNuclei} onChange={(e) => setUseNuclei(e.target.checked)} />
-              Use Nuclei
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />
-              Use ZAP Baseline
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={useXSSMap} onChange={(e) => setUseXSSMap(e.target.checked)} />
-              XSSMap (LLM-assisted XSS) — requires ALLOW_DESTRUCTIVE_CHECKS
-            </label>
-          </div>
-          <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-            <label className="check">
-              <input type="checkbox" checked={useMLTriage} onChange={(e) => setUseMLTriage(e.target.checked)} />
-              ML Triage Agent
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />
-              Attack Path Agent
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />
-              False Positive Review
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />
-              Remediation Planner
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />
-              Aggressive Exploitation Mode (Metasploit/Burp priority)
-            </label>
-          </div>
-
-          {/* ── Strict Reporting / False-Positive Tuning ── */}
-          <div style={{ marginTop: "0.75rem", padding: "0.75rem", background: "rgba(255,255,255,0.03)", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <p style={{ margin: "0 0 0.5rem", fontWeight: 600, fontSize: "0.9rem" }}>
-              🎯 False-Positive Tuning
-            </p>
-            <div style={{ display: "flex", gap: "1.5rem", flexWrap: "wrap", alignItems: "end" }}>
-              <label className="check" style={{ alignSelf: "center" }}>
-                <input
-                  type="checkbox"
-                  checked={strictReporting}
-                  onChange={(e) => setStrictReporting(e.target.checked)}
-                />
-                Strict Reporting — filter low-confidence findings from output
-              </label>
-              {strictReporting && (
-                <label style={{ minWidth: "180px" }}>
-                  Min Confidence (0.0–1.0)
-                  <input
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={minReportConfidence}
-                    placeholder="0.75"
-                    onChange={(e) => setMinReportConfidence(e.target.value)}
-                  />
-                </label>
-              )}
-            </div>
-            <p className="meta" style={{ marginTop: "0.4rem" }}>
-              When enabled, findings below the confidence threshold are hidden from reports and scan output. Useful for
-              sites behind cookie consent or third-party SSO (e.g. Microsoft Entra ID / Azure AD) where redirect-based probes generate
-              noise. Leave blank to use the workspace default of 0.75. Combine with <em>False Positive Review</em> above
-              for best results.
-            </p>
-          </div>
-          <button disabled={loading}>{loading ? "Scanning…" : "▶ Start Scan"}</button>
-        </form>
-        {loading && scanId && (
-          <button type="button" onClick={() => stopScan(scanId)} style={{ marginTop: "0.5rem", background: "#ef4444" }}>
-            ⏹ Stop Scan
-          </button>
-        )}
-        {error && <p className="error">{error}</p>}
-        {scanId && <p className="meta">Scan ID: {scanId}</p>}
+        <div className="metrics-grid" style={{ marginTop: 22 }}>
+          <article className="stat-card">
+            <span className="stat-card__label">Submission-ready findings</span>
+            <div className="stat-card__value">{findingsSummary.submissionReady}</div>
+            <div className="stat-card__hint">Highest-value outcomes the operator can package immediately.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Demonstrated impact</span>
+            <div className="stat-card__value">{findingsSummary.demonstrated}</div>
+            <div className="stat-card__hint">Findings with business-effect proof, not just technical validation.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Avg bounty score</span>
+            <div className="stat-card__value">{(Number(findingsSummary.avgBountyScore || 0) * 100).toFixed(0)}%</div>
+            <div className="stat-card__hint">Ranking driven by proof quality, exploitability, and impact.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Top exploit chains</span>
+            <div className="stat-card__value">{findingsSummary.chains}</div>
+            <div className="stat-card__hint">Chained paths that end in reviewer-friendly business outcomes.</div>
+          </article>
+        </div>
       </section>
 
-      {/* Summary when complete */}
-      {job && job.status !== "running" && (
-        <>
-          <section className="card">
-            {(() => {
-              const statusColor = { completed: "#4ade80", cancelled: "#facc15" }[job.status] || "#ef4444";
-              return <h2>Status: <span style={{ color: statusColor }}>{job.status}</span></h2>;
-            })()}
-            <div className="stats">
-              <span className="pill high">High: {sevCounts.high}</span>
-              <span className="pill medium">Medium: {sevCounts.medium}</span>
-              <span className="pill low">Low: {sevCounts.low}</span>
-              <span className="pill info">Info: {sevCounts.info}</span>
+      <div className="two-column-grid">
+        <section className="card">
+          <div className="toolbar" style={{ alignItems: "flex-start", marginBottom: 14 }}>
+            <div>
+              <h2>Launch autonomous engagement</h2>
+              <p className="meta">Configure targets, auth, scope, impact goals, and proof-tuning in one operator workflow.</p>
             </div>
-            {job.aiSummary && (
-              <>
-                <h3>AI Summary</h3>
-                <pre className="summary">{job.aiSummary}</pre>
-              </>
+            <div className="filter-row">
+              {Object.entries(SCENARIOS).map(([key, preset]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`filter-chip ${scenario === key ? "is-active" : ""}`}
+                  onClick={() => applyScenario(key)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {scenario && (
+            <div className="surface" style={{ marginBottom: 14 }}>
+              <strong>{SCENARIOS[scenario].label}</strong>
+              <p className="meta" style={{ marginTop: 6 }}>{SCENARIOS[scenario].description}</p>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit}>
+            <div className="form-grid form-grid--wide">
+              <label>
+                Target URL *
+                <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://target.example" required />
+              </label>
+              <label>
+                Workspace ID
+                <input value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} placeholder="default" />
+              </label>
+              <label>
+                Policy pack
+                <select value={policyPack} onChange={(e) => setPolicyPack(e.target.value)}>
+                  <option value="internal">internal</option>
+                  <option value="bugbounty">bugbounty</option>
+                  <option value="regulated">regulated</option>
+                </select>
+              </label>
+              <label>
+                User-Agent
+                <input value={userAgent} onChange={(e) => setUserAgent(e.target.value)} placeholder="Mozilla/5.0 ..." />
+              </label>
+            </div>
+
+            <div>
+              <div className="toolbar" style={{ marginBottom: 10 }}>
+                <div>
+                  <strong>Impact objectives</strong>
+                  <p className="meta" style={{ marginTop: 4 }}>These goals steer planning, chain reasoning, verification, and final submissions.</p>
+                </div>
+                <span className="chip chip--muted">{impactGoals.length} selected</span>
+              </div>
+              <div className="goal-grid">
+                {IMPACT_GOALS.map((goal) => (
+                  <button
+                    key={goal.id}
+                    type="button"
+                    className={`goal-card ${impactGoals.includes(goal.id) ? "is-selected" : ""}`}
+                    onClick={() => toggleImpactGoal(goal.id)}
+                  >
+                    <div className="goal-card__title">
+                      <span>{goal.label}</span>
+                      <span className="chip chip--muted">{goal.shortLabel}</span>
+                    </div>
+                    <div className="meta">{goal.description}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-grid">
+              <label>
+                Auth headers (JSON)
+                <textarea rows={3} value={headersJson} onChange={(e) => setHeadersJson(e.target.value)} placeholder='{"Authorization":"Bearer token"}' />
+              </label>
+              <label>
+                Auth cookies (JSON)
+                <textarea rows={3} value={cookiesJson} onChange={(e) => setCookiesJson(e.target.value)} placeholder='{"session":"abc123"}' />
+              </label>
+            </div>
+
+            <div className="form-grid">
+              <label>
+                Custom header name
+                <input value={customHeaderName} onChange={(e) => setCustomHeaderName(e.target.value)} placeholder="X-Bug-Bounty" />
+              </label>
+              <label>
+                Custom header value
+                <input value={customHeaderValue} onChange={(e) => setCustomHeaderValue(e.target.value)} placeholder="researcher-handle" />
+              </label>
+              <label>
+                Standard login URL
+                <input value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} placeholder="https://example.com/login" />
+              </label>
+            </div>
+
+            <div className="form-grid">
+              <label>
+                App username
+                <input value={username} onChange={(e) => setUsername(e.target.value)} />
+              </label>
+              <label>
+                App password
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              </label>
+              <label>
+                HTTP basic auth username
+                <input value={basicAuthUsername} onChange={(e) => setBasicAuthUsername(e.target.value)} />
+              </label>
+              <label>
+                HTTP basic auth password
+                <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
+              </label>
+            </div>
+
+            <details>
+              <summary>Login steps / browser automation {loginSteps.length ? `(${loginSteps.length})` : ""}</summary>
+              <p className="meta" style={{ margin: "10px 0 0" }}>
+                Handle cookie banners, SSO, or multi-step entry points. Use <code>{"{{username}}"}</code> and <code>{"{{password}}"}</code> inside fill values.
+              </p>
+              {loginSteps.map((step, idx) => (
+                <div key={idx} className="form-grid" style={{ marginTop: 12 }}>
+                  <label>
+                    Action
+                    <select value={step.action} onChange={(e) => updateLoginStep(idx, "action", e.target.value)}>
+                      <option value="click">click</option>
+                      <option value="fill">fill</option>
+                      <option value="wait">wait</option>
+                    </select>
+                  </label>
+                  <label>
+                    CSS selector
+                    <input value={step.selector} disabled={step.action === "wait"} onChange={(e) => updateLoginStep(idx, "selector", e.target.value)} />
+                  </label>
+                  <label>
+                    {step.action === "fill" ? "Value" : "Wait ms"}
+                    <input
+                      value={step.action === "fill" ? step.value : step.waitMillis}
+                      type={step.action === "fill" ? "text" : "number"}
+                      onChange={(e) => updateLoginStep(idx, step.action === "fill" ? "value" : "waitMillis", step.action === "fill" ? e.target.value : Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="check" style={{ marginTop: 28 }}>
+                    <input type="checkbox" checked={step.optional} onChange={(e) => updateLoginStep(idx, "optional", e.target.checked)} />
+                    Optional
+                  </label>
+                  <button type="button" className="button-danger" onClick={() => removeLoginStep(idx)} style={{ marginTop: 26 }}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div className="button-row" style={{ marginTop: 12 }}>
+                <button type="button" className="button-secondary" onClick={addLoginStep}>Add step</button>
+                {loginSteps.length > 0 && <button type="button" className="button-ghost" onClick={() => setLoginSteps([])}>Clear all</button>}
+              </div>
+            </details>
+
+            <div className="form-grid">
+              <label>
+                Include hosts
+                <input value={includeHosts} onChange={(e) => setIncludeHosts(e.target.value)} placeholder="example.com, api.example.com" />
+              </label>
+              <label>
+                Exclude hosts
+                <input value={excludeHosts} onChange={(e) => setExcludeHosts(e.target.value)} />
+              </label>
+              <label>
+                Exclude paths
+                <input value={excludePaths} onChange={(e) => setExcludePaths(e.target.value)} placeholder="/logout, /admin" />
+              </label>
+            </div>
+
+            <label>
+              Program rules (one per line)
+              <textarea rows={3} value={programRules} onChange={(e) => setProgramRules(e.target.value)} placeholder={"in_scope: example.com\nno_dos_testing\nno_account_takeover"} />
+            </label>
+
+            <BurpImport onImport={handleBurpImport} />
+
+            <div className="surface">
+              <div className="toolbar" style={{ marginBottom: 12 }}>
+                <strong>Agent stack and noise controls</strong>
+                <span className="chip chip--muted">Proof-aware tuning</span>
+              </div>
+              <div className="form-grid form-grid--wide">
+                <label className="check"><input type="checkbox" checked={useNuclei} onChange={(e) => setUseNuclei(e.target.checked)} />Use Nuclei</label>
+                <label className="check"><input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />Use ZAP baseline</label>
+                <label className="check"><input type="checkbox" checked={useXSSMap} onChange={(e) => setUseXSSMap(e.target.checked)} />Use XSSMap</label>
+                <label className="check"><input type="checkbox" checked={useMLTriage} onChange={(e) => setUseMLTriage(e.target.checked)} />ML triage agent</label>
+                <label className="check"><input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />Attack path agent</label>
+                <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
+                <label className="check"><input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />Remediation planner</label>
+                <label className="check"><input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />Aggressive exploitation</label>
+                <label className="check"><input type="checkbox" checked={strictReporting} onChange={(e) => setStrictReporting(e.target.checked)} />Strict reporting</label>
+              </div>
+              {strictReporting && (
+                <div className="form-grid" style={{ marginTop: 12 }}>
+                  <label>
+                    Min confidence (0.0–1.0)
+                    <input type="number" min="0" max="1" step="0.05" value={minReportConfidence} onChange={(e) => setMinReportConfidence(e.target.value)} placeholder="0.75" />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div className="button-row">
+              <button disabled={loading}>{loading ? "Scanning…" : "Start scan"}</button>
+              {loading && scanId && <button type="button" className="button-danger" onClick={() => stopScan(scanId)}>Stop scan</button>}
+            </div>
+          </form>
+
+          {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
+          {scanId && <p className="meta" style={{ marginTop: 12 }}>Scan ID: {scanId}</p>}
+        </section>
+
+        <div className="section-grid">
+          <section className="card card--soft">
+            <div className="toolbar" style={{ alignItems: "flex-start" }}>
+              <div>
+                <h2>Mission control</h2>
+                <p className="meta">A paid-tool style snapshot of reportability, proof maturity, and operator focus.</p>
+              </div>
+              <span className="chip chip--goal">{impactGoals.length} goals armed</span>
+            </div>
+
+            <div className="three-column-grid" style={{ marginTop: 14 }}>
+              <article className="meta-block">
+                <b>Primary focus</b>
+                {impactGoals.slice(0, 2).map((goal) => <div key={goal}>{impactGoalMeta(goal).label}</div>)}
+              </article>
+              <article className="meta-block">
+                <b>Top finding</b>
+                <div>{findingsSummary.topFinding?.title || "Awaiting signal"}</div>
+                <div className="meta">Bounty {(Number(findingsSummary.topFinding?.bountyScore || 0) * 100).toFixed(0)}%</div>
+              </article>
+              <article className="meta-block">
+                <b>Proof artifacts</b>
+                <div>{findingsSummary.proofArtifacts}</div>
+                <div className="meta">Captured across current engagement evidence.</div>
+              </article>
+            </div>
+
+            {highlightedGoals.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <strong>Observed impact patterns</strong>
+                <div className="filter-row" style={{ marginTop: 10 }}>
+                  {highlightedGoals.map(({ goal, count }) => (
+                    <span key={goal} className="chip chip--goal">
+                      {impactGoalMeta(goal).shortLabel} · {count}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
           </section>
-          <SecurityKnowledgePanel knowledge={job.modelRecommendations?.securityKnowledge} />
-        </>
-      )}
 
+          <LiveFeed events={liveEvents} isRunning={isRunning} />
+
+          {job && job.status !== "running" && (
+            <>
+              <section className="card">
+                <div className="toolbar" style={{ alignItems: "flex-start" }}>
+                  <div>
+                    <h2>Engagement outcome</h2>
+                    <p className="meta">Final scan state with impact-grade summary and severity distribution.</p>
+                  </div>
+                  <span className={`status-badge ${job.status === "completed" ? "success" : job.status === "failed" ? "error" : "warning"}`}>{job.status}</span>
+                </div>
+                <div className="filter-row" style={{ margin: "12px 0 10px" }}>
+                  <span className="pill high">High {findingsSummary.severities.high}</span>
+                  <span className="pill medium">Medium {findingsSummary.severities.medium}</span>
+                  <span className="pill low">Low {findingsSummary.severities.low}</span>
+                  <span className="pill info">Info {findingsSummary.severities.info}</span>
+                </div>
+                {job.aiSummary ? <pre className="summary">{job.aiSummary}</pre> : <p className="meta">No AI summary captured for this scan.</p>}
+              </section>
+              <SecurityKnowledgePanel knowledge={job.modelRecommendations?.securityKnowledge} />
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
