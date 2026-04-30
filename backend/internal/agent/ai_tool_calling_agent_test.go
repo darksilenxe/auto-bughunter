@@ -77,8 +77,8 @@ func TestAIToolCallingAgent_GeneratedToolProducesFinding(t *testing.T) {
 			{Action: "stop", StopReason: "enough evidence"},
 		},
 		generated: &ai.GeneratedToolSpec{
-			Name: "impact_probe",
-			Code: "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"id\":\"1\",\"category\":\"impact\",\"severity\":\"high\",\"title\":\"Impact confirmed\",\"description\":\"Confirmed business impact\",\"evidence\":\"impact evidence\",\"recommendation\":\"fix it\"}))\n",
+			Name:      "impact_probe",
+			Code:      "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"id\":\"1\",\"category\":\"impact\",\"severity\":\"high\",\"title\":\"Impact confirmed\",\"description\":\"Confirmed business impact\",\"evidence\":\"impact evidence\",\"recommendation\":\"fix it\"}))\n",
 			Rationale: "confirm impact",
 		},
 	}, true)

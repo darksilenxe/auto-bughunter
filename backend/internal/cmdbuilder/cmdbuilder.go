@@ -120,9 +120,9 @@ var blockedArgPatterns = []*regexp.Regexp{
 }
 
 var genericAllowedFlags = map[string]bool{
-	"-h":       true,
-	"--help":   true,
-	"-v":       true,
+	"-h":        true,
+	"--help":    true,
+	"-v":        true,
 	"--version": true,
 }
 
@@ -432,10 +432,10 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 			Message:   "Unsafe command-flag mode enabled: per-tool flag allow-list bypassed; core safety checks remain enforced",
 			Timestamp: time.Now().UTC(),
 			Metadata: map[string]string{
-				"audit":             "true",
-				"unsafe_mode":       "true",
-				"policy_component":  "cmdbuilder",
-				"policy_bypass":     "tool_flag_allowlist_only",
+				"audit":            "true",
+				"unsafe_mode":      "true",
+				"policy_component": "cmdbuilder",
+				"policy_bypass":    "tool_flag_allowlist_only",
 			},
 		})
 	}

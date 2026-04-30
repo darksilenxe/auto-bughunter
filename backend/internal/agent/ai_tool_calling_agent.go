@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	maxAIToolCallRounds       = 4
-	maxAIToolCallHistory      = 5
-	maxAIToolCommandActions   = 2
-	maxAIToolHackTricksActions = 2
-	maxAIToolGeneratedTools   = 1
+	maxAIToolCallRounds         = 4
+	maxAIToolCallHistory        = 5
+	maxAIToolCommandActions     = 2
+	maxAIToolHackTricksActions  = 2
+	maxAIToolGeneratedTools     = 1
 	maxAIToolTechniqueTemplates = 2
 )
 
@@ -78,16 +78,18 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	generatedToolCalls := 0
 	executedCalls := 0
 	validationFailures := 0
+	roundsCompleted := 0
 
 	for round := 0; round < maxAIToolCallRounds; round++ {
 		select {
 		case <-ctx.Done():
 			output.Status = "partial"
 			output.DebugNotes = "AI tool-calling interrupted by context cancellation"
-			setAIToolCallingMetadata(&output, round, executedCalls, validationFailures, commandCalls, hacktricksCalls, generatedToolCalls)
+			setAIToolCallingMetadata(&output, roundsCompleted, executedCalls, validationFailures, commandCalls, hacktricksCalls, generatedToolCalls)
 			return output, ctx.Err()
 		default:
 		}
+		roundsCompleted++
 
 		req := ai.ToolCallRequest{
 			Target:            input.Target,
@@ -205,7 +207,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		}
 	}
 
-	setAIToolCallingMetadata(&output, len(history), executedCalls, validationFailures, commandCalls, hacktricksCalls, generatedToolCalls)
+	setAIToolCallingMetadata(&output, roundsCompleted, executedCalls, validationFailures, commandCalls, hacktricksCalls, generatedToolCalls)
 	output.DebugNotes = fmt.Sprintf(
 		"AI tool-calling executed %d bounded action(s), validation failures=%d, findings=%d.",
 		executedCalls, validationFailures, len(output.Findings),
@@ -247,9 +249,6 @@ func (a *AIToolCallingAgent) executeHackTricks(ctx context.Context, input AgentI
 	helper := NewHackTricksAgent(true, nil)
 	if a.aiClient != nil {
 		helper.aiClient = anyToAIClient(a.aiClient)
-	}
-	if helper.aiClient == nil {
-		helper.aiClient = nil
 	}
 	tech := techniques[0]
 	templates := tech.CommandTemplates
@@ -314,7 +313,11 @@ func summarizeToolCallFindings(findings []model.Finding) []map[string]any {
 	if len(findings) == 0 {
 		return nil
 	}
-	out := make([]map[string]any, 0, minInt(len(findings), 12))
+	capHint := len(findings)
+	if capHint > 12 {
+		capHint = 12
+	}
+	out := make([]map[string]any, 0, capHint)
 	for _, f := range findings {
 		if len(out) >= 12 {
 			break
