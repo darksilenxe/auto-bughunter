@@ -19,7 +19,11 @@ export default function AttackGraph() {
   // Close fullscreen on Escape
   useEffect(() => {
     if (!isGraphFullscreen) return;
-    const handleKey = (e) => { if (e.key === "Escape") setIsGraphFullscreen(false); };
+    const handleKey = (e) => {
+      if (e.key === "Escape") {
+        setIsGraphFullscreen(false);
+      }
+    };
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
   }, [isGraphFullscreen]);

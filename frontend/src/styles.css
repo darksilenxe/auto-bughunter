@@ -1070,8 +1070,6 @@ details summary {
   flex-direction: column;
 }
 
-
-
 @media (max-width: 900px) {
   .page {
     padding-top: 82px;

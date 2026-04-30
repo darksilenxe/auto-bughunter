@@ -313,7 +313,7 @@ func TestCooldownAfterNuclei_ContextCancelledDuringCooldown(t *testing.T) {
 	})
 
 	// Create a context that we cancel immediately after starting the scan so
-	// that it expires during the cooldown window (which is 5 s by default).
+	// that it expires during the cooldown window (which is 5s by default).
 	ctx, cancel := context.WithCancel(context.Background())
 
 	go func() {
@@ -378,7 +378,7 @@ func TestCooldownAfterNuclei_NotAppliedWithoutNuclei(t *testing.T) {
 	svc.runOptionalIntegrations(ctx, input)
 	elapsed := time.Since(start)
 
-	// The cooldown is 5 s; if it were applied incorrectly the test context
+	// The cooldown is 5s; if it were applied incorrectly the test context
 	// would time out (2 s) and elapsed would be >= 2 s.  Without the cooldown
 	// the ZAP binary-missing path returns almost instantly.
 	if elapsed >= 1500*time.Millisecond {
