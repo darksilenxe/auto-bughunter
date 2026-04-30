@@ -25,6 +25,10 @@ var (
 	pathStateWhitespaceRe = regexp.MustCompile(`\s+`)
 	pathStateTokenRe      = regexp.MustCompile(`\b[0-9a-f]{8,}\b|\b\d{4,}\b`)
 	pathStateTitleRe      = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	spaResponseHints      = []string{"id=\"root\"", "id='root'", "id=\"__next\"", "data-reactroot", "__nuxt", "data-v-app", "__vite", "single page app", "/_next/", "/_nuxt/"}
+	loginWallHints        = []string{"sign in", "log in", "login", "password", "remember me", "name=\"password\"", "name='password'"}
+	apiErrorEnvelopeHints = []string{"\"error\"", "\"message\"", "\"status\"", "\"path\"", "\"timestamp\"", "\"errors\""}
+	notFoundResponseHints = []string{"not found", "404", "cannot get /", "page could not be found", "whitelabel error page", "does not exist", "the page you requested could not be found"}
 )
 
 type WordlistScanner struct {
@@ -735,8 +739,7 @@ func extractHTMLTitle(body string) string {
 
 func hasSPAMarkers(body string) bool {
 	lower := strings.ToLower(body)
-	spaHints := []string{"id=\"root\"", "id='root'", "id=\"__next\"", "data-reactroot", "__nuxt", "data-v-app", "__vite", "single page app", "/_next/", "/_nuxt/"}
-	for _, hint := range spaHints {
+	for _, hint := range spaResponseHints {
 		if strings.Contains(lower, hint) {
 			return true
 		}
@@ -746,8 +749,7 @@ func hasSPAMarkers(body string) bool {
 
 func hasLoginWall(body string) bool {
 	lower := strings.ToLower(body)
-	loginHints := []string{"sign in", "log in", "login", "password", "remember me", "name=\"password\"", "name='password'"}
-	for _, hint := range loginHints {
+	for _, hint := range loginWallHints {
 		if strings.Contains(lower, hint) {
 			return true
 		}
@@ -760,9 +762,8 @@ func hasAPIErrorEnvelope(contentType, body string) bool {
 		return false
 	}
 	lower := strings.ToLower(body)
-	jsonHints := []string{"\"error\"", "\"message\"", "\"status\"", "\"path\"", "\"timestamp\"", "\"errors\""}
 	matches := 0
-	for _, hint := range jsonHints {
+	for _, hint := range apiErrorEnvelopeHints {
 		if strings.Contains(lower, hint) {
 			matches++
 		}
@@ -772,8 +773,7 @@ func hasAPIErrorEnvelope(contentType, body string) bool {
 
 func hasNotFoundMarkers(body string) bool {
 	lower := strings.ToLower(body)
-	notFoundHints := []string{"not found", "404", "cannot get /", "page could not be found", "whitelabel error page", "does not exist", "the page you requested could not be found"}
-	for _, hint := range notFoundHints {
+	for _, hint := range notFoundResponseHints {
 		if strings.Contains(lower, hint) {
 			return true
 		}
