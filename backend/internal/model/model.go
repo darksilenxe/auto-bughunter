@@ -244,7 +244,7 @@ type ScanOptions struct {
 	// loop. The model may choose only from the backend's approved JSON tool
 	// contract; command execution still flows through existing cmdbuilder,
 	// HackTricks, and toolbuilder safety controls.
-	UseAIToolCalling bool `json:"useAiToolCalling,omitempty"`
+	UseAIToolCalling bool `json:"useAIToolCalling,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

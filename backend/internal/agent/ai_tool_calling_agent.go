@@ -79,8 +79,12 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	executedCalls := 0
 	validationFailures := 0
 	roundsCompleted := 0
+	stopLoop := false
 
 	for round := 0; round < maxAIToolCallRounds; round++ {
+		if stopLoop {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			output.Status = "partial"
@@ -203,7 +207,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				Status:  "invalid_action",
 				Summary: "planner returned unsupported action",
 			})
-			break
+			stopLoop = true
 		}
 	}
 
