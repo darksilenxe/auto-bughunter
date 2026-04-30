@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,6 +89,17 @@ var allowedBinaries = map[string]bool{
 	"python":    true,
 }
 
+// ApprovedBinaries returns the sorted allow-list of binaries that agents may
+// execute through cmdbuilder.
+func ApprovedBinaries() []string {
+	out := make([]string, 0, len(allowedBinaries))
+	for name := range allowedBinaries {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // blockedArgPatterns are argument substrings that are never permitted regardless
 // of the binary, e.g. those that would allow command injection or filesystem writes
 // outside safe scratch space.
@@ -108,9 +120,9 @@ var blockedArgPatterns = []*regexp.Regexp{
 }
 
 var genericAllowedFlags = map[string]bool{
-	"-h":       true,
-	"--help":   true,
-	"-v":       true,
+	"-h":        true,
+	"--help":    true,
+	"-v":        true,
 	"--version": true,
 }
 
@@ -420,10 +432,10 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 			Message:   "Unsafe command-flag mode enabled: per-tool flag allow-list bypassed; core safety checks remain enforced",
 			Timestamp: time.Now().UTC(),
 			Metadata: map[string]string{
-				"audit":             "true",
-				"unsafe_mode":       "true",
-				"policy_component":  "cmdbuilder",
-				"policy_bypass":     "tool_flag_allowlist_only",
+				"audit":            "true",
+				"unsafe_mode":      "true",
+				"policy_component": "cmdbuilder",
+				"policy_bypass":    "tool_flag_allowlist_only",
 			},
 		})
 	}

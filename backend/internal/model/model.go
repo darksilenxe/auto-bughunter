@@ -11,6 +11,36 @@ const (
 	SeverityHigh   Severity = "high"
 )
 
+type ImpactGoal string
+
+const (
+	ImpactGoalAccountTakeover       ImpactGoal = "account_takeover"
+	ImpactGoalCrossTenantAccess     ImpactGoal = "cross_tenant_access"
+	ImpactGoalSensitiveDataExposure ImpactGoal = "sensitive_data_exposure"
+	ImpactGoalPaymentAbuse          ImpactGoal = "payment_abuse"
+	ImpactGoalAuthBypass            ImpactGoal = "auth_bypass"
+	ImpactGoalStoredXSS             ImpactGoal = "stored_xss"
+	ImpactGoalSSRFInternalAccess    ImpactGoal = "ssrf_internal_access"
+	ImpactGoalTenantBreakout        ImpactGoal = "tenant_breakout"
+)
+
+type ProofState string
+
+const (
+	ProofStateSuspected          ProofState = "suspected"
+	ProofStateValidated          ProofState = "validated"
+	ProofStateExploited          ProofState = "exploited"
+	ProofStateImpactDemonstrated ProofState = "impact_demonstrated"
+	ProofStateSubmissionReady    ProofState = "submission_ready"
+)
+
+type ProofArtifact struct {
+	Type        string `json:"type"`
+	Label       string `json:"label"`
+	Value       string `json:"value,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 type Finding struct {
 	ID                  string            `json:"id"`
 	Category            string            `json:"category"`
@@ -34,6 +64,11 @@ type Finding struct {
 	AffectedParameter   string            `json:"affectedParameter,omitempty"`
 	ReproductionSteps   []string          `json:"reproductionSteps,omitempty"`
 	Impact              string            `json:"impact,omitempty"`
+	ImpactScore         float64           `json:"impactScore,omitempty"`
+	BountyScore         float64           `json:"bountyScore,omitempty"`
+	ProofState          ProofState        `json:"proofState,omitempty"`
+	ImpactGoals         []ImpactGoal      `json:"impactGoals,omitempty"`
+	ProofArtifacts      []ProofArtifact   `json:"proofArtifacts,omitempty"`
 	References          []string          `json:"references,omitempty"`
 	PoC                 string            `json:"poc,omitempty"`
 	// MITRETechniques is a deterministic list of MITRE ATT&CK technique IDs
@@ -58,18 +93,24 @@ type ReportTemplateOptions struct {
 // BugBountySubmission is the canonical structure for a single-finding report
 // suitable for submission to bug-bounty platforms (HackerOne, Bugcrowd, etc.).
 type BugBountySubmission struct {
-	Title       string   `json:"title"`
-	Severity    Severity `json:"severity"`
-	CVSSVector  string   `json:"cvssVector,omitempty"`
-	CVSSScore   float64  `json:"cvssScore,omitempty"`
-	CWE         string   `json:"cwe,omitempty"`
-	Asset       string   `json:"asset,omitempty"`
-	Summary     string   `json:"summary"`
-	Steps       []string `json:"steps,omitempty"`
-	Impact      string   `json:"impact,omitempty"`
-	Remediation string   `json:"remediation,omitempty"`
-	References  []string `json:"references,omitempty"`
-	Attachments []string `json:"attachments,omitempty"`
+	Title          string          `json:"title"`
+	Severity       Severity        `json:"severity"`
+	CVSSVector     string          `json:"cvssVector,omitempty"`
+	CVSSScore      float64         `json:"cvssScore,omitempty"`
+	CWE            string          `json:"cwe,omitempty"`
+	Asset          string          `json:"asset,omitempty"`
+	Summary        string          `json:"summary"`
+	Steps          []string        `json:"steps,omitempty"`
+	Impact         string          `json:"impact,omitempty"`
+	ImpactScore    float64         `json:"impactScore,omitempty"`
+	BountyScore    float64         `json:"bountyScore,omitempty"`
+	ProofState     ProofState      `json:"proofState,omitempty"`
+	Goals          []ImpactGoal    `json:"goals,omitempty"`
+	Prerequisites  []string        `json:"prerequisites,omitempty"`
+	ProofArtifacts []ProofArtifact `json:"proofArtifacts,omitempty"`
+	Remediation    string          `json:"remediation,omitempty"`
+	References     []string        `json:"references,omitempty"`
+	Attachments    []string        `json:"attachments,omitempty"`
 }
 
 type Exploitability struct {
@@ -240,6 +281,15 @@ type ScanOptions struct {
 	// binary allow-list, blocked injection/path patterns, python sandboxing, and
 	// target host scoping. Default is false and usage is audit-logged.
 	UnsafeDynamicCommandFlags bool `json:"unsafeDynamicCommandFlags,omitempty"`
+	// UseAIToolCalling opt-ins a scan to a bounded model-driven tool-calling
+	// loop. The model may choose only from the backend's approved JSON tool
+	// contract; command execution still flows through existing cmdbuilder,
+	// HackTricks, and toolbuilder safety controls.
+	UseAIToolCalling bool `json:"useAIToolCalling,omitempty"`
+	// ImpactGoals tunes planning, verification, and reporting toward concrete
+	// bug-bounty-relevant outcomes. When empty, the backend applies a
+	// default impact-first goal set.
+	ImpactGoals []ImpactGoal `json:"impactGoals,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

@@ -76,7 +76,7 @@ func (p *StaticPlanner) Plan(_ context.Context, _ AgentInput, history []AgentOut
 // It is satisfied by *ai.Client.Plan and is declared here to avoid an import
 // cycle between the agent and ai packages.
 type AIPlanCaller interface {
-	Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string) ([]map[string]string, bool, error)
+	Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal) ([]map[string]string, bool, error)
 }
 
 // AIPlanner asks the configured AI provider what to run next, falling back to
@@ -160,7 +160,7 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		})
 	}
 
-	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents)
+	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals)
 	if err != nil {
 		if p.Fallback != nil {
 			return p.Fallback.Plan(ctx, input, history)

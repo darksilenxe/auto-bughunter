@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const TABS = [
-  { id: "history", label: "HTTP History" },
+  { id: "history", label: "HTTP history" },
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
-  { id: "configure", label: "Configure Browser" },
+  { id: "configure", label: "Configure browser" },
 ];
 
 const authHeaders = () => ({
@@ -26,13 +26,9 @@ export default function Proxy() {
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  // Repeater state
   const [repeaterHeaders, setRepeaterHeaders] = useState("");
   const [repeaterBody, setRepeaterBody] = useState("");
   const [repeaterResult, setRepeaterResult] = useState(null);
-
-  // Intruder state
   const [intruderMarker, setIntruderMarker] = useState("§");
   const [intruderPayloads, setIntruderPayloads] = useState("");
   const [intruderResults, setIntruderResults] = useState([]);
@@ -49,9 +45,7 @@ export default function Proxy() {
     }
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/proxy/requests/${encodeURIComponent(selectedId)}`, {
-          headers: authHeaders(),
-        });
+        const res = await fetch(`${API_BASE}/api/proxy/requests/${encodeURIComponent(selectedId)}`, { headers: authHeaders() });
         const data = await res.json();
         if (!res.ok) {
           setError(data.error || "Failed to load request detail.");
@@ -97,10 +91,7 @@ export default function Proxy() {
     if (!window.confirm("Delete all captured proxy requests?")) return;
     setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/api/proxy/requests`, {
-        method: "DELETE",
-        headers: authHeaders(),
-      });
+      const res = await fetch(`${API_BASE}/api/proxy/requests`, { method: "DELETE", headers: authHeaders() });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Failed to clear history.");
@@ -144,10 +135,7 @@ export default function Proxy() {
 
   async function runIntruder() {
     if (!selectedId) return;
-    const payloads = intruderPayloads
-      .split(/\r?\n/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
+    const payloads = intruderPayloads.split(/\r?\n/).map((payload) => payload.trim()).filter(Boolean);
     if (payloads.length === 0) {
       setError("Add at least one payload (one per line).");
       return;
@@ -180,45 +168,80 @@ export default function Proxy() {
     }
   }
 
+  const historySummary = useMemo(() => summarizeHistory(requests), [requests]);
+
   return (
-    <div className="page">
-      <header>
-        <h1>🛰️ Burp-Style Proxy Suite</h1>
-        <p>Capture, repeat, and fuzz HTTP traffic through the in-browser proxy.</p>
-      </header>
+    <div className="page page--wide">
+      <section className="hero-panel">
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <div className="eyebrow">Operator proxy workbench</div>
+            <header style={{ marginBottom: 0 }}>
+              <h1>Proxy Suite</h1>
+              <p>Capture traffic, replay requests, fuzz insertion points, and bootstrap browser interception from one premium operator surface.</p>
+            </header>
+          </div>
+          <div className="filter-row">
+            <span className={`status-badge ${settings?.enabled ? "success" : "warning"}`}>{settings?.enabled ? "Listener enabled" : "Listener disabled"}</span>
+            <span className={`status-badge ${settings?.mitmEnabled ? "success" : "warning"}`}>{settings?.mitmEnabled ? "HTTPS intercept on" : "HTTPS passthrough"}</span>
+          </div>
+        </div>
+
+        <div className="metrics-grid" style={{ marginTop: 18 }}>
+          <article className="stat-card">
+            <span className="stat-card__label">Captured requests</span>
+            <div className="stat-card__value">{requests.length}</div>
+            <div className="stat-card__hint">HTTP history retained for replay, fuzzing, and reporting pivots.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">2xx responses</span>
+            <div className="stat-card__value">{historySummary.success}</div>
+            <div className="stat-card__hint">Useful high-signal flows to promote into repeater and intruder sessions.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">5xx responses</span>
+            <div className="stat-card__value">{historySummary.serverErrors}</div>
+            <div className="stat-card__hint">Potential fault lines for auth, parsing, and input handling pivots.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Proxy endpoint</span>
+            <div className="stat-card__value">{settings ? `${settings.host}:${settings.port}` : "…"}</div>
+            <div className="stat-card__hint">Operator-facing address for browser and CLI proxy configuration.</div>
+          </article>
+        </div>
+      </section>
 
       {!settings?.enabled && (
-        <section className="card" style={{ borderColor: "#f97316" }}>
-          <h2>Proxy listener is disabled</h2>
+        <section className="card">
+          <h2>Listener currently disabled</h2>
           <p className="meta">
-            Set <code>ENABLE_PROXY=true</code> in <code>.env</code> and restart the backend to start the
-            intercepting proxy on port <code>{settings?.port || "8081"}</code>.
+            Set <code>ENABLE_PROXY=true</code> and restart the backend to expose the intercepting proxy on port <code>{settings?.port || "8081"}</code>.
           </p>
         </section>
       )}
 
       {error && (
-        <section className="card" style={{ borderColor: "#dc2626" }}>
-          <p style={{ margin: 0, color: "#fecaca" }}>{error}</p>
-          <button type="button" onClick={() => setError("")} style={{ marginTop: 8 }}>Dismiss</button>
+        <section className="card">
+          <div className="toolbar">
+            <p className="error" style={{ margin: 0 }}>{error}</p>
+            <button type="button" className="button-secondary" onClick={() => setError("")}>Dismiss</button>
+          </div>
         </section>
       )}
 
-      <section className="card" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            style={{
-              background: tab === t.id ? "#7c3aed" : "rgba(124,58,237,0.18)",
-              color: "#fff",
-              fontWeight: tab === t.id ? 700 : 500,
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+      <section className="card card--compact">
+        <div className="filter-row">
+          {TABS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`filter-chip ${tab === item.id ? "is-active" : ""}`}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </section>
 
       {tab === "history" && (
@@ -270,47 +293,42 @@ export default function Proxy() {
 
 function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, selected }) {
   return (
-    <>
+    <div className="two-column-grid">
       <section className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-          <h2 style={{ margin: 0 }}>HTTP History ({requests.length})</h2>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" onClick={onRefresh} disabled={busy}>Refresh</button>
-            <button type="button" onClick={onClear} disabled={busy} style={{ background: "#7f1d1d" }}>
-              Clear all
-            </button>
+        <div className="toolbar" style={{ marginBottom: 12 }}>
+          <div>
+            <h2>HTTP history</h2>
+            <p className="meta">Capture review queue for selecting replayable or fuzz-worthy flows.</p>
+          </div>
+          <div className="button-row">
+            <button type="button" className="button-secondary" onClick={onRefresh} disabled={busy}>Refresh</button>
+            <button type="button" className="button-danger" onClick={onClear} disabled={busy}>Clear all</button>
           </div>
         </div>
         {requests.length === 0 ? (
-          <p className="meta">
-            No captures yet. Configure your browser to use the proxy (see the Configure Browser tab) and
-            visit a target URL.
-          </p>
+          <div className="empty-state">No captures yet. Point your browser at the proxy and load a target application.</div>
         ) : (
-          <div style={{ maxHeight: 360, overflow: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <div className="table-wrap" style={{ maxHeight: 420 }}>
+            <table>
               <thead>
-                <tr style={{ textAlign: "left", color: "#a78bfa" }}>
-                  <th style={{ padding: "4px 8px" }}>Time</th>
-                  <th style={{ padding: "4px 8px" }}>Method</th>
-                  <th style={{ padding: "4px 8px" }}>Status</th>
-                  <th style={{ padding: "4px 8px" }}>URL</th>
+                <tr>
+                  <th>Time</th>
+                  <th>Method</th>
+                  <th>Status</th>
+                  <th>URL</th>
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r) => (
+                {requests.map((request) => (
                   <tr
-                    key={r.id}
-                    onClick={() => onSelect(r.id)}
-                    style={{
-                      cursor: "pointer",
-                      background: r.id === selectedId ? "rgba(124,58,237,0.25)" : "transparent",
-                    }}
+                    key={request.id}
+                    onClick={() => onSelect(request.id)}
+                    style={{ cursor: "pointer", background: request.id === selectedId ? "rgba(89,208,255,0.08)" : "transparent" }}
                   >
-                    <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{formatTime(r.capturedAt)}</td>
-                    <td style={{ padding: "4px 8px" }}>{r.method}</td>
-                    <td style={{ padding: "4px 8px" }}>{r.responseStatus || "-"}</td>
-                    <td style={{ padding: "4px 8px", wordBreak: "break-all" }}>{r.url}</td>
+                    <td>{formatTime(request.capturedAt)}</td>
+                    <td>{request.method}</td>
+                    <td>{request.responseStatus || "-"}</td>
+                    <td style={{ wordBreak: "break-all" }}>{request.url}</td>
                   </tr>
                 ))}
               </tbody>
@@ -319,174 +337,176 @@ function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, 
         )}
       </section>
 
-      {selected && <RequestDetail req={selected} />}
-    </>
+      {selected ? <RequestDetail req={selected} /> : (
+        <section className="card empty-state">
+          Select a captured request to inspect headers, bodies, and replay inputs.
+        </section>
+      )}
+    </div>
   );
 }
 
 function RequestDetail({ req }) {
   return (
     <section className="card">
-      <h2>Request {req.id.slice(0, 8)}</h2>
-      <p className="meta">
-        <strong>{req.method}</strong> {req.url} · status {req.responseStatus || "-"}
-      </p>
-      <h3>Request headers</h3>
-      <pre className="summary">{headersToText(req.requestHeaders) || "(none)"}</pre>
-      {req.requestBody && (
-        <>
-          <h3>Request body</h3>
-          <pre className="summary" style={{ maxHeight: 240, overflow: "auto" }}>{req.requestBody}</pre>
-        </>
-      )}
-      <h3>Response headers</h3>
-      <pre className="summary">{headersToText(req.responseHeaders) || "(none)"}</pre>
-      {req.responseBody && (
-        <>
-          <h3>Response body</h3>
-          <pre className="summary" style={{ maxHeight: 320, overflow: "auto" }}>{req.responseBody}</pre>
-        </>
-      )}
-      {req.notes && <p className="meta"><em>{req.notes}</em></p>}
+      <div className="toolbar" style={{ alignItems: "flex-start" }}>
+        <div>
+          <h2>Selected request</h2>
+          <p className="meta"><strong>{req.method}</strong> {req.url}</p>
+        </div>
+        <span className="chip chip--muted">status {req.responseStatus || "-"}</span>
+      </div>
+      <div className="two-column-grid" style={{ marginTop: 14 }}>
+        <div className="surface">
+          <strong>Request headers</strong>
+          <pre className="summary" style={{ marginTop: 10 }}>{headersToText(req.requestHeaders) || "(none)"}</pre>
+        </div>
+        <div className="surface">
+          <strong>Response headers</strong>
+          <pre className="summary" style={{ marginTop: 10 }}>{headersToText(req.responseHeaders) || "(none)"}</pre>
+        </div>
+      </div>
+      <div className="two-column-grid" style={{ marginTop: 14 }}>
+        <div className="surface">
+          <strong>Request body</strong>
+          <pre className="summary" style={{ marginTop: 10, maxHeight: 260, overflow: "auto" }}>{req.requestBody || "(none)"}</pre>
+        </div>
+        <div className="surface">
+          <strong>Response body</strong>
+          <pre className="summary" style={{ marginTop: 10, maxHeight: 260, overflow: "auto" }}>{req.responseBody || "(none)"}</pre>
+        </div>
+      </div>
+      {req.notes && <p className="meta" style={{ marginTop: 12 }}><em>{req.notes}</em></p>}
     </section>
   );
 }
 
 function RepeaterTab({ selected, repeaterHeaders, setRepeaterHeaders, repeaterBody, setRepeaterBody, onSend, busy, result }) {
   if (!selected) {
-    return (
-      <section className="card">
-        <p className="meta">Select a request from HTTP History first, then edit and resend it here.</p>
-      </section>
-    );
+    return <section className="card empty-state">Select a request from HTTP history first, then edit and resend it here.</section>;
   }
+
   return (
-    <>
+    <div className="two-column-grid">
       <section className="card">
-        <h2>Repeater</h2>
-        <p className="meta">
-          <strong>{selected.method}</strong> {selected.url}
-        </p>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Repeater</h2>
+            <p className="meta">Tweak a captured request and resend it with controlled header/body overrides.</p>
+          </div>
+          <span className="chip chip--muted">{selected.method}</span>
+        </div>
+        <p className="meta">{selected.url}</p>
         <label>
-          Headers (one <code>Name: value</code> per line)
-          <textarea
-            rows={8}
-            value={repeaterHeaders}
-            onChange={(e) => setRepeaterHeaders(e.target.value)}
-            spellCheck={false}
-          />
+          Headers
+          <textarea rows={10} value={repeaterHeaders} onChange={(e) => setRepeaterHeaders(e.target.value)} spellCheck={false} />
         </label>
         <label>
           Body
-          <textarea
-            rows={10}
-            value={repeaterBody}
-            onChange={(e) => setRepeaterBody(e.target.value)}
-            spellCheck={false}
-          />
+          <textarea rows={12} value={repeaterBody} onChange={(e) => setRepeaterBody(e.target.value)} spellCheck={false} />
         </label>
-        <button type="button" onClick={onSend} disabled={busy}>
-          {busy ? "Sending…" : "▶ Send"}
-        </button>
+        <div className="button-row">
+          <button type="button" onClick={onSend} disabled={busy}>{busy ? "Sending…" : "Send replay"}</button>
+        </div>
       </section>
-      {result && <RequestDetail req={result} />}
-    </>
+      {result ? <RequestDetail req={result} /> : <section className="card empty-state">Replay results will appear here after the request is sent.</section>}
+    </div>
   );
 }
 
-function IntruderTab({
-  selected, marker, setMarker, payloads, setPayloads,
-  headers, setHeaders, body, setBody, onRun, busy, results,
-}) {
-  if (!selected) {
-    return (
-      <section className="card">
-        <p className="meta">Select a request from HTTP History first, then add payload markers and run.</p>
-      </section>
-    );
-  }
+function IntruderTab({ selected, marker, setMarker, payloads, setPayloads, headers, setHeaders, body, setBody, onRun, busy, results }) {
   const summary = useMemo(() => summarizeIntruder(results), [results]);
+
+  if (!selected) {
+    return <section className="card empty-state">Select a request from HTTP history first, then add payload markers and run an attack batch.</section>;
+  }
+
   return (
     <>
-      <section className="card">
-        <h2>Intruder</h2>
-        <p className="meta">
-          Insert the marker (<code>{marker || "§"}</code>) anywhere in the URL, headers, or body — each
-          payload below replaces every occurrence.
-        </p>
-        <p className="meta">
-          <strong>{selected.method}</strong> {selected.url}
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+      <div className="two-column-grid">
+        <section className="card">
+          <div className="toolbar" style={{ alignItems: "flex-start" }}>
+            <div>
+              <h2>Intruder</h2>
+              <p className="meta">Place the marker in headers or body; each payload replaces every occurrence.</p>
+            </div>
+            <span className="chip chip--muted">cap 200 payloads</span>
+          </div>
+          <p className="meta"><strong>{selected.method}</strong> {selected.url}</p>
+          <div className="form-grid">
+            <label>
+              Marker
+              <input value={marker} onChange={(e) => setMarker(e.target.value)} maxLength={8} />
+            </label>
+            <label>
+              Payload count limit
+              <input value="200" disabled />
+            </label>
+          </div>
           <label>
-            Marker
-            <input value={marker} onChange={(e) => setMarker(e.target.value)} maxLength={8} />
+            Headers
+            <textarea rows={7} value={headers} onChange={(e) => setHeaders(e.target.value)} spellCheck={false} />
           </label>
           <label>
-            Payload count limit
-            <input value="200" disabled />
+            Body
+            <textarea rows={7} value={body} onChange={(e) => setBody(e.target.value)} spellCheck={false} />
           </label>
-        </div>
-        <label>
-          Headers
-          <textarea
-            rows={6}
-            value={headers}
-            onChange={(e) => setHeaders(e.target.value)}
-            spellCheck={false}
-          />
-        </label>
-        <label>
-          Body
-          <textarea
-            rows={6}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            spellCheck={false}
-          />
-        </label>
-        <label>
-          Payloads (one per line)
-          <textarea
-            rows={8}
-            value={payloads}
-            onChange={(e) => setPayloads(e.target.value)}
-            spellCheck={false}
-            placeholder={"admin\nroot\nguest"}
-          />
-        </label>
-        <button type="button" onClick={onRun} disabled={busy}>
-          {busy ? "Running…" : "▶ Start attack"}
-        </button>
-      </section>
+          <label>
+            Payloads
+            <textarea rows={10} value={payloads} onChange={(e) => setPayloads(e.target.value)} spellCheck={false} placeholder={"admin\nroot\nguest"} />
+          </label>
+          <button type="button" onClick={onRun} disabled={busy}>{busy ? "Running…" : "Start attack"}</button>
+        </section>
+
+        <section className="card">
+          <h2>Attack summary</h2>
+          {results.length > 0 ? (
+            <>
+              <div className="three-column-grid" style={{ marginTop: 12 }}>
+                <article className="meta-block">
+                  <b>Total payloads</b>
+                  <div>{results.length}</div>
+                </article>
+                <article className="meta-block">
+                  <b>Errors</b>
+                  <div>{summary.errors}</div>
+                </article>
+                <article className="meta-block">
+                  <b>Status codes</b>
+                  <div>{Object.entries(summary.statusCounts).map(([code, count]) => `${code}×${count}`).join(", ") || "none"}</div>
+                </article>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state">Run Intruder to see response variance and error trends here.</div>
+          )}
+        </section>
+      </div>
+
       {results.length > 0 && (
         <section className="card">
-          <h2>Results ({results.length})</h2>
-          <p className="meta">
-            Status codes: {Object.entries(summary.statusCounts).map(([k, v]) => `${k}×${v}`).join(", ") || "none"}
-            {summary.errors > 0 && ` · errors: ${summary.errors}`}
-          </p>
-          <div style={{ maxHeight: 360, overflow: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <h2>Intruder results</h2>
+          <div className="table-wrap" style={{ marginTop: 12, maxHeight: 420 }}>
+            <table>
               <thead>
-                <tr style={{ textAlign: "left", color: "#a78bfa" }}>
-                  <th style={{ padding: "4px 8px" }}>#</th>
-                  <th style={{ padding: "4px 8px" }}>Payload</th>
-                  <th style={{ padding: "4px 8px" }}>Status</th>
-                  <th style={{ padding: "4px 8px" }}>Length</th>
-                  <th style={{ padding: "4px 8px" }}>ms</th>
-                  <th style={{ padding: "4px 8px" }}>Error</th>
+                <tr>
+                  <th>#</th>
+                  <th>Payload</th>
+                  <th>Status</th>
+                  <th>Length</th>
+                  <th>ms</th>
+                  <th>Error</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((r, i) => (
-                  <tr key={i}>
-                    <td style={{ padding: "4px 8px" }}>{i + 1}</td>
-                    <td style={{ padding: "4px 8px", wordBreak: "break-all" }}>{r.payload}</td>
-                    <td style={{ padding: "4px 8px" }}>{r.status || "-"}</td>
-                    <td style={{ padding: "4px 8px" }}>{r.lengthBytes}</td>
-                    <td style={{ padding: "4px 8px" }}>{r.durationMs}</td>
-                    <td style={{ padding: "4px 8px", color: r.error ? "#fca5a5" : undefined }}>{r.error || ""}</td>
+                {results.map((result, idx) => (
+                  <tr key={idx}>
+                    <td>{idx + 1}</td>
+                    <td style={{ wordBreak: "break-all" }}>{result.payload}</td>
+                    <td>{result.status || "-"}</td>
+                    <td>{result.lengthBytes}</td>
+                    <td>{result.durationMs}</td>
+                    <td style={{ color: result.error ? "var(--sev-high)" : undefined }}>{result.error || ""}</td>
                   </tr>
                 ))}
               </tbody>
@@ -500,78 +520,62 @@ function IntruderTab({
 
 function ConfigureTab({ settings }) {
   if (!settings) {
-    return (
-      <section className="card">
-        <p className="meta">Loading proxy configuration…</p>
-      </section>
-    );
+    return <section className="card empty-state">Loading proxy configuration…</section>;
   }
+
   const proxyURL = `${settings.host}:${settings.port}`;
   return (
-    <>
+    <div className="two-column-grid">
       <section className="card">
-        <h2>Configure your browser</h2>
-        <p className="meta">
-          Point your browser's HTTP and HTTPS proxy at <code>{proxyURL}</code>. Examples:
-        </p>
-        <h3>Firefox</h3>
-        <pre className="summary">{`Settings → Network Settings → Manual proxy configuration
+        <h2>Browser bootstrap</h2>
+        <div className="meta-block">
+          <b>Firefox</b>
+          <pre className="summary" style={{ marginTop: 10 }}>{`Settings → Network Settings → Manual proxy configuration
 HTTP Proxy: ${settings.host}    Port: ${settings.port}
 ☑ Also use this proxy for HTTPS`}</pre>
-        <h3>Chrome / Chromium (CLI)</h3>
-        <pre className="summary">{`chromium --proxy-server="http://${proxyURL}"`}</pre>
-        <h3>curl</h3>
-        <pre className="summary">{`curl -x http://${proxyURL} https://example.com`}</pre>
+        </div>
+        <div className="meta-block" style={{ marginTop: 10 }}>
+          <b>Chromium / Chrome</b>
+          <pre className="summary" style={{ marginTop: 10 }}>{`chromium --proxy-server="http://${proxyURL}"`}</pre>
+        </div>
+        <div className="meta-block" style={{ marginTop: 10 }}>
+          <b>curl</b>
+          <pre className="summary" style={{ marginTop: 10 }}>{`curl -x http://${proxyURL} https://example.com`}</pre>
+        </div>
       </section>
+
       <section className="card">
-        <h2>HTTPS interception (CA certificate)</h2>
+        <h2>HTTPS interception</h2>
         {settings.mitmEnabled ? (
           <>
-            <p className="meta">
-              TLS interception is <strong>enabled</strong>. Install the proxy CA in your browser/OS trust
-              store so HTTPS sites load without warnings and request/response bodies are captured.
-            </p>
-            <ul className="meta" style={{ marginTop: 0 }}>
+            <p className="meta">TLS interception is enabled. Install the proxy CA to capture HTTPS requests and response bodies without warnings.</p>
+            <ul className="bullet-list" style={{ marginTop: 12 }}>
               <li>SHA-256 fingerprint: <code>{settings.caFingerprintSHA256}</code></li>
               {settings.caNotAfter && <li>Expires: <code>{settings.caNotAfter}</code></li>}
             </ul>
-            <a
-              href={`${API_BASE}/api/proxy/ca-certificate`}
-              download="auto-bughunter-proxy-ca.pem"
-            >
-              <button type="button">⬇ Download CA certificate (.pem)</button>
-            </a>
-            <h3>Install</h3>
-            <pre className="summary">{`Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import…
-   ☑ Trust this CA to identify websites
+            <div className="button-row" style={{ marginTop: 14 }}>
+              <a href={`${API_BASE}/api/proxy/ca-certificate`} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
+            </div>
+            <pre className="summary" style={{ marginTop: 14 }}>{`Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import…
 macOS:   open auto-bughunter-proxy-ca.pem → Keychain Access → set "Always Trust"
-Linux:   sudo cp auto-bughunter-proxy-ca.pem /usr/local/share/ca-certificates/
-         sudo update-ca-certificates`}</pre>
+Linux:   sudo cp auto-bughunter-proxy-ca.pem /usr/local/share/ca-certificates/ && sudo update-ca-certificates`}</pre>
           </>
         ) : (
           <>
-            <p className="meta">
-              TLS interception is <strong>disabled</strong>. HTTPS tunnels will be passed through without
-              decryption (only the CONNECT line is captured).
-            </p>
-            <p className="meta">
-              To enable Burp-style HTTPS capture, set the following in <code>.env</code> and restart:
-            </p>
-            <pre className="summary">{`PROXY_CA_CERT_FILE=/var/lib/auto-bughunter/proxy-ca.pem
+            <p className="meta">TLS interception is disabled, so HTTPS traffic passes through without decryption.</p>
+            <pre className="summary" style={{ marginTop: 14 }}>{`PROXY_CA_CERT_FILE=/var/lib/auto-bughunter/proxy-ca.pem
 PROXY_CA_KEY_FILE=/var/lib/auto-bughunter/proxy-ca.key
 PROXY_CA_AUTOGENERATE=true`}</pre>
           </>
         )}
       </section>
-    </>
+    </div>
   );
 }
 
 function headersToText(headers) {
   if (!headers) return "";
-  return Object.entries(headers)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join("\n");
+  return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
 }
 
 function textToHeaders(text) {
@@ -582,9 +586,9 @@ function textToHeaders(text) {
     if (!line) continue;
     const idx = line.indexOf(":");
     if (idx <= 0) continue;
-    const k = line.slice(0, idx).trim();
-    const v = line.slice(idx + 1).trim();
-    if (k) out[k] = v;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (key) out[key] = value;
   }
   return out;
 }
@@ -592,17 +596,26 @@ function textToHeaders(text) {
 function summarizeIntruder(results) {
   const statusCounts = {};
   let errors = 0;
-  for (const r of results) {
-    if (r.error) errors += 1;
-    const key = r.status ? String(r.status) : "—";
+  for (const result of results) {
+    if (result.error) errors += 1;
+    const key = result.status ? String(result.status) : "—";
     statusCounts[key] = (statusCounts[key] || 0) + 1;
   }
   return { statusCounts, errors };
 }
 
+function summarizeHistory(requests) {
+  return requests.reduce((summary, request) => {
+    const status = Number(request.responseStatus || 0);
+    if (status >= 200 && status < 300) summary.success += 1;
+    if (status >= 500) summary.serverErrors += 1;
+    return summary;
+  }, { success: 0, serverErrors: 0 });
+}
+
 function formatTime(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString();
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString();
 }

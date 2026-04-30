@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/impact"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -55,19 +56,24 @@ func (a *LLMChainSynthesisAgent) Run(ctx context.Context, input AgentInput) (Age
 	}
 
 	// Convert findings to a lightweight representation for the LLM.
+	goals := impact.GoalsOrDefault(input.Options)
 	findingSet := make([]map[string]string, 0, len(allFindings))
 	for _, f := range allFindings {
+		enriched := impact.EnrichFinding(f, goals)
 		findingSet = append(findingSet, map[string]string{
-			"id":       f.ID,
-			"category": f.Category,
-			"severity": string(f.Severity),
-			"title":    f.Title,
-			"cwe":      f.CWE,
-			"url":      f.AffectedURL,
+			"id":          enriched.ID,
+			"category":    enriched.Category,
+			"severity":    string(enriched.Severity),
+			"title":       enriched.Title,
+			"cwe":         enriched.CWE,
+			"url":         enriched.AffectedURL,
+			"proofState":  string(enriched.ProofState),
+			"impactScore": fmt.Sprintf("%.2f", enriched.ImpactScore),
+			"bountyScore": fmt.Sprintf("%.2f", enriched.BountyScore),
 		})
 	}
 
-	chains := a.aiClient.SynthesizeChains(ctx, input.Target, findingSet)
+	chains := a.aiClient.SynthesizeChains(ctx, input.Target, findingSet, goals)
 	if len(chains) == 0 {
 		output.DebugNotes = "LLMChainSynthesisAgent: AI returned no novel chains"
 		return output, nil
@@ -110,7 +116,7 @@ func (a *LLMChainSynthesisAgent) Run(ctx context.Context, input AgentInput) (Age
 				"confidence":     fmt.Sprintf("%.2f", chain.Confidence),
 			},
 		}
-		output.Findings = append(output.Findings, finding)
+		output.Findings = append(output.Findings, impact.EnrichFinding(finding, goals))
 	}
 
 	output.DebugNotes = fmt.Sprintf(

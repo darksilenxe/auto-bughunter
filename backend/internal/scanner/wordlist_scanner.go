@@ -3,9 +3,12 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +16,11 @@ import (
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scope"
 	"auto-bughunter/backend/internal/wordlist"
+)
+
+var (
+	pathStateWhitespaceRe = regexp.MustCompile(`\s+`)
+	pathStateTokenRe      = regexp.MustCompile(`\b[0-9a-f]{8,}\b|\b\d{4,}\b`)
 )
 
 type WordlistScanner struct {
@@ -40,6 +48,7 @@ func (ws *WordlistScanner) ScanDirectories(ctx context.Context, target string, a
 
 	dirs := wordlist.GetCommonDirectoriesWithExternal(ctx)
 	discovered := ws.checkMultiple(ctx, target, dirs, authProfile, scanScope)
+	discovered = filterStateChangingPaths(ctx, ws.httpClient, target, discovered, authProfile, scanScope, ws.maxConcurrency, ws.timeoutPerCheck)
 
 	if len(discovered) > 0 {
 		evidence := strings.Join(discovered, ", ")
@@ -159,13 +168,118 @@ done:
 	return discovered
 }
 
-func (ws *WordlistScanner) isAccessible(ctx context.Context, target string, path string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) bool {
+type pathStateFingerprint struct {
+	status      int
+	contentType string
+	bodySample  string
+	accessible  bool
+}
+
+func filterStateChangingPaths(ctx context.Context, client *http.Client, target string, paths []string, authProfile model.ScanAuthProfile, scanScope model.ScanScope, maxConcurrency int, timeoutPerCheck time.Duration) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	if client == nil {
+		return append([]string(nil), paths...)
+	}
+	if maxConcurrency <= 0 {
+		maxConcurrency = 5
+	}
+	if timeoutPerCheck <= 0 {
+		timeoutPerCheck = 3 * time.Second
+	}
+
+	baseline, ok := capturePathState(ctx, client, target, fmt.Sprintf("/__auto-bughunter-state-probe-%d__", time.Now().UnixNano()), authProfile, scanScope, timeoutPerCheck)
+	if !ok {
+		out := append([]string(nil), paths...)
+		sort.Strings(out)
+		return out
+	}
+
+	out := make([]string, 0, len(paths))
+	sem := make(chan struct{}, maxConcurrency)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, path := range paths {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(candidate string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			state, ok := capturePathState(ctx, client, target, candidate, authProfile, scanScope, timeoutPerCheck)
+			if !ok || !state.accessible {
+				return
+			}
+			if !stateMeaningfullyChanged(baseline, state) {
+				return
+			}
+			mu.Lock()
+			out = append(out, candidate)
+			mu.Unlock()
+		}(path)
+	}
+	wg.Wait()
+	sort.Strings(out)
+	return out
+}
+
+func capturePathState(ctx context.Context, client *http.Client, target, path string, authProfile model.ScanAuthProfile, scanScope model.ScanScope, timeoutPerCheck time.Duration) (pathStateFingerprint, bool) {
+	fullURL := buildWordlistURL(target, path)
+	if !scope.IsURLInScope(fullURL, scanScope) {
+		return pathStateFingerprint{}, false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeoutPerCheck)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fullURL, nil)
+	if err != nil {
+		return pathStateFingerprint{}, false
+	}
+	ApplyAuthProfile(req, authProfile)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return pathStateFingerprint{}, false
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return pathStateFingerprint{
+		status:      resp.StatusCode,
+		contentType: normalizePathStateText(resp.Header.Get("Content-Type")),
+		bodySample:  normalizePathStateText(string(bodyBytes)),
+		accessible:  resp.StatusCode >= 200 && resp.StatusCode < 400,
+	}, true
+}
+
+func stateMeaningfullyChanged(baseline, candidate pathStateFingerprint) bool {
+	return baseline.status != candidate.status ||
+		baseline.contentType != candidate.contentType ||
+		baseline.bodySample != candidate.bodySample
+}
+
+func normalizePathStateText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	text = pathStateWhitespaceRe.ReplaceAllString(text, " ")
+	text = pathStateTokenRe.ReplaceAllString(text, "#")
+	if len(text) > 256 {
+		text = text[:256]
+	}
+	return text
+}
+
+func buildWordlistURL(target, path string) string {
 	baseURL := target
 	if !strings.HasSuffix(baseURL, "/") {
 		baseURL += "/"
 	}
-	trimmedPath := strings.TrimPrefix(path, "/")
-	fullURL := baseURL + trimmedPath
+	return baseURL + strings.TrimPrefix(path, "/")
+}
+
+func (ws *WordlistScanner) isAccessible(ctx context.Context, target string, path string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) bool {
+	fullURL := buildWordlistURL(target, path)
 	if !scope.IsURLInScope(fullURL, scanScope) {
 		return false
 	}

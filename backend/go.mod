@@ -12,6 +12,7 @@ require (
 	github.com/projectdiscovery/wappalyzergo v0.2.77
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.50.0
+	golang.org/x/text v0.36.0
 )
 
 require (
@@ -27,5 +28,4 @@ require (
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 )

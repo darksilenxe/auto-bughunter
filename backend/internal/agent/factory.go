@@ -41,12 +41,14 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("metasploit", func() Agent { return NewMetasploitAgent(true) })
 	f.Register("burp", func() Agent { return NewBurpAgent(true) })
 	f.Register("wordlist", func() Agent { return NewWordlistAgent(true) })
+	f.Register("ai_tool_calling", func() Agent { return NewAIToolCallingAgent(nil, true) })
 	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, nil) })
 	f.Register("analysis", func() Agent { return NewAnalysisAgent(true) })
 	f.Register("ml_triage", func() Agent { return NewMLTriageAgent(mlService, true) })
 	f.Register("attack_path", func() Agent { return NewAttackPathAgent(mlService, true) })
 	f.Register("false_positive_review", func() Agent { return NewFalsePositiveReviewAgent(mlService, true) })
 	f.Register("remediation_planner", func() Agent { return NewRemediationPlannerAgent(mlService, true) })
+	f.Register("impact_verifier", func() Agent { return NewImpactVerifierAgent(true) })
 	f.Register("reporting", func() Agent { return NewReportingAgent(true) })
 
 	// Exploit-chain agent: deterministic multi-step attack-chain analysis.
@@ -80,6 +82,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 
 // SetAIClient re-registers agents that benefit from an AI client:
 //   - "hypothesis" uses the primary model for hypothesis generation.
+//   - "ai_tool_calling" uses the coding/planning model for bounded tool choices.
 //   - "tool_builder" uses the coding model for on-the-fly Python tool synthesis.
 //   - "hacktricks_techniques" uses the coding model to adapt HackTricks templates.
 //   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
@@ -91,6 +94,7 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 		return
 	}
 	f.Register("hypothesis", func() Agent { return NewHypothesisAgent(c, scanService, true) })
+	f.Register("ai_tool_calling", func() Agent { return NewAIToolCallingAgent(c, true) })
 	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, c) })
 	f.Register("hacktricks_techniques", func() Agent { return NewHackTricksAgent(true, c) })
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })

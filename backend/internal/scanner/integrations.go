@@ -2255,6 +2255,7 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 	}
 
 	paths := parsePathHits(outb.String(), target, scanScope)
+	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
 	if len(paths) == 0 {
 		return []model.Finding{{
 			ID:             "ffuf-no-paths",
@@ -2335,6 +2336,7 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 	}
 
 	paths := parsePathHits(outb.String(), target, scanScope)
+	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
 	if len(paths) == 0 {
 		return []model.Finding{{
 			ID:             "gobuster-no-paths",

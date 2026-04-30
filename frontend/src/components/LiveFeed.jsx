@@ -1,99 +1,102 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 const ICON = {
-  agent_start:    "▶",
-  agent_complete: "✔",
-  agent_spawned:  "⚡",
-  finding:        "🔍",
-  command:        "$",
-  screenshot:     "📷",
-  info:           "ℹ",
+  agent_start: "▶",
+  agent_complete: "✓",
+  agent_spawned: "⚡",
+  finding: "◎",
+  command: "$",
+  screenshot: "◫",
+  info: "•",
 };
 
 const SEV_COLOR = {
-  high:   "#ef4444",
-  medium: "#f97316",
-  low:    "#eab308",
-  info:   "#94a3b8",
+  high: "#ff5f7a",
+  medium: "#ffad66",
+  low: "#ffd966",
+  info: "#8aa0bf",
 };
 
 export default function LiveFeed({ events, isRunning, onScreenshot }) {
   const ref = useRef(null);
+
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [events]);
 
-  if (!events.length) return null;
+  const counters = useMemo(() => {
+    return events.reduce(
+      (acc, evt) => {
+        acc.total += 1;
+        if (evt.type === "finding") acc.findings += 1;
+        if (evt.type === "command") acc.commands += 1;
+        if (evt.type === "agent_start" || evt.type === "agent_complete" || evt.type === "agent_spawned") acc.agentSteps += 1;
+        return acc;
+      },
+      { total: 0, findings: 0, commands: 0, agentSteps: 0 }
+    );
+  }, [events]);
+
+  if (!events.length) {
+    return (
+      <section className="card card--compact">
+        <div className="live-feed__head">
+          <h2>AI activity stream</h2>
+          <span className="status-badge">Idle</span>
+        </div>
+        <p className="meta">Start a scan to watch agents reason, spawn probes, and prove impact live.</p>
+      </section>
+    );
+  }
 
   return (
-    <div>
-      <h3 style={{ margin: "1rem 0 0.4rem", fontSize: "1rem" }}>
-        ⚡ Live Activity Feed{" "}
-        {isRunning && (
-          <span style={{ fontSize: "0.72rem", color: "#4ade80", marginLeft: "6px" }}>● streaming</span>
-        )}
-      </h3>
-      <div
-        ref={ref}
-        style={{
-          background: "#0d1117",
-          borderRadius: "8px",
-          padding: "0.75rem 1rem",
-          maxHeight: "280px",
-          overflowY: "auto",
-          fontFamily: "monospace",
-          fontSize: "0.76rem",
-          lineHeight: 1.6,
-          border: "1px solid rgba(255,255,255,0.1)",
-        }}
-      >
-        {events.map((evt, idx) => (
-          <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginBottom: "1px" }}>
-            <span style={{ color: "#4b5563", flexShrink: 0, minWidth: "80px" }}>
-              {new Date(evt.timestamp).toLocaleTimeString()}
-            </span>
-            <span style={{ flexShrink: 0, width: "16px" }}>{ICON[evt.type] || "·"}</span>
+    <section className="card">
+      <div className="live-feed__head">
+        <div>
+          <h2 style={{ marginBottom: 4 }}>AI activity stream</h2>
+          <p className="meta">Operator-grade event timeline for agent decisions, tool calls, and promoted findings.</p>
+        </div>
+        <div className="filter-row">
+          <span className={`status-badge ${isRunning ? "success" : ""}`}>{isRunning ? "Streaming" : "Complete"}</span>
+          <span className="chip chip--muted">{counters.agentSteps} agent steps</span>
+          <span className="chip chip--muted">{counters.commands} commands</span>
+          <span className="chip chip--muted">{counters.findings} findings</span>
+        </div>
+      </div>
 
-            {evt.type === "finding" && (
-              <span style={{ color: SEV_COLOR[evt.severity] || "#cdd9e5" }}>
-                [{evt.severity?.toUpperCase()}] {evt.findingTitle}
-              </span>
-            )}
-            {evt.type === "command" && (
-              <span style={{ color: "#79c0ff" }}>
-                <span style={{ color: "#4b5563" }}>$ </span>{evt.command}
-              </span>
-            )}
-            {evt.type === "screenshot" && (
-              <span style={{ color: "#d2a8ff" }}>
-                {evt.message}{" "}
-                {onScreenshot && (
-                  <button
-                    onClick={() => onScreenshot(evt.screenshot)}
-                    style={{
-                      background: "none", border: "1px solid #555", color: "#d2a8ff",
-                      cursor: "pointer", fontSize: "0.68rem", borderRadius: "3px",
-                      padding: "0 4px",
-                    }}
-                  >view</button>
-                )}
-              </span>
-            )}
-            {evt.type === "agent_spawned" && (
-              <span style={{ color: "#fde68a" }}>{evt.message}</span>
-            )}
-            {!["finding","command","screenshot","agent_spawned"].includes(evt.type) && (
-              <span style={{
-                color: evt.type === "agent_start" ? "#56d364"
-                     : evt.type === "agent_complete" ? "#3fb950"
-                     : "#cdd9e5",
-              }}>
-                {evt.agentName ? `[${evt.agentName}] ` : ""}{evt.message}
-              </span>
-            )}
+      <div ref={ref} className="terminal live-feed__stream">
+        {events.map((evt, idx) => (
+          <div key={idx} className="live-feed__item">
+            <span className="meta">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : "live"}</span>
+            <span>{ICON[evt.type] || "·"}</span>
+            <span style={{ color: evt.type === "finding" ? SEV_COLOR[evt.severity] || "#dff1ff" : "#dff1ff" }}>
+              {evt.type === "finding" && <>[{evt.severity?.toUpperCase() || "INFO"}] {evt.findingTitle}</>}
+              {evt.type === "command" && <><span style={{ color: "#7c8aa5" }}>$ </span>{evt.command}</>}
+              {evt.type === "screenshot" && (
+                <>
+                  {evt.message}
+                  {onScreenshot && evt.screenshot && (
+                    <button
+                      type="button"
+                      onClick={() => onScreenshot(evt.screenshot)}
+                      className="button-ghost"
+                      style={{ marginLeft: 10, padding: "0.18rem 0.5rem", fontSize: "0.72rem" }}
+                    >
+                      View
+                    </button>
+                  )}
+                </>
+              )}
+              {!["finding", "command", "screenshot"].includes(evt.type) && (
+                <>
+                  {evt.agentName ? `[${evt.agentName}] ` : ""}
+                  {evt.message}
+                </>
+              )}
+            </span>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { useScan, API_BASE } from "../context/ScanContext";
+import { useMemo, useState } from "react";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
+import { API_BASE, useScan } from "../context/ScanContext";
+import { proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
 export default function Reports() {
   const { job, scanId, screenshots } = useScan();
@@ -16,13 +17,17 @@ export default function Reports() {
   const [optionsStatus, setOptionsStatus] = useState("");
   const [copyStatus, setCopyStatus] = useState({});
 
+  const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
+  const summary = useMemo(() => summarizeFindings(findings), [findings]);
+
   if (!job) {
     return (
       <div className="page">
-        <header><h1>📄 Reports</h1></header>
-        <section className="card">
-          <p className="meta">No scan data available. Go to the Dashboard to run a scan.</p>
-        </section>
+        <header>
+          <h1>Submission center</h1>
+          <p>Generate polished pentest and bug bounty reports after a scan completes.</p>
+        </header>
+        <section className="card empty-state">No scan data available. Run an engagement from the dashboard first.</section>
       </div>
     );
   }
@@ -51,10 +56,7 @@ export default function Reports() {
       const res = await fetch(reportURL(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          companyName, classification, contact, programHandle, logoPath,
-          reportType,
-        }),
+        body: JSON.stringify({ companyName, classification, contact, programHandle, logoPath, reportType }),
       });
       if (!res.ok) {
         setOptionsStatus(`Error ${res.status}`);
@@ -62,12 +64,12 @@ export default function Reports() {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filenameFor();
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filenameFor();
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
       URL.revokeObjectURL(url);
       setOptionsStatus("Downloaded");
     } catch (err) {
@@ -80,257 +82,241 @@ export default function Reports() {
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        setCopyStatus({ ...copyStatus, [finding.id]: `Error ${res.status}` });
+        setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error ${res.status}` }));
         return;
       }
       const text = await res.text();
       await navigator.clipboard.writeText(text);
-      setCopyStatus({ ...copyStatus, [finding.id]: "Copied!" });
-      setTimeout(() => setCopyStatus((s) => ({ ...s, [finding.id]: "" })), 2000);
+      setCopyStatus((prev) => ({ ...prev, [finding.id]: "Copied!" }));
+      setTimeout(() => setCopyStatus((prev) => ({ ...prev, [finding.id]: "" })), 2000);
     } catch (err) {
-      setCopyStatus({ ...copyStatus, [finding.id]: `Error: ${err.message}` });
+      setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error: ${err.message}` }));
     }
   };
 
-  const findings = job.findings || [];
-
   return (
-    <div className="page">
-      <header>
-        <h1>📄 Reports</h1>
-        <p>Target: <strong>{job.target}</strong></p>
-      </header>
+    <div className="page page--wide">
+      <section className="hero-panel">
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <div className="eyebrow">Submission-ready reporting</div>
+            <header style={{ marginBottom: 0 }}>
+              <h1>Bug bounty & pentest report workspace</h1>
+              <p>Package proof-state aware findings into premium-looking downloads, per-finding submissions, and executive deliverables.</p>
+            </header>
+          </div>
+          <div className="filter-row">
+            <span className="chip chip--goal">{summary.submissionReady} ready to submit</span>
+            <span className="chip">{summary.demonstrated} impact-demonstrated</span>
+          </div>
+        </div>
 
-      {/* Report generator panel */}
+        <div className="metrics-grid" style={{ marginTop: 18 }}>
+          <article className="stat-card">
+            <span className="stat-card__label">Top bounty score</span>
+            <div className="stat-card__value">{(Number(summary.topFinding?.bountyScore || 0) * 100).toFixed(0)}%</div>
+            <div className="stat-card__hint">{summary.topFinding?.title || "No findings yet"}</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Proof artifacts</span>
+            <div className="stat-card__value">{summary.proofArtifacts}</div>
+            <div className="stat-card__hint">Reusable evidence that maps cleanly into submission forms.</div>
+          </article>
+          <article className="stat-card">
+            <span className="stat-card__label">Bundle target</span>
+            <div className="stat-card__value">{job.target?.replace(/^https?:\/\//, "") || "target"}</div>
+            <div className="stat-card__hint">Current engagement asset for all generated reports.</div>
+          </article>
+        </div>
+      </section>
+
       {job.status === "completed" && scanId && (
         <section className="card">
-          <h2>Generate Report</h2>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", marginBottom: "0.75rem" }}>
-            <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
+          <div className="toolbar" style={{ alignItems: "flex-start" }}>
+            <div>
+              <h2>Generate deliverables</h2>
+              <p className="meta">Choose a format, then export a full pentest report or a per-finding bounty submission bundle.</p>
+            </div>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => setShowOptions(true)}>Customize template</button>
+            </div>
+          </div>
+
+          <div className="form-grid" style={{ marginTop: 14 }}>
+            <label>
               Format
-              <select value={format} onChange={(e) => setFormat(e.target.value)}
-                style={{ padding: "0.4rem", borderRadius: "6px", marginTop: "4px" }}>
+              <select value={format} onChange={(e) => setFormat(e.target.value)}>
                 <option value="pdf">PDF</option>
                 <option value="md">Markdown</option>
                 <option value="html">HTML</option>
                 <option value="json">JSON</option>
               </select>
             </label>
-            <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-              Type
-              <select value={reportType} onChange={(e) => setReportType(e.target.value)}
-                style={{ padding: "0.4rem", borderRadius: "6px", marginTop: "4px" }}>
-                <option value="pentest">Pen Test</option>
+            <label>
+              Report type
+              <select value={reportType} onChange={(e) => setReportType(e.target.value)}>
+                <option value="pentest">Pen test</option>
                 <option value="executive">Executive</option>
               </select>
             </label>
-            <a
-              href={reportURL()}
-              download={filenameFor()}
-              style={{
-                display: "inline-block", padding: "0.6rem 1.4rem",
-                background: "#7f1d1d", color: "#fff", borderRadius: "8px",
-                textDecoration: "none", fontWeight: 700, fontSize: "0.9rem",
-              }}
-            >
-              ⬇ Download Report
-            </a>
-            <a
-              href={`${API_BASE}/api/report/${scanId}/bugbounty.zip`}
-              download={`bugbounty-${scanId}.zip`}
-              style={{
-                display: "inline-block", padding: "0.6rem 1.4rem",
-                background: "#1e3a8a", color: "#fff", borderRadius: "8px",
-                textDecoration: "none", fontWeight: 700, fontSize: "0.9rem",
-              }}
-            >
-              ⬇ Bug Bounty Bundle (.zip)
-            </a>
-            <button
-              type="button"
-              onClick={() => setShowOptions(true)}
-              style={{
-                padding: "0.55rem 1.1rem", borderRadius: "8px", background: "#374151",
-                color: "#fff", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.85rem",
-              }}
-            >
-              Customize template…
-            </button>
           </div>
-          <p className="meta" style={{ fontSize: "0.8rem" }}>
-            Pen-test reports include CVSS / CWE / OWASP mapping, reproduction steps, and an appendix
-            of tools and commands. Bug-bounty bundles produce one Markdown submission per finding.
+
+          <div className="button-row" style={{ marginTop: 16 }}>
+            <a href={reportURL()} download={filenameFor()} className="button-link">Download report</a>
+            <a href={`${API_BASE}/api/report/${scanId}/bugbounty.zip`} download={`bugbounty-${scanId}.zip`} className="button-link">Download bounty bundle</a>
+          </div>
+          <p className="meta" style={{ marginTop: 12 }}>
+            Reports include CVSS/CWE, reproduction steps, impact statements, proof states, and submission-focused evidence.
           </p>
         </section>
       )}
 
-      {/* Per-finding bug-bounty submissions */}
       {findings.length > 0 && (
         <section className="card">
-          <h2>Bug Bounty Submissions</h2>
-          <p className="meta">Click a row to copy a Markdown submission to the clipboard, or download as PDF/MD.</p>
-          <ul className="findings" style={{ listStyle: "none", padding: 0 }}>
-            {findings.map((f, i) => (
-              <li key={`${f.id}-${i}`} style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", padding: "0.5rem 0" }}>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-                  <strong style={{ flex: "1 1 280px" }}>
-                    [{(f.severity || "info").toUpperCase()}] {f.title}
-                  </strong>
-                  <button type="button" onClick={() => copyBugBountySubmission(f)}
-                    style={{ padding: "0.35rem 0.75rem", background: "#0f766e", color: "#fff",
-                      border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "0.78rem" }}>
-                    📋 Copy submission
-                  </button>
-                  <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(f.id)}?format=md`}
-                    download={`bugbounty-${scanId}-${f.id}.md`}
-                    style={{ padding: "0.35rem 0.75rem", background: "#1e40af", color: "#fff",
-                      borderRadius: "6px", textDecoration: "none", fontSize: "0.78rem", fontWeight: 600 }}>
-                    .md
-                  </a>
-                  <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(f.id)}?format=pdf`}
-                    download={`bugbounty-${scanId}-${f.id}.pdf`}
-                    style={{ padding: "0.35rem 0.75rem", background: "#7f1d1d", color: "#fff",
-                      borderRadius: "6px", textDecoration: "none", fontSize: "0.78rem", fontWeight: 600 }}>
-                    .pdf
-                  </a>
-                  {copyStatus[f.id] && (
-                    <span style={{ fontSize: "0.75rem", color: "#0ea5e9" }}>{copyStatus[f.id]}</span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="toolbar" style={{ alignItems: "flex-start" }}>
+            <div>
+              <h2>Per-finding submissions</h2>
+              <p className="meta">Copy individual Markdown submissions or download them as separate artifacts for triage workflows.</p>
+            </div>
+            <span className="chip chip--muted">{findings.length} findings in queue</span>
+          </div>
+
+          <div className="table-wrap" style={{ marginTop: 14 }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Finding</th>
+                  <th>Proof state</th>
+                  <th>Bounty score</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {findings.map((finding) => (
+                  <tr key={finding.id}>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{finding.title}</div>
+                      <div className="meta">{finding.category || "uncategorized"} · {(finding.severity || "info").toUpperCase()}</div>
+                    </td>
+                    <td>
+                      <span className={`proof-badge ${finding.proofState || "suspected"}`}>{proofStateLabel(finding.proofState)}</span>
+                    </td>
+                    <td>{(Number(finding.bountyScore || 0) * 100).toFixed(0)}%</td>
+                    <td>
+                      <div className="button-row">
+                        <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>Copy</button>
+                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md`} download={`bugbounty-${scanId}-${finding.id}.md`} className="button-link">.md</a>
+                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf`} download={`bugbounty-${scanId}-${finding.id}.pdf`} className="button-link">.pdf</a>
+                        {copyStatus[finding.id] && <span className="meta">{copyStatus[finding.id]}</span>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 
-      {/* Automated pen test report */}
       {job.automatedReport && (
         <section className="card">
-          <h2>Automated Penetration Testing Report</h2>
+          <h2>Automated penetration testing report</h2>
           <pre className="summary">{job.automatedReport}</pre>
         </section>
       )}
 
-      {/* AI Summary */}
       {job.aiSummary && (
         <section className="card">
-          <h2>AI Summary</h2>
+          <h2>AI summary</h2>
           <pre className="summary">{job.aiSummary}</pre>
         </section>
       )}
 
       <SecurityKnowledgePanel knowledge={job.modelRecommendations?.securityKnowledge} />
 
-      {/* Screenshots gallery */}
       {screenshots.length > 0 && (
         <section className="card">
-          <h2>📷 Evidence Screenshots ({screenshots.length})</h2>
-          <p className="meta">Screenshots captured automatically during the attack path.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px", marginTop: "0.75rem" }}>
+          <div className="toolbar">
+            <div>
+              <h2>Evidence screenshots</h2>
+              <p className="meta">Visual artifacts captured automatically during attack-path execution.</p>
+            </div>
+            <span className="chip chip--muted">{screenshots.length} images</span>
+          </div>
+          <div className="three-column-grid" style={{ marginTop: 14 }}>
             {screenshots.map((s, i) => (
-              <div
-                key={i}
-                onClick={() => setSelectedScreenshot(s.b64)}
-                style={{ cursor: "pointer", borderRadius: "8px", overflow: "hidden", border: "2px solid rgba(255,255,255,0.25)", background: "rgba(0,0,0,0.3)" }}
-              >
-                <img
-                  src={`data:image/png;base64,${s.b64}`}
-                  alt={`Screenshot ${i + 1}`}
-                  style={{ width: "100%", height: "130px", objectFit: "cover", display: "block" }}
-                />
-                <div style={{ padding: "6px 8px" }}>
-                  <div style={{ fontSize: "0.7rem", color: "#000", fontWeight: 600 }}>{s.agentName}</div>
-                  <div style={{ fontSize: "0.65rem", color: "#333", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {s.message || `Page ${i + 1}`}
-                  </div>
+              <button key={i} type="button" className="surface" style={{ cursor: "pointer", padding: 0, overflow: "hidden", textAlign: "left" }} onClick={() => setSelectedScreenshot(s.b64)}>
+                <img src={`data:image/png;base64,${s.b64}`} alt={`Screenshot ${i + 1}`} style={{ width: "100%", height: 150, objectFit: "cover", display: "block" }} />
+                <div style={{ padding: 12 }}>
+                  <div style={{ fontWeight: 700 }}>{s.agentName}</div>
+                  <div className="meta">{s.message || `Evidence ${i + 1}`}</div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </section>
       )}
 
-      {/* Decision Dashboard */}
       {job.dashboard && (
         <section className="card">
-          <h2>Decision Dashboard</h2>
-          <ul className="findings">
-            <li>
-              <p><b>Coverage completeness:</b> {job.dashboard.coverageCompletenessScore}%</p>
-              <p><b>Authenticated coverage rate:</b> {(Number(job.dashboard.authenticatedCoverageRate || 0) * 100).toFixed(0)}%</p>
-              <p><b>Drift:</b> new={job.dashboard.newFindings || 0}, changed={job.dashboard.changedFindings || 0}, resolved={job.dashboard.resolvedFindings || 0}</p>
-              <p><b>Actionable findings:</b> {job.dashboard.actionableFindings || 0}</p>
-              {job.dashboard.topAttackPaths?.length > 0 && (
-                <p><b>Top attack paths:</b> {job.dashboard.topAttackPaths.join(", ")}</p>
-              )}
-            </li>
-          </ul>
+          <h2>Decision dashboard</h2>
+          <div className="three-column-grid" style={{ marginTop: 12 }}>
+            <article className="meta-block">
+              <b>Coverage completeness</b>
+              <div>{job.dashboard.coverageCompletenessScore}%</div>
+            </article>
+            <article className="meta-block">
+              <b>Authenticated coverage</b>
+              <div>{(Number(job.dashboard.authenticatedCoverageRate || 0) * 100).toFixed(0)}%</div>
+            </article>
+            <article className="meta-block">
+              <b>Actionable findings</b>
+              <div>{job.dashboard.actionableFindings || 0}</div>
+            </article>
+          </div>
         </section>
       )}
 
-      {/* Next actions */}
       {job.nextActions?.length > 0 && (
         <section className="card">
-          <h2>Recommended Next Actions</h2>
-          <ul className="findings">
-            {job.nextActions.map((n, i) => <li key={i}><p>{n}</p></li>)}
+          <h2>Recommended next actions</h2>
+          <ul className="bullet-list" style={{ marginTop: 10 }}>
+            {job.nextActions.map((nextAction, idx) => <li key={idx}>{nextAction}</li>)}
           </ul>
         </section>
       )}
 
-      {/* Lightbox */}
       {selectedScreenshot && (
-        <div
-          onClick={() => setSelectedScreenshot(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, cursor: "zoom-out" }}
-        >
-          <img src={`data:image/png;base64,${selectedScreenshot}`} alt="Screenshot"
-            style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: "8px" }}
-            onClick={(e) => e.stopPropagation()} />
-          <button onClick={() => setSelectedScreenshot(null)}
-            style={{ position: "absolute", top: "16px", right: "24px", background: "none", border: "none", color: "#fff", fontSize: "2rem", cursor: "pointer" }}>×</button>
+        <div onClick={() => setSelectedScreenshot(null)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,12,0.86)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, cursor: "zoom-out" }}>
+          <img src={`data:image/png;base64,${selectedScreenshot}`} alt="Screenshot" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 18 }} onClick={(e) => e.stopPropagation()} />
+          <button type="button" className="button-ghost" style={{ position: "absolute", top: 20, right: 20 }} onClick={() => setSelectedScreenshot(null)}>Close</button>
         </div>
       )}
 
-      {/* Template options modal */}
       {showOptions && (
-        <div
-          onClick={() => setShowOptions(false)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}
-        >
-          <div onClick={(e) => e.stopPropagation()}
-            style={{ background: "#0f172a", color: "#e2e8f0", padding: "1.5rem", borderRadius: "10px", width: "min(480px, 92vw)" }}>
-            <h2 style={{ marginTop: 0 }}>Report Template Options</h2>
-            <p className="meta" style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
-              These optional fields are embedded in the generated report cover page.
-            </p>
-            {[
-              ["Company name", companyName, setCompanyName],
-              ["Classification (e.g. TLP:RED)", classification, setClassification],
-              ["Contact (email)", contact, setContact],
-              ["Bug bounty program handle", programHandle, setProgramHandle],
-              ["Logo path (server-side)", logoPath, setLogoPath],
-            ].map(([label, value, setter]) => (
-              <label key={label} style={{ display: "block", marginTop: "0.6rem", fontSize: "0.85rem" }}>
-                {label}
-                <input type="text" value={value} onChange={(e) => setter(e.target.value)}
-                  style={{ width: "100%", padding: "0.45rem", marginTop: "4px", borderRadius: "6px",
-                    background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155" }} />
-              </label>
-            ))}
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem", justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => setShowOptions(false)}
-                style={{ padding: "0.5rem 1rem", borderRadius: "6px", border: "1px solid #334155",
-                  background: "transparent", color: "#cbd5e1", cursor: "pointer" }}>
-                Close
-              </button>
-              <button type="button" onClick={submitTemplateOptions}
-                style={{ padding: "0.5rem 1rem", borderRadius: "6px", border: "none",
-                  background: "#7f1d1d", color: "#fff", cursor: "pointer", fontWeight: 600 }}>
-                Generate &amp; Download
-              </button>
+        <div onClick={() => setShowOptions(false)} style={{ position: "fixed", inset: 0, background: "rgba(1,4,12,0.78)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+          <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: "min(520px, 92vw)", marginBottom: 0 }}>
+            <h2>Report template options</h2>
+            <p className="meta">Embed custom branding and contact information in the final report cover page.</p>
+            <div className="form-grid" style={{ marginTop: 12 }}>
+              {[
+                ["Company name", companyName, setCompanyName],
+                ["Classification", classification, setClassification],
+                ["Contact", contact, setContact],
+                ["Program handle", programHandle, setProgramHandle],
+                ["Logo path", logoPath, setLogoPath],
+              ].map(([label, value, setter]) => (
+                <label key={label}>
+                  {label}
+                  <input type="text" value={value} onChange={(e) => setter(e.target.value)} />
+                </label>
+              ))}
             </div>
-            {optionsStatus && <p style={{ marginTop: "0.6rem", fontSize: "0.8rem", color: "#0ea5e9" }}>{optionsStatus}</p>}
+            <div className="button-row" style={{ marginTop: 16 }}>
+              <button type="button" onClick={submitTemplateOptions}>Generate with options</button>
+              <button type="button" className="button-ghost" onClick={() => setShowOptions(false)}>Close</button>
+            </div>
+            {optionsStatus && <p className="meta" style={{ marginTop: 10 }}>{optionsStatus}</p>}
           </div>
         </div>
       )}

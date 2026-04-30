@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/impact"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -21,19 +22,30 @@ var SupportedBugBountyPlatforms = []string{"hackerone", "bugcrowd", "intigriti"}
 // BugBountySubmission structure, applying enrichment first so that CVSS/CWE/
 // References are populated when available.
 func FindingToBugBountySubmission(f model.Finding, target string) model.BugBountySubmission {
-	enriched := EnrichFinding(f)
+	enriched := impact.EnrichFinding(EnrichFinding(f), f.ImpactGoals)
+	prerequisites := []string(nil)
+	if enriched.Exploitability != nil {
+		prerequisites = append(prerequisites, enriched.Exploitability.Prerequisites...)
+	}
 	return model.BugBountySubmission{
-		Title:       enriched.Title,
-		Severity:    enriched.Severity,
-		CVSSVector:  enriched.CVSSVector,
-		CVSSScore:   enriched.CVSSScore,
-		CWE:         enriched.CWE,
-		Asset:       findingAsset(enriched, target),
-		Summary:     enriched.Description,
-		Steps:       enriched.ReproductionSteps,
-		Impact:      enriched.Impact,
-		Remediation: enriched.Recommendation,
-		References:  enriched.References,
+		Title:          enriched.Title,
+		Severity:       enriched.Severity,
+		CVSSVector:     enriched.CVSSVector,
+		CVSSScore:      enriched.CVSSScore,
+		CWE:            enriched.CWE,
+		Asset:          findingAsset(enriched, target),
+		Summary:        enriched.Description,
+		Steps:          enriched.ReproductionSteps,
+		Impact:         enriched.Impact,
+		ImpactScore:    enriched.ImpactScore,
+		BountyScore:    enriched.BountyScore,
+		ProofState:     enriched.ProofState,
+		Goals:          append([]model.ImpactGoal(nil), enriched.ImpactGoals...),
+		Prerequisites:  prerequisites,
+		ProofArtifacts: append([]model.ProofArtifact(nil), enriched.ProofArtifacts...),
+		Remediation:    enriched.Recommendation,
+		References:     enriched.References,
+		Attachments:    impact.BuildSubmissionAttachments(enriched),
 	}
 }
 
@@ -49,7 +61,7 @@ func RenderBugBountyMarkdown(f model.Finding, target string) string {
 // hints when platform is one of SupportedBugBountyPlatforms. Unknown values
 // fall back to the platform-agnostic format.
 func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string) string {
-	enriched := EnrichFinding(f)
+	enriched := impact.EnrichFinding(EnrichFinding(f), f.ImpactGoals)
 	sub := FindingToBugBountySubmission(enriched, target)
 	var b strings.Builder
 	b.WriteString("# " + sub.Title + "\n\n")
@@ -79,6 +91,15 @@ func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string
 		if strings.TrimSpace(row[1]) != "" {
 			b.WriteString(fmt.Sprintf("- **%s:** %s\n", row[0], row[1]))
 		}
+	}
+	if sub.ProofState != "" {
+		b.WriteString(fmt.Sprintf("- **Proof State:** %s\n", strings.ReplaceAll(string(sub.ProofState), "_", " ")))
+	}
+	if sub.ImpactScore > 0 {
+		b.WriteString(fmt.Sprintf("- **Impact Score:** %.2f\n", sub.ImpactScore))
+	}
+	if sub.BountyScore > 0 {
+		b.WriteString(fmt.Sprintf("- **Bounty Score:** %.2f\n", sub.BountyScore))
 	}
 	b.WriteString("\n")
 
@@ -113,7 +134,7 @@ func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string
 		b.WriteString("## Proof of Concept\n\n```\n" + enriched.PoC + "\n```\n\n")
 	}
 
-	// Reproducibility evidence checklist tells the triager which artefacts
+	// Reproducibility evidence checklist tells the triager which artifacts
 	// are bundled and which are missing — turning the submission into a
 	// reproducibility bundle by default.
 	b.WriteString("## Reproducibility Evidence\n\n")
@@ -121,6 +142,37 @@ func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string
 		b.WriteString("- " + line + "\n")
 	}
 	b.WriteString("\n")
+
+	if len(sub.Goals) > 0 {
+		b.WriteString("## Target Impact Goals\n\n")
+		for _, goal := range sub.Goals {
+			b.WriteString("- " + strings.ReplaceAll(string(goal), "_", " ") + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(sub.Prerequisites) > 0 {
+		b.WriteString("## Exploit Preconditions\n\n")
+		for _, pre := range sub.Prerequisites {
+			b.WriteString("- " + pre + "\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(sub.ProofArtifacts) > 0 {
+		b.WriteString("## Proof Artifacts\n\n")
+		for _, artifact := range sub.ProofArtifacts {
+			line := "- **" + artifact.Label + "**"
+			if artifact.Value != "" {
+				line += ": " + artifact.Value
+			}
+			if artifact.Description != "" {
+				line += " — " + artifact.Description
+			}
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## Impact\n\n")
 	if sub.Impact != "" {
@@ -184,7 +236,7 @@ func SeverityRationale(f model.Finding) []string {
 }
 
 // reproducibilityChecklist returns a deterministic evidence checklist (✅/⚠)
-// describing which reproducibility artefacts are bundled with this submission.
+// describing which reproducibility artifacts are bundled with this submission.
 // This makes it obvious to triagers what is and isn't included.
 func reproducibilityChecklist(f model.Finding) []string {
 	mark := func(present bool, label string) string {
@@ -270,7 +322,8 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 	index.WriteString("| # | Severity | Title | File |\n|---|----------|-------|------|\n")
 
 	if job != nil {
-		for i, f := range job.Findings {
+		findings := impact.RankFindings(job.Findings, job.Options.ImpactGoals)
+		for i, f := range findings {
 			fname := fmt.Sprintf("%02d-%s-%s.md", i+1, strings.ToLower(string(f.Severity)), safeFilename(f.ID))
 			content := RenderBugBountyMarkdownForPlatform(f, target, platform)
 			fileWriter, err := zw.Create(fname)
@@ -296,4 +349,3 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 	}
 	return buf.Bytes(), nil
 }
-

@@ -137,11 +137,21 @@ func TestRenderPentestPDFNonEmpty(t *testing.T) {
 
 func TestRenderBugBountyMarkdownContainsRequiredSections(t *testing.T) {
 	f := sampleJob().Findings[0]
+	f.Impact = "Account takeover or cross-account data access is plausible after successful exploitation."
+	f.ProofState = model.ProofStateImpactDemonstrated
+	f.ImpactScore = 0.88
+	f.BountyScore = 0.84
+	f.ImpactGoals = []model.ImpactGoal{model.ImpactGoalSensitiveDataExposure}
+	f.ProofArtifacts = []model.ProofArtifact{{Type: "evidence", Label: "Raw evidence", Value: "responseDiff=other-user"}}
 	md := RenderBugBountyMarkdown(f, "https://example.com")
 	for _, want := range []string{
 		"## Summary",
 		"## Steps to Reproduce",
 		"## Impact",
+		"Proof State",
+		"Impact Score",
+		"## Target Impact Goals",
+		"## Proof Artifacts",
 		"## Suggested Remediation",
 		"CWE-89",
 		"id",                    // affected parameter
