@@ -610,8 +610,18 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
+	// Track how many jobs are waiting for a global execution slot.
+	// The defer is a safety net in case acquireGlobalSlot panics; the
+	// normal Dec immediately after acquireGlobalSlot is the hot path.
 	metrics.ScanQueueDepth.Inc()
+	dequeued := false
+	defer func() {
+		if !dequeued {
+			metrics.ScanQueueDepth.Dec()
+		}
+	}()
 	releaseGlobal := s.acquireGlobalSlot(options)
+	dequeued = true
 	metrics.ScanQueueDepth.Dec()
 	defer releaseGlobal()
 	s.enforceTargetRateLimit(target, options)

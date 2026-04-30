@@ -445,8 +445,8 @@ func AICall(callType string, durationSecs float64, failed bool) {
 			)
 			aiErrorsByType[ct] = errCounter
 		}
-		aiCallMetricsMu.Unlock()
 		errCounter.Inc()
+		aiCallMetricsMu.Unlock()
 		return
 	}
 

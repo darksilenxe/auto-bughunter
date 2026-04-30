@@ -92,6 +92,13 @@ export function ScanProvider({ children }) {
   const bgPollRef = useRef(null);
 
   const pollScan = useCallback(async (id) => {
+    // Cancel any existing background interval from a previous scan before
+    // starting a new active-poll loop, preventing interval leaks on re-use.
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
+
     // Active phase: poll every 5 s for up to 10 min while the loading
     // indicator is shown.
     const maxAttempts = 120;
