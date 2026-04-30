@@ -145,4 +145,3 @@ export function impactGoalMeta(goal) {
     description: "",
   };
 }
-
