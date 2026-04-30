@@ -72,21 +72,64 @@ export function ScanProvider({ children }) {
   useEffect(() => () => sseRef.current?.close(), []);
 
   // ── Poll scan status ──────────────────────────────────────────────────
+  // Fetches a single status snapshot and returns true when the job has
+  // reached a terminal state (completed / failed / cancelled).
+  const fetchJobStatus = useCallback(async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      setJob(data);
+      return data.status === "completed" || data.status === "failed" || data.status === "cancelled";
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Ref for the background interval so we can cancel it on unmount.
+  const bgPollRef = useRef(null);
+
   const pollScan = useCallback(async (id) => {
+    // Cancel any existing background interval from a previous scan before
+    // starting a new active-poll loop, preventing interval leaks on re-use.
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
+
+    // Active phase: poll every 5 s for up to 10 min while the loading
+    // indicator is shown.
     const maxAttempts = 120;
+    let done = false;
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 5000));
-      try {
-        const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
-          headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        setJob(data);
-        if (data.status === "completed" || data.status === "failed" || data.status === "cancelled") break;
-      } catch { /* ignore */ }
+      done = await fetchJobStatus(id);
+      if (done) break;
     }
     setLoading(false);
+
+    // Background phase: if the scan is still running after the active-poll
+    // window (e.g. a very long scan), keep checking every 30 s so the UI
+    // eventually reflects the terminal state without a manual refresh.
+    if (!done) {
+      bgPollRef.current = setInterval(async () => {
+        const terminal = await fetchJobStatus(id);
+        if (terminal) {
+          clearInterval(bgPollRef.current);
+          bgPollRef.current = null;
+        }
+      }, 30000);
+    }
+  }, [fetchJobStatus]);
+
+  // Clean up the background interval on unmount.
+  useEffect(() => () => {
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
   }, []);
 
   // ── Stop a running scan ───────────────────────────────────────────────

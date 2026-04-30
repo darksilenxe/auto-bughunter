@@ -222,6 +222,17 @@ var (
 		"Number of scans currently in progress.",
 		nil,
 	)
+	ScanQueueDepth = DefaultRegistry.NewGauge(
+		"autobughunter_scan_queue_depth",
+		"Number of scan jobs currently queued but not yet started.",
+		nil,
+	)
+	PostProcessDuration = DefaultRegistry.NewHistogram(
+		"autobughunter_scan_postprocess_seconds",
+		"Time spent in post-scan processing (enrichment, AI summary, ML) in seconds.",
+		nil,
+		[]float64{0.1, 0.5, 1, 2.5, 5, 10, 20, 30, 60},
+	)
 	FindingsTotal = DefaultRegistry.NewCounter(
 		"autobughunter_findings_total",
 		"Total findings emitted across all scans.",
@@ -232,14 +243,37 @@ var (
 		"Total agent executions.",
 		nil,
 	)
+	// AgentDuration is a legacy aggregate histogram kept for backward compat.
+	// Per-agent durations are tracked via AgentDurationByName.
 	AgentDuration = DefaultRegistry.NewHistogram(
 		"autobughunter_agent_duration_seconds",
-		"Per-agent execution duration in seconds.",
+		"Overall agent execution duration in seconds (all agents combined).",
 		nil, nil,
 	)
 	ProbeErrorsTotal = DefaultRegistry.NewCounter(
 		"autobughunter_probe_errors_total",
 		"Total scanner probe errors.",
+		nil,
+	)
+	OutboundProbeRequests = DefaultRegistry.NewCounter(
+		"autobughunter_outbound_probe_requests_total",
+		"Total outbound HTTP requests made by the scanner to target applications.",
+		nil,
+	)
+	AICallsTotal = DefaultRegistry.NewCounter(
+		"autobughunter_ai_calls_total",
+		"Total AI/LLM API calls made (all call types combined).",
+		nil,
+	)
+	AICallDuration = DefaultRegistry.NewHistogram(
+		"autobughunter_ai_call_duration_seconds",
+		"Latency of AI/LLM API calls in seconds.",
+		nil,
+		[]float64{0.1, 0.5, 1, 2, 5, 10, 20, 30},
+	)
+	AICallErrorsTotal = DefaultRegistry.NewCounter(
+		"autobughunter_ai_call_errors_total",
+		"Total AI/LLM API call errors.",
 		nil,
 	)
 )
@@ -254,9 +288,19 @@ var (
 	agentsByName   = map[string]*Counter{}
 	agentsByNameMu sync.Mutex
 
+	agentDurationByName   = map[string]*Histogram{}
+	agentFindingsByName   = map[string]*Histogram{}
+	agentStatusByKey      = map[string]*Counter{}
+	agentDetailMetricsMu  sync.Mutex
+
 	toolRunsByKey     = map[string]*Counter{}
 	toolDurationByKey = map[string]*Histogram{}
 	toolMetricsMu     sync.Mutex
+
+	aiCallsByType        = map[string]*Counter{}
+	aiDurationByType     = map[string]*Histogram{}
+	aiErrorsByType       = map[string]*Counter{}
+	aiCallMetricsMu      sync.Mutex
 )
 
 // FindingRecorded increments the findings counter for the given severity label.
@@ -291,6 +335,122 @@ func AgentRun(agentName string) {
 	}
 	agentsByNameMu.Unlock()
 	c.Inc()
+}
+
+// AgentCompleted records detailed per-agent telemetry: duration, finding count, and
+// outcome status (completed / error / timed_out).
+func AgentCompleted(agentName, status string, durationSecs float64, findingsCount int) {
+	agent := strings.TrimSpace(agentName)
+	if agent == "" {
+		agent = "unknown"
+	}
+	stat := strings.TrimSpace(status)
+	if stat == "" {
+		stat = "unknown"
+	}
+
+	// Aggregate histogram (all agents).
+	AgentDuration.Observe(durationSecs)
+
+	agentDetailMetricsMu.Lock()
+
+	// Per-agent duration histogram.
+	durHist, ok := agentDurationByName[agent]
+	if !ok {
+		durHist = DefaultRegistry.NewHistogram(
+			"autobughunter_agent_duration_seconds_by_name",
+			"Per-agent execution duration in seconds.",
+			map[string]string{"agent": agent},
+			nil,
+		)
+		agentDurationByName[agent] = durHist
+	}
+	durHist.Observe(durationSecs)
+
+	// Per-agent findings-produced histogram.
+	findHist, ok := agentFindingsByName[agent]
+	if !ok {
+		findHist = DefaultRegistry.NewHistogram(
+			"autobughunter_agent_findings_per_run",
+			"Number of findings produced per agent run.",
+			map[string]string{"agent": agent},
+			[]float64{0, 1, 2, 5, 10, 20, 50, 100},
+		)
+		agentFindingsByName[agent] = findHist
+	}
+	findHist.Observe(float64(findingsCount))
+
+	// Per-agent status counter.
+	statusKey := agent + "|" + stat
+	statusCounter, ok := agentStatusByKey[statusKey]
+	if !ok {
+		statusCounter = DefaultRegistry.NewCounter(
+			"autobughunter_agent_runs_by_status_total",
+			"Agent executions broken down by agent name and outcome status.",
+			map[string]string{"agent": agent, "status": stat},
+		)
+		agentStatusByKey[statusKey] = statusCounter
+	}
+
+	agentDetailMetricsMu.Unlock()
+
+	statusCounter.Inc()
+}
+
+// AICall records one AI/LLM API call with its call type, duration, and whether it errored.
+func AICall(callType string, durationSecs float64, failed bool) {
+	ct := strings.TrimSpace(callType)
+	if ct == "" {
+		ct = "unknown"
+	}
+
+	AICallsTotal.Inc()
+	AICallDuration.Observe(durationSecs)
+	if failed {
+		AICallErrorsTotal.Inc()
+	}
+
+	aiCallMetricsMu.Lock()
+
+	callCounter, ok := aiCallsByType[ct]
+	if !ok {
+		callCounter = DefaultRegistry.NewCounter(
+			"autobughunter_ai_calls_by_type_total",
+			"AI/LLM API calls broken down by call type.",
+			map[string]string{"call_type": ct},
+		)
+		aiCallsByType[ct] = callCounter
+	}
+	callCounter.Inc()
+
+	durHist, ok := aiDurationByType[ct]
+	if !ok {
+		durHist = DefaultRegistry.NewHistogram(
+			"autobughunter_ai_call_duration_seconds_by_type",
+			"AI/LLM API call latency in seconds broken down by call type.",
+			map[string]string{"call_type": ct},
+			[]float64{0.1, 0.5, 1, 2, 5, 10, 20, 30},
+		)
+		aiDurationByType[ct] = durHist
+	}
+	durHist.Observe(durationSecs)
+
+	if failed {
+		errCounter, ok := aiErrorsByType[ct]
+		if !ok {
+			errCounter = DefaultRegistry.NewCounter(
+				"autobughunter_ai_call_errors_by_type_total",
+				"AI/LLM API call errors broken down by call type.",
+				map[string]string{"call_type": ct},
+			)
+			aiErrorsByType[ct] = errCounter
+		}
+		errCounter.Inc()
+		aiCallMetricsMu.Unlock()
+		return
+	}
+
+	aiCallMetricsMu.Unlock()
 }
 
 // ToolRun records one scanner-tool execution with tool/agent/status labels and duration.

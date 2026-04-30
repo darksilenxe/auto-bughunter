@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/safety"
@@ -686,6 +687,7 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		cloned := req.Clone(ctx)
+		metrics.OutboundProbeRequests.Inc()
 		resp, err := s.httpClient.Do(cloned)
 		if err == nil && !isRetriableStatus(resp.StatusCode) {
 			return resp, nil

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/impact"
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -91,7 +92,9 @@ func (c *Client) completeWith(ctx context.Context, p Provider, model string, mes
 		// Fallback: use the legacy OpenAI-compatible path via c.HTTP directly.
 		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, model, messages, temperature, jsonMode)
 	}
+	t0 := time.Now()
 	text, err := p.Complete(ctx, model, messages, temperature, jsonMode)
+	metrics.AICall("provider_complete", time.Since(t0).Seconds(), err != nil)
 	if err != nil {
 		return "", err
 	}
@@ -151,7 +154,9 @@ func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model stri
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	t0 := time.Now()
 	resp, err := c.HTTP.Do(req)
+	metrics.AICall("legacy_complete", time.Since(t0).Seconds(), err != nil)
 	if err != nil {
 		return "", fmt.Errorf("legacy complete: do: %w", err)
 	}

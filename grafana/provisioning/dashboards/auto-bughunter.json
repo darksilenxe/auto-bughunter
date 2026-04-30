@@ -2,111 +2,502 @@
   "title": "Auto BugHunter",
   "uid": "auto-bughunter",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Scans Total",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
-      "targets": [{ "expr": "autobughunter_scans_total", "legendFormat": "scans" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_scans_total",
+          "legendFormat": "scans"
+        }
+      ]
     },
     {
       "id": 2,
       "type": "stat",
       "title": "Active Scans",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-      "targets": [{ "expr": "autobughunter_active_scans", "legendFormat": "active" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_active_scans",
+          "legendFormat": "active"
+        }
+      ]
     },
     {
       "id": 3,
       "type": "stat",
       "title": "Findings Total",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
-      "targets": [{ "expr": "autobughunter_findings_total", "legendFormat": "findings" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_findings_total",
+          "legendFormat": "findings"
+        }
+      ]
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Agent Runs Total",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-      "targets": [{ "expr": "autobughunter_agents_total", "legendFormat": "agents" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_agents_total",
+          "legendFormat": "agents"
+        }
+      ]
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "Scan Rate (per minute)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
-      "targets": [{ "expr": "rate(autobughunter_scans_total[1m])", "legendFormat": "scans/min" }]
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_scans_total[1m])",
+          "legendFormat": "scans/min"
+        }
+      ]
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Findings Rate by Severity",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "targets": [
-        { "expr": "rate(autobughunter_findings_by_severity_total{severity=\"high\"}[5m])", "legendFormat": "high" },
-        { "expr": "rate(autobughunter_findings_by_severity_total{severity=\"medium\"}[5m])", "legendFormat": "medium" },
-        { "expr": "rate(autobughunter_findings_by_severity_total{severity=\"low\"}[5m])", "legendFormat": "low" },
-        { "expr": "rate(autobughunter_findings_by_severity_total{severity=\"info\"}[5m])", "legendFormat": "info" }
+        {
+          "expr": "rate(autobughunter_findings_by_severity_total{severity=\"high\"}[5m])",
+          "legendFormat": "high"
+        },
+        {
+          "expr": "rate(autobughunter_findings_by_severity_total{severity=\"medium\"}[5m])",
+          "legendFormat": "medium"
+        },
+        {
+          "expr": "rate(autobughunter_findings_by_severity_total{severity=\"low\"}[5m])",
+          "legendFormat": "low"
+        },
+        {
+          "expr": "rate(autobughunter_findings_by_severity_total{severity=\"info\"}[5m])",
+          "legendFormat": "info"
+        }
       ]
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "Scan Duration p50/p95 (seconds)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "targets": [
-        { "expr": "histogram_quantile(0.50, rate(autobughunter_scan_duration_seconds_bucket[5m]))", "legendFormat": "p50" },
-        { "expr": "histogram_quantile(0.95, rate(autobughunter_scan_duration_seconds_bucket[5m]))", "legendFormat": "p95" }
+        {
+          "expr": "histogram_quantile(0.50, rate(autobughunter_scan_duration_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(autobughunter_scan_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        }
       ]
     },
     {
       "id": 8,
       "type": "timeseries",
       "title": "Agent Runs by Name",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "targets": [
-        { "expr": "rate(autobughunter_agent_runs_total[5m])", "legendFormat": "{{agent}}" }
+        {
+          "expr": "rate(autobughunter_agent_runs_total[5m])",
+          "legendFormat": "{{agent}}"
+        }
       ]
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Tool Runs by Tool/Status",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
       "targets": [
-        { "expr": "rate(autobughunter_tool_runs_total[5m])", "legendFormat": "{{tool}} {{status}}" }
+        {
+          "expr": "rate(autobughunter_tool_runs_total[5m])",
+          "legendFormat": "{{tool}} {{status}}"
+        }
       ]
     },
     {
       "id": 10,
       "type": "timeseries",
       "title": "Tool Error + Timeout Rate",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
       "targets": [
-        { "expr": "sum by (tool, status) (rate(autobughunter_tool_runs_total{status=~\"error|timeout\"}[5m]))", "legendFormat": "{{tool}} {{status}}" }
+        {
+          "expr": "sum by (tool, status) (rate(autobughunter_tool_runs_total{status=~\"error|timeout\"}[5m]))",
+          "legendFormat": "{{tool}} {{status}}"
+        }
       ]
     },
     {
       "id": 11,
       "type": "timeseries",
       "title": "Tool Duration p50/p95 by Tool (seconds)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}} p50" },
-        { "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))", "legendFormat": "{{tool}} p95" }
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(autobughunter_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}} p95"
+        }
       ]
     },
     {
       "id": 12,
       "type": "timeseries",
       "title": "Top Tool Throughput (runs/min)",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
       "targets": [
-        { "expr": "topk(10, sum by (tool) (rate(autobughunter_tool_runs_total[1m]) * 60))", "legendFormat": "{{tool}}" }
+        {
+          "expr": "topk(10, sum by (tool) (rate(autobughunter_tool_runs_total[1m]) * 60))",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Scan Queue Depth",
+      "description": "Scans queued and waiting for a global execution slot.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_scan_queue_depth",
+          "legendFormat": "queued"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "AI Calls Total",
+      "description": "Total AI/LLM API calls made since startup.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "autobughunter_ai_calls_total",
+          "legendFormat": "AI calls"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Post-Processing Duration p50/p95 (seconds)",
+      "description": "Time spent on enrichment, AI summary, ML recommendations and report generation after the scan agents finish.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(autobughunter_scan_postprocess_seconds_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(autobughunter_scan_postprocess_seconds_bucket[5m]))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Agent Duration p50/p95 by Agent (seconds)",
+      "description": "Execution latency per individual agent name.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, agent) (rate(autobughunter_agent_duration_seconds_by_name_bucket[5m])))",
+          "legendFormat": "{{agent}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, agent) (rate(autobughunter_agent_duration_seconds_by_name_bucket[5m])))",
+          "legendFormat": "{{agent}} p95"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Agent Run Outcomes by Agent",
+      "description": "Breakdown of completed / error / timed-out runs per agent.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_agent_runs_by_status_total{status=\"completed\"}[5m])",
+          "legendFormat": "{{agent}} ok"
+        },
+        {
+          "expr": "rate(autobughunter_agent_runs_by_status_total{status=\"error\"}[5m])",
+          "legendFormat": "{{agent}} error"
+        },
+        {
+          "expr": "rate(autobughunter_agent_runs_by_status_total{status=\"partial\"}[5m])",
+          "legendFormat": "{{agent}} partial"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Findings Produced per Agent Run (p50 / p95)",
+      "description": "How many findings each agent typically produces per execution.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, agent) (rate(autobughunter_agent_findings_per_run_bucket[5m])))",
+          "legendFormat": "{{agent}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, agent) (rate(autobughunter_agent_findings_per_run_bucket[5m])))",
+          "legendFormat": "{{agent}} p95"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "AI Call Rate by Type (per minute)",
+      "description": "Rate of LLM API calls broken down by call type (provider_complete, legacy_complete, plan, summarize, etc.).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_ai_calls_by_type_total[1m]) * 60",
+          "legendFormat": "{{call_type}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "AI Call Latency p50/p95 by Type (seconds)",
+      "description": "LLM API response time distribution per call type.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, call_type) (rate(autobughunter_ai_call_duration_seconds_by_type_bucket[5m])))",
+          "legendFormat": "{{call_type}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, call_type) (rate(autobughunter_ai_call_duration_seconds_by_type_bucket[5m])))",
+          "legendFormat": "{{call_type}} p95"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "AI Call Error Rate by Type",
+      "description": "Rate of failed LLM API calls per call type.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_ai_call_errors_by_type_total[5m])",
+          "legendFormat": "{{call_type}} errors"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Outbound Probe Requests (per minute)",
+      "description": "Rate of outbound HTTP requests sent by the scanner to target applications.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_outbound_probe_requests_total[1m]) * 60",
+          "legendFormat": "requests/min"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Scanner Probe Error Rate",
+      "description": "Rate of scanner probe errors \u2014 unexpected failures during active security checks.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_probe_errors_total[5m])",
+          "legendFormat": "probe errors/s"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Probe Requests vs Probe Errors",
+      "description": "Side-by-side view of outbound probe volume vs error rate to spot reliability issues.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "targets": [
+        {
+          "expr": "rate(autobughunter_outbound_probe_requests_total[1m]) * 60",
+          "legendFormat": "requests/min"
+        },
+        {
+          "expr": "rate(autobughunter_probe_errors_total[1m]) * 60",
+          "legendFormat": "errors/min"
+        }
       ]
     }
   ]
