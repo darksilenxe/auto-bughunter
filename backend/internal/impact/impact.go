@@ -301,7 +301,7 @@ func deriveImpactNarrative(f model.Finding, goals []model.ImpactGoal) string {
 		asset = "the affected asset"
 	}
 	goalText := strings.ReplaceAll(string(goals[0]), "_", " ")
-	return fmt.Sprintf("Evidence suggests %s against %s, with bug-bounty relevance driven by the verified attack path and captured proof artefacts.", goalText, asset)
+	return fmt.Sprintf("Evidence suggests %s against %s, with bug-bounty relevance driven by the verified attack path and captured proof artifacts.", goalText, asset)
 }
 
 func matchedGoalsForFinding(f model.Finding, goals []model.ImpactGoal) []model.ImpactGoal {

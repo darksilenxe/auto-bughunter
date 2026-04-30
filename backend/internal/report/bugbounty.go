@@ -134,7 +134,7 @@ func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string
 		b.WriteString("## Proof of Concept\n\n```\n" + enriched.PoC + "\n```\n\n")
 	}
 
-	// Reproducibility evidence checklist tells the triager which artefacts
+	// Reproducibility evidence checklist tells the triager which artifacts
 	// are bundled and which are missing — turning the submission into a
 	// reproducibility bundle by default.
 	b.WriteString("## Reproducibility Evidence\n\n")
@@ -236,7 +236,7 @@ func SeverityRationale(f model.Finding) []string {
 }
 
 // reproducibilityChecklist returns a deterministic evidence checklist (✅/⚠)
-// describing which reproducibility artefacts are bundled with this submission.
+// describing which reproducibility artifacts are bundled with this submission.
 // This makes it obvious to triagers what is and isn't included.
 func reproducibilityChecklist(f model.Finding) []string {
 	mark := func(present bool, label string) string {
