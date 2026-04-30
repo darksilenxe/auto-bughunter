@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AttackGraphChart from "../components/AttackGraph";
 import AttackPathGraph from "../components/AttackPathGraph";
 import { useScan } from "../context/ScanContext";
@@ -8,12 +8,21 @@ export default function AttackGraph() {
   const { job, loading, liveEvents } = useScan();
   const [activeGraphTab, setActiveGraphTab] = useState("chain");
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
+  const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
   const isRunning = job?.status === "running" || loading;
   const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
   const topAttackPaths = job?.dashboard?.topAttackPaths || [];
   const agentRuns = job?.agentRuns || [];
   const activeAgents = agentRuns.filter((run) => ["running", "in_progress"].includes(String(run.status || "").toLowerCase())).length;
+
+  // Close fullscreen on Escape
+  useEffect(() => {
+    if (!isGraphFullscreen) return;
+    const handleKey = (e) => { if (e.key === "Escape") setIsGraphFullscreen(false); };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [isGraphFullscreen]);
 
   return (
     <div className="page page--wide">
@@ -88,6 +97,14 @@ export default function AttackGraph() {
                     {label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="filter-chip"
+                  onClick={() => setIsGraphFullscreen(true)}
+                  title="Expand graph to fullscreen (Esc to close)"
+                >
+                  ⛶ Fullscreen
+                </button>
               </div>
             </div>
 
@@ -145,6 +162,51 @@ export default function AttackGraph() {
                 The graph is optimized to explain exploit paths and proof progression, not just show scanner output.
               </p>
             </section>
+          </div>
+        </div>
+      )}
+
+      {isGraphFullscreen && (
+        <div className="graph-fullscreen-overlay" onClick={() => setIsGraphFullscreen(false)}>
+          <div className="graph-fullscreen-inner" onClick={(e) => e.stopPropagation()}>
+            <div className="graph-fullscreen-header">
+              <span className="eyebrow">Attack graph — fullscreen</span>
+              <div className="filter-row">
+                {[
+                  { id: "chain", label: "Attack chain" },
+                  { id: "pipeline", label: "Agent pipeline" },
+                ].map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`filter-chip ${activeGraphTab === id ? "is-active" : ""}`}
+                    onClick={() => setActiveGraphTab(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="button-ghost"
+                  style={{ padding: "0.42rem 0.8rem", fontSize: "0.8rem", fontWeight: 700 }}
+                  onClick={() => setIsGraphFullscreen(false)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+            <div className="graph-fullscreen-body">
+              {activeGraphTab === "chain" ? (
+                <AttackGraphChart
+                  job={job}
+                  liveEvents={liveEvents}
+                  isRunning={isRunning}
+                  onScreenshot={(b64) => setSelectedScreenshot(b64)}
+                />
+              ) : (
+                <AttackPathGraph events={liveEvents} job={job} />
+              )}
+            </div>
           </div>
         </div>
       )}
