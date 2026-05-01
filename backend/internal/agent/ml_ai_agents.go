@@ -36,10 +36,6 @@ func (a *MLTriageAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
-	if !input.Options.UseMLTriageAgent {
-		output.DebugNotes = "ML triage agent disabled by scan options"
-		return output, nil
-	}
 	if a.ml == nil {
 		output.DebugNotes = "ML service not configured"
 		return output, nil
@@ -111,10 +107,6 @@ func (a *AttackPathAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 		Status:    "completed",
 	}
 
-	if !input.Options.UseAttackPathAgent {
-		output.DebugNotes = "Attack path agent disabled by scan options"
-		return output, nil
-	}
 	if a.ml == nil {
 		output.DebugNotes = "ML service not configured"
 		return output, nil
@@ -169,10 +161,6 @@ func (a *FalsePositiveReviewAgent) Run(ctx context.Context, input AgentInput) (A
 		Status:    "completed",
 	}
 
-	if !input.Options.UseFalsePositiveReview {
-		output.DebugNotes = "False positive review agent disabled by scan options"
-		return output, nil
-	}
 	if a.ml == nil {
 		output.DebugNotes = "ML service not configured"
 		return output, nil
@@ -230,10 +218,6 @@ func (a *RemediationPlannerAgent) Run(ctx context.Context, input AgentInput) (Ag
 		Status:    "completed",
 	}
 
-	if !input.Options.UseRemediationPlanner {
-		output.DebugNotes = "Remediation planner agent disabled by scan options"
-		return output, nil
-	}
 	if a.ml == nil {
 		output.DebugNotes = "ML service not configured"
 		return output, nil

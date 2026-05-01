@@ -154,7 +154,7 @@ func promotedSeverity(source model.Finding) model.Severity {
 	if source.BountyScore >= 0.8 || source.ImpactScore >= 0.85 {
 		return model.SeverityHigh
 	}
-	if source.Severity == model.SeverityHigh {
+	if source.Severity == model.SeverityCritical || source.Severity == model.SeverityHigh {
 		return model.SeverityHigh
 	}
 	return model.SeverityMedium
