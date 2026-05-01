@@ -11,10 +11,10 @@ export default function AttackGraph() {
   const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
   const isRunning = job?.status === "running" || loading;
-  const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
+  const findingsSummary = useMemo(function() { return summarizeFindings(job?.findings || []); }, [job?.findings]);
   const topAttackPaths = job?.dashboard?.topAttackPaths || [];
   const agentRuns = job?.agentRuns || [];
-  const activeAgents = agentRuns.filter((run) => ["running", "in_progress"].includes(String(run.status || "").toLowerCase())).length;
+  const activeAgents = agentRuns.filter(function(run) { return ["running", "in_progress"].includes(String(run.status || "").toLowerCase()); }).length;
 
   // Close fullscreen on Escape
   useEffect(() => {
@@ -25,7 +25,7 @@ export default function AttackGraph() {
       }
     };
     document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
+    return function() { return document.removeEventListener("keydown", handleKey); };
   }, [isGraphFullscreen]);
 
   return (

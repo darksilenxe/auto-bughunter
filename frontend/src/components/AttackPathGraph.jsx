@@ -110,7 +110,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
         Math.abs(p.y - dragState.current.startY) > 3) {
       didDrag.current = true;
     }
-    setNodeOffsets(prev => ({ ...prev, [dragState.current.id]: { dx, dy } }));
+    setNodeOffsets(function(prev) { return ({ ...prev, [dragState.current.id]: { dx, dy } }); });
   }
 
   function onSVGPointerUp() {
