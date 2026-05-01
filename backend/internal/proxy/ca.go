@@ -80,10 +80,10 @@ func LoadOrGenerateCA(opts CAOptions) (*CA, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create CA cert dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create CA key dir: %w", err)
 	}
 	if err := os.WriteFile(certPath, ca.certPEM, 0o644); err != nil {

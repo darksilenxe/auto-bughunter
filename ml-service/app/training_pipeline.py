@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 from urllib.error import HTTPError, URLError
 from urllib import request
+from urllib.parse import urlparse
 
 import numpy as np
 import onnx
@@ -51,8 +52,21 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def validate_api_base(api_base: str) -> str:
+    base = api_base.strip()
+    if not base:
+        raise RuntimeError("api_base is required")
+    if any(ch in base for ch in ("\r", "\n", "\x00")):
+        raise RuntimeError("api_base contains invalid characters")
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"api_base must be an http(s) URL: {api_base}")
+    return base
+
+
 def read_dataset_from_api(api_base: str, api_key: str, limit: int) -> Dict[str, Any]:
-    url = f"{api_base.rstrip('/')}/api/ml/engagements?limit={limit}"
+    base = validate_api_base(api_base)
+    url = f"{base.rstrip('/')}/api/ml/engagements?limit={limit}"
     req = request.Request(url, method="GET")
     if api_key.strip():
         req.add_header("Authorization", f"Bearer {api_key.strip()}")
@@ -173,6 +187,8 @@ def clamp01(value: float) -> float:
 
 def severity_base(sev: str) -> float:
     sev = normalize(sev)
+    if sev == "critical":
+        return 0.9
     if sev == "high":
         return 0.75
     if sev == "medium":

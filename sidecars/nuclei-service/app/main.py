@@ -133,6 +133,7 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
         "-silent",
         "-json",
         "-nc",
+        "-no-interactsh",
     }
     allowed_flags_with_value = {
         "-u",
@@ -141,6 +142,8 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
         "-severity",
         "-timeout",
         "-rl",
+        "-c",
+        "-bulk-size",
     }
 
     sanitized_args: List[str] = []
@@ -219,8 +222,8 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     except subprocess.TimeoutExpired as e:
         logger.warning(f"Nuclei execution timed out after {req.timeout}s")
         return ExecuteResponse(
-            stdout=e.stdout.decode() if e.stdout else "",
-            stderr=e.stderr.decode() if e.stderr else "",
+            stdout=e.stdout if e.stdout else "",
+            stderr=e.stderr if e.stderr else "",
             exit_code=-1,
             timed_out=True,
             error=f"Execution timed out after {req.timeout} seconds"

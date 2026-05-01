@@ -63,18 +63,18 @@ type Finding struct {
 // ────────────────────────────────────────────────────────────────────────────
 
 var scriptBlockedPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),      // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),        // no spawning sub-processes
 	regexp.MustCompile(`(?i)\bfrom\s+subprocess\s+import\b`), // no spawning sub-processes
-	regexp.MustCompile(`(?i)\bsubprocess\.`),                // no subprocess API usage
-	regexp.MustCompile(`(?i)\bos\.system\s*\(`),             // no os.system calls
-	regexp.MustCompile(`(?i)__import__\s*\(`),               // no dynamic imports
-	regexp.MustCompile(`(?i)\beval\s*\(`),                   // no eval
-	regexp.MustCompile(`(?i)\bexec\s*\(`),                   // no exec
-	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),        // no opening absolute paths (allow relative)
-	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),        // no raw socket connects (use urllib)
-	regexp.MustCompile(`(?i)rm\s+-rf`),                      // no recursive deletes
-	regexp.MustCompile(`(?i)/etc/passwd`),                   // no passwd access
-	regexp.MustCompile(`(?i)/root`),                         // no /root access
+	regexp.MustCompile(`(?i)\bsubprocess\.`),                 // no subprocess API usage
+	regexp.MustCompile(`(?i)\bos\.system\s*\(`),              // no os.system calls
+	regexp.MustCompile(`(?i)__import__\s*\(`),                // no dynamic imports
+	regexp.MustCompile(`(?i)\beval\s*\(`),                    // no eval
+	regexp.MustCompile(`(?i)\bexec\s*\(`),                    // no exec
+	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),         // no opening absolute paths (allow relative)
+	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),         // no raw socket connects (use urllib)
+	regexp.MustCompile(`(?i)rm\s+-rf`),                       // no recursive deletes
+	regexp.MustCompile(`(?i)/etc/passwd`),                    // no passwd access
+	regexp.MustCompile(`(?i)/root`),                          // no /root access
 }
 
 func validateScript(code string) error {
@@ -133,11 +133,11 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	if emit != nil {
 		cmdStr := fmt.Sprintf("%s %s %s", interp, scriptPath, target)
 		emit(model.ScanEvent{
-			Type:        model.ScanEventCommand,
-			AgentName:   spec.GeneratedBy,
-			Command:     cmdStr,
-			Message:     fmt.Sprintf("Running generated tool %q: %s", spec.Name, spec.Rationale),
-			Timestamp:   time.Now().UTC(),
+			Type:      model.ScanEventCommand,
+			AgentName: spec.GeneratedBy,
+			Command:   cmdStr,
+			Message:   fmt.Sprintf("Running generated tool %q: %s", spec.Name, spec.Rationale),
+			Timestamp: time.Now().UTC(),
 		})
 	}
 
@@ -224,6 +224,8 @@ func parseFindings(output, toolName string) ([]model.Finding, error) {
 
 func toSeverity(s string) model.Severity {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return model.SeverityCritical
 	case "high":
 		return model.SeverityHigh
 	case "medium":
@@ -274,41 +276,41 @@ func safeEnv() []string {
 // Each script outputs JSON-lines findings to stdout.
 func BuiltInTools() map[string]func(agentName string) ToolSpec {
 	return map[string]func(agentName string) ToolSpec{
-		"jwt_probe":             jwtProbeTool,
-		"graphql_probe":         graphqlProbeTool,
-		"redirect_probe":        redirectProbeTool,
-		"header_probe":          headerProbeTool,
-		"csp_probe":             cspProbeTool,
-		"ssrf_probe":            ssrfProbeTool,
-		"cors_probe":            corsProbeTool,
-		"idor_probe":            idorProbeTool,
-		"cookie_probe":          cookieProbeTool,
-		"info_disclosure_probe": infoDisclosureProbeTool,
-		"ssti_probe":            sstiProbeTool,
-		"xxe_probe":             xxeProbeTool,
-		"rate_limit_probe":      rateLimitProbeTool,
-		"api_keys_probe":        apiKeysProbeTool,
-		"path_traversal_probe":         pathTraversalProbeTool,
-		"log4shell_probe":              log4shellProbeTool,
-		"nosql_injection_probe":        nosqlInjectionProbeTool,
-		"ldap_injection_probe":         ldapInjectionProbeTool,
-		"crlf_injection_probe":         crlfInjectionProbeTool,
-		"http_smuggling_probe":         httpSmugglingProbeTool,
-		"subdomain_takeover_probe":     subdomainTakeoverProbeTool,
-		"ssl_tls_probe":                sslTlsProbeTool,
-		"host_header_injection_probe":  hostHeaderInjectionProbeTool,
-		"oauth_probe":                  oauthProbeTool,
-		"password_reset_probe":         passwordResetProbeTool,
-		"account_enumeration_probe":    accountEnumerationProbeTool,
-		"mass_assignment_probe":        massAssignmentProbeTool,
-		"verb_tampering_probe":         verbTamperingProbeTool,
-		"deserialization_probe":        deserializationProbeTool,
-		"cache_poisoning_probe":        cachePoisoningProbeTool,
-		"race_condition_probe":         raceConditionProbeTool,
-		"dom_xss_probe":                domXssProbeTool,
-		"http_methods_probe":           httpMethodsProbeTool,
-		"business_logic_probe":         businessLogicProbeTool,
-		"file_upload_probe":            fileUploadProbeTool,
+		"jwt_probe":                   jwtProbeTool,
+		"graphql_probe":               graphqlProbeTool,
+		"redirect_probe":              redirectProbeTool,
+		"header_probe":                headerProbeTool,
+		"csp_probe":                   cspProbeTool,
+		"ssrf_probe":                  ssrfProbeTool,
+		"cors_probe":                  corsProbeTool,
+		"idor_probe":                  idorProbeTool,
+		"cookie_probe":                cookieProbeTool,
+		"info_disclosure_probe":       infoDisclosureProbeTool,
+		"ssti_probe":                  sstiProbeTool,
+		"xxe_probe":                   xxeProbeTool,
+		"rate_limit_probe":            rateLimitProbeTool,
+		"api_keys_probe":              apiKeysProbeTool,
+		"path_traversal_probe":        pathTraversalProbeTool,
+		"log4shell_probe":             log4shellProbeTool,
+		"nosql_injection_probe":       nosqlInjectionProbeTool,
+		"ldap_injection_probe":        ldapInjectionProbeTool,
+		"crlf_injection_probe":        crlfInjectionProbeTool,
+		"http_smuggling_probe":        httpSmugglingProbeTool,
+		"subdomain_takeover_probe":    subdomainTakeoverProbeTool,
+		"ssl_tls_probe":               sslTlsProbeTool,
+		"host_header_injection_probe": hostHeaderInjectionProbeTool,
+		"oauth_probe":                 oauthProbeTool,
+		"password_reset_probe":        passwordResetProbeTool,
+		"account_enumeration_probe":   accountEnumerationProbeTool,
+		"mass_assignment_probe":       massAssignmentProbeTool,
+		"verb_tampering_probe":        verbTamperingProbeTool,
+		"deserialization_probe":       deserializationProbeTool,
+		"cache_poisoning_probe":       cachePoisoningProbeTool,
+		"race_condition_probe":        raceConditionProbeTool,
+		"dom_xss_probe":               domXssProbeTool,
+		"http_methods_probe":          httpMethodsProbeTool,
+		"business_logic_probe":        businessLogicProbeTool,
+		"file_upload_probe":           fileUploadProbeTool,
 	}
 }
 
@@ -652,12 +654,12 @@ if re.search(r"script-src[^;]*\*", csp):
 }
 
 func ssrfProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "ssrf_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect SSRF via common URL parameters, AWS/GCP metadata, and error reflection",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "ssrf_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect SSRF via common URL parameters, AWS/GCP metadata, and error reflection",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: SSRF probe — tests common URL parameters for server-side request forgery."""
 import sys, json, urllib.request, urllib.error, urllib.parse, time
 
@@ -758,16 +760,16 @@ for param in file_params[:6]:
     except Exception:
         pass
 `,
-}
+	}
 }
 
 func corsProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "cors_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect advanced CORS misconfigurations: null origin, subdomain bypass, wildcard-prefix, HTTP downgrade",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "cors_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect advanced CORS misconfigurations: null origin, subdomain bypass, wildcard-prefix, HTTP downgrade",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Advanced CORS misconfiguration probe."""
 import sys, json, urllib.request, urllib.error, urllib.parse
 
@@ -894,16 +896,16 @@ for endpoint in endpoints[:3]:
         except Exception:
             pass
 `,
-}
+	}
 }
 
 func idorProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "idor_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect Insecure Direct Object References by comparing responses for sequential and UUID-style resource IDs",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "idor_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect Insecure Direct Object References by comparing responses for sequential and UUID-style resource IDs",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: IDOR probe — sequential and UUID resource enumeration."""
 import sys, json, urllib.request, urllib.error, urllib.parse, re
 
@@ -1011,16 +1013,16 @@ for qp in qp_paths:
             "recommendation": "Validate that the authenticated user is authorized to access the requested object. Never trust client-supplied resource IDs alone.",
         })
 `,
-}
+	}
 }
 
 func cookieProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "cookie_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Analyse Set-Cookie headers for missing security flags, overly broad scope, and long-lived sessions",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "cookie_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Analyse Set-Cookie headers for missing security flags, overly broad scope, and long-lived sessions",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Cookie security probe — analyses Set-Cookie headers."""
 import sys, json, urllib.request, urllib.error, re
 
@@ -1137,16 +1139,16 @@ for url in check_urls:
                 except ValueError:
                     pass
 `,
-}
+	}
 }
 
 func infoDisclosureProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "info_disclosure_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Discover sensitive paths: .git, .env, backup files, actuator endpoints, swagger, source maps",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "info_disclosure_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Discover sensitive paths: .git, .env, backup files, actuator endpoints, swagger, source maps",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Information disclosure probe — deep sensitive-path enumeration."""
 import sys, json, urllib.request, urllib.error
 
@@ -1236,16 +1238,16 @@ for path, severity, title, description, rec in sensitive_paths:
             "recommendation": rec,
         })
 `,
-}
+	}
 }
 
 func sstiProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "ssti_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect Server-Side Template Injection across Jinja2, Twig, FreeMarker, ERB, Mako, Smarty, and Velocity",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "ssti_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect Server-Side Template Injection across Jinja2, Twig, FreeMarker, ERB, Mako, Smarty, and Velocity",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: SSTI probe — tests common template injection payloads across engines."""
 import sys, json, urllib.request, urllib.error, urllib.parse
 
@@ -1341,16 +1343,16 @@ for param in test_params[:8]:
         except Exception:
             pass
 `,
-}
+	}
 }
 
 func xxeProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "xxe_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect XXE injection via classic, OOB, and parameter-entity variants at XML-accepting endpoints",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "xxe_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect XXE injection via classic, OOB, and parameter-entity variants at XML-accepting endpoints",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: XXE probe — tests XML endpoints for external entity injection."""
 import sys, json, urllib.request, urllib.error, urllib.parse
 
@@ -1478,16 +1480,16 @@ for url in probe_urls[:5]:
             pass
         break  # only test one content-type for attack surface
 `,
-}
+	}
 }
 
 func rateLimitProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "rate_limit_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Test authentication endpoints for missing rate limiting and IP-header bypass techniques",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "rate_limit_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Test authentication endpoints for missing rate limiting and IP-header bypass techniques",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Rate limit probe — tests auth endpoints for rate limit bypass."""
 import sys, json, urllib.request, urllib.error, time
 
@@ -1599,16 +1601,16 @@ for endpoint in auth_endpoints[:6]:
                 ),
             })
 `,
-}
+	}
 }
 
 func apiKeysProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "api_keys_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Scan HTML, JavaScript, and API responses for exposed API keys, tokens, and cloud credentials",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "api_keys_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Scan HTML, JavaScript, and API responses for exposed API keys, tokens, and cloud credentials",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: API key exposure probe — scans JS/HTML for embedded secrets."""
 import sys, json, urllib.request, urllib.error, re
 
@@ -1718,16 +1720,16 @@ for js_path in ['/static/js/main.js', '/js/app.js', '/bundle.js', '/main.js',
     if js_body and len(js_body) > 100:
         scan_content(url, js_body)
 `,
-}
+	}
 }
 
 func pathTraversalProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "path_traversal_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect path traversal via multiple encoding variants, null bytes, and common file parameters",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "path_traversal_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect path traversal via multiple encoding variants, null bytes, and common file parameters",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Path traversal probe — tests multiple encoding and bypass variants."""
 import sys, json, urllib.request, urllib.error, urllib.parse
 
@@ -1826,16 +1828,16 @@ for param in file_params[:12]:
         continue
     break  # stop after first confirmed traversal param
 `,
-}
+	}
 }
 
 func log4shellProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "log4shell_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect Log4Shell (CVE-2021-44228) and related JNDI injection via common HTTP request fields",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "log4shell_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect Log4Shell (CVE-2021-44228) and related JNDI injection via common HTTP request fields",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Log4Shell/JNDI injection probe — tests HTTP headers for CVE-2021-44228."""
 import sys, json, urllib.request, urllib.error, time
 
@@ -1958,16 +1960,16 @@ for payload in jndi_payloads[:4]:
             })
             break
 `,
-}
+	}
 }
 
 func nosqlInjectionProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "nosql_injection_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect MongoDB and NoSQL injection vulnerabilities via operator injection",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "nosql_injection_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect MongoDB and NoSQL injection vulnerabilities via operator injection",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: NoSQL injection probe for MongoDB operator injection."""
 import json
 import sys
@@ -2025,16 +2027,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_nosql(sys.argv[1])
 `,
-}
+	}
 }
 
 func ldapInjectionProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "ldap_injection_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect LDAP injection vulnerabilities in authentication and search endpoints",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "ldap_injection_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect LDAP injection vulnerabilities in authentication and search endpoints",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: LDAP injection probe."""
 import json
 import sys
@@ -2093,16 +2095,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_ldap(sys.argv[1])
 `,
-}
+	}
 }
 
 func crlfInjectionProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "crlf_injection_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect HTTP header injection via CRLF sequences",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "crlf_injection_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect HTTP header injection via CRLF sequences",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: CRLF injection probe for header injection."""
 import json
 import sys
@@ -2151,16 +2153,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_crlf(sys.argv[1])
 `,
-}
+	}
 }
 
 func httpSmugglingProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "http_smuggling_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect HTTP request smuggling via CL.TE and TE.CL desync",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "http_smuggling_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect HTTP request smuggling via CL.TE and TE.CL desync",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: HTTP smuggling detection probe."""
 import json
 import sys
@@ -2235,16 +2237,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_smuggling(sys.argv[1])
 `,
-}
+	}
 }
 
 func subdomainTakeoverProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "subdomain_takeover_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect dangling DNS records vulnerable to subdomain takeover",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "subdomain_takeover_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect dangling DNS records vulnerable to subdomain takeover",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Subdomain takeover detection probe."""
 import json
 import sys
@@ -2309,16 +2311,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_takeover(sys.argv[1])
 `,
-}
+	}
 }
 
 func sslTlsProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "ssl_tls_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Analyze SSL/TLS configuration for security issues",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "ssl_tls_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Analyze SSL/TLS configuration for security issues",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: SSL/TLS security analysis probe."""
 import json
 import sys
@@ -2421,16 +2423,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_ssl(sys.argv[1])
 `,
-}
+	}
 }
 
 func hostHeaderInjectionProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "host_header_injection_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect host header injection for cache poisoning and password reset attacks",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "host_header_injection_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect host header injection for cache poisoning and password reset attacks",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Host header injection probe."""
 import json
 import sys
@@ -2502,16 +2504,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_host_header(sys.argv[1])
 `,
-}
+	}
 }
 
 func oauthProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "oauth_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect OAuth implementation vulnerabilities including redirect URI manipulation",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "oauth_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect OAuth implementation vulnerabilities including redirect URI manipulation",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: OAuth vulnerability probe."""
 import json
 import sys
@@ -2591,16 +2593,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_oauth(sys.argv[1])
 `,
-}
+	}
 }
 
 func passwordResetProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "password_reset_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect password reset vulnerabilities including host header poisoning",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "password_reset_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect password reset vulnerabilities including host header poisoning",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Password reset vulnerability probe."""
 import json
 import sys
@@ -2675,16 +2677,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_reset(sys.argv[1])
 `,
-}
+	}
 }
 
 func accountEnumerationProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "account_enumeration_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect user account enumeration via differential responses",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "account_enumeration_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect user account enumeration via differential responses",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Account enumeration detection probe."""
 import json
 import sys
@@ -2776,16 +2778,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_enumeration(sys.argv[1])
 `,
-}
+	}
 }
 
 func massAssignmentProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "mass_assignment_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect mass assignment vulnerabilities allowing privilege escalation",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "mass_assignment_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect mass assignment vulnerabilities allowing privilege escalation",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Mass assignment vulnerability probe."""
 import json
 import sys
@@ -2867,16 +2869,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_mass_assignment(sys.argv[1])
 `,
-}
+	}
 }
 
 func verbTamperingProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "verb_tampering_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect HTTP verb tampering bypasses on protected endpoints",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "verb_tampering_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect HTTP verb tampering bypasses on protected endpoints",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: HTTP verb tampering probe."""
 import json
 import sys
@@ -2946,16 +2948,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_verb_tampering(sys.argv[1])
 `,
-}
+	}
 }
 
 func deserializationProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "deserialization_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect insecure deserialization vulnerabilities",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "deserialization_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect insecure deserialization vulnerabilities",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Insecure deserialization probe."""
 import json
 import sys
@@ -3043,16 +3045,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_deserialization(sys.argv[1])
 `,
-}
+	}
 }
 
 func cachePoisoningProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "cache_poisoning_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect web cache poisoning vulnerabilities",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "cache_poisoning_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect web cache poisoning vulnerabilities",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Web cache poisoning probe."""
 import json
 import sys
@@ -3124,16 +3126,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_cache_poisoning(sys.argv[1])
 `,
-}
+	}
 }
 
 func raceConditionProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "race_condition_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect race condition vulnerabilities in stateful operations",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "race_condition_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect race condition vulnerabilities in stateful operations",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Race condition probe via timing analysis."""
 import json
 import sys
@@ -3232,16 +3234,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_race(sys.argv[1])
 `,
-}
+	}
 }
 
 func domXssProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "dom_xss_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect DOM-based XSS sinks and sources in JavaScript",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "dom_xss_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect DOM-based XSS sinks and sources in JavaScript",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: DOM XSS source/sink detection probe."""
 import json
 import sys
@@ -3351,16 +3353,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_dom_xss(sys.argv[1])
 `,
-}
+	}
 }
 
 func httpMethodsProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "http_methods_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Enumerate allowed HTTP methods and detect dangerous ones",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "http_methods_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Enumerate allowed HTTP methods and detect dangerous ones",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: HTTP methods enumeration probe."""
 import json
 import sys
@@ -3448,16 +3450,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_methods(sys.argv[1])
 `,
-}
+	}
 }
 
 func businessLogicProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "business_logic_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect business logic flaws like negative values and boundary issues",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "business_logic_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect business logic flaws like negative values and boundary issues",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: Business logic vulnerability probe."""
 import json
 import sys
@@ -3556,16 +3558,16 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_business_logic(sys.argv[1])
 `,
-}
+	}
 }
 
 func fileUploadProbeTool(agentName string) ToolSpec {
-return ToolSpec{
-Name:        "file_upload_probe",
-Language:    "python3",
-GeneratedBy: agentName,
-Rationale:   "Detect file upload vulnerabilities and bypass techniques",
-Code: `#!/usr/bin/env python3
+	return ToolSpec{
+		Name:        "file_upload_probe",
+		Language:    "python3",
+		GeneratedBy: agentName,
+		Rationale:   "Detect file upload vulnerabilities and bypass techniques",
+		Code: `#!/usr/bin/env python3
 """Auto-generated: File upload vulnerability probe."""
 import json
 import sys
@@ -3676,5 +3678,5 @@ if __name__ == "__main__":
         sys.exit(1)
     probe_upload(sys.argv[1])
 `,
-}
+	}
 }

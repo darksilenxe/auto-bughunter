@@ -45,6 +45,8 @@ export function scoreFinding(finding) {
 
 export function severityWeight(severity) {
   switch ((severity || "").toLowerCase()) {
+    case "critical":
+      return 5;
     case "high":
       return 4;
     case "medium":
@@ -101,7 +103,7 @@ export function summarizeFindings(findings = []) {
     proofArtifacts: 0,
     avgBountyScore: 0,
     topFinding: ordered[0] || null,
-    severities: { high: 0, medium: 0, low: 0, info: 0 },
+    severities: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
   };
 
   if (!ordered.length) return summary;
