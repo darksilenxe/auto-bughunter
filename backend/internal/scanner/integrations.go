@@ -843,8 +843,7 @@ func resolveIntegrationBinary(expected, configured string) (string, error) {
 }
 
 func commandForIntegration(ctx context.Context, binary string, args ...string) *exec.Cmd {
-	// nosemgrep: allowlisted binary resolved in resolveIntegrationBinary with sanitized args.
-	return exec.CommandContext(ctx, binary, args...)
+	return exec.CommandContext(ctx, binary, args...) //nolint:gosec // nosemgrep: allowlisted binary resolved in resolveIntegrationBinary
 }
 
 func commandPreflight(parent context.Context, expected, configured string, args ...string) bool {

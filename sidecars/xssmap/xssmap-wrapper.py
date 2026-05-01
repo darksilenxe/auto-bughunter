@@ -94,6 +94,13 @@ def _validate_timeout(value: int) -> int:
     return value
 
 
+def _resolve_executable(name: str) -> str | None:
+    resolved = shutil.which(name)
+    if not resolved or _has_invalid_chars(resolved):
+        return None
+    return resolved
+
+
 def _fail(message: str, output: str) -> int:
     sys.stderr.write(f"xssmap wrapper: {message}\n")
     if output == "json":
@@ -103,7 +110,7 @@ def _fail(message: str, output: str) -> int:
 
 
 def _candidate_invocations(src: Path, target: str, max_payloads: int | None,
-                           model: str | None, ollama_url: str) -> list[list[str]]:
+                            model: str | None, ollama_url: str) -> list[list[str]]:
     """Build a prioritised list of candidate command lines to try."""
     common: list[str] = []
     if max_payloads is not None:
@@ -114,14 +121,19 @@ def _candidate_invocations(src: Path, target: str, max_payloads: int | None,
         common += ["--ollama-url", ollama_url]
 
     invocations: list[list[str]] = []
+    python_exec = sys.executable or "python3"
+    if _has_invalid_chars(python_exec):
+        raise ValueError("python executable contains invalid characters")
     # 1) Project-provided entry script (most XSSMap forks ship `xssmap.py`).
     script = src / "xssmap.py"
     if script.is_file():
-        invocations.append(["python3", str(script), "-u", target] + common)
+        invocations.append([python_exec, str(script), "-u", target] + common)
     # 2) Console-script style entry-point installed by `pip install .`.
-    invocations.append(["xssmap", "-u", target] + common)
+    xssmap_exec = _resolve_executable("xssmap")
+    if xssmap_exec:
+        invocations.append([xssmap_exec, "-u", target] + common)
     # 3) `python -m xssmap` style.
-    invocations.append(["python3", "-m", "xssmap", "-u", target] + common)
+    invocations.append([python_exec, "-m", "xssmap", "-u", target] + common)
     return invocations
 
 
@@ -153,7 +165,7 @@ def _parse_stdout(raw: str) -> list[dict[str, Any]]:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # nosemgrep - command is validated before invocation
+    return subprocess.run(  # nosemgrep: command uses validated args and resolved executables
         cmd,
         cwd=str(cwd),
         capture_output=True,
@@ -196,8 +208,11 @@ def main() -> int:
     except ValueError as exc:
         return _fail(str(exc), args.output)
 
-    invocations = _candidate_invocations(src, target, args.max_payloads,
-                                         model, ollama_url)
+    try:
+        invocations = _candidate_invocations(src, target, args.max_payloads,
+                                             model, ollama_url)
+    except ValueError as exc:
+        return _fail(str(exc), args.output)
 
     last_err = "no invocation attempted"
     for cmd in invocations:
