@@ -22,6 +22,7 @@ from onnx import TensorProto, helper, numpy_helper
 
 SCHEMA_VERSION = "v1"
 FEATURE_DIMS = 8
+ONNX_OPSET_VERSION = int(os.getenv("ONNX_OPSET_VERSION", "13"))
 SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*:\s*)(bearer|basic)\s+[A-Za-z0-9\-._~+/=]+"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9\-._~+/=]+['\"]?"),
@@ -296,7 +297,7 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
 
 def train_logreg(x: np.ndarray, y: np.ndarray, *, epochs: int = 400, lr: float = 0.08, l2: float = 1e-3) -> Tuple[np.ndarray, float]:
     if len(x) == 0:
-        return np.zeros((FEATURE_DIMS,), dtype=np.float32), 0.0
+        return np.zeros((FEATURE_DIMS,), dtype=np.float64).astype(np.float32), 0.0
     weights = np.zeros((x.shape[1],), dtype=np.float64)
     bias = 0.0
     n = float(len(x))
@@ -357,7 +358,11 @@ def export_onnx(weights: np.ndarray, bias: float, out_path: Path) -> None:
         outputs=[output_tensor_info],
         initializer=[weights_initializer, bias_initializer],
     )
-    model = helper.make_model(graph, producer_name="auto-bughunter-training-pipeline", opset_imports=[helper.make_opsetid("", 13)])
+    model = helper.make_model(
+        graph,
+        producer_name="auto-bughunter-training-pipeline",
+        opset_imports=[helper.make_opsetid("", ONNX_OPSET_VERSION)],
+    )
     onnx.checker.check_model(model)
     onnx.save(model, str(out_path))
 
