@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess  # nosec B404
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -32,6 +33,10 @@ _AUTH_EXEMPT_PATHS = {"/health"}
 
 # Maximum execution timeout (seconds)
 MAX_TIMEOUT = 600  # 10 minutes
+MAX_RATE_LIMIT = 1000
+MAX_CONCURRENCY = 200
+MAX_BULK_SIZE = 200
+ALLOWED_SEVERITIES = {"info", "low", "medium", "high", "critical"}
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -60,6 +65,53 @@ def _resolve_nuclei_binary() -> str:
     if not binary:
         raise FileNotFoundError("nuclei binary not found in PATH")
     return binary
+
+
+def _normalize_url(value: str) -> str:
+    value = value.strip()
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("invalid URL")
+    return parsed.geturl()
+
+
+def _normalize_severity(value: str) -> str:
+    parts = [p.strip().lower() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("severity must be non-empty")
+    for part in parts:
+        if part not in ALLOWED_SEVERITIES:
+            raise ValueError("unsupported severity value")
+    return ",".join(parts)
+
+
+def _normalize_int(value: str, *, minimum: int, maximum: int) -> str:
+    value = value.strip()
+    if not value.isdigit():
+        raise ValueError("value must be numeric")
+    number = int(value)
+    if number < minimum or number > maximum:
+        raise ValueError("value outside allowed range")
+    return str(number)
+
+
+def _normalize_path(value: str) -> str:
+    value = value.strip()
+    if not value or "\x00" in value or "\n" in value or "\r" in value:
+        raise ValueError("invalid path")
+    if not os.path.isabs(value):
+        raise ValueError("path must be absolute")
+    normalized = os.path.normpath(value)
+    prefixes = []
+    configured_prefixes = os.getenv("NUCLEI_ALLOWED_PATH_PREFIXES", "")
+    if configured_prefixes:
+        prefixes.extend([p.strip() for p in configured_prefixes.split(",") if p.strip()])
+    prefixes.append(os.getenv("SHARED_TMP_DIR", "/tmp"))
+    for prefix in prefixes:
+        prefix = os.path.normpath(prefix)
+        if normalized == prefix or normalized.startswith(prefix + os.sep):
+            return normalized
+    raise ValueError("path is outside allowed prefixes")
 
 
 @app.middleware("http")
@@ -188,7 +240,7 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
             value = req.args[i + 1]
 
             # Basic value sanity checks
-            if not value or len(value) > 2048 or "\x00" in value or "\n" in value or "\r" in value:
+            if not value or len(value) > 2048:
                 return ExecuteResponse(
                     stdout="",
                     stderr="",
@@ -197,14 +249,31 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
                     error=f"Invalid value for {arg}"
                 )
 
-            # Extra restriction for file/path-like options
-            if arg in {"-l", "-t"} and ".." in value:
+            try:
+                if arg == "-u":
+                    value = _normalize_url(value)
+                elif arg == "-severity":
+                    value = _normalize_severity(value)
+                elif arg == "-timeout":
+                    value = _normalize_int(value, minimum=1, maximum=MAX_TIMEOUT)
+                elif arg == "-rl":
+                    value = _normalize_int(value, minimum=1, maximum=MAX_RATE_LIMIT)
+                elif arg == "-c":
+                    value = _normalize_int(value, minimum=1, maximum=MAX_CONCURRENCY)
+                elif arg == "-bulk-size":
+                    value = _normalize_int(value, minimum=1, maximum=MAX_BULK_SIZE)
+                elif arg in {"-l", "-t"}:
+                    value = _normalize_path(value)
+                else:
+                    if "\x00" in value or "\n" in value or "\r" in value:
+                        raise ValueError("invalid value")
+            except ValueError as exc:
                 return ExecuteResponse(
                     stdout="",
                     stderr="",
                     exit_code=1,
                     timed_out=False,
-                    error=f"Invalid value for {arg}: path traversal detected"
+                    error=f"Invalid value for {arg}: {exc}"
                 )
 
             sanitized_args.extend([arg, value])

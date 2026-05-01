@@ -810,9 +810,6 @@ func resolveIntegrationBinary(expected, configured string) (string, error) {
 	if strings.ContainsAny(candidate, "\x00\r\n") {
 		return "", fmt.Errorf("binary name contains invalid characters")
 	}
-	if filepath.Base(candidate) != expected {
-		return "", fmt.Errorf("binary must resolve to %s", expected)
-	}
 	if strings.Contains(candidate, string(os.PathSeparator)) {
 		if !filepath.IsAbs(candidate) {
 			return "", fmt.Errorf("binary path must be absolute")
@@ -838,6 +835,7 @@ func resolveIntegrationBinary(expected, configured string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Ensure PATH resolution did not redirect to an unexpected binary name.
 	if filepath.Base(resolved) != expected {
 		return "", fmt.Errorf("binary must resolve to %s", expected)
 	}
