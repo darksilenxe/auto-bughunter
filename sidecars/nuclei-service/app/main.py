@@ -295,6 +295,7 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     try:
         binary = _resolve_nuclei_binary()
         # Execute nuclei with validated arguments
+        # lgtm [py/command-line-injection] args are strictly allowlisted, normalized, and shell=False.
         result = subprocess.run(  # nosemgrep - args validated against allowlist
             [binary] + sanitized_args,
             capture_output=True,
