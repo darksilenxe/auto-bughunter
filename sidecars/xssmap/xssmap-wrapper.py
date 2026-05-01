@@ -36,6 +36,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 # Conservative regex that captures URL/parameter/payload triples from a wide
@@ -50,6 +51,55 @@ _TRIPLE_RE = re.compile(
     r"payload[=:\s]+(?P<payload>.+?)\s*$",
     re.IGNORECASE,
 )
+
+_MAX_TIMEOUT_SECONDS = 600
+_MAX_PAYLOADS = 500
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _has_invalid_chars(value: str) -> bool:
+    return any(ch in value for ch in ("\r", "\n", "\x00"))
+
+
+def _validate_url(value: str, label: str) -> str:
+    value = value.strip()
+    if not value or _has_invalid_chars(value):
+        raise ValueError(f"{label} contains invalid characters")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{label} must be an http(s) URL")
+    return value
+
+
+def _validate_model(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if len(value) > 128 or not _MODEL_RE.match(value):
+        raise ValueError("model must be 1-128 chars (letters, numbers, ., _, :, -)")
+    return value
+
+
+def _validate_max_payloads(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value <= 0 or value > _MAX_PAYLOADS:
+        raise ValueError(f"max-payloads must be between 1 and {_MAX_PAYLOADS}")
+    return value
+
+
+def _validate_timeout(value: int) -> int:
+    if value <= 0 or value > _MAX_TIMEOUT_SECONDS:
+        raise ValueError(f"timeout must be between 1 and {_MAX_TIMEOUT_SECONDS} seconds")
+    return value
+
+
+def _fail(message: str, output: str) -> int:
+    sys.stderr.write(f"xssmap wrapper: {message}\n")
+    if output == "json":
+        json.dump({"vulnerabilities": []}, sys.stdout)
+        sys.stdout.write("\n")
+    return 2
 
 
 def _candidate_invocations(src: Path, target: str, max_payloads: int | None,
@@ -126,14 +176,26 @@ def main() -> int:
                       default=int(os.environ.get("XSSMAP_TIMEOUT_SECONDS", "120")))
     args = parser.parse_args()
 
+    try:
+        target = _validate_url(args.url, "target URL")
+        args.max_payloads = _validate_max_payloads(args.max_payloads)
+        args.timeout = _validate_timeout(args.timeout)
+    except ValueError as exc:
+        return _fail(str(exc), args.output)
+
     home = Path(os.environ.get("XSSMAP_HOME", "/opt/xssmap"))
     src = home / "src"
     ollama_url = (args.ollama_url
                   or os.environ.get("XSSMAP_OLLAMA_URL")
                   or "http://ollama:11434")
     model = args.model or os.environ.get("OLLAMA_MODEL") or ""
+    try:
+        ollama_url = _validate_url(ollama_url, "Ollama URL") if ollama_url else ""
+        model = _validate_model(model)
+    except ValueError as exc:
+        return _fail(str(exc), args.output)
 
-    invocations = _candidate_invocations(src, args.url, args.max_payloads,
+    invocations = _candidate_invocations(src, target, args.max_payloads,
                                          model, ollama_url)
 
     last_err = "no invocation attempted"

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
 import { isAbortError, useAbortable } from "../lib/useAbortable";
 import { impactGoalMeta, proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
@@ -56,6 +56,7 @@ export default function Findings() {
 
   async function transitionFinding(findingId, nextStatus, currentStatus) {
     if (!job?.id) return;
+    if (!findingId) return;
     const ownerNeeded = nextStatus === "accepted" || nextStatus === "remediated";
     let owner = "";
     if (ownerNeeded) {
@@ -117,10 +118,38 @@ export default function Findings() {
   const findings = sortFindings(job.findings || []);
   const summary = summarizeFindings(findings);
   const filteredFindings = findings.filter((finding) => {
-    const severityMatches = severityFilter === "all" || finding.severity === severityFilter;
+    const severityValue = (finding.severity || "info").toLowerCase();
+    const severityMatches = severityFilter === "all" || severityValue === severityFilter;
     const proofMatches = proofFilter === "all" || (finding.proofState || "suspected") === proofFilter;
     return severityMatches && proofMatches;
   });
+  const severityButtons = [];
+  for (const severity of ["all", "critical", "high", "medium", "low", "info"]) {
+    const label = severity === "all" ? `All (${findings.length})` : `${severity} (${summary.severities[severity] || 0})`;
+    severityButtons.push(
+      <button
+        key={severity}
+        type="button"
+        className={`filter-chip ${severityFilter === severity ? "is-active" : ""}`}
+        onClick={() => setSeverityFilter(severity)}
+      >
+        {label}
+      </button>
+    );
+  }
+  const proofButtons = [];
+  for (const state of ["all", "suspected", "validated", "exploited", "impact_demonstrated", "submission_ready"]) {
+    proofButtons.push(
+      <button
+        key={state}
+        type="button"
+        className={`filter-chip ${proofFilter === state ? "is-active" : ""}`}
+        onClick={() => setProofFilter(state)}
+      >
+        {state === "all" ? "All proof states" : proofStateLabel(state)}
+      </button>
+    );
+  }
 
   return (
     <div className="page page--wide">
@@ -156,9 +185,9 @@ export default function Findings() {
             <div className="stat-card__hint">Before/after diffs, role evidence, curl reproducers, and screenshots.</div>
           </article>
           <article className="stat-card">
-            <span className="stat-card__label">High severity</span>
-            <div className="stat-card__value">{summary.severities.high}</div>
-            <div className="stat-card__hint">Still visible, but ranked below higher proof-value outcomes when needed.</div>
+            <span className="stat-card__label">Critical/High severity</span>
+            <div className="stat-card__value">{summary.severities.critical + summary.severities.high}</div>
+            <div className="stat-card__hint">Most urgent exposures based on severity, even when proof is still maturing.</div>
           </article>
         </div>
       </section>
@@ -200,30 +229,12 @@ export default function Findings() {
             <p className="meta">Each finding surfaces impact narrative, proof state, exploitability, goals, artifacts, and triage actions.</p>
           </div>
           <div className="filter-row">
-            {["all", "high", "medium", "low", "info"].map((severity) => (
-              <button
-                key={severity}
-                type="button"
-                className={`filter-chip ${severityFilter === severity ? "is-active" : ""}`}
-                onClick={() => setSeverityFilter(severity)}
-              >
-                {severity === "all" ? `All (${findings.length})` : `${severity} (${summary.severities[severity] || 0})`}
-              </button>
-            ))}
+            {severityButtons}
           </div>
         </div>
 
         <div className="filter-row" style={{ marginTop: 12, marginBottom: 14 }}>
-          {["all", "suspected", "validated", "exploited", "impact_demonstrated", "submission_ready"].map((state) => (
-            <button
-              key={state}
-              type="button"
-              className={`filter-chip ${proofFilter === state ? "is-active" : ""}`}
-              onClick={() => setProofFilter(state)}
-            >
-              {state === "all" ? "All proof states" : proofStateLabel(state)}
-            </button>
-          ))}
+          {proofButtons}
         </div>
 
         {filteredFindings.length === 0 ? (
@@ -233,13 +244,16 @@ export default function Findings() {
             {filteredFindings.map((finding, idx) => {
               const currentLifecycle = finding.exploitability?.verifiedStatus || "new";
               const transitions = LIFECYCLE_TRANSITIONS[currentLifecycle] || [];
+              const severityValue = (finding.severity || "info").toLowerCase();
+              const canTransition = Boolean(finding.id);
+              const severityBadgeProps = { className: `severity-badge ${severityValue}` };
 
               return (
                 <li key={finding.id || idx} className="finding-card">
                   <div className="finding-card__header">
                     <div>
                       <div className="inline-metrics" style={{ marginBottom: 8 }}>
-                        <span className={`severity-badge ${finding.severity || "info"}`}>{(finding.severity || "info").toUpperCase()}</span>
+                        <span {...severityBadgeProps}>{severityValue.toUpperCase()}</span>
                         <span className={`proof-badge ${finding.proofState || "suspected"}`}>{proofStateLabel(finding.proofState)}</span>
                         <span className="chip chip--muted">Bounty {(Number(finding.bountyScore || 0) * 100).toFixed(0)}%</span>
                         <span className="chip chip--muted">Impact {(Number(finding.impactScore || 0) * 100).toFixed(0)}%</span>
@@ -350,8 +364,17 @@ export default function Findings() {
 
                     {transitions.length > 0 && (
                       <div className="button-row">
+                        {!canTransition && (
+                          <span className="meta">Lifecycle updates are unavailable until this finding has an ID.</span>
+                        )}
                         {transitions.map((nextStatus) => (
-                          <button key={nextStatus} type="button" className="button-secondary" onClick={() => transitionFinding(finding.id, nextStatus, currentLifecycle)}>
+                          <button
+                            key={nextStatus}
+                            type="button"
+                            className="button-secondary"
+                            onClick={() => transitionFinding(finding.id, nextStatus, currentLifecycle)}
+                            disabled={!canTransition}
+                          >
                             Mark {nextStatus}
                           </button>
                         ))}
