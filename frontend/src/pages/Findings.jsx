@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
 import { isAbortError, useAbortable } from "../lib/useAbortable";
 import { impactGoalMeta, proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
@@ -123,6 +123,33 @@ export default function Findings() {
     const proofMatches = proofFilter === "all" || (finding.proofState || "suspected") === proofFilter;
     return severityMatches && proofMatches;
   });
+  const severityButtons = [];
+  for (const severity of ["all", "critical", "high", "medium", "low", "info"]) {
+    const label = severity === "all" ? `All (${findings.length})` : `${severity} (${summary.severities[severity] || 0})`;
+    severityButtons.push(
+      <button
+        key={severity}
+        type="button"
+        className={`filter-chip ${severityFilter === severity ? "is-active" : ""}`}
+        onClick={() => setSeverityFilter(severity)}
+      >
+        {label}
+      </button>
+    );
+  }
+  const proofButtons = [];
+  for (const state of ["all", "suspected", "validated", "exploited", "impact_demonstrated", "submission_ready"]) {
+    proofButtons.push(
+      <button
+        key={state}
+        type="button"
+        className={`filter-chip ${proofFilter === state ? "is-active" : ""}`}
+        onClick={() => setProofFilter(state)}
+      >
+        {state === "all" ? "All proof states" : proofStateLabel(state)}
+      </button>
+    );
+  }
 
   return (
     <div className="page page--wide">
@@ -202,30 +229,12 @@ export default function Findings() {
             <p className="meta">Each finding surfaces impact narrative, proof state, exploitability, goals, artifacts, and triage actions.</p>
           </div>
           <div className="filter-row">
-            {["all", "critical", "high", "medium", "low", "info"].map((severity) => (
-              <button
-                key={severity}
-                type="button"
-                className={`filter-chip ${severityFilter === severity ? "is-active" : ""}`}
-                onClick={() => setSeverityFilter(severity)}
-              >
-                {severity === "all" ? `All (${findings.length})` : `${severity} (${summary.severities[severity] || 0})`}
-              </button>
-            ))}
+            {severityButtons}
           </div>
         </div>
 
         <div className="filter-row" style={{ marginTop: 12, marginBottom: 14 }}>
-          {["all", "suspected", "validated", "exploited", "impact_demonstrated", "submission_ready"].map((state) => (
-            <button
-              key={state}
-              type="button"
-              className={`filter-chip ${proofFilter === state ? "is-active" : ""}`}
-              onClick={() => setProofFilter(state)}
-            >
-              {state === "all" ? "All proof states" : proofStateLabel(state)}
-            </button>
-          ))}
+          {proofButtons}
         </div>
 
         {filteredFindings.length === 0 ? (
@@ -237,13 +246,14 @@ export default function Findings() {
               const transitions = LIFECYCLE_TRANSITIONS[currentLifecycle] || [];
               const severityValue = (finding.severity || "info").toLowerCase();
               const canTransition = Boolean(finding.id);
+              const severityBadgeProps = { className: `severity-badge ${severityValue}` };
 
               return (
                 <li key={finding.id || idx} className="finding-card">
                   <div className="finding-card__header">
                     <div>
                       <div className="inline-metrics" style={{ marginBottom: 8 }}>
-                        <span className={`severity-badge ${severityValue}`}>{severityValue.toUpperCase()}</span>
+                        <span {...severityBadgeProps}>{severityValue.toUpperCase()}</span>
                         <span className={`proof-badge ${finding.proofState || "suspected"}`}>{proofStateLabel(finding.proofState)}</span>
                         <span className="chip chip--muted">Bounty {(Number(finding.bountyScore || 0) * 100).toFixed(0)}%</span>
                         <span className="chip chip--muted">Impact {(Number(finding.impactScore || 0) * 100).toFixed(0)}%</span>

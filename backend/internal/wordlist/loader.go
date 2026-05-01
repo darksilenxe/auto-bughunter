@@ -160,14 +160,27 @@ func (el *ExternalLoader) loadKiterunnerAPIPaths(ctx context.Context) []string {
 
 func (el *ExternalLoader) loadFromURLs(ctx context.Context, cacheKey string, urls []string) []string {
 	cacheFile := filepath.Join(el.cacheDir, cacheKey+".txt")
+	safeCacheFile, err := safeCachePath(el.cacheDir, cacheFile)
+	if err != nil {
+		return el.loadFromURLsUncached(ctx, urls)
+	}
 
-	if isCacheValid(cacheFile, el.maxCacheAge) {
-		cached, err := readCachedFile(cacheFile)
+	if isCacheValid(safeCacheFile, el.maxCacheAge) {
+		cached, err := readCachedFile(safeCacheFile)
 		if err == nil && len(cached) > 0 {
 			return cached
 		}
 	}
 
+	all := el.loadFromURLsUncached(ctx, urls)
+	if len(all) > 0 {
+		_ = cacheLines(el.cacheDir, safeCacheFile, all)
+	}
+
+	return all
+}
+
+func (el *ExternalLoader) loadFromURLsUncached(ctx context.Context, urls []string) []string {
 	all := make([]string, 0)
 	for _, url := range urls {
 		select {
@@ -181,10 +194,6 @@ func (el *ExternalLoader) loadFromURLs(ctx context.Context, cacheKey string, url
 	}
 
 done:
-	if len(all) > 0 {
-		_ = cacheLines(cacheFile, all)
-	}
-
 	return all
 }
 
@@ -243,13 +252,17 @@ func readCachedFile(path string) ([]string, error) {
 	return result, scanner.Err()
 }
 
-func cacheLines(path string, lines []string) error {
-	dir := filepath.Dir(path)
+func cacheLines(baseDir, path string, lines []string) error {
+	safePath, err := safeCachePath(baseDir, path)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(safePath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	file, err := os.OpenFile(safePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -262,6 +275,25 @@ func cacheLines(path string, lines []string) error {
 		}
 	}
 	return writer.Flush()
+}
+
+func safeCachePath(baseDir, cachePath string) (string, error) {
+	baseDir = filepath.Clean(baseDir)
+	if baseDir == "" || baseDir == "." {
+		return "", fmt.Errorf("invalid cache directory")
+	}
+	cleanPath := filepath.Clean(cachePath)
+	if !filepath.IsAbs(cleanPath) {
+		cleanPath = filepath.Join(baseDir, cleanPath)
+	}
+	rel, err := filepath.Rel(baseDir, cleanPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("cache path escapes base directory")
+	}
+	return cleanPath, nil
 }
 
 func extractJSONLPaths(lines []string) []string {
