@@ -44,7 +44,7 @@ export function ScanProvider({ children }) {
     if (sseRef.current) sseRef.current.close();
     setLiveEvents([]);
     setScreenshots([]);
-    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?api_key=${encodeURIComponent(API_KEY)}&workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
+    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
     es.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);

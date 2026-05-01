@@ -4055,7 +4055,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
 	if input.Options.AutonomyEmergencyStop {
-		return nil, nil, errors.New("autonomy emergency stop is enabled")
+		return nil, nil, errors.New("autonomy emergency stop is enabled; disable AutonomyEmergencyStop to resume operations")
 	}
 	if s.agentFactory == nil {
 		return s.agentRegistry.RunAll(ctx, input)
@@ -4401,10 +4401,7 @@ func collectToolHealth() []toolHealth {
 	// container. Use the sidecar health endpoint to determine availability
 	// instead of exec.LookPath so that applyHealthAwareExecutionGating does not
 	// incorrectly disable these integrations.
-	useHTTP := func() bool {
-		v := os.Getenv("USE_HTTP_TOOL_SERVICES")
-		return v == "true" || v == "1"
-	}()
+	useHTTP := boolFromEnv("USE_HTTP_TOOL_SERVICES", false)
 
 	checkNucleiHTTP := func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
