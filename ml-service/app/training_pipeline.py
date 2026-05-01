@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
-from urllib.error import HTTPError, URLError
 from urllib import request
 
 import numpy as np
@@ -55,32 +54,8 @@ def read_dataset_from_api(api_base: str, api_key: str, limit: int) -> Dict[str, 
     req = request.Request(url, method="GET")
     if api_key.strip():
         req.add_header("Authorization", f"Bearer {api_key.strip()}")
-    try:
-        with request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise RuntimeError(f"dataset API request failed with status {exc.code}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"dataset API request failed: {exc.reason}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"dataset API returned invalid JSON at line {exc.lineno} column {exc.colno}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("dataset API returned a non-object JSON payload")
-    return payload
-
-
-def read_json_object(path: Path, label: str) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"{label} not found: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{label} is not valid JSON: {path} (line {exc.lineno} column {exc.colno})") from exc
-    except OSError as exc:
-        raise RuntimeError(f"failed to read {label}: {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"{label} must be a JSON object: {path}")
-    return payload
+    with request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def quality_report(dataset: Dict[str, Any], min_records: int) -> Dict[str, Any]:
@@ -374,10 +349,8 @@ def update_registry(registry_path: Path, entry: Dict[str, Any]) -> None:
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     data: Dict[str, Any] = {"schemaVersion": 1, "models": []}
     if registry_path.exists():
-        data = read_json_object(registry_path, "model registry")
-    models = data.get("models")
-    if not isinstance(models, list):
-        models = []
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    models = data.get("models") or []
     models.append(entry)
     data["models"] = models[-100:]
     registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -413,18 +386,14 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     dataset_path = output_dir / "engagements.dataset.json"
 
-    try:
-        if args.dataset_path:
-            source_path = Path(args.dataset_path).resolve()
-            dataset = read_json_object(source_path, "dataset file")
-        else:
-            if not args.api_base:
-                print("error: --api-base (or TRAINING_API_BASE) is required when --dataset-path is not provided", file=sys.stderr)
-                return 2
-            dataset = read_dataset_from_api(args.api_base, args.api_key, args.limit)
-    except RuntimeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+    if args.dataset_path:
+        source_path = Path(args.dataset_path).resolve()
+        dataset = json.loads(source_path.read_text(encoding="utf-8"))
+    else:
+        if not args.api_base:
+            print("error: --api-base (or TRAINING_API_BASE) is required when --dataset-path is not provided", file=sys.stderr)
+            return 2
+        dataset = read_dataset_from_api(args.api_base, args.api_key, args.limit)
 
     dataset_path.write_text(json.dumps(dataset, indent=2) + "\n", encoding="utf-8")
     report = quality_report(dataset, args.min_records)
@@ -506,11 +475,7 @@ def main() -> int:
         "promoted": promote,
         "metrics": metrics_doc,
     }
-    try:
-        update_registry(registry_path, registry_entry)
-    except RuntimeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 7
+    update_registry(registry_path, registry_entry)
     if promote:
         promote_model(candidate_model, models_dir, registry_entry)
         print(f"promoted model: {model_version}")

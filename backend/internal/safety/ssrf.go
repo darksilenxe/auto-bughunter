@@ -1,7 +1,6 @@
 package safety
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/url"
@@ -62,24 +61,4 @@ func validateIP(ip net.IP) error {
 		return fmt.Errorf("private or local ip is not allowed")
 	}
 	return nil
-}
-
-// SafeDialContext is a DialContext-compatible function that re-resolves and
-// re-validates the target hostname at actual TCP connection time.  This
-// prevents DNS-rebinding attacks where a hostname resolves to a safe public IP
-// during the ValidateOutboundURL pre-flight check but then resolves to a
-// private or metadata IP by the time the HTTP client opens the socket.
-//
-// Use this as the DialContext on an http.Transport for any http.Client that
-// connects to user-controlled or operator-configured target URLs.
-func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid address %q: %w", addr, err)
-	}
-	if err := ValidateHostname(host); err != nil {
-		return nil, fmt.Errorf("SSRF policy blocked connection to %q: %w", host, err)
-	}
-	d := &net.Dialer{}
-	return d.DialContext(ctx, network, net.JoinHostPort(host, port))
 }

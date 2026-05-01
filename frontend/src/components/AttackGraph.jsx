@@ -618,18 +618,6 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
   }
 
   function onSVGPointerUp() {
-    // When the pointer was pressed on a node and released without significant
-    // movement it is a tap/click. setPointerCapture() (called in
-    // onNodePointerDown) redirects the synthesised click event to the SVG
-    // element, so the onClick handler on the <g> never fires in modern
-    // browsers. We therefore handle node selection here instead.
-    if (dragState.current && !didDrag.current) {
-      const nodeId = dragState.current.id;
-      setSelected(prev => prev === nodeId ? null : nodeId);
-      // Mark as handled so the onClick fallback (for browsers without pointer
-      // capture) does not double-fire.
-      didDrag.current = true;
-    }
     dragState.current = null;
   }
 
