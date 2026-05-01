@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +84,6 @@ type Server struct {
 	defaultDailyProbeLimit     int
 	cancelMu                   sync.Mutex
 	cancelFuncs                map[string]context.CancelFunc
-	schedulerDone              chan struct{}
 }
 
 const (
@@ -276,21 +274,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 		cancelFuncs:                map[string]context.CancelFunc{},
-		schedulerDone:              make(chan struct{}),
 	}
 	go s.runCampaignScheduler()
 	return s
-}
-
-// Shutdown signals the background campaign-scheduler goroutine to stop.  Call
-// this during graceful server shutdown before closing the database connection.
-func (s *Server) Shutdown() {
-	select {
-	case <-s.schedulerDone:
-		// already closed
-	default:
-		close(s.schedulerDone)
-	}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -333,10 +319,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
 	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
-	mux.HandleFunc("/api/diag/logs", s.handleDiagLogs)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
-	return withCORS(s.authMiddleware(s.rateLimitMiddleware(withBodySizeLimit(mux))))
+	return withCORS(s.authMiddleware(s.rateLimitMiddleware(mux)))
 }
 
 // handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.
@@ -659,11 +644,6 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if err != nil || job == nil {
 		return
 	}
-	// The scan may have been cancelled while waiting for a global execution slot.
-	// Re-check status here so we don't execute a job that was already stopped.
-	if job.Status == "cancelled" {
-		return
-	}
 	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
 	persistedState, _ := s.repo.GetScanState(context.Background(), target)
 	if persistedState != nil && len(persistedState.KnownRuntimeEndpoints) > 0 {
@@ -719,9 +699,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan failed: " + job.Error,
 			})
 			s.appendAuditEvent(id, "failed", "Scan execution panicked: "+job.Error)
-			recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer recoveryCancel()
-			_ = s.repo.UpdateJob(recoveryCtx, job)
+			_ = s.repo.UpdateJob(context.Background(), job)
 		}
 	}()
 
@@ -1010,6 +988,48 @@ func hasOperatorOverrides(options model.ScanOptions) bool {
 		options.AutonomyFallbackRerun
 }
 
+func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
+	reg := agent.NewRegistry()
+
+	reg.Register(agent.NewReconnaissanceAgent(true))
+	reg.Register(agent.NewScanningAgent(s.scanService, true))
+	reg.Register(agent.NewInputValidationAgent(true))
+	reg.Register(agent.NewInformationDisclosureAgent(true))
+	reg.Register(agent.NewAccessControlAgent(true))
+	reg.Register(agent.NewAPISecurityAgent(true))
+	reg.Register(agent.NewCORSRedirectAgent(true))
+	reg.Register(agent.NewWordlistAgent(true))
+	reg.Register(agent.NewAnalysisAgent(true))
+	reg.Register(agent.NewAIToolCallingAgent(s.aiClient, options.UseAIToolCalling))
+
+	// Autonomous tool-building agents — run after core scanning so they have
+	// rich findings context to work from.  DynamicCommandAgent composes and
+	// executes validated CLI tool invocations; ToolBuilderAgent writes and
+	// runs custom Python probes for specialised tasks.
+	reg.Register(agent.NewDynamicCommandAgent(true))
+	reg.Register(agent.NewToolBuilderAgent(true, s.aiClient))
+
+	mlTriageEnabled := options.UseMLTriageAgent
+	attackPathEnabled := options.UseAttackPathAgent
+	falsePositiveEnabled := options.UseFalsePositiveReview
+	remediationEnabled := options.UseRemediationPlanner
+
+	reg.Register(agent.NewMLTriageAgent(s.mlService, mlTriageEnabled))
+	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
+	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
+	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
+	reg.Register(agent.NewImpactVerifierAgent(true))
+	reg.Register(agent.NewReportingAgent(true))
+
+	// Attach the neural learner as the autonomous spawner so it can augment
+	// the static orchestration rules with learned Q-values.
+	if s.agentLearner != nil {
+		reg.SetSpawner(s.agentLearner)
+	}
+
+	return reg
+}
+
 func normalizeAndValidateTarget(raw string) (string, string, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
@@ -1039,28 +1059,6 @@ func withCORS(next http.Handler) http.Handler {
 			}
 			w.WriteHeader(http.StatusNoContent)
 			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// maxRequestBodyBytes is the upper bound applied to every POST/PUT request
-// body.  It prevents a misbehaving or malicious client from making the server
-// allocate unbounded memory while decoding JSON.
-//
-// 4 MB was chosen to be safely above the largest observed legitimate payloads:
-// a scan request with a fully populated auth profile, 50 scope rules, and 200
-// seed endpoints is roughly 50 KB.  The ceiling therefore gives 80× headroom
-// while still blocking pathological inputs.
-const maxRequestBodyBytes = 4 << 20 // 4 MB
-
-// withBodySizeLimit wraps the bodies of all POST and PUT requests with
-// http.MaxBytesReader so that reading beyond maxRequestBodyBytes returns an
-// error, the handler returns a 400, and no further bytes are buffered.
-func withBodySizeLimit(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost || r.Method == http.MethodPut {
-			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -1248,19 +1246,7 @@ func (s *Server) handleListScanAnnotations(w http.ResponseWriter, r *http.Reques
 	}
 
 	job, err := s.repo.GetJob(r.Context(), scanID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
-		return
-	}
-	if job == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
-		return
-	}
-	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -1827,35 +1813,8 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load completed jobs"})
 		return
 	}
-
-	// Build a set of scan IDs that are accessible in the requesting workspace.
-	// Feedback rows have no WorkspaceID of their own — they reference a ScanID,
-	// so we filter them through this set to avoid leaking feedback from other
-	// workspaces.
-	allowedScanIDs := make(map[string]struct{}, len(jobs))
-	for _, job := range jobs {
-		if job != nil && canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
-			allowedScanIDs[job.ID] = struct{}{}
-		}
-	}
-
-	allFeedback, _ := s.repo.ListFeedback(r.Context(), 1000)
-	// Only retain feedback that belongs to scans in the requesting workspace.
-	feedback := make([]model.ReportFeedback, 0, len(allFeedback))
-	for _, item := range allFeedback {
-		if _, ok := allowedScanIDs[item.ScanID]; ok {
-			feedback = append(feedback, item)
-		}
-	}
-
-	// Fetch tickets scoped to the requesting workspace prefix so we don't
-	// accidentally count tickets from other workspaces.
-	ws := workspaceFromRequest(r)
-	wsPrefix := ""
-	if ws != "" {
-		wsPrefix = ws + "::"
-	}
-	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), wsPrefix, 1000)
+	feedback, _ := s.repo.ListFeedback(r.Context(), 1000)
+	openTickets, _ := s.repo.ListOpenAutomationTickets(r.Context(), "", 1000)
 
 	report := model.ExecutiveReport{
 		GeneratedAt:            time.Now().UTC(),
@@ -1903,10 +1862,14 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	// Count only workspace-scoped tickets.
-	for _, ticket := range openTickets {
-		if wsPrefix == "" || strings.HasPrefix(ticket.Target, wsPrefix) {
-			report.OpenAutomationTickets++
+	ws := workspaceFromRequest(r)
+	if ws == "" {
+		report.OpenAutomationTickets = len(openTickets)
+	} else {
+		for _, ticket := range openTickets {
+			if strings.HasPrefix(ticket.Target, ws+"::") {
+				report.OpenAutomationTickets++
+			}
 		}
 	}
 	for _, item := range feedback {
@@ -1950,6 +1913,7 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			delete(report.AgentFalsePositiveRate, agentName)
 		}
 	}
+	_ = openTickets
 	writeJSON(w, http.StatusOK, report)
 }
 
@@ -2586,12 +2550,6 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	rejectedCount := 0
 	strictScans := 0
 	strictSuppressed := 0
-	// Cap the number of per-job verification DB queries to prevent this
-	// endpoint from issuing O(N) sequential round-trips when thousands of
-	// completed jobs are present.  A sample of 200 is statistically
-	// representative for the false-positive rate metric.
-	const maxVerificationSample = 200
-	verificationSampleCount := 0
 	for _, job := range jobs {
 		if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 			continue
@@ -2616,18 +2574,15 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 				strictSuppressed += suppressed
 			}
 		}
-		if verificationSampleCount < maxVerificationSample {
-			if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), job.ID); err == nil {
-				verificationSampleCount++
-				for _, v := range verifications {
-					switch findingLifecycleAliases(v.Status) {
-					case "verified", "rejected", "suppressed", "accepted", "remediated":
-						verifiedSampled++
-					}
-					switch findingLifecycleAliases(v.Status) {
-					case "rejected", "suppressed":
-						rejectedCount++
-					}
+		if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), job.ID); err == nil {
+			for _, v := range verifications {
+				switch findingLifecycleAliases(v.Status) {
+				case "verified", "rejected", "suppressed", "accepted", "remediated":
+					verifiedSampled++
+				}
+				switch findingLifecycleAliases(v.Status) {
+				case "rejected", "suppressed":
+					rejectedCount++
 				}
 			}
 		}
@@ -3398,12 +3353,7 @@ func (s *Server) runCampaignScheduler() {
 	}
 	ticker := time.NewTicker(s.campaignPoll)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-s.schedulerDone:
-			return
-		case <-ticker.C:
-		}
+	for range ticker.C {
 		now := time.Now().UTC()
 		_, _ = s.repo.ReclaimStaleAutomationCampaignLeases(context.Background(), now.Add(-4*s.campaignPoll), 100)
 		campaigns, err := s.repo.ListDueAutomationCampaigns(context.Background(), now, 25)
@@ -3570,18 +3520,18 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int, int, int, []model.Finding) {
 	prevByKey := map[string]model.Finding{}
 	for _, f := range previousFindings {
-		prevByKey[fingerprintFindingForDrift(f)] = f
+		prevByKey[fingerprintFindingBase(f)] = f
 	}
 	currByKey := map[string]model.Finding{}
 	for _, f := range currentFindings {
-		currByKey[fingerprintFindingForDrift(f)] = f
+		currByKey[fingerprintFindingBase(f)] = f
 	}
 
 	newItems := make([]string, 0)
 	changedItems := make([]string, 0)
 	resolvedItems := make([]string, 0)
 	for _, current := range currentFindings {
-		key := fingerprintFindingForDrift(current)
+		key := fingerprintFindingBase(current)
 		prev, ok := prevByKey[key]
 		if !ok {
 			newItems = append(newItems, fmt.Sprintf("[%s] %s", current.Severity, current.Title))
@@ -3592,7 +3542,7 @@ func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int,
 		}
 	}
 	for _, prev := range previousFindings {
-		if _, ok := currByKey[fingerprintFindingForDrift(prev)]; !ok {
+		if _, ok := currByKey[fingerprintFindingBase(prev)]; !ok {
 			resolvedItems = append(resolvedItems, fmt.Sprintf("[%s] %s", prev.Severity, prev.Title))
 		}
 	}
@@ -3826,14 +3776,6 @@ func dedupeStrings(items []string) []string {
 func fingerprintFindingBase(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
 		strings.ToLower(strings.TrimSpace(f.Title))
-}
-
-// fingerprintFindingForDrift extends fingerprintFindingBase with the target
-// host extracted from AffectedURL so that the same category+title pair on
-// different URLs is tracked as distinct drift entries.
-func fingerprintFindingForDrift(f model.Finding) string {
-	host := strings.ToLower(strings.TrimSpace(hostFromTarget(strings.TrimSpace(f.AffectedURL))))
-	return fingerprintFindingBase(f) + "|" + host
 }
 
 func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {
@@ -4244,7 +4186,11 @@ func (s *Server) acquireGlobalSlot(options model.ScanOptions) func() {
 	if s.globalSem == nil {
 		return func() {}
 	}
-	s.globalSem <- struct{}{}
+	select {
+	case s.globalSem <- struct{}{}:
+	default:
+		s.globalSem <- struct{}{}
+	}
 	return func() { <-s.globalSem }
 }
 
@@ -4263,24 +4209,17 @@ func (s *Server) enforceTargetRateLimit(target string, options model.ScanOptions
 	}
 	s.rateMu.Lock()
 	last := s.targetLastRun[host]
-	now := time.Now()
-	var wait time.Duration
+	wait := time.Duration(0)
 	if !last.IsZero() {
-		elapsed := now.Sub(last)
-		if elapsed < minGap {
-			wait = minGap - elapsed
-		}
+		wait = minGap - time.Since(last)
 	}
-	// Stamp the intended run time before releasing the lock. Concurrent
-	// goroutines for the same host will observe this future timestamp and
-	// compute their own wait, preventing the unlock/sleep/reacquire race where
-	// two goroutines could both conclude they need to wait and then both proceed
-	// simultaneously after sleeping.
-	s.targetLastRun[host] = now.Add(wait)
-	s.rateMu.Unlock()
 	if wait > 0 {
+		s.rateMu.Unlock()
 		time.Sleep(wait)
+		s.rateMu.Lock()
 	}
+	s.targetLastRun[host] = time.Now()
+	s.rateMu.Unlock()
 }
 
 func redactSensitiveFindings(findings []model.Finding) []model.Finding {
@@ -4297,28 +4236,14 @@ func redactSensitiveFindings(findings []model.Finding) []model.Finding {
 	return out
 }
 
-// sensitiveTextRegexps is compiled once and used by redactSensitiveText to
-// perform case-insensitive replacement of credential-like patterns in evidence
-// strings.  Each pattern captures the keyword prefix (up to and including the
-// delimiter) in group 1 so the original casing is preserved in the output.
-var sensitiveTextRegexps = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization:)\S*`),
-	regexp.MustCompile(`(?i)(cookie:)\S*`),
-	regexp.MustCompile(`(?i)(token=)\S*`),
-	regexp.MustCompile(`(?i)(password=)\S*`),
-	regexp.MustCompile(`(?i)(api[_-]?key[:=])\S*`),
-	regexp.MustCompile(`(?i)(x-api-key:)\S*`),
-	regexp.MustCompile(`(?i)(secret[:=])\S*`),
-	regexp.MustCompile(`(?i)(client_secret[:=])\S*`),
-	regexp.MustCompile(`(?i)(access_token[:=])\S*`),
-	regexp.MustCompile(`(?i)(refresh_token[:=])\S*`),
-}
-
 func redactSensitiveText(value string) string {
-	for _, re := range sensitiveTextRegexps {
-		value = re.ReplaceAllString(value, "${1}[redacted]")
-	}
-	return value
+	replacer := strings.NewReplacer(
+		"authorization:", "authorization:[redacted]",
+		"cookie:", "cookie:[redacted]",
+		"token=", "token=[redacted]",
+		"password=", "password=[redacted]",
+	)
+	return replacer.Replace(value)
 }
 
 func (s *Server) applySuppressions(target string, findings []model.Finding) []model.Finding {
@@ -4702,6 +4627,10 @@ func inWindowAt(now time.Time, spec string, loc *time.Location) bool {
 	return (localNow.Equal(start) || localNow.After(start)) && localNow.Before(end)
 }
 
+func inWindowUTC(now time.Time, spec string) bool {
+	return inWindowAt(now, spec, time.UTC)
+}
+
 func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
 	for _, win := range windows {
 		if strings.TrimSpace(win) == "" {
@@ -4712,6 +4641,10 @@ func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
 		}
 	}
 	return false
+}
+
+func inBlackout(now time.Time, windows []string) bool {
+	return inBlackoutAt(now, windows, time.UTC)
 }
 
 func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertRequest) time.Time {
@@ -5113,9 +5046,6 @@ func sendWebhookJSON(target string, payload any) {
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{
 		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			DialContext: safety.SafeDialContext,
-		},
 		CheckRedirect: func(redirReq *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
@@ -5242,24 +5172,8 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 			existing.Severity = f.Severity
 		}
 		existing.Sources = mergeActions(existing.Sources, f.Sources)
-		// Prefer whichever duplicate has a non-empty Evidence string.
-		// If both are non-empty, keep the longer one as it is likely richer.
 		if strings.TrimSpace(existing.Evidence) == "" {
 			existing.Evidence = f.Evidence
-		} else if strings.TrimSpace(f.Evidence) != "" && len(f.Evidence) > len(existing.Evidence) {
-			existing.Evidence = f.Evidence
-		}
-		// Merge EvidenceFields: existing wins on conflicts so that the first
-		// observation's metadata is not overwritten by a later, sparser duplicate.
-		if f.EvidenceFields != nil {
-			if existing.EvidenceFields == nil {
-				existing.EvidenceFields = make(map[string]string, len(f.EvidenceFields))
-			}
-			for k, v := range f.EvidenceFields {
-				if _, set := existing.EvidenceFields[k]; !set {
-					existing.EvidenceFields[k] = v
-				}
-			}
 		}
 		dedup[key] = existing
 	}

@@ -251,6 +251,9 @@ func extractAPIKey(r *http.Request) string {
 	if h := strings.TrimSpace(r.Header.Get("X-API-Key")); h != "" {
 		return h
 	}
+	if q := strings.TrimSpace(r.URL.Query().Get("api_key")); q != "" {
+		return q
+	}
 	authz := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 		return strings.TrimSpace(authz[7:])

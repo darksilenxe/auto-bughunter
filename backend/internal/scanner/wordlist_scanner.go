@@ -25,7 +25,7 @@ var (
 	pathStateWhitespaceRe = regexp.MustCompile(`\s+`)
 	pathStateTokenRe      = regexp.MustCompile(`\b[0-9a-f]{8,}\b|\b\d{4,}\b`)
 	pathStateTitleRe      = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	spaResponseHints      = []string{"id=\"root\"", "id='root'", "id=\"app\"", "id='app'", "id=\"__next\"", "data-reactroot", "__nuxt", "data-v-app", "__vite", "single page app", "/_next/", "/_nuxt/", "ng-version=", "ng-app=", "data-ng-app"}
+	spaResponseHints      = []string{"id=\"root\"", "id='root'", "id=\"__next\"", "data-reactroot", "__nuxt", "data-v-app", "__vite", "single page app", "/_next/", "/_nuxt/"}
 	loginWallHints        = []string{"sign in", "log in", "login", "password", "remember me", "name=\"password\"", "name='password'"}
 	apiErrorEnvelopeHints = []string{"\"error\"", "\"message\"", "\"status\"", "\"path\"", "\"timestamp\"", "\"errors\""}
 	notFoundResponseHints = []string{"not found", "404", "cannot get /", "page could not be found", "whitelabel error page", "does not exist", "the page you requested could not be found"}
@@ -116,7 +116,7 @@ var frameworkCatalog = []frameworkCatalogEntry{
 	{
 		Key:               "react-spa",
 		TechnologyAliases: []string{"react", "vite"},
-		BodyHints:         []string{"data-reactroot", "id=\"root\"", "id='root'", "__vite"},
+		BodyHints:         []string{"data-reactroot", "id=\"root\"", "__vite"},
 		PrioritizedDirs:   []string{"/dashboard", "/settings", "/profile", "/assets"},
 		PrioritizedAPIs:   []string{"/api", "/api/v1", "/graphql"},
 	},

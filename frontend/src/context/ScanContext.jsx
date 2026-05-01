@@ -91,29 +91,13 @@ export function ScanProvider({ children }) {
   // Ref for the background interval so we can cancel it on unmount.
   const bgPollRef = useRef(null);
 
-  const clearBackgroundPoll = useCallback(() => {
-    if (bgPollRef.current) {
-      clearTimeout(bgPollRef.current);
-      bgPollRef.current = null;
-    }
-  }, []);
-
-  const scheduleBackgroundPoll = useCallback((id) => {
-    const tick = async () => {
-      const terminal = await fetchJobStatus(id);
-      if (terminal) {
-        clearBackgroundPoll();
-        return;
-      }
-      bgPollRef.current = setTimeout(tick, 30000);
-    };
-    bgPollRef.current = setTimeout(tick, 30000);
-  }, [clearBackgroundPoll, fetchJobStatus]);
-
   const pollScan = useCallback(async (id) => {
     // Cancel any existing background interval from a previous scan before
     // starting a new active-poll loop, preventing interval leaks on re-use.
-    clearBackgroundPoll();
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
 
     // Active phase: poll every 5 s for up to 10 min while the loading
     // indicator is shown.
@@ -130,12 +114,23 @@ export function ScanProvider({ children }) {
     // window (e.g. a very long scan), keep checking every 30 s so the UI
     // eventually reflects the terminal state without a manual refresh.
     if (!done) {
-      scheduleBackgroundPoll(id);
+      bgPollRef.current = setInterval(async () => {
+        const terminal = await fetchJobStatus(id);
+        if (terminal) {
+          clearInterval(bgPollRef.current);
+          bgPollRef.current = null;
+        }
+      }, 30000);
     }
-  }, [clearBackgroundPoll, fetchJobStatus, scheduleBackgroundPoll]);
+  }, [fetchJobStatus]);
 
   // Clean up the background interval on unmount.
-  useEffect(() => () => clearBackgroundPoll(), [clearBackgroundPoll]);
+  useEffect(() => () => {
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
+  }, []);
 
   // ── Stop a running scan ───────────────────────────────────────────────
   const stopScan = useCallback(async (id) => {
