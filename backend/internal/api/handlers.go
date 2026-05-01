@@ -4145,10 +4145,6 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		orchestrator.CostWeight = input.Options.AutonomyCostWeight
 	}
 	outputs, findings, err := orchestrator.Run(ctx, input)
-	// Emit per-agent metrics from the orchestrator outputs.
-	for _, o := range outputs {
-		metrics.AgentRun(o.AgentName)
-	}
 	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
 		return s.agentRegistry.RunAll(ctx, input)
 	}

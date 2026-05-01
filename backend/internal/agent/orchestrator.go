@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -251,6 +252,10 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				Message:   fmt.Sprintf("Agent %q completed in %dms with %d finding(s)", output.AgentName, output.DurationMs, len(output.Findings)),
 				Metadata:  output.Metadata,
 			})
+			// Emit per-agent metrics inline so the dashboard reflects live
+			// progress instead of a batch update at the very end of the run.
+			metrics.AgentRun(output.AgentName)
+			metrics.AgentCompleted(output.AgentName, output.Status, float64(output.DurationMs)/1000.0, len(output.Findings))
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
 			delete(forcePending, output.AgentName)
