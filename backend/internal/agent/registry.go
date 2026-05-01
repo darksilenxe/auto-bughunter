@@ -494,6 +494,8 @@ func normalizeDedupToken(v string) string {
 
 func findingSeverityWeight(sev model.Severity) int {
 	switch sev {
+	case model.SeverityCritical:
+		return 5
 	case model.SeverityHigh:
 		return 4
 	case model.SeverityMedium:

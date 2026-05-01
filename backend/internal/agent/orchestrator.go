@@ -315,7 +315,7 @@ func computeActionQuality(output AgentOutput) float64 {
 	highSignal := 0
 	lowSignal := 0
 	for _, f := range output.Findings {
-		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+		if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical || f.Confidence >= 0.85 {
 			highSignal++
 		}
 		if f.Confidence > 0 && f.Confidence < 0.4 {
@@ -349,7 +349,7 @@ func computeActionCostUnits(output AgentOutput) int {
 func countHighSignalFindings(findings []model.Finding) int {
 	count := 0
 	for _, f := range findings {
-		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+		if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical || f.Confidence >= 0.85 {
 			count++
 		}
 	}
