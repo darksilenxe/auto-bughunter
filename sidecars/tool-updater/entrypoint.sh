@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-NUCLEI_TEMPLATES_DIR="${NUCLEI_TEMPLATES_DIR:-/root/nuclei-templates}"
+NUCLEI_TEMPLATES_DIR="${NUCLEI_TEMPLATES_DIR:-/home/appuser/nuclei-templates}"
 TOOL_UPDATES_DIR="${TOOL_UPDATES_DIR:-/var/lib/auto-bughunter/updates}"
 TOOL_UPDATER_MANIFEST="${TOOL_UPDATER_MANIFEST:-/etc/auto-bughunter/tool-updater/manifest.json}"
 TOOL_UPDATER_HTTP_TIMEOUT="${TOOL_UPDATER_HTTP_TIMEOUT:-15}"
