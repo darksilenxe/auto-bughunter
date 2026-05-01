@@ -154,7 +154,8 @@ function resolveBackendNodeFinding(node, findings = []) {
   return (
     findingByID.get(node.id) ||
     findingBySignature.get(findingSignature(node.label, node.sublabel)) ||
-    (titleMatches.length === 1 ? titleMatches[0] : null)
+    (titleMatches.length === 1 ? titleMatches[0] : null) ||
+    { title: String(node.label || "Unknown Finding"), severity: node.severity || "info" }
   );
 }
 
@@ -286,7 +287,7 @@ function buildGraph(job, liveEvents) {
         label:    title,
         sublabel: info.agentName,
         ts:       Math.max(scanStart, Math.min(info.ts, scanEnd)),
-        finding:  null,
+        finding:  { title, severity: info.severity },
         live:     true,
       });
     }
