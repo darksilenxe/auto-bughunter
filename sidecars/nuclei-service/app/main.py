@@ -46,6 +46,14 @@ def _extract_bearer_token(request: Request) -> str:
 app = FastAPI(title="Nuclei HTTP Wrapper", version="1.0.0")
 
 
+def _coerce_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
 @app.middleware("http")
 async def _require_sidecar_token(request: Request, call_next):
     if SIDECAR_AUTH_TOKEN and request.url.path not in _AUTH_EXEMPT_PATHS:
@@ -222,8 +230,8 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     except subprocess.TimeoutExpired as e:
         logger.warning(f"Nuclei execution timed out after {req.timeout}s")
         return ExecuteResponse(
-            stdout=e.stdout if e.stdout else "",
-            stderr=e.stderr if e.stderr else "",
+            stdout=_coerce_output(e.stdout),
+            stderr=_coerce_output(e.stderr),
             exit_code=-1,
             timed_out=True,
             error=f"Execution timed out after {req.timeout} seconds"

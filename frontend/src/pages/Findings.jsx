@@ -158,7 +158,7 @@ export default function Findings() {
             <div className="stat-card__hint">Before/after diffs, role evidence, curl reproducers, and screenshots.</div>
           </article>
           <article className="stat-card">
-            <span className="stat-card__label">Critical / High severity</span>
+            <span className="stat-card__label">Critical/High severity</span>
             <div className="stat-card__value">{summary.severities.critical + summary.severities.high}</div>
             <div className="stat-card__hint">Most urgent exposures based on severity, even when proof is still maturing.</div>
           </article>
