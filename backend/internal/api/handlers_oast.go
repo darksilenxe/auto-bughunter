@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// maxOASTRequestBodyBytes caps the JSON body accepted by the OAST issue
+// endpoint. The body only carries two short string fields (`scanId`, `label`),
+// so this is far more than enough for any legitimate request and small enough
+// that an adversarial POST cannot exhaust backend memory.
+const maxOASTRequestBodyBytes = 64 * 1024
+
 // handleOASTTokens supports:
 //   GET  /api/oast/tokens            - list active tokens (optional ?scanId= filter)
 //   POST /api/oast/tokens            - issue a new token (body: {"scanId":"...","label":"..."})
@@ -29,10 +35,7 @@ func (s *Server) handleOASTTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Body != nil {
 			defer r.Body.Close()
-			// Cap the request body so a malicious caller can't OOM us by
-			// streaming a huge POST. 64 KiB is far more than enough for the
-			// two short string fields we accept.
-			r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+			r.Body = http.MaxBytesReader(w, r.Body, maxOASTRequestBodyBytes)
 			dec := json.NewDecoder(r.Body)
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {

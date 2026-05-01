@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -370,7 +371,8 @@ func (s *Server) handleAgentWeights(w http.ResponseWriter, r *http.Request) {
 	}
 	weights, err := s.agentLearner.Weights(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable: " + err.Error()})
+		log.Printf("api: %s %s: agent learner weights: %v", r.Method, r.URL.Path, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, weights)
@@ -1033,6 +1035,26 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// writeServerError responds with a generic 5xx body while logging the raw
+// error and request route server-side. Use this for any 5xx response whose
+// underlying error originates from internal infrastructure (database,
+// filesystem, third-party service) so we never leak internal paths,
+// connection strings, or stack traces back to the caller.
+//
+// Use writeJSON directly with a 4xx status when the error message is part of
+// the contract with the caller (e.g. validation feedback).
+func writeServerError(w http.ResponseWriter, r *http.Request, op string, err error) {
+	if err == nil {
+		err = errors.New("unknown error")
+	}
+	method, path := "?", "?"
+	if r != nil {
+		method, path = r.Method, r.URL.Path
+	}
+	log.Printf("api: %s %s: %s: %v", method, path, op, err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+}
+
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allowed := applyCORSHeaders(w, r)
@@ -1148,7 +1170,7 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 
 	replayed, err := s.proxyServer.Replay(r.Context(), req.RequestID, req.OverrideHeaders, req.OverrideBody)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeServerError(w, r, "proxy replay", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, replayed)

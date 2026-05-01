@@ -371,10 +371,10 @@ Docker Compose sidecar:
 | `neo4j`            | `neo4j:5.26.1`                     | Optional graph database storing attack-graph snapshots returned to the frontend (Bolt 7687 / HTTP 7474) |
 
 The backend container is the **single orchestrator** of the stack: it is
-the only service that holds the docker socket bind-mount, the only
-service that issues `docker compose exec` into the CLI sidecars, and the
-only service that issues HTTP calls to `agents` / `ml-service` /
-`security-knowledge`. No sidecar talks to another sidecar.
+the only service that issues HTTP calls to tool sidecars (HTTP mode) or
+`docker compose exec` into the CLI sidecars (exec mode), and the only
+service that talks to `agents` / `ml-service` / `security-knowledge`. No
+sidecar talks to another sidecar.
 
 Two integration paths:
 
@@ -390,15 +390,20 @@ Two integration paths:
 
 ### Docker socket requirement
 
-**NEW: HTTP mode eliminates Docker socket requirement!**
+The default `docker-compose.yml` does **not** mount the host Docker
+socket. The default deployment uses HTTP mode (see `.env.example`:
+`USE_HTTP_TOOL_SERVICES=true`), where each tool sidecar exposes an HTTP
+endpoint and the backend talks to it directly. No Docker socket
+required.
 
 The backend can communicate with tool sidecars in two modes:
 
-#### 1. HTTP Mode (Recommended, No Docker Socket)
+#### 1. HTTP Mode (Default, No Docker Socket)
 
-Set `USE_HTTP_TOOL_SERVICES=true` in `.env` to use HTTP wrapper services.
-Tool sidecars (nuclei-service, etc.) expose HTTP endpoints that the backend
-calls directly. This eliminates the need for Docker socket access entirely.
+Set `USE_HTTP_TOOL_SERVICES=true` in `.env` (this is the default in
+`.env.example`). Tool sidecars (nuclei-service, etc.) expose HTTP
+endpoints that the backend calls directly. This eliminates the need
+for Docker socket access entirely.
 
 **Benefits:**
 - No root-equivalent Docker socket access required
@@ -407,20 +412,20 @@ calls directly. This eliminates the need for Docker socket access entirely.
 - Easier to scale horizontally
 - Container-orchestration agnostic
 
-**Setup:**
-```bash
-# In .env
-USE_HTTP_TOOL_SERVICES=true
-```
-
-When using HTTP mode, you can comment out the Docker socket mounts in
-`docker-compose.yml` and remove docker-cli from the backend Dockerfile.
-
-#### 2. Exec Mode (Legacy, Requires Docker Socket)
+#### 2. Exec Mode (Opt-in, Requires Docker Socket)
 
 When `USE_HTTP_TOOL_SERVICES=false`, shim scripts call
 `docker compose exec -T <svc> <tool>` into CLI tool sidecars. This requires
-the backend container to have `/var/run/docker.sock` bind-mounted.
+the backend container to have `/var/run/docker.sock` bind-mounted, which
+is intentionally **not** done by the default compose file. Layer the
+opt-in override file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.exec.yml up
+```
+
+The override sets `USE_HTTP_TOOL_SERVICES=false` and adds the socket
+mount in one place.
 
 **This is effectively root-equivalent on the host** — fine for self-hosted
 single-tenant scanner usage, but not appropriate for multi-tenant deployments.
