@@ -495,7 +495,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	result.Duration = time.Since(start)
 
 	// Truncate output to avoid memory bloat.
