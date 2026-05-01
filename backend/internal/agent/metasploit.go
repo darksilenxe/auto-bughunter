@@ -1422,7 +1422,7 @@ func loadMSFRPCModuleTemplate(path, rhost, rport, ssl string) ([]msfRPCModuleTem
 	if err != nil {
 		return nil, err
 	}
-	// nosemgrep: path validated as absolute file in resolveMSFTemplatePath.
+	// nosemgrep -- path validated as absolute file in resolveMSFTemplatePath.
 	raw, err := os.ReadFile(safePath)
 	if err != nil {
 		return nil, err
@@ -1798,6 +1798,7 @@ func msfCall(ctx context.Context, client *http.Client, rpcURL string, payload in
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// nosemgrep -- rpcURL is operator-configured Metasploit RPC URL from settings; not user-controlled.
 	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, rpcURL+"/api/1.0", bytes.NewReader(body))
 	if err != nil {
 		return err

@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -165,7 +166,7 @@ def _parse_stdout(raw: str) -> list[dict[str, Any]]:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # nosemgrep: command uses validated args and resolved executables
+    return subprocess.run(  # nosec B603 - nosemgrep: command uses validated args and resolved executables (see _resolve_xssmap_entrypoint)
         cmd,
         cwd=str(cwd),
         capture_output=True,

@@ -102,6 +102,12 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/wpscan \
              /usr/local/bin/xssmap
 
+# Run as non-root user for least privilege.
+RUN addgroup -S -g 1001 appuser \
+ && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser \
+ && chown -R appuser:appuser /app
+USER appuser
+
 # Default chromedp wiring — the `chromium` sidecar exposes the DevTools
 # protocol on port 9222. The Go scanner picks this up via CHROME_REMOTE_URL
 # (see backend/internal/scanner/browser.go).

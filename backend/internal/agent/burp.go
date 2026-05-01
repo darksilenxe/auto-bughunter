@@ -1006,6 +1006,7 @@ func burpCreateScan(ctx context.Context, client *http.Client, apiURL, apiKey, ta
 		return "", err
 	}
 
+	// nosemgrep -- apiURL is operator-configured Burp Enterprise API base URL from settings; not user-controlled.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/v0.1/scan", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -1035,6 +1036,7 @@ func burpCreateScan(ctx context.Context, client *http.Client, apiURL, apiKey, ta
 }
 
 func burpGetScanStatus(ctx context.Context, client *http.Client, apiURL, apiKey, scanID string) (string, error) {
+	// nosemgrep -- apiURL is operator-configured Burp Enterprise API base URL from settings; scanID is returned by Burp itself; not user-controlled.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		apiURL+"/api/v0.1/scan/"+scanID, nil)
 	if err != nil {

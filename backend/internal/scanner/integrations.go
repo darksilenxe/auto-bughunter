@@ -843,7 +843,7 @@ func resolveIntegrationBinary(expected, configured string) (string, error) {
 }
 
 func commandForIntegration(ctx context.Context, binary string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, binary, args...) //nolint:gosec // nosemgrep: allowlisted binary resolved in resolveIntegrationBinary
+	return exec.CommandContext(ctx, binary, args...) //nolint:gosec // nosemgrep -- allowlisted binary resolved in resolveIntegrationBinary; not user-controlled.
 }
 
 func commandPreflight(parent context.Context, expected, configured string, args ...string) bool {
@@ -2481,7 +2481,7 @@ func writeTemporaryWordlist(entries []string) (string, error) {
 	if dir != "" {
 		// The shared tmp volume is mounted into the sidecars under the same user
 		// in Docker Compose, so 0700 remains accessible while limiting exposure.
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil { // nosemgrep -- shared tmp dir requires execute bit so sidecars can list/read; 0700 is owner-only.
 			return "", err
 		}
 	}

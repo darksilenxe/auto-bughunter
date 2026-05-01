@@ -24,6 +24,7 @@ from onnx import TensorProto, helper, numpy_helper
 SCHEMA_VERSION = "v1"
 FEATURE_DIMS = 8
 ONNX_OPSET_VERSION = int(os.getenv("ONNX_OPSET_VERSION", "13"))
+MAX_DATASET_RESPONSE_BYTES = 64 * 1024 * 1024  # 64 MiB cap on the dataset API response body
 SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*:\s*)(bearer|basic)\s+[A-Za-z0-9\-._~+/=]+"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9\-._~+/=]+['\"]?"),
@@ -89,7 +90,14 @@ def read_dataset_from_api(api_base: str, api_key: str, limit: int) -> Dict[str, 
             conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=60)
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()
-        body = resp.read().decode("utf-8")
+        # Read at most MAX_DATASET_RESPONSE_BYTES + 1 so we can detect oversize responses
+        # without loading an unbounded payload into memory.
+        body_bytes = resp.read(MAX_DATASET_RESPONSE_BYTES + 1)
+        if len(body_bytes) > MAX_DATASET_RESPONSE_BYTES:
+            raise RuntimeError(
+                f"dataset API response exceeds {MAX_DATASET_RESPONSE_BYTES} bytes"
+            )
+        body = body_bytes.decode("utf-8")
         if resp.status >= 400:
             raise RuntimeError(f"dataset API request failed with status {resp.status}")
         payload = json.loads(body)

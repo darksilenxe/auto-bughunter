@@ -34,6 +34,12 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY manifest.json /etc/auto-bughunter/tool-updater/manifest.json
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# NOTE: tool-updater intentionally runs as root. The shared `nuclei_templates`
+# named volume is mounted at /root/nuclei-templates (see docker-compose.yml)
+# and is also consumed by `nuclei-service` from the same path; keeping a
+# single uid (root, 0) on both ends avoids cross-container ownership issues
+# with the named volume. Run is short-lived and one-shot.
+
 # Defaults; overridable via compose.
 ENV NUCLEI_TEMPLATES_DIR=/root/nuclei-templates \
     TOOL_UPDATES_DIR=/var/lib/auto-bughunter/updates \
