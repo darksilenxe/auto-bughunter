@@ -37,7 +37,7 @@ export default function BurpImport({ onImport }) {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`${API_BASE}/api/burp/parse`, { method: "POST", body: form, signal: ac.signal });
+      const res = await fetch("" + API_BASE + "/api/burp/parse", { method: "POST", body: form, signal: ac.signal });
       const data = await res.json();
       if (ac.signal.aborted) return;
       if (!res.ok) {

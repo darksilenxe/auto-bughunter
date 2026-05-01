@@ -62,7 +62,7 @@ const STYLE = {
 };
 
 function nodeStyle(node) {
-  if (node.type === "finding") return STYLE[`finding_${node.severity}`] || STYLE.finding_info;
+  if (node.type === "finding") return STYLE["finding_" + node.severity] || STYLE.finding_info;
   return STYLE[node.type] || STYLE.finding_info;
 }
 
@@ -82,7 +82,7 @@ const SEV_COLOR = { high: "#ef4444", medium: "#f97316", low: "#fbbf24", info: "#
 
 function bezier(x1, y1, x2, y2) {
   const cx = (x1 + x2) / 2;
-  return `M${x1} ${y1} C${cx} ${y1},${cx} ${y2},${x2} ${y2}`;
+  return "M" + x1 + " " + y1 + " C" + cx + " " + y1 + "," + cx + " " + y2 + "," + x2 + " " + y2;
 }
 
 function fmtMs(ms) {
@@ -91,9 +91,9 @@ function fmtMs(ms) {
   const m = Math.floor((totalS % 3600) / 60);
   const s = totalS % 60;
   if (h > 0) {
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return "" + h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return "" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
 }
 
 function shortLabel(str, max = 24) {
@@ -122,7 +122,7 @@ function classifyFinding(title, category, severity, exploitability) {
 
 function findingGraphID(finding, index) {
   const id = String(finding?.id || "").trim();
-  return id || `__f${index}__`;
+  return id || "__f" + index + "__";
 }
 
 function findingSignature(title = "", affectedUrl = "") {
