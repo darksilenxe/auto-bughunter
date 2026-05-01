@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
