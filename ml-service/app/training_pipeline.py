@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import math
 import os
 import re
 import shutil
+import ssl
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
-from urllib.error import HTTPError, URLError
-from urllib import request
 from urllib.parse import urlparse
 
 import numpy as np
@@ -67,18 +67,39 @@ def validate_api_base(api_base: str) -> str:
 def read_dataset_from_api(api_base: str, api_key: str, limit: int) -> Dict[str, Any]:
     base = validate_api_base(api_base)
     url = f"{base.rstrip('/')}/api/ml/engagements?limit={limit}"
-    req = request.Request(url, method="GET")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError("dataset API URL must be http(s)")
+    headers = {}
     if api_key.strip():
-        req.add_header("Authorization", f"Bearer {api_key.strip()}")
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    conn: http.client.HTTPConnection | None = None
     try:
-        with request.urlopen(req, timeout=60) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise RuntimeError(f"dataset API request failed with status {exc.code}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"dataset API request failed: {exc.reason}") from exc
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(
+                parsed.hostname,
+                parsed.port or 443,
+                timeout=60,
+                context=ssl.create_default_context(),
+            )
+        else:
+            conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=60)
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8")
+        if resp.status >= 400:
+            raise RuntimeError(f"dataset API request failed with status {resp.status}")
+        payload = json.loads(body)
+    except (OSError, http.client.HTTPException) as exc:
+        raise RuntimeError(f"dataset API request failed: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"dataset API returned invalid JSON at line {exc.lineno} column {exc.colno}") from exc
+    finally:
+        if conn:
+            conn.close()
     if not isinstance(payload, dict):
         raise RuntimeError("dataset API returned a non-object JSON payload")
     return payload

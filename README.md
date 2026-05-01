@@ -96,7 +96,7 @@ OLLAMA_SECONDARY_MODEL=codellama
 4. Open:
 
 - Frontend: 
-- Backend health: http://localhost:8080/api/health
+- Backend health (relative to the backend base URL): /api/health
 
 ## Command-line interface
 

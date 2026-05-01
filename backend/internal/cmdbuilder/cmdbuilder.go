@@ -276,6 +276,25 @@ func ValidateWithPolicy(spec CommandSpec, target string, policy ValidationPolicy
 	return nil
 }
 
+func resolveToolBinary(binary string) (string, error) {
+	candidate := strings.TrimSpace(binary)
+	if candidate == "" {
+		return "", fmt.Errorf("empty binary")
+	}
+	expected := strings.ToLower(candidate)
+	if !allowedBinaries[expected] {
+		return "", fmt.Errorf("binary %q is not on the approved tool list", candidate)
+	}
+	resolved, err := exec.LookPath(candidate)
+	if err != nil {
+		return "", err
+	}
+	if strings.ToLower(filepath.Base(resolved)) != expected {
+		return "", fmt.Errorf("binary must resolve to %s", candidate)
+	}
+	return resolved, nil
+}
+
 func validateToolFlags(binary string, args []string) error {
 	allowed := allowedFlagsByBinary[binary]
 	if len(allowed) == 0 {
@@ -424,6 +443,12 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 		return result
 	}
 
+	resolvedBinary, err := resolveToolBinary(spec.Binary)
+	if err != nil {
+		result.Error = fmt.Errorf("resolve tool binary: %w", err)
+		return result
+	}
+
 	if policy.UnsafeMode && emit != nil {
 		emit(model.ScanEvent{
 			Type:      model.ScanEventInfo,
@@ -462,8 +487,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// nosemgrep: validated allowlisted binary and args via ValidateWithPolicy.
-	cmd := exec.CommandContext(cmdCtx, spec.Binary, spec.Args...) //nolint:gosec // binary is allowlisted
+	cmd := exec.CommandContext(cmdCtx, resolvedBinary, spec.Args...) //nolint:gosec // nosemgrep: allowlisted binary resolved via resolveToolBinary
 	cmd.Env = safeEnv()
 
 	var stdout, stderr bytes.Buffer
@@ -471,7 +495,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	result.Duration = time.Since(start)
 
 	// Truncate output to avoid memory bloat.
