@@ -162,6 +162,14 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				continue
 			}
 			if !agent.Enabled() {
+				outputs = append(outputs, AgentOutput{
+					AgentName:   agent.Name(),
+					Status:      "skipped",
+					DebugNotes:  "agent disabled",
+					Metadata:    map[string]string{"orchestration_reason": spec.Reason},
+					StartedAt:   time.Now().UTC(),
+					CompletedAt: time.Now().UTC(),
+				})
 				continue
 			}
 			Emit(input.Emit, model.ScanEvent{
