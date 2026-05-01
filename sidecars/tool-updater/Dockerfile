@@ -34,19 +34,15 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY manifest.json /etc/auto-bughunter/tool-updater/manifest.json
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Run as non-root user for least privilege. The entrypoint writes to
-# NUCLEI_TEMPLATES_DIR and TOOL_UPDATES_DIR, so those directories are
-# pre-created and chowned to the runtime user.
-RUN addgroup -S -g 1001 appuser \
- && adduser  -S -u 1001 -G appuser -h /home/appuser -s /sbin/nologin appuser \
- && mkdir -p /home/appuser/nuclei-templates /var/lib/auto-bughunter/updates \
- && chown -R appuser:appuser /home/appuser /var/lib/auto-bughunter
+# NOTE: tool-updater intentionally runs as root. The shared `nuclei_templates`
+# named volume is mounted at /root/nuclei-templates (see docker-compose.yml)
+# and is also consumed by `nuclei-service` from the same path; keeping a
+# single uid (root, 0) on both ends avoids cross-container ownership issues
+# with the named volume. Run is short-lived and one-shot.
 
 # Defaults; overridable via compose.
-ENV NUCLEI_TEMPLATES_DIR=/home/appuser/nuclei-templates \
+ENV NUCLEI_TEMPLATES_DIR=/root/nuclei-templates \
     TOOL_UPDATES_DIR=/var/lib/auto-bughunter/updates \
     TOOL_UPDATER_MANIFEST=/etc/auto-bughunter/tool-updater/manifest.json
-
-USER appuser
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
