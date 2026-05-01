@@ -774,13 +774,11 @@ func ApplyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 		return
 	}
 	for key, value := range profile.Headers {
-		key = strings.TrimSpace(key)
-		if key == "" || !isSafeHeaderName(key) || !isSafeHeaderValue(value) {
-			continue
+		if strings.TrimSpace(key) != "" {
+			req.Header.Set(key, value)
 		}
-		req.Header.Set(key, value)
 	}
-	if profile.UserAgent != "" && isSafeHeaderValue(profile.UserAgent) {
+	if profile.UserAgent != "" {
 		req.Header.Set("User-Agent", profile.UserAgent)
 	}
 	if profile.BasicAuthUsername != "" || profile.BasicAuthPassword != "" {
@@ -794,47 +792,10 @@ func ApplyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 		sort.Strings(names)
 		parts := make([]string, 0, len(names))
 		for _, name := range names {
-			val := profile.Cookies[name]
-			// A cookie value containing CR/LF would let an attacker-controlled
-			// auth profile inject arbitrary additional request headers when we
-			// concatenate cookies into the Cookie header below.
-			if !isSafeHeaderValue(name) || !isSafeHeaderValue(val) {
-				continue
-			}
-			parts = append(parts, name+"="+val)
+			parts = append(parts, name+"="+profile.Cookies[name])
 		}
-		if len(parts) > 0 {
-			req.Header.Set("Cookie", strings.Join(parts, "; "))
-		}
+		req.Header.Set("Cookie", strings.Join(parts, "; "))
 	}
-}
-
-// isSafeHeaderName mirrors the validation Go's net/http performs internally:
-// reject empty names, names containing CR/LF/NUL, or any non-token bytes.
-func isSafeHeaderName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		// RFC 7230 token characters only.
-		if c <= 0x20 || c >= 0x7f || strings.IndexByte("()<>@,;:\\\"/[]?={}", c) >= 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// isSafeHeaderValue rejects values containing CR, LF, or NUL bytes that could
-// be used to split / smuggle additional headers.
-func isSafeHeaderValue(value string) bool {
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if c == '\r' || c == '\n' || c == 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func checkSecurityHeaders(h http.Header) []model.Finding {

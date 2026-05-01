@@ -96,9 +96,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
     e.stopPropagation();
     svgRef.current?.setPointerCapture(e.pointerId);
     const p   = svgPoint(e);
-    // Look up by `Object.hasOwn` to avoid passing arbitrary user-controlled
-    // strings into a property accessor (eslint-security/detect-object-injection).
-    const off = Object.hasOwn(nodeOffsets, nodeId) ? nodeOffsets[nodeId] : { dx: 0, dy: 0 };
+    const off = nodeOffsets[nodeId] || { dx: 0, dy: 0 };
     dragState.current = { id: nodeId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
     didDrag.current   = false;
   }
@@ -112,7 +110,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
         Math.abs(p.y - dragState.current.startY) > 3) {
       didDrag.current = true;
     }
-    setNodeOffsets(function(prev) { return ({ ...prev, [dragState.current.id]: { dx, dy } }); });
+    setNodeOffsets(prev => ({ ...prev, [dragState.current.id]: { dx, dy } }));
   }
 
   function onSVGPointerUp() {
@@ -121,9 +119,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
 
   /** Effective position of a named node accounting for user drag. */
   function effPos(name, basePos) {
-    // Look up by `Object.hasOwn` to avoid passing arbitrary user-controlled
-    // strings into a property accessor (eslint-security/detect-object-injection).
-    const off = Object.hasOwn(nodeOffsets, name) ? nodeOffsets[name] : undefined;
+    const off = nodeOffsets[name];
     return { x: basePos.x + (off?.dx || 0), y: basePos.y + (off?.dy || 0) };
   }
 

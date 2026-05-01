@@ -473,8 +473,6 @@ func proofRank(s model.ProofState) int {
 
 func severityWeight(s model.Severity) int {
 	switch s {
-	case model.SeverityCritical:
-		return 5
 	case model.SeverityHigh:
 		return 4
 	case model.SeverityMedium:

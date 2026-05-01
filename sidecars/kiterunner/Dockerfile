@@ -56,19 +56,10 @@ COPY --from=kr-fetch /out/kr /usr/local/bin/kr
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Run as non-root user for least privilege. The entrypoint writes wordlists
-# under /wordlists, so that directory is pre-created and chowned.
-RUN addgroup -S -g 1001 appuser \
- && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser \
- && mkdir -p /wordlists \
- && chown -R appuser:appuser /wordlists
-
 # Wordlist cache lives on a docker named volume so it survives restarts and
 # is shared (read-only) with the backend.
 VOLUME ["/wordlists"]
 ENV WORDLIST_DIR=/wordlists
-
-USER appuser
 
 # `entrypoint.sh` downloads any missing Assetnote wordlists, then keeps the
 # container alive so `docker compose exec -T kiterunner kr ...` works. Each

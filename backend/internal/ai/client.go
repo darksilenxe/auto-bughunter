@@ -346,7 +346,7 @@ func complianceFrameworkForTarget(target string) string {
 func topCategories(findings []model.Finding) string {
 	cats := map[string]int{}
 	for _, f := range findings {
-		if isHighOrCritical(f.Severity) {
+		if f.Severity == model.SeverityHigh {
 			cats[f.Category]++
 		}
 	}
@@ -385,7 +385,7 @@ func topRemediationPriorities(findings []model.Finding) []string {
 	priorities := make([]string, 0, 3)
 	// High/critical first.
 	for _, f := range findings {
-		if isHighOrCritical(f.Severity) &&
+		if (f.Severity == model.SeverityHigh) &&
 			strings.TrimSpace(f.Recommendation) != "" && !seen[f.ID] {
 			seen[f.ID] = true
 			// Take first sentence of recommendation.
@@ -422,7 +422,7 @@ func buildAttackNarrative(findings []model.Finding) string {
 	// Build a simple "attacker can do X then Y" narrative from top findings.
 	var highFindings []model.Finding
 	for _, f := range findings {
-		if isHighOrCritical(f.Severity) {
+		if f.Severity == model.SeverityHigh {
 			highFindings = append(highFindings, f)
 			if len(highFindings) >= 2 {
 				break
@@ -442,10 +442,6 @@ func buildAttackNarrative(findings []model.Finding) string {
 		highFindings[0].Title, highFindings[0].AffectedURL,
 		highFindings[1].Title, highFindings[1].AffectedURL,
 	)
-}
-
-func isHighOrCritical(severity model.Severity) bool {
-	return severity == model.SeverityHigh || severity == model.SeverityCritical
 }
 
 func firstSentence(s string) string {

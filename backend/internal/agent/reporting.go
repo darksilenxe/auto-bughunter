@@ -77,9 +77,8 @@ func buildExecutiveSummary(findings []model.Finding) string {
 	}
 
 	return fmt.Sprintf(
-		"Assessment identified %d findings: %d critical, %d high, %d medium, %d low, %d info. %d finding(s) include demonstrated or submission-ready impact evidence. Recommend immediate remediation of the highest bounty-value items first.",
+		"Assessment identified %d findings: %d high, %d medium, %d low, %d info. %d finding(s) include demonstrated or submission-ready impact evidence. Recommend immediate remediation of the highest bounty-value items first.",
 		len(findings),
-		severities[model.SeverityCritical],
 		severities[model.SeverityHigh],
 		severities[model.SeverityMedium],
 		severities[model.SeverityLow],

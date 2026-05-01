@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 import { API_BASE, useScan } from "../context/ScanContext";
-import { isAbortError, useAbortable } from "../lib/useAbortable";
 import { proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
 export default function Reports() {
@@ -17,9 +16,8 @@ export default function Reports() {
   const [logoPath, setLogoPath] = useState("");
   const [optionsStatus, setOptionsStatus] = useState("");
   const [copyStatus, setCopyStatus] = useState({});
-  const newController = useAbortable();
 
-  const findings = useMemo(function () { return sortFindings(job?.findings || []); }, [job?.findings]);
+  const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
 
   if (!job) {
@@ -54,21 +52,17 @@ export default function Reports() {
 
   const submitTemplateOptions = async () => {
     setOptionsStatus("Generating...");
-    const ac = newController();
     try {
       const res = await fetch(reportURL(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ companyName, classification, contact, programHandle, logoPath, reportType }),
-        signal: ac.signal,
       });
-      if (ac.signal.aborted) return;
       if (!res.ok) {
         setOptionsStatus(`Error ${res.status}`);
         return;
       }
       const blob = await res.blob();
-      if (ac.signal.aborted) return;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -79,29 +73,23 @@ export default function Reports() {
       URL.revokeObjectURL(url);
       setOptionsStatus("Downloaded");
     } catch (err) {
-      if (isAbortError(err)) return;
       setOptionsStatus(`Error: ${err.message}`);
     }
   };
 
   const copyBugBountySubmission = async (finding) => {
     const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md`;
-    const ac = newController();
     try {
-      const res = await fetch(url, { signal: ac.signal });
-      if (ac.signal.aborted) return;
+      const res = await fetch(url);
       if (!res.ok) {
         setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error ${res.status}` }));
         return;
       }
       const text = await res.text();
-      if (ac.signal.aborted) return;
       await navigator.clipboard.writeText(text);
-      if (ac.signal.aborted) return;
       setCopyStatus((prev) => ({ ...prev, [finding.id]: "Copied!" }));
       setTimeout(() => setCopyStatus((prev) => ({ ...prev, [finding.id]: "" })), 2000);
     } catch (err) {
-      if (isAbortError(err)) return;
       setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error: ${err.message}` }));
     }
   };

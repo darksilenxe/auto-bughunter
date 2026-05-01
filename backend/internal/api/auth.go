@@ -255,14 +255,6 @@ func extractAPIKey(r *http.Request) string {
 	if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 		return strings.TrimSpace(authz[7:])
 	}
-	// Browser EventSource cannot send custom headers, so SSE connections pass
-	// the key as a query parameter.  Accept it here as a fallback for GET
-	// requests only to limit the exposure surface.
-	if r.Method == http.MethodGet {
-		if q := strings.TrimSpace(r.URL.Query().Get("apiKey")); q != "" {
-			return q
-		}
-	}
 	return ""
 }
 

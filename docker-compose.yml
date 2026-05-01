@@ -156,23 +156,25 @@ services:
       - "8081:8081"
     # The backend can communicate with tool sidecars in two modes:
     #
-    # 1. HTTP mode (USE_HTTP_TOOL_SERVICES=true, default in .env.example):
-    #    Tools expose HTTP endpoints (e.g., nuclei-service:8093). No Docker
-    #    socket required. Secure and production-ready.
+    # 1. HTTP mode (USE_HTTP_TOOL_SERVICES=true): Tools expose HTTP endpoints
+    #    (e.g., nuclei-service:8093). No Docker socket required. Secure and
+    #    production-ready.
     #
-    # 2. Exec mode (USE_HTTP_TOOL_SERVICES=false): Shim scripts call
-    #    `docker compose exec -T <svc> <tool>` using the Docker socket.
-    #    Requires the docker-cli to be installed in the backend image and the
-    #    Docker socket to be mounted. To enable, layer the override file:
-    #
-    #        docker compose -f docker-compose.yml -f docker-compose.exec.yml up
-    #
-    #    The default compose file no longer mounts the Docker socket — it is
-    #    root-equivalent on the host and unnecessary in the default HTTP mode.
+    # 2. Exec mode (USE_HTTP_TOOL_SERVICES=false, default): Shim scripts call
+    #    `docker compose exec -T <svc> <tool>` using the Docker socket. Requires
+    #    docker-cli in backend image and socket mount below.
     #
     # The backend remains the single orchestrator: it is the only service that
     # talks to tool sidecars. No sidecar talks to another sidecar directly.
+    #
+    # Security note (exec mode only): Docker socket access is root-equivalent on
+    # the host. Acceptable for self-hosted scanner usage; not recommended in
+    # multi-tenant deployments. HTTP mode eliminates this requirement entirely.
     volumes:
+      # Docker socket - ONLY needed when USE_HTTP_TOOL_SERVICES=false
+      # Comment out these two lines when using HTTP mode:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
       # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
       # sidecars. Mounted at the same path inside both backend and the
       # consumer sidecars so `-w <path>` resolves identically on both
@@ -442,7 +444,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
-        # VITE_API_KEY intentionally omitted — see frontend/Dockerfile.
+        VITE_API_KEY: ${VITE_API_KEY:-change-this-bootstrap-key}
         VITE_WORKSPACE_ID: ${VITE_WORKSPACE_ID:-default}
     ports:
       - "3000:80"
@@ -483,15 +485,9 @@ services:
     image: grafana/grafana:11.6.1
     profiles: ["obs"]
     environment:
-      # Anonymous access is enabled so operators can view dashboards without a
-      # login on local/dev deployments. The role is intentionally Viewer (not
-      # Admin) so anyone reaching the Grafana port cannot mutate dashboards,
-      # add data sources, or exfiltrate plugin secrets. Tighten further (set
-      # GF_AUTH_ANONYMOUS_ENABLED=false and configure an admin password) for
-      # any deployment exposed beyond localhost.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
     ports:
       - "3002:3000"
     volumes:

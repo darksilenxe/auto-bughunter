@@ -16,12 +16,6 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY app/ ./app/
 
-# Switch back to the non-root `zap` user shipped by the upstream zaproxy
-# image. We needed root only to install pip and copy app code; the runtime
-# itself drops privileges. (Dockerfile last-user-is-root / DL3002.)
-RUN chown -R zap:zap /zap-service
-USER zap
-
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8094/health', timeout=5)"
 

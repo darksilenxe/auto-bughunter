@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -142,14 +141,7 @@ func (s *Service) surfaceHashURL(
 	h := sha256.New()
 	// 256KB is sufficient to detect content changes in schema/sitemap/robots
 	// documents while keeping memory usage bounded during bulk snapshotting.
-	if _, err := io.Copy(h, io.LimitReader(resp.Body, 256*1024)); err != nil {
-		// A truncated read produces a hash that's stable but not derivable
-		// from the full body. Returning empty signals "no usable hash" so the
-		// surface-diff probe doesn't claim the resource is unchanged when we
-		// actually couldn't read it.
-		log.Printf("surface_diff: read body for %s: %v", rawURL, err)
-		return ""
-	}
+	_, _ = io.Copy(h, io.LimitReader(resp.Body, 256*1024))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 

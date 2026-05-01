@@ -32,12 +32,10 @@ import argparse
 import json
 import os
 import re
-import shutil
-import subprocess  # nosec B404
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 
 # Conservative regex that captures URL/parameter/payload triples from a wide
@@ -53,65 +51,9 @@ _TRIPLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MAX_TIMEOUT_SECONDS = 600
-_MAX_PAYLOADS = 500
-_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-
-
-def _has_invalid_chars(value: str) -> bool:
-    return any(ch in value for ch in ("\r", "\n", "\x00"))
-
-
-def _validate_url(value: str, label: str) -> str:
-    value = value.strip()
-    if not value or _has_invalid_chars(value):
-        raise ValueError(f"{label} contains invalid characters")
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError(f"{label} must be an http(s) URL")
-    return value
-
-
-def _validate_model(value: str) -> str:
-    value = (value or "").strip()
-    if not value:
-        return ""
-    if len(value) > 128 or not _MODEL_RE.match(value):
-        raise ValueError("model must be 1-128 chars (letters, numbers, ., _, :, -)")
-    return value
-
-
-def _validate_max_payloads(value: int | None) -> int | None:
-    if value is None:
-        return None
-    if value <= 0 or value > _MAX_PAYLOADS:
-        raise ValueError(f"max-payloads must be between 1 and {_MAX_PAYLOADS}")
-    return value
-
-
-def _validate_timeout(value: int) -> int:
-    if value <= 0 or value > _MAX_TIMEOUT_SECONDS:
-        raise ValueError(f"timeout must be between 1 and {_MAX_TIMEOUT_SECONDS} seconds")
-    return value
-
-
-def _resolve_executable(name: str) -> str | None:
-    resolved = shutil.which(name)
-    if not resolved or _has_invalid_chars(resolved):
-        return None
-    return resolved
-
-
-def _fail(message: str, output: str) -> int:
-    sys.stderr.write(f"xssmap wrapper: {message}\n")
-    if output == "json":
-        json.dump({"vulnerabilities": []}, sys.stdout)
-        sys.stdout.write("\n")
-    return 2
-
 
 def _candidate_invocations(src: Path, target: str, max_payloads: int | None,
-                            model: str | None, ollama_url: str) -> list[list[str]]:
+                           model: str | None, ollama_url: str) -> list[list[str]]:
     """Build a prioritised list of candidate command lines to try."""
     common: list[str] = []
     if max_payloads is not None:
@@ -122,19 +64,14 @@ def _candidate_invocations(src: Path, target: str, max_payloads: int | None,
         common += ["--ollama-url", ollama_url]
 
     invocations: list[list[str]] = []
-    python_exec = sys.executable or "python3"
-    if _has_invalid_chars(python_exec):
-        raise ValueError("python executable contains invalid characters")
     # 1) Project-provided entry script (most XSSMap forks ship `xssmap.py`).
     script = src / "xssmap.py"
     if script.is_file():
-        invocations.append([python_exec, str(script), "-u", target] + common)
+        invocations.append(["python3", str(script), "-u", target] + common)
     # 2) Console-script style entry-point installed by `pip install .`.
-    xssmap_exec = _resolve_executable("xssmap")
-    if xssmap_exec:
-        invocations.append([xssmap_exec, "-u", target] + common)
+    invocations.append(["xssmap", "-u", target] + common)
     # 3) `python -m xssmap` style.
-    invocations.append([python_exec, "-m", "xssmap", "-u", target] + common)
+    invocations.append(["python3", "-m", "xssmap", "-u", target] + common)
     return invocations
 
 
@@ -166,13 +103,12 @@ def _parse_stdout(raw: str) -> list[dict[str, Any]]:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # nosec B603 - nosemgrep: command uses validated args and resolved executables (see _resolve_xssmap_entrypoint)
+    return subprocess.run(
         cmd,
         cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=timeout,
-        shell=False,
         check=False,
     )
 
@@ -190,30 +126,15 @@ def main() -> int:
                       default=int(os.environ.get("XSSMAP_TIMEOUT_SECONDS", "120")))
     args = parser.parse_args()
 
-    try:
-        target = _validate_url(args.url, "target URL")
-        args.max_payloads = _validate_max_payloads(args.max_payloads)
-        args.timeout = _validate_timeout(args.timeout)
-    except ValueError as exc:
-        return _fail(str(exc), args.output)
-
     home = Path(os.environ.get("XSSMAP_HOME", "/opt/xssmap"))
     src = home / "src"
     ollama_url = (args.ollama_url
                   or os.environ.get("XSSMAP_OLLAMA_URL")
                   or "http://ollama:11434")
     model = args.model or os.environ.get("OLLAMA_MODEL") or ""
-    try:
-        ollama_url = _validate_url(ollama_url, "Ollama URL") if ollama_url else ""
-        model = _validate_model(model)
-    except ValueError as exc:
-        return _fail(str(exc), args.output)
 
-    try:
-        invocations = _candidate_invocations(src, target, args.max_payloads,
-                                             model, ollama_url)
-    except ValueError as exc:
-        return _fail(str(exc), args.output)
+    invocations = _candidate_invocations(src, args.url, args.max_payloads,
+                                         model, ollama_url)
 
     last_err = "no invocation attempted"
     for cmd in invocations:

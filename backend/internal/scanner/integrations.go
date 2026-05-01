@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -447,7 +446,7 @@ func (s *Service) shouldRunNucleiViaHTTP(ctx context.Context) bool {
 	if httpToolServicesEnabled() {
 		return true
 	}
-	if commandPreflight(ctx, "nuclei", s.cfg.NucleiBinary, "-version") {
+	if commandPreflight(ctx, s.cfg.NucleiBinary, "-version") {
 		return false
 	}
 	client := toolclient.NewNucleiClient()
@@ -541,8 +540,7 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 }
 
 func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Finding {
-	binary, err := resolveIntegrationBinary("nuclei", s.cfg.NucleiBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.NucleiBinary); err != nil {
 		return []model.Finding{{
 			ID:             "nuclei-binary-missing",
 			Category:       "integration",
@@ -557,7 +555,7 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary,
+	cmd := exec.CommandContext(ictx, s.cfg.NucleiBinary,
 		"-u", target,
 		"-severity", "medium,high,critical",
 		"-silent",
@@ -571,7 +569,7 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
 		return []model.Finding{{
 			ID:             "nuclei-timeout",
@@ -631,7 +629,7 @@ func (s *Service) shouldRunZAPBaselineViaHTTP(ctx context.Context) bool {
 	if httpToolServicesEnabled() {
 		return true
 	}
-	if commandPreflight(ctx, "zap-baseline.py", s.cfg.ZAPBaselineBinary, "-h") {
+	if commandPreflight(ctx, s.cfg.ZAPBaselineBinary, "-h") {
 		return false
 	}
 	client := toolclient.NewZapClient()
@@ -690,8 +688,7 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 }
 
 func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model.Finding {
-	binary, err := resolveIntegrationBinary("zap-baseline.py", s.cfg.ZAPBaselineBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.ZAPBaselineBinary); err != nil {
 		return []model.Finding{{
 			ID:             "zap-baseline-binary-missing",
 			Category:       "integration",
@@ -706,12 +703,12 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-t", target, "-m", "1", "-I")
+	cmd := exec.CommandContext(ictx, s.cfg.ZAPBaselineBinary, "-t", target, "-m", "1", "-I")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
 		return []model.Finding{{
 			ID:             "zap-baseline-timeout",
@@ -775,85 +772,13 @@ func httpToolServicesEnabled() bool {
 	return useHTTPMode == "true" || useHTTPMode == "1"
 }
 
-var integrationBinaries = map[string]struct{}{
-	"nuclei":          {},
-	"zap-baseline.py": {},
-	"xssmap":          {},
-	"subfinder":       {},
-	"httpx":           {},
-	"cloudlist":       {},
-	"vulnx":           {},
-	"naabu":           {},
-	"dnsx":            {},
-	"shuffledns":      {},
-	"katana":          {},
-	"tlsx":            {},
-	"cdncheck":        {},
-	"asnmap":          {},
-	"ffuf":            {},
-	"gobuster":        {},
-}
-
-func resolveIntegrationBinary(expected, configured string) (string, error) {
-	expected = strings.TrimSpace(expected)
-	if expected == "" {
-		return "", fmt.Errorf("expected binary is empty")
-	}
-	if _, ok := integrationBinaries[expected]; !ok {
-		return "", fmt.Errorf("binary %q is not approved for integrations", expected)
-	}
-
-	candidate := strings.TrimSpace(configured)
-	if candidate == "" {
-		candidate = expected
-	}
-	if strings.ContainsAny(candidate, "\x00\r\n") {
-		return "", fmt.Errorf("binary name contains invalid characters")
-	}
-	if strings.Contains(candidate, string(os.PathSeparator)) {
-		if !filepath.IsAbs(candidate) {
-			return "", fmt.Errorf("binary path must be absolute")
-		}
-		resolved, err := filepath.EvalSymlinks(candidate)
-		if err != nil {
-			return "", err
-		}
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return "", err
-		}
-		if info.IsDir() {
-			return "", fmt.Errorf("binary path is a directory")
-		}
-		if filepath.Base(resolved) != expected {
-			return "", fmt.Errorf("binary must resolve to %s", expected)
-		}
-		return resolved, nil
-	}
-
-	resolved, err := exec.LookPath(candidate)
-	if err != nil {
-		return "", err
-	}
-	// Ensure PATH resolution did not redirect to an unexpected binary name.
-	if filepath.Base(resolved) != expected {
-		return "", fmt.Errorf("binary must resolve to %s", expected)
-	}
-	return resolved, nil
-}
-
-func commandForIntegration(ctx context.Context, binary string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, binary, args...) //nolint:gosec // nosemgrep -- allowlisted binary resolved in resolveIntegrationBinary; not user-controlled.
-}
-
-func commandPreflight(parent context.Context, expected, configured string, args ...string) bool {
-	binary, err := resolveIntegrationBinary(expected, configured)
-	if err != nil {
+func commandPreflight(parent context.Context, binary string, args ...string) bool {
+	if strings.TrimSpace(binary) == "" {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(parent, integrationPreflightTimeout)
 	defer cancel()
-	cmd := commandForIntegration(ctx, binary, args...)
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run() == nil
@@ -935,8 +860,7 @@ type xssmapVuln struct {
 }
 
 func (s *Service) runXSSMap(ctx context.Context, target string) []model.Finding {
-	binary, err := resolveIntegrationBinary("xssmap", s.cfg.XSSMapBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.XSSMapBinary); err != nil {
 		return []model.Finding{{
 			ID:             "xssmap-binary-missing",
 			Category:       "integration",
@@ -964,12 +888,12 @@ func (s *Service) runXSSMap(ctx context.Context, target string) []model.Finding 
 		args = append(args, "--ollama-url", v)
 	}
 
-	cmd := commandForIntegration(ictx, binary, args...)
+	cmd := exec.CommandContext(ictx, s.cfg.XSSMapBinary, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
 		return []model.Finding{{
 			ID:             "xssmap-timeout",
@@ -1090,8 +1014,7 @@ func (s *Service) runSubfinder(ctx context.Context, target string, state *integr
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("subfinder", s.cfg.SubfinderBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.SubfinderBinary); err != nil {
 		return []model.Finding{{
 			ID:             "subfinder-binary-missing",
 			Category:       "integration",
@@ -1107,12 +1030,12 @@ func (s *Service) runSubfinder(ctx context.Context, target string, state *integr
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-d", host, "-silent")
+	cmd := exec.CommandContext(ictx, s.cfg.SubfinderBinary, "-d", host, "-silent")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "subfinder-execution-error",
@@ -1173,8 +1096,7 @@ func (s *Service) runHttpx(ctx context.Context, target string) []model.Finding {
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("httpx", s.cfg.HttpxBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.HttpxBinary); err != nil {
 		return []model.Finding{{
 			ID:             "httpx-binary-missing",
 			Category:       "integration",
@@ -1189,12 +1111,12 @@ func (s *Service) runHttpx(ctx context.Context, target string) []model.Finding {
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-u", target, "-silent", "-status-code", "-title", "-tech-detect")
+	cmd := exec.CommandContext(ictx, s.cfg.HttpxBinary, "-u", target, "-silent", "-status-code", "-title", "-tech-detect")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "httpx-execution-error",
@@ -1316,8 +1238,7 @@ func (s *Service) runCloudlist(ctx context.Context, target string) []model.Findi
 	if !s.cfg.EnableCloudlist {
 		return nil
 	}
-	binary, err := resolveIntegrationBinary("cloudlist", s.cfg.CloudlistBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.CloudlistBinary); err != nil {
 		return []model.Finding{{
 			ID:             "cloudlist-binary-missing",
 			Category:       "integration",
@@ -1333,12 +1254,12 @@ func (s *Service) runCloudlist(ctx context.Context, target string) []model.Findi
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-silent", "-host", "-id", host)
+	cmd := exec.CommandContext(ictx, s.cfg.CloudlistBinary, "-silent", "-host", "-id", host)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "cloudlist-execution-error",
@@ -1379,8 +1300,7 @@ func (s *Service) runVulnx(ctx context.Context, target string) []model.Finding {
 			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
 		}}
 	}
-	binary, err := resolveIntegrationBinary("vulnx", s.cfg.VulnxBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.VulnxBinary); err != nil {
 		return []model.Finding{{
 			ID:             "vulnx-binary-missing",
 			Category:       "integration",
@@ -1396,12 +1316,12 @@ func (s *Service) runVulnx(ctx context.Context, target string) []model.Finding {
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "search", "--limit", "20", "--silent", host)
+	cmd := exec.CommandContext(ictx, s.cfg.VulnxBinary, "search", "--limit", "20", "--silent", host)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "vulnx-execution-error",
@@ -1443,8 +1363,7 @@ func (s *Service) runNaabu(ctx context.Context, target string) []model.Finding {
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("naabu", s.cfg.NaabuBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.NaabuBinary); err != nil {
 		return []model.Finding{{
 			ID:             "naabu-binary-missing",
 			Category:       "integration",
@@ -1460,12 +1379,12 @@ func (s *Service) runNaabu(ctx context.Context, target string) []model.Finding {
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-host", host, "-silent", "-top-ports", "1000")
+	cmd := exec.CommandContext(ictx, s.cfg.NaabuBinary, "-host", host, "-silent", "-top-ports", "1000")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "naabu-execution-error",
@@ -1510,8 +1429,7 @@ func (s *Service) runDnsx(ctx context.Context, target string) []model.Finding {
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("dnsx", s.cfg.DnsxBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.DnsxBinary); err != nil {
 		return []model.Finding{{
 			ID:             "dnsx-binary-missing",
 			Category:       "integration",
@@ -1527,12 +1445,12 @@ func (s *Service) runDnsx(ctx context.Context, target string) []model.Finding {
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-d", host, "-silent", "-a", "-cname", "-mx", "-txt")
+	cmd := exec.CommandContext(ictx, s.cfg.DnsxBinary, "-d", host, "-silent", "-a", "-cname", "-mx", "-txt")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "dnsx-execution-error",
@@ -1576,8 +1494,7 @@ func (s *Service) runShuffleDNS(ctx context.Context, target string, state *integ
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("shuffledns", s.cfg.ShuffleDNSBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.ShuffleDNSBinary); err != nil {
 		return []model.Finding{{
 			ID:             "shuffledns-binary-missing",
 			Category:       "integration",
@@ -1593,12 +1510,12 @@ func (s *Service) runShuffleDNS(ctx context.Context, target string, state *integ
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-d", host, "-silent")
+	cmd := exec.CommandContext(ictx, s.cfg.ShuffleDNSBinary, "-d", host, "-silent")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "shuffledns-execution-error",
@@ -1893,8 +1810,7 @@ func (s *Service) runKatana(ctx context.Context, target string, depth int) []mod
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("katana", s.cfg.KatanaBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.KatanaBinary); err != nil {
 		return []model.Finding{{
 			ID:             "katana-binary-missing",
 			Category:       "integration",
@@ -1912,12 +1828,12 @@ func (s *Service) runKatana(ctx context.Context, target string, depth int) []mod
 	if depth <= 0 {
 		depth = 2
 	}
-	cmd := commandForIntegration(ictx, binary, "-u", target, "-silent", "-depth", strconv.Itoa(depth), "-js-crawl")
+	cmd := exec.CommandContext(ictx, s.cfg.KatanaBinary, "-u", target, "-silent", "-depth", strconv.Itoa(depth), "-js-crawl")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "katana-execution-error",
@@ -1961,8 +1877,7 @@ func (s *Service) runTlsx(ctx context.Context, target string) []model.Finding {
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("tlsx", s.cfg.TlsxBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.TlsxBinary); err != nil {
 		return []model.Finding{{
 			ID:             "tlsx-binary-missing",
 			Category:       "integration",
@@ -1978,12 +1893,12 @@ func (s *Service) runTlsx(ctx context.Context, target string) []model.Finding {
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-u", host, "-silent", "-expired", "-self-signed", "-mismatched")
+	cmd := exec.CommandContext(ictx, s.cfg.TlsxBinary, "-u", host, "-silent", "-expired", "-self-signed", "-mismatched")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "tlsx-execution-error",
@@ -2028,8 +1943,7 @@ func (s *Service) runCdncheck(ctx context.Context, target string) []model.Findin
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("cdncheck", s.cfg.CdncheckBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.CdncheckBinary); err != nil {
 		return []model.Finding{{
 			ID:             "cdncheck-binary-missing",
 			Category:       "integration",
@@ -2045,12 +1959,12 @@ func (s *Service) runCdncheck(ctx context.Context, target string) []model.Findin
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-i", host, "-silent")
+	cmd := exec.CommandContext(ictx, s.cfg.CdncheckBinary, "-i", host, "-silent")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "cdncheck-execution-error",
@@ -2094,8 +2008,7 @@ func (s *Service) runAsnmap(ctx context.Context, target string) []model.Finding 
 		}}
 	}
 
-	binary, err := resolveIntegrationBinary("asnmap", s.cfg.AsnmapBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.AsnmapBinary); err != nil {
 		return []model.Finding{{
 			ID:             "asnmap-binary-missing",
 			Category:       "integration",
@@ -2111,12 +2024,12 @@ func (s *Service) runAsnmap(ctx context.Context, target string) []model.Finding 
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
 
-	cmd := commandForIntegration(ictx, binary, "-a", host, "-silent")
+	cmd := exec.CommandContext(ictx, s.cfg.AsnmapBinary, "-a", host, "-silent")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return []model.Finding{{
 			ID:             "asnmap-execution-error",
@@ -2320,8 +2233,7 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
 		}}
 	}
-	binary, err := resolveIntegrationBinary("ffuf", s.cfg.FFUFBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.FFUFBinary); err != nil {
 		return []model.Finding{{
 			ID:             "ffuf-binary-missing",
 			Category:       "integration",
@@ -2348,7 +2260,7 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
-	cmd := commandForIntegration(ictx, binary, "-u", strings.TrimRight(target, "/")+"/FUZZ", "-w", wordlistPath, "-mc", "200,204,301,302,307,401,403", "-s")
+	cmd := exec.CommandContext(ictx, s.cfg.FFUFBinary, "-u", strings.TrimRight(target, "/")+"/FUZZ", "-w", wordlistPath, "-mc", "200,204,301,302,307,401,403", "-s")
 	var outb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &outb
@@ -2402,8 +2314,7 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
 		}}
 	}
-	binary, err := resolveIntegrationBinary("gobuster", s.cfg.GobusterBinary)
-	if err != nil {
+	if _, err := exec.LookPath(s.cfg.GobusterBinary); err != nil {
 		return []model.Finding{{
 			ID:             "gobuster-binary-missing",
 			Category:       "integration",
@@ -2430,7 +2341,7 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
-	cmd := commandForIntegration(ictx, binary, "dir", "-u", target, "-w", wordlistPath, "-q", "--no-error")
+	cmd := exec.CommandContext(ictx, s.cfg.GobusterBinary, "dir", "-u", target, "-w", wordlistPath, "-q", "--no-error")
 	var outb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &outb
@@ -2479,9 +2390,7 @@ func writeTemporaryWordlist(entries []string) (string, error) {
 	// backend binary outside Docker Compose).
 	dir := os.Getenv("SHARED_TMP_DIR")
 	if dir != "" {
-		// The shared tmp volume is mounted into the sidecars under the same user
-		// in Docker Compose, so 0700 remains accessible while limiting exposure.
-		if err := os.MkdirAll(dir, 0o700); err != nil { // nosemgrep -- shared tmp dir requires execute bit so sidecars can list/read; 0700 is owner-only.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
 	}
