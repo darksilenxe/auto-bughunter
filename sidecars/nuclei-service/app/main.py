@@ -128,22 +128,79 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     """
     logger.info(f"Executing nuclei with args: {req.args}")
 
-    # Validate args to prevent command injection
-    # Note: subprocess.run with list args is safe, but we add validation for defense in depth
-    for arg in req.args:
-        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
-            return ExecuteResponse(
-                stdout="",
-                stderr="",
-                exit_code=1,
-                timed_out=False,
-                error="Invalid argument: potentially dangerous characters detected"
-            )
+    # Strict allowlist validation for nuclei arguments
+    allowed_flags_no_value = {
+        "-silent",
+        "-json",
+        "-nc",
+    }
+    allowed_flags_with_value = {
+        "-u",
+        "-l",
+        "-t",
+        "-severity",
+        "-timeout",
+        "-rl",
+    }
+
+    sanitized_args: List[str] = []
+    i = 0
+    while i < len(req.args):
+        arg = req.args[i]
+
+        if arg in allowed_flags_no_value:
+            sanitized_args.append(arg)
+            i += 1
+            continue
+
+        if arg in allowed_flags_with_value:
+            if i + 1 >= len(req.args):
+                return ExecuteResponse(
+                    stdout="",
+                    stderr="",
+                    exit_code=1,
+                    timed_out=False,
+                    error=f"Invalid argument: missing value for {arg}"
+                )
+
+            value = req.args[i + 1]
+
+            # Basic value sanity checks
+            if not value or len(value) > 2048 or "\x00" in value or "\n" in value or "\r" in value:
+                return ExecuteResponse(
+                    stdout="",
+                    stderr="",
+                    exit_code=1,
+                    timed_out=False,
+                    error=f"Invalid value for {arg}"
+                )
+
+            # Extra restriction for file/path-like options
+            if arg in {"-l", "-t"} and ".." in value:
+                return ExecuteResponse(
+                    stdout="",
+                    stderr="",
+                    exit_code=1,
+                    timed_out=False,
+                    error=f"Invalid value for {arg}: path traversal detected"
+                )
+
+            sanitized_args.extend([arg, value])
+            i += 2
+            continue
+
+        return ExecuteResponse(
+            stdout="",
+            stderr="",
+            exit_code=1,
+            timed_out=False,
+            error=f"Invalid argument: {arg} is not allowed"
+        )
 
     try:
-        # Execute nuclei
+        # Execute nuclei with validated arguments
         result = subprocess.run(
-            ["nuclei"] + req.args,
+            ["nuclei"] + sanitized_args,
             capture_output=True,
             text=True,
             timeout=req.timeout
