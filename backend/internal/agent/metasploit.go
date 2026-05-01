@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1390,8 +1391,39 @@ func envFlagTrue(key string) bool {
 	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
+func resolveMSFTemplatePath(path string) (string, error) {
+	cleaned := strings.TrimSpace(path)
+	if cleaned == "" {
+		return "", fmt.Errorf("template path is empty")
+	}
+	if strings.ContainsAny(cleaned, "\x00\r\n") {
+		return "", fmt.Errorf("template path contains invalid characters")
+	}
+	cleaned = filepath.Clean(cleaned)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("template path must be absolute")
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("template path must be a file")
+	}
+	return resolved, nil
+}
+
 func loadMSFRPCModuleTemplate(path, rhost, rport, ssl string) ([]msfRPCModuleTemplate, error) {
-	raw, err := os.ReadFile(path)
+	safePath, err := resolveMSFTemplatePath(path)
+	if err != nil {
+		return nil, err
+	}
+	// nosemgrep: path validated as absolute file in resolveMSFTemplatePath.
+	raw, err := os.ReadFile(safePath)
 	if err != nil {
 		return nil, err
 	}

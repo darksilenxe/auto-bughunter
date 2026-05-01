@@ -462,6 +462,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// nosemgrep: validated allowlisted binary and args via ValidateWithPolicy.
 	cmd := exec.CommandContext(cmdCtx, spec.Binary, spec.Args...) //nolint:gosec // binary is allowlisted
 	cmd.Env = safeEnv()
 

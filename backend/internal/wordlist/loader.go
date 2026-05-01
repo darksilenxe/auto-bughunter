@@ -166,7 +166,7 @@ func (el *ExternalLoader) loadFromURLs(ctx context.Context, cacheKey string, url
 	}
 
 	if isCacheValid(safeCacheFile, el.maxCacheAge) {
-		cached, err := readCachedFile(safeCacheFile)
+		cached, err := readCachedFile(el.cacheDir, safeCacheFile)
 		if err == nil && len(cached) > 0 {
 			return cached
 		}
@@ -234,8 +234,12 @@ func isCacheValid(path string, maxAge time.Duration) bool {
 	return time.Since(info.ModTime()) < maxAge
 }
 
-func readCachedFile(path string) ([]string, error) {
-	file, err := os.Open(path)
+func readCachedFile(baseDir, path string) ([]string, error) {
+	safePath, err := safeCachePath(baseDir, path)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(safePath)
 	if err != nil {
 		return nil, err
 	}
