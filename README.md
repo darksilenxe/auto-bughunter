@@ -96,7 +96,7 @@ OLLAMA_SECONDARY_MODEL=codellama
 4. Open:
 
 - Frontend: 
-- Backend health:
+- Backend health: /api/health
 
 ## Command-line interface
 
