@@ -19,7 +19,7 @@ export default function Reports() {
   const [copyStatus, setCopyStatus] = useState({});
   const newController = useAbortable();
 
-  const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
+  const findings = useMemo(function () { return sortFindings(job?.findings || []); }, [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
 
   if (!job) {
