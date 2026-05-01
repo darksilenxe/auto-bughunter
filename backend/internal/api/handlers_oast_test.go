@@ -106,3 +106,33 @@ func TestOASTHandlers_IssueListAndHits(t *testing.T) {
 		t.Fatalf("expected empty hits list, got: %s", body)
 	}
 }
+
+func TestOASTHandlers_IssueRejectsMalformedJSON(t *testing.T) {
+	_, srv := newOASTTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/oast/tokens", "application/json",
+		strings.NewReader(`{"scanId": not-json`))
+	if err != nil {
+		t.Fatalf("POST tokens: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed JSON, got %d", resp.StatusCode)
+	}
+}
+
+func TestOASTHandlers_IssueAcceptsEmptyBody(t *testing.T) {
+	_, srv := newOASTTestServer(t)
+	defer srv.Close()
+
+	// Empty body must remain valid (both fields are optional).
+	resp, err := http.Post(srv.URL+"/api/oast/tokens", "application/json", strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("POST tokens: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for empty body, got %d", resp.StatusCode)
+	}
+}

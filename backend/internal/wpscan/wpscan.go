@@ -495,17 +495,20 @@ func getBodyFollowRedirect(ctx context.Context, target string, auth model.ScanAu
 }
 
 // applyAuthProfile applies the provided credentials to an outgoing HTTP request.
-// This mirrors scanner.ApplyAuthProfile to avoid a circular import dependency.
+// This mirrors scanner.ApplyAuthProfile to avoid a circular import dependency,
+// including its CRLF/NUL rejection on header names and values.
 func applyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 	if req == nil {
 		return
 	}
 	for key, value := range profile.Headers {
-		if strings.TrimSpace(key) != "" {
-			req.Header.Set(key, value)
+		key = strings.TrimSpace(key)
+		if key == "" || !isSafeHeaderName(key) || !isSafeHeaderValue(value) {
+			continue
 		}
+		req.Header.Set(key, value)
 	}
-	if profile.UserAgent != "" {
+	if profile.UserAgent != "" && isSafeHeaderValue(profile.UserAgent) {
 		req.Header.Set("User-Agent", profile.UserAgent)
 	}
 	if profile.BasicAuthUsername != "" || profile.BasicAuthPassword != "" {
@@ -514,8 +517,36 @@ func applyAuthProfile(req *http.Request, profile model.ScanAuthProfile) {
 	if len(profile.Cookies) > 0 {
 		parts := make([]string, 0, len(profile.Cookies))
 		for name, val := range profile.Cookies {
+			if !isSafeHeaderValue(name) || !isSafeHeaderValue(val) {
+				continue
+			}
 			parts = append(parts, name+"="+val)
 		}
-		req.Header.Set("Cookie", strings.Join(parts, "; "))
+		if len(parts) > 0 {
+			req.Header.Set("Cookie", strings.Join(parts, "; "))
+		}
 	}
+}
+
+func isSafeHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c <= 0x20 || c >= 0x7f || strings.IndexByte("()<>@,;:\\\"/[]?={}", c) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '\r' || c == '\n' || c == 0 {
+			return false
+		}
+	}
+	return true
 }

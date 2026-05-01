@@ -1026,10 +1026,14 @@ func (s *MemoryStore) AuthenticateAPIKey(ctx context.Context, rawKey string) (*m
 		return nil, err
 	}
 	candidate := strings.TrimSpace(rawKey)
+	prefix := apiKeyPrefix(candidate)
+	if prefix == "" {
+		return nil, sql.ErrNoRows
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, key := range s.apiKeys {
-		if !key.Record.Active {
+		if !key.Record.Active || key.Record.KeyPrefix != prefix {
 			continue
 		}
 		if bcrypt.CompareHashAndPassword([]byte(key.Hash), []byte(candidate)) == nil {

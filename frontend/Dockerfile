@@ -4,8 +4,10 @@ WORKDIR /app
 ARG VITE_API_BASE=http://localhost:8080
 ENV VITE_API_BASE=${VITE_API_BASE}
 
-ARG VITE_API_KEY=
-ENV VITE_API_KEY=${VITE_API_KEY}
+# Note: VITE_API_KEY is intentionally NOT a build arg. Vite would inline it
+# into the public JS bundle, publishing the operator's API key to every
+# browser. The browser receives the key at runtime via the Settings UI
+# (persisted in localStorage for that browser only).
 
 ARG VITE_WORKSPACE_ID=default
 ENV VITE_WORKSPACE_ID=${VITE_WORKSPACE_ID}

@@ -113,7 +113,7 @@ export default function Settings() {
       },
       appConfig: {
         apiBase: API_BASE,
-        authConfigured: Boolean(localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY),
+        authConfigured: Boolean(localStorage.getItem("api_key")),
         workspaceId: WORKSPACE_ID,
         currentUrl: window.location.href,
       },
@@ -369,7 +369,7 @@ export default function Settings() {
     );
   }
 
-  const configuredApiKey = runtimeApiKey.trim() || import.meta.env.VITE_API_KEY || "";
+  const configuredApiKey = runtimeApiKey.trim();
   const toolsSummary = useMemo(() => {
     const installed = toolsHealth.filter((tool) => tool.installed).length;
     return { installed, total: toolsHealth.length };
@@ -536,7 +536,7 @@ export default function Settings() {
       <section className="card">
         <h2>Browser API key</h2>
         <p className="meta">
-          Set the key used by the browser against the backend <code>/api/*</code> routes. This overrides build-time <code>VITE_API_KEY</code>.
+          Set the key used by the browser against the backend <code>/api/*</code> routes. The key is stored in <code>localStorage</code> only — the build-time <code>VITE_API_KEY</code> is intentionally <em>not</em> honored, because Vite would inline its value into the public JS bundle.
         </p>
         <div className="toolbar">
           <input type="password" placeholder="Paste your API key here" value={runtimeApiKey} onChange={(e) => setRuntimeApiKey(e.target.value)} style={{ flex: "1 1 280px" }} />
@@ -546,7 +546,7 @@ export default function Settings() {
           </div>
         </div>
         {apiKeyStatus && <p className="meta" style={{ marginTop: 12 }}>{apiKeyStatus}</p>}
-        {!runtimeApiKey && !import.meta.env.VITE_API_KEY && <p className="error" style={{ marginTop: 12 }}>No API key configured — backend requests from the browser will fail.</p>}
+        {!runtimeApiKey && <p className="error" style={{ marginTop: 12 }}>No API key configured — backend requests from the browser will fail.</p>}
       </section>
 
       <section className="card">

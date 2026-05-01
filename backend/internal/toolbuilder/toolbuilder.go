@@ -10,7 +10,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,10 +153,35 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	cmd := exec.CommandContext(cmdCtx, interp, args...) //nolint:gosec // script is validated
 	cmd.Env = safeEnv()
 
-	stdout, err := cmd.Output()
-	if err != nil && cmdCtx.Err() == context.DeadlineExceeded {
+	// Read stdout through a bounded LimitReader rather than cmd.Output(), which
+	// would buffer the entire (potentially adversarial) script output in
+	// memory before truncation. We allow one extra byte beyond maxOutputBytes
+	// so we can detect (and discard) an over-long stream without OOM-ing the
+	// backend on a runaway tool. Stderr is discarded entirely; the contract
+	// with generated tools is JSON-lines findings on stdout.
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("tool %q stdout pipe: %w", spec.Name, err)
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("tool %q start: %w", spec.Name, err)
+	}
+	stdout, readErr := io.ReadAll(io.LimitReader(stdoutPipe, int64(maxOutputBytes)+1))
+	// Drain anything beyond the cap so the writer is never blocked on a full
+	// pipe (which would prevent the process from exiting cleanly).
+	_, _ = io.Copy(io.Discard, stdoutPipe)
+	waitErr := cmd.Wait()
+	if cmdCtx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("tool %q timed out", spec.Name)
 	}
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return nil, fmt.Errorf("tool %q read stdout: %w", spec.Name, readErr)
+	}
+	// Non-zero exit is non-fatal: the script may still have emitted partial
+	// findings on stdout before failing. We log nothing here on purpose
+	// because some templates intentionally exit non-zero on a found vuln.
+	_ = waitErr
 
 	if len(stdout) > maxOutputBytes {
 		stdout = stdout[:maxOutputBytes]
@@ -211,7 +238,15 @@ func toSeverity(s string) model.Severity {
 func sanitizeName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	r := regexp.MustCompile(`[^a-z0-9_-]`)
-	return r.ReplaceAllString(name, "_")
+	name = r.ReplaceAllString(name, "_")
+	// Cap the length so that long generated tool names can't produce
+	// filesystem-rejecting filenames (most filesystems cap a single path
+	// component at 255 bytes; we leave headroom for the extension).
+	const maxNameLen = 100
+	if len(name) > maxNameLen {
+		name = name[:maxNameLen]
+	}
+	return name
 }
 
 func safeEnv() []string {
