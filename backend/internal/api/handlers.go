@@ -4118,6 +4118,15 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		planner = aiPlanner
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
+	if !useAI {
+		// The static planner walks a finite, predefined pipeline. Consecutive-no-novelty
+		// stopping is only meaningful for the AI planner (which may schedule repeated
+		// passes indefinitely). Disable it so every registered agent gets to run even
+		// when early pipeline steps find nothing. Also ensure MaxRounds is at least as
+		// large as the pipeline so the outer loop does not cut the pipeline short.
+		orchestrator.MaxNoNoveltyRounds = 0
+		orchestrator.MaxRounds = maxInt(orchestrator.MaxRounds, len(staticOrder))
+	}
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
 		orchestrator.MaxNoNoveltyRounds = input.Options.AutonomyMaxNoNoveltyRounds
 	}
@@ -4983,7 +4992,7 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		}
 		stat.Findings += len(out.Findings)
 		for _, f := range out.Findings {
-			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh {
+			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
 				stat.HighConfidenceFindings++
 			}
 		}
