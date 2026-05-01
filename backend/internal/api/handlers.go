@@ -4124,9 +4124,7 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		// passes indefinitely). Disable it so every registered agent gets to run even
 		// when early pipeline steps find nothing. Also ensure MaxRounds is at least as
 		// large as the pipeline so the outer loop does not cut the pipeline short.
-		if input.Options.AutonomyMaxNoNoveltyRounds == 0 {
-			orchestrator.MaxNoNoveltyRounds = 0
-		}
+		orchestrator.MaxNoNoveltyRounds = 0
 		orchestrator.MaxRounds = maxInt(orchestrator.MaxRounds, len(staticOrder))
 	}
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
