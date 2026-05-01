@@ -2480,6 +2480,8 @@ func writeTemporaryWordlist(entries []string) (string, error) {
 	// backend binary outside Docker Compose).
 	dir := os.Getenv("SHARED_TMP_DIR")
 	if dir != "" {
+		// The shared tmp volume is mounted into the sidecars under the same user
+		// in Docker Compose, so 0700 remains accessible while limiting exposure.
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}

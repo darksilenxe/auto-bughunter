@@ -102,11 +102,15 @@ def _normalize_path(value: str) -> str:
     if not os.path.isabs(value):
         raise ValueError("path must be absolute")
     normalized = os.path.normpath(value)
-    prefixes = []
+    prefixes: list[str] = []
     configured_prefixes = os.getenv("NUCLEI_ALLOWED_PATH_PREFIXES", "")
     if configured_prefixes:
         prefixes.extend([p.strip() for p in configured_prefixes.split(",") if p.strip()])
-    prefixes.append(os.getenv("SHARED_TMP_DIR", "/tmp"))
+    shared_tmp = os.getenv("SHARED_TMP_DIR", "").strip()
+    if shared_tmp:
+        prefixes.append(shared_tmp)
+    if not prefixes:
+        raise ValueError("no allowed path prefixes configured")
     for prefix in prefixes:
         prefix = os.path.normpath(prefix)
         if normalized == prefix or normalized.startswith(prefix + os.sep):
