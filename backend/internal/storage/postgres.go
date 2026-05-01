@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -249,43 +250,49 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 	}
 
 	if len(findingsRaw) > 0 {
-		_ = json.Unmarshal(findingsRaw, &job.Findings)
+		decodeScanJSONColumn(job.ID, "findings", findingsRaw, &job.Findings)
 	}
 	if len(summaryRaw) > 0 && string(summaryRaw) != "null" {
 		var summary model.ScanAuthProfileSummary
 		if err := json.Unmarshal(summaryRaw, &summary); err == nil {
 			job.AuthProfileSummary = &summary
+		} else {
+			logScanColumnUnmarshalError(job.ID, "auth_profile_summary", err)
 		}
 	}
 	if len(optionsRaw) > 0 {
-		_ = json.Unmarshal(optionsRaw, &job.Options)
+		decodeScanJSONColumn(job.ID, "options", optionsRaw, &job.Options)
 	}
 	if len(scopeRaw) > 0 {
-		_ = json.Unmarshal(scopeRaw, &job.Scope)
+		decodeScanJSONColumn(job.ID, "scope", scopeRaw, &job.Scope)
 	}
 	if len(agentRunsRaw) > 0 {
-		_ = json.Unmarshal(agentRunsRaw, &job.AgentRuns)
+		decodeScanJSONColumn(job.ID, "agent_runs", agentRunsRaw, &job.AgentRuns)
 	}
 	if len(assetLinksRaw) > 0 {
-		_ = json.Unmarshal(assetLinksRaw, &job.AssetLinks)
+		decodeScanJSONColumn(job.ID, "asset_links", assetLinksRaw, &job.AssetLinks)
 	}
 	if len(dashboardRaw) > 0 && string(dashboardRaw) != "null" {
 		var dashboard model.DecisionDashboard
 		if err := json.Unmarshal(dashboardRaw, &dashboard); err == nil {
 			job.Dashboard = &dashboard
+		} else {
+			logScanColumnUnmarshalError(job.ID, "dashboard", err)
 		}
 	}
 	if len(nextActionsRaw) > 0 {
-		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
+		decodeScanJSONColumn(job.ID, "next_actions", nextActionsRaw, &job.NextActions)
 	}
 	if len(modelRecommendationsRaw) > 0 && string(modelRecommendationsRaw) != "null" {
 		var modelRecommendations model.ModelRecommendations
 		if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
 			job.ModelRecommendations = &modelRecommendations
+		} else {
+			logScanColumnUnmarshalError(job.ID, "model_recommendations", err)
 		}
 	}
 	if len(disallowedTestsRaw) > 0 {
-		_ = json.Unmarshal(disallowedTestsRaw, &job.DisallowedTestTypes)
+		decodeScanJSONColumn(job.ID, "disallowed_tests", disallowedTestsRaw, &job.DisallowedTestTypes)
 	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
@@ -528,6 +535,15 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate api_keys table: %w", err)
 	}
+	// Index used by AuthenticateAPIKey to look up the candidate row by
+	// prefix instead of scanning every active key with bcrypt.
+	if _, err := p.db.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS api_keys_active_prefix_idx
+		ON api_keys (key_prefix)
+		WHERE active = TRUE
+	`); err != nil {
+		return fmt.Errorf("migrate api_keys index: %w", err)
+	}
 	_, err = p.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_campaigns (
 			id TEXT PRIMARY KEY,
@@ -747,43 +763,49 @@ func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, ex
 	}
 
 	if len(findingsRaw) > 0 {
-		_ = json.Unmarshal(findingsRaw, &job.Findings)
+		decodeScanJSONColumn(job.ID, "findings", findingsRaw, &job.Findings)
 	}
 	if len(summaryRaw) > 0 && string(summaryRaw) != "null" {
 		var summary model.ScanAuthProfileSummary
 		if err := json.Unmarshal(summaryRaw, &summary); err == nil {
 			job.AuthProfileSummary = &summary
+		} else {
+			logScanColumnUnmarshalError(job.ID, "auth_profile_summary", err)
 		}
 	}
 	if len(optionsRaw) > 0 {
-		_ = json.Unmarshal(optionsRaw, &job.Options)
+		decodeScanJSONColumn(job.ID, "options", optionsRaw, &job.Options)
 	}
 	if len(scopeRaw) > 0 {
-		_ = json.Unmarshal(scopeRaw, &job.Scope)
+		decodeScanJSONColumn(job.ID, "scope", scopeRaw, &job.Scope)
 	}
 	if len(agentRunsRaw) > 0 {
-		_ = json.Unmarshal(agentRunsRaw, &job.AgentRuns)
+		decodeScanJSONColumn(job.ID, "agent_runs", agentRunsRaw, &job.AgentRuns)
 	}
 	if len(assetLinksRaw) > 0 {
-		_ = json.Unmarshal(assetLinksRaw, &job.AssetLinks)
+		decodeScanJSONColumn(job.ID, "asset_links", assetLinksRaw, &job.AssetLinks)
 	}
 	if len(dashboardRaw) > 0 && string(dashboardRaw) != "null" {
 		var dashboard model.DecisionDashboard
 		if err := json.Unmarshal(dashboardRaw, &dashboard); err == nil {
 			job.Dashboard = &dashboard
+		} else {
+			logScanColumnUnmarshalError(job.ID, "dashboard", err)
 		}
 	}
 	if len(nextActionsRaw) > 0 {
-		_ = json.Unmarshal(nextActionsRaw, &job.NextActions)
+		decodeScanJSONColumn(job.ID, "next_actions", nextActionsRaw, &job.NextActions)
 	}
 	if len(modelRecommendationsRaw) > 0 && string(modelRecommendationsRaw) != "null" {
 		var modelRecommendations model.ModelRecommendations
 		if err := json.Unmarshal(modelRecommendationsRaw, &modelRecommendations); err == nil {
 			job.ModelRecommendations = &modelRecommendations
+		} else {
+			logScanColumnUnmarshalError(job.ID, "model_recommendations", err)
 		}
 	}
 	if len(disallowedTestsRaw) > 0 {
-		_ = json.Unmarshal(disallowedTestsRaw, &job.DisallowedTestTypes)
+		decodeScanJSONColumn(job.ID, "disallowed_tests", disallowedTestsRaw, &job.DisallowedTestTypes)
 	}
 	job.Assets, _ = p.GetAssetsByScanID(ctx, job.ID)
 	job.AuditTrail, _ = p.ListAuditEvents(ctx, job.ID)
@@ -2216,16 +2238,25 @@ func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
 }
 
 func (p *Postgres) AuthenticateAPIKey(ctx context.Context, rawKey string) (*model.APIKeyRecord, error) {
+	candidate := strings.TrimSpace(rawKey)
+	// Issued keys all share the deterministic prefix produced by
+	// apiKeyPrefix(); using it as an indexed lookup means we perform exactly
+	// one bcrypt comparison per request instead of O(n) over every active
+	// key in the workspace. This closes a per-request DoS / timing-leak
+	// vector against the unauthenticated /api/* surface.
+	prefix := apiKeyPrefix(candidate)
+	if prefix == "" {
+		return nil, sql.ErrNoRows
+	}
 	rows, err := p.db.QueryContext(ctx, `
 		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active, key_hash
 		FROM api_keys
-		WHERE active = TRUE
-	`)
+		WHERE active = TRUE AND key_prefix = $1
+	`, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("authenticate api key: %w", err)
 	}
 	defer rows.Close()
-	candidate := strings.TrimSpace(rawKey)
 	for rows.Next() {
 		var rec model.APIKeyRecord
 		var role, hashed string
@@ -2275,6 +2306,27 @@ func apiKeyPrefix(raw string) string {
 		return raw
 	}
 	return raw[:12]
+}
+
+// decodeScanJSONColumn unmarshals a JSON-encoded scan column into dst, logging
+// (but not failing) on malformed payloads. Persisted scan columns occasionally
+// outlive a schema change; surfacing the error gives operators a chance to
+// notice silent data loss instead of seeing zero-valued fields appear in the
+// UI.
+func decodeScanJSONColumn(scanID, column string, raw []byte, dst any) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		logScanColumnUnmarshalError(scanID, column, err)
+	}
+}
+
+func logScanColumnUnmarshalError(scanID, column string, err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("storage: scan %s column %q: json unmarshal failed: %v", scanID, column, err)
 }
 
 func redactHeaders(headers map[string]string) map[string]string {

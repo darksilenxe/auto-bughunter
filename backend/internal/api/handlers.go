@@ -483,6 +483,10 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
 	if req.IdempotencyKey != "" {
+		if !isValidIdempotencyKey(req.IdempotencyKey) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Idempotency-Key (allowed: up to 200 of [A-Za-z0-9._-])"})
+			return
+		}
 		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, idempotencyTarget, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
 			writeJSON(w, http.StatusAccepted, map[string]string{"id": existing.ID, "status": existing.Status, "deduplicated": "true"})
 			return
@@ -4262,6 +4266,18 @@ func (s *Server) enforceTargetRateLimit(target string, options model.ScanOptions
 		return
 	}
 	s.rateMu.Lock()
+	// Opportunistically evict per-host entries that haven't been touched in
+	// the last hour so the map doesn't accumulate forever in long-running
+	// deployments. The eviction window is well above any realistic minGap so
+	// it won't perturb the rate-limit decision for an active host.
+	if len(s.targetLastRun) > 1024 {
+		cutoff := time.Now().Add(-1 * time.Hour)
+		for h, t := range s.targetLastRun {
+			if t.Before(cutoff) {
+				delete(s.targetLastRun, h)
+			}
+		}
+	}
 	last := s.targetLastRun[host]
 	now := time.Now()
 	var wait time.Duration
@@ -5157,6 +5173,28 @@ func diffAssets(previous, current []model.ScanAsset) []string {
 
 func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
 	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes > 0
+}
+
+// isValidIdempotencyKey enforces a conservative shape for client-supplied
+// Idempotency-Key values: bounded length and a printable, URL-safe character
+// set. This prevents oversized or binary payloads from reaching the database
+// and keeps the key safe to log and to use as a composite lookup key.
+func isValidIdempotencyKey(key string) bool {
+	if key == "" || len(key) > 200 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '-' || c == '_' || c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) appendAuditEvent(scanID, stage, message string) {

@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -27,8 +29,16 @@ func (s *Server) handleOASTTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Body != nil {
 			defer r.Body.Close()
-			// Empty body is fine; both fields are optional.
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			// Cap the request body so a malicious caller can't OOM us by
+			// streaming a huge POST. 64 KiB is far more than enough for the
+			// two short string fields we accept.
+			r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+				return
+			}
 		}
 		tok := s.oast.Issue(strings.TrimSpace(body.ScanID), strings.TrimSpace(body.Label))
 		if tok.CallbackURL == "" {

@@ -211,7 +211,15 @@ func toSeverity(s string) model.Severity {
 func sanitizeName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	r := regexp.MustCompile(`[^a-z0-9_-]`)
-	return r.ReplaceAllString(name, "_")
+	name = r.ReplaceAllString(name, "_")
+	// Cap the length so that long generated tool names can't produce
+	// filesystem-rejecting filenames (most filesystems cap a single path
+	// component at 255 bytes; we leave headroom for the extension).
+	const maxNameLen = 100
+	if len(name) > maxNameLen {
+		name = name[:maxNameLen]
+	}
+	return name
 }
 
 func safeEnv() []string {

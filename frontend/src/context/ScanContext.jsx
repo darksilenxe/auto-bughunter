@@ -1,7 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-const API_KEY = localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY || "";
+// Security: API keys are read from localStorage (set via Settings UI) only.
+// VITE_API_KEY is intentionally NOT honored here because Vite inlines
+// `import.meta.env.*` literals into the production JS bundle at build time,
+// which would publish the operator's API key to every browser that downloads
+// the app. Dev-time auth should rely on BOOTSTRAP_ADMIN_API_KEY pasted into
+// the Settings UI, not a build-time env var.
+const API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("api_key")) || "";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
 export { API_BASE, API_KEY, WORKSPACE_ID };
 

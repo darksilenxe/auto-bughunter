@@ -444,7 +444,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
-        VITE_API_KEY: ${VITE_API_KEY:-change-this-bootstrap-key}
+        # VITE_API_KEY intentionally omitted — see frontend/Dockerfile.
         VITE_WORKSPACE_ID: ${VITE_WORKSPACE_ID:-default}
     ports:
       - "3000:80"
@@ -485,9 +485,15 @@ services:
     image: grafana/grafana:11.6.1
     profiles: ["obs"]
     environment:
+      # Anonymous access is enabled so operators can view dashboards without a
+      # login on local/dev deployments. The role is intentionally Viewer (not
+      # Admin) so anyone reaching the Grafana port cannot mutate dashboards,
+      # add data sources, or exfiltrate plugin secrets. Tighten further (set
+      # GF_AUTH_ANONYMOUS_ENABLED=false and configure an admin password) for
+      # any deployment exposed beyond localhost.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
     ports:
       - "3002:3000"
     volumes:
