@@ -1,14 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { isAbortError, useAbortable } from "../lib/useAbortable";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-// Security: API keys are read from localStorage (set via Settings UI) only.
-// VITE_API_KEY is intentionally NOT honored here because Vite inlines
-// `import.meta.env.*` literals into the production JS bundle at build time,
-// which would publish the operator's API key to every browser that downloads
-// the app. Dev-time auth should rely on BOOTSTRAP_ADMIN_API_KEY pasted into
-// the Settings UI, not a build-time env var.
-const API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("api_key")) || "";
+const API_KEY = localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY || "";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
 export { API_BASE, API_KEY, WORKSPACE_ID };
 
@@ -20,11 +13,6 @@ export function ScanProvider({ children }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  // Per-call AbortController registry; every still-in-flight controller is
-  // aborted automatically when the provider unmounts so no `setState` runs on
-  // a torn-down tree.
-  const newController = useAbortable();
 
   // ── Live events (SSE) ───────────────────────────────────────────────
   const [liveEvents, setLiveEvents] = useState([]);
@@ -56,7 +44,7 @@ export function ScanProvider({ children }) {
     if (sseRef.current) sseRef.current.close();
     setLiveEvents([]);
     setScreenshots([]);
-    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
+    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?api_key=${encodeURIComponent(API_KEY)}&workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
     es.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
@@ -87,23 +75,18 @@ export function ScanProvider({ children }) {
   // Fetches a single status snapshot and returns true when the job has
   // reached a terminal state (completed / failed / cancelled).
   const fetchJobStatus = useCallback(async (id) => {
-    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
-        signal: ac.signal,
       });
-      if (ac.signal.aborted) return false;
       if (!res.ok) return false;
       const data = await res.json();
-      if (ac.signal.aborted) return false;
       setJob(data);
       return data.status === "completed" || data.status === "failed" || data.status === "cancelled";
-    } catch (err) {
-      if (isAbortError(err)) return true; // stop polling loops on unmount
+    } catch {
       return false;
     }
-  }, [newController]);
+  }, []);
 
   // Ref for the background interval so we can cancel it on unmount.
   const bgPollRef = useRef(null);
@@ -158,18 +141,13 @@ export function ScanProvider({ children }) {
   const stopScan = useCallback(async (id) => {
     const targetId = id || scanId;
     if (!targetId) return;
-    const ac = newController();
     try {
       await fetch(`${API_BASE}/api/scan/${encodeURIComponent(targetId)}/stop`, {
         method: "POST",
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
-        signal: ac.signal,
       });
-    } catch (err) {
-      if (isAbortError(err)) return;
-      /* ignore */
-    }
-  }, [scanId, newController]);
+    } catch { /* ignore */ }
+  }, [scanId]);
 
   // ── Start a scan ──────────────────────────────────────────────────────
   const startScan = useCallback(async (payload) => {
@@ -178,49 +156,34 @@ export function ScanProvider({ children }) {
     setJob(null);
     setLiveEvents([]);
     setScreenshots([]);
-    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(payload),
-        signal: ac.signal,
       });
       const data = await res.json();
-      if (ac.signal.aborted) return;
       if (!res.ok) { setError(data.error || "Scan failed"); setLoading(false); return; }
       setScanId(data.id);
       startEventStream(data.id);
       await pollScan(data.id);
     } catch (err) {
-      if (isAbortError(err)) return;
       setError(err.message);
       setLoading(false);
     }
-  }, [startEventStream, pollScan, newController]);
+  }, [startEventStream, pollScan]);
 
   // ── Load scan history ─────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
-    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/scans?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
-        signal: ac.signal,
       });
-      if (ac.signal.aborted) return;
-      if (res.ok) {
-        const data = await res.json();
-        if (ac.signal.aborted) return;
-        setScanHistory(data.scans || []);
-      }
-    } catch (err) {
-      if (isAbortError(err)) return;
-      /* ignore */
-    } finally {
-      if (!ac.signal.aborted) setHistoryLoading(false);
-    }
-  }, [newController]);
+      if (res.ok) setScanHistory((await res.json()).scans || []);
+    } catch { /* ignore */ }
+    setHistoryLoading(false);
+  }, []);
 
   return (
     <ScanContext.Provider value={{

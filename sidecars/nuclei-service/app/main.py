@@ -15,10 +15,8 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-import shutil
-import subprocess  # nosec B404
+import subprocess
 from typing import List, Optional
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -33,10 +31,6 @@ _AUTH_EXEMPT_PATHS = {"/health"}
 
 # Maximum execution timeout (seconds)
 MAX_TIMEOUT = 600  # 10 minutes
-MAX_RATE_LIMIT = 1000
-MAX_CONCURRENCY = 200
-MAX_BULK_SIZE = 200
-ALLOWED_SEVERITIES = {"info", "low", "medium", "high", "critical"}
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -50,72 +44,6 @@ def _extract_bearer_token(request: Request) -> str:
 
 
 app = FastAPI(title="Nuclei HTTP Wrapper", version="1.0.0")
-
-
-def _coerce_output(value: str | bytes | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    return value
-
-
-def _resolve_nuclei_binary() -> str:
-    binary = shutil.which("nuclei")
-    if not binary:
-        raise FileNotFoundError("nuclei binary not found in PATH")
-    return binary
-
-
-def _normalize_url(value: str) -> str:
-    value = value.strip()
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("invalid URL")
-    return parsed.geturl()
-
-
-def _normalize_severity(value: str) -> str:
-    parts = [p.strip().lower() for p in value.split(",") if p.strip()]
-    if not parts:
-        raise ValueError("severity must be non-empty")
-    for part in parts:
-        if part not in ALLOWED_SEVERITIES:
-            raise ValueError("unsupported severity value")
-    return ",".join(parts)
-
-
-def _normalize_int(value: str, *, minimum: int, maximum: int) -> str:
-    value = value.strip()
-    if not value.isdigit():
-        raise ValueError("value must be numeric")
-    number = int(value)
-    if number < minimum or number > maximum:
-        raise ValueError("value outside allowed range")
-    return str(number)
-
-
-def _normalize_path(value: str) -> str:
-    value = value.strip()
-    if not value or "\x00" in value or "\n" in value or "\r" in value:
-        raise ValueError("invalid path")
-    if not os.path.isabs(value):
-        raise ValueError("path must be absolute")
-    normalized = os.path.normpath(value)
-    prefixes: list[str] = []
-    configured_prefixes = os.getenv("NUCLEI_ALLOWED_PATH_PREFIXES", "")
-    if configured_prefixes:
-        prefixes.extend([p.strip() for p in configured_prefixes.split(",") if p.strip()])
-    shared_tmp = os.getenv("SHARED_TMP_DIR", "").strip()
-    if shared_tmp:
-        prefixes.append(shared_tmp)
-    if not prefixes:
-        raise ValueError("no allowed path prefixes configured")
-    for prefix in prefixes:
-        prefix = os.path.normpath(prefix)
-        if normalized == prefix or normalized.startswith(prefix + os.sep):
-            return normalized
-    raise ValueError("path is outside allowed prefixes")
 
 
 @app.middleware("http")
@@ -158,14 +86,11 @@ def health() -> Response:
     """Health check endpoint."""
     # Verify nuclei binary is available
     try:
-        binary = _resolve_nuclei_binary()
-        result = subprocess.run(  # nosec B603 - nosemgrep - binary is resolved with shutil.which
-            [binary, "-version"],
+        result = subprocess.run(
+            ["nuclei", "-version"],
             capture_output=True,
             text=True,
-            timeout=5,
-            shell=False,
-            check=False,
+            timeout=5
         )
         version = result.stdout.strip() if result.returncode == 0 else "unknown"
         return JSONResponse(content={
@@ -203,106 +128,25 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     """
     logger.info(f"Executing nuclei with args: {req.args}")
 
-    # Strict allowlist validation for nuclei arguments
-    allowed_flags_no_value = {
-        "-silent",
-        "-json",
-        "-nc",
-        "-no-interactsh",
-    }
-    allowed_flags_with_value = {
-        "-u",
-        "-l",
-        "-t",
-        "-severity",
-        "-timeout",
-        "-rl",
-        "-c",
-        "-bulk-size",
-    }
-
-    sanitized_args: List[str] = []
-    i = 0
-    while i < len(req.args):
-        arg = req.args[i]
-
-        if arg in allowed_flags_no_value:
-            sanitized_args.append(arg)
-            i += 1
-            continue
-
-        if arg in allowed_flags_with_value:
-            if i + 1 >= len(req.args):
-                return ExecuteResponse(
-                    stdout="",
-                    stderr="",
-                    exit_code=1,
-                    timed_out=False,
-                    error=f"Invalid argument: missing value for {arg}"
-                )
-
-            value = req.args[i + 1]
-
-            # Basic value sanity checks
-            if not value or len(value) > 2048:
-                return ExecuteResponse(
-                    stdout="",
-                    stderr="",
-                    exit_code=1,
-                    timed_out=False,
-                    error=f"Invalid value for {arg}"
-                )
-
-            try:
-                if arg == "-u":
-                    value = _normalize_url(value)
-                elif arg == "-severity":
-                    value = _normalize_severity(value)
-                elif arg == "-timeout":
-                    value = _normalize_int(value, minimum=1, maximum=MAX_TIMEOUT)
-                elif arg == "-rl":
-                    value = _normalize_int(value, minimum=1, maximum=MAX_RATE_LIMIT)
-                elif arg == "-c":
-                    value = _normalize_int(value, minimum=1, maximum=MAX_CONCURRENCY)
-                elif arg == "-bulk-size":
-                    value = _normalize_int(value, minimum=1, maximum=MAX_BULK_SIZE)
-                elif arg in {"-l", "-t"}:
-                    value = _normalize_path(value)
-                else:
-                    if "\x00" in value or "\n" in value or "\r" in value:
-                        raise ValueError("invalid value")
-            except ValueError as exc:
-                return ExecuteResponse(
-                    stdout="",
-                    stderr="",
-                    exit_code=1,
-                    timed_out=False,
-                    error=f"Invalid value for {arg}: {exc}"
-                )
-
-            sanitized_args.extend([arg, value])
-            i += 2
-            continue
-
-        return ExecuteResponse(
-            stdout="",
-            stderr="",
-            exit_code=1,
-            timed_out=False,
-            error=f"Invalid argument: {arg} is not allowed"
-        )
+    # Validate args to prevent command injection
+    # Note: subprocess.run with list args is safe, but we add validation for defense in depth
+    for arg in req.args:
+        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
+            return ExecuteResponse(
+                stdout="",
+                stderr="",
+                exit_code=1,
+                timed_out=False,
+                error="Invalid argument: potentially dangerous characters detected"
+            )
 
     try:
-        binary = _resolve_nuclei_binary()
-        # Execute nuclei with validated arguments
-        # lgtm [py/command-line-injection] args are strictly allowlisted, normalized, and shell=False.
-        result = subprocess.run(  # nosemgrep - args validated against allowlist
-            [binary] + sanitized_args,
+        # Execute nuclei
+        result = subprocess.run(
+            ["nuclei"] + req.args,
             capture_output=True,
             text=True,
-            timeout=req.timeout,
-            shell=False,
-            check=False,
+            timeout=req.timeout
         )
 
         logger.info(f"Nuclei execution completed with exit code {result.returncode}")
@@ -318,8 +162,8 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     except subprocess.TimeoutExpired as e:
         logger.warning(f"Nuclei execution timed out after {req.timeout}s")
         return ExecuteResponse(
-            stdout=_coerce_output(e.stdout),
-            stderr=_coerce_output(e.stderr),
+            stdout=e.stdout.decode() if e.stdout else "",
+            stderr=e.stderr.decode() if e.stderr else "",
             exit_code=-1,
             timed_out=True,
             error=f"Execution timed out after {req.timeout} seconds"

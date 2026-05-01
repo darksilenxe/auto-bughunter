@@ -15,8 +15,8 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-import subprocess  # nosec B404
-from typing import List, Optional, Tuple
+import subprocess
+from typing import List, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -104,34 +104,6 @@ def health() -> Response:
     )
 
 
-_ALLOWED_FLAGS_WITH_VALUE = {
-    "-t", "-m", "-d", "-P", "-c", "-u", "-g", "-r", "-w", "-x", "-J", "-z", "-n", "-p", "-j", "-T"
-}
-_ALLOWED_BOOLEAN_FLAGS = {"-I", "-a"}
-
-
-def _validate_and_normalize_args(args: List[str]) -> Tuple[Optional[List[str]], Optional[str]]:
-    validated: List[str] = []
-    i = 0
-    while i < len(args):
-        token = args[i]
-        if token in _ALLOWED_BOOLEAN_FLAGS:
-            validated.append(token)
-            i += 1
-            continue
-        if token in _ALLOWED_FLAGS_WITH_VALUE:
-            if i + 1 >= len(args):
-                return None, f"Missing value for argument: {token}"
-            value = args[i + 1]
-            if value.startswith("-"):
-                return None, f"Invalid value for argument: {token}"
-            validated.extend([token, value])
-            i += 2
-            continue
-        return None, f"Unsupported argument: {token}"
-    return validated, None
-
-
 @app.post("/v1/execute", response_model=ExecuteResponse)
 def execute_zap_baseline(req: ExecuteRequest) -> ExecuteResponse:
     """
@@ -150,24 +122,26 @@ def execute_zap_baseline(req: ExecuteRequest) -> ExecuteResponse:
     """
     logger.info(f"Executing zap-baseline.py with args: {req.args}")
 
-    validated_args, validation_error = _validate_and_normalize_args(req.args)
-    if validation_error:
-        return ExecuteResponse(
-            stdout="",
-            stderr="",
-            exit_code=1,
-            timed_out=False,
-            error=validation_error
-        )
+    # Validate args to prevent shell injection. Defense-in-depth only:
+    # subprocess.run with a list and shell=False (the default) is already safe
+    # from shell injection regardless of argument content. This check provides
+    # an additional layer against unexpected shell-like metacharacters.
+    for arg in req.args:
+        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
+            return ExecuteResponse(
+                stdout="",
+                stderr="",
+                exit_code=1,
+                timed_out=False,
+                error="Invalid argument: potentially dangerous characters detected"
+            )
 
     try:
-        result = subprocess.run(  # nosec B603 - nosemgrep - args validated against allowlist
-            [_ZAP_BASELINE] + validated_args,
+        result = subprocess.run(
+            [_ZAP_BASELINE] + req.args,
             capture_output=True,
             text=True,
-            timeout=req.timeout,
-            shell=False,
-            check=False,
+            timeout=req.timeout
         )
 
         logger.info(f"zap-baseline.py completed with exit code {result.returncode}")

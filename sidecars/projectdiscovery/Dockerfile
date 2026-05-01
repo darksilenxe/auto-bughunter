@@ -44,11 +44,6 @@ COPY --from=cdncheck   /usr/local/bin/cdncheck   /usr/local/bin/cdncheck
 COPY --from=asnmap     /usr/local/bin/asnmap     /usr/local/bin/asnmap
 COPY --from=vulnx      /usr/local/bin/vulnx      /usr/local/bin/vulnx
 
-# Run as non-root user for least privilege.
-RUN addgroup -S -g 1001 appuser \
- && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser
-USER appuser
-
 # Keep the container alive so `docker compose exec` works on demand. Each
 # invocation is a short-lived child of this PID 1.
 ENTRYPOINT ["/bin/sh", "-c", "tail -f /dev/null"]

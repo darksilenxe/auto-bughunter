@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import http.client
 import json
 import math
 import os
 import re
 import shutil
-import ssl
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
-from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib import request
 
 import numpy as np
 import onnx
@@ -23,8 +22,6 @@ from onnx import TensorProto, helper, numpy_helper
 
 SCHEMA_VERSION = "v1"
 FEATURE_DIMS = 8
-ONNX_OPSET_VERSION = int(os.getenv("ONNX_OPSET_VERSION", "13"))
-MAX_DATASET_RESPONSE_BYTES = 64 * 1024 * 1024  # 64 MiB cap on the dataset API response body
 SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*:\s*)(bearer|basic)\s+[A-Za-z0-9\-._~+/=]+"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9\-._~+/=]+['\"]?"),
@@ -53,61 +50,20 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def validate_api_base(api_base: str) -> str:
-    base = api_base.strip()
-    if not base:
-        raise RuntimeError("api_base is required")
-    if any(ch in base for ch in ("\r", "\n", "\x00")):
-        raise RuntimeError("api_base contains invalid characters")
-    parsed = urlparse(base)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise RuntimeError(f"api_base must be an http(s) URL: {api_base}")
-    return base
-
-
 def read_dataset_from_api(api_base: str, api_key: str, limit: int) -> Dict[str, Any]:
-    base = validate_api_base(api_base)
-    url = f"{base.rstrip('/')}/api/ml/engagements?limit={limit}"
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise RuntimeError("dataset API URL must be http(s)")
-    headers = {}
+    url = f"{api_base.rstrip('/')}/api/ml/engagements?limit={limit}"
+    req = request.Request(url, method="GET")
     if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-    conn: http.client.HTTPConnection | None = None
+        req.add_header("Authorization", f"Bearer {api_key.strip()}")
     try:
-        if parsed.scheme == "https":
-            conn = http.client.HTTPSConnection(
-                parsed.hostname,
-                parsed.port or 443,
-                timeout=60,
-                context=ssl.create_default_context(),
-            )
-        else:
-            conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=60)
-        conn.request("GET", path, headers=headers)
-        resp = conn.getresponse()
-        # Read at most MAX_DATASET_RESPONSE_BYTES + 1 so we can detect oversize responses
-        # without loading an unbounded payload into memory.
-        body_bytes = resp.read(MAX_DATASET_RESPONSE_BYTES + 1)
-        if len(body_bytes) > MAX_DATASET_RESPONSE_BYTES:
-            raise RuntimeError(
-                f"dataset API response exceeds {MAX_DATASET_RESPONSE_BYTES} bytes"
-            )
-        body = body_bytes.decode("utf-8")
-        if resp.status >= 400:
-            raise RuntimeError(f"dataset API request failed with status {resp.status}")
-        payload = json.loads(body)
-    except (OSError, http.client.HTTPException) as exc:
-        raise RuntimeError(f"dataset API request failed: {exc}") from exc
+        with request.urlopen(req, timeout=60) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"dataset API request failed with status {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"dataset API request failed: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"dataset API returned invalid JSON at line {exc.lineno} column {exc.colno}") from exc
-    finally:
-        if conn:
-            conn.close()
     if not isinstance(payload, dict):
         raise RuntimeError("dataset API returned a non-object JSON payload")
     return payload
@@ -216,8 +172,6 @@ def clamp01(value: float) -> float:
 
 def severity_base(sev: str) -> float:
     sev = normalize(sev)
-    if sev == "critical":
-        return 0.9
     if sev == "high":
         return 0.75
     if sev == "medium":
@@ -342,7 +296,7 @@ def sigmoid(x: np.ndarray) -> np.ndarray:
 
 def train_logreg(x: np.ndarray, y: np.ndarray, *, epochs: int = 400, lr: float = 0.08, l2: float = 1e-3) -> Tuple[np.ndarray, float]:
     if len(x) == 0:
-        return np.zeros((FEATURE_DIMS,), dtype=np.float64).astype(np.float32), 0.0
+        return np.zeros((FEATURE_DIMS,), dtype=np.float32), 0.0
     weights = np.zeros((x.shape[1],), dtype=np.float64)
     bias = 0.0
     n = float(len(x))
@@ -403,11 +357,7 @@ def export_onnx(weights: np.ndarray, bias: float, out_path: Path) -> None:
         outputs=[output_tensor_info],
         initializer=[weights_initializer, bias_initializer],
     )
-    model = helper.make_model(
-        graph,
-        producer_name="auto-bughunter-training-pipeline",
-        opset_imports=[helper.make_opsetid("", ONNX_OPSET_VERSION)],
-    )
+    model = helper.make_model(graph, producer_name="auto-bughunter-training-pipeline", opset_imports=[helper.make_opsetid("", 13)])
     onnx.checker.check_model(model)
     onnx.save(model, str(out_path))
 

@@ -55,14 +55,6 @@ RUN apt-get update \
 COPY xssmap-wrapper.py /usr/local/bin/xssmap
 RUN chmod +x /usr/local/bin/xssmap
 
-# NOTE: this image inherits from the official Playwright base
-# (mcr.microsoft.com/playwright/python), which installs browsers and
-# their runtime dependencies tied to the upstream `pwuser`/root setup
-# (browser binaries under /ms-playwright, font/X11 deps configured for
-# the default user). Switching to a custom non-root user without a
-# matching home dir breaks chromium launch (Playwright caches under
-# $HOME/.cache). We keep the upstream default user here.
-
 # Keep the container alive so the backend can `docker compose exec -T xssmap
 # xssmap ...` on demand (same pattern as nuclei/zap/sqlmap sidecars).
 ENTRYPOINT ["sh", "-c", "tail -f /dev/null"]

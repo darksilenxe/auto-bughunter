@@ -8,7 +8,6 @@
  *                      updating its form state.
  */
 import { useRef, useState } from "react";
-import { isAbortError, useAbortable } from "../lib/useAbortable";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -19,7 +18,6 @@ export default function BurpImport({ onImport }) {
   const [parsed, setParsed]   = useState(null);   // BurpParsedConfig | null
   const [error, setError]     = useState("");
   const inputRef              = useRef(null);
-  const newController         = useAbortable();
 
   // ── File handling ─────────────────────────────────────────────────────────
 
@@ -33,23 +31,20 @@ export default function BurpImport({ onImport }) {
     setError("");
     setParsed(null);
     setParsing(true);
-    const ac = newController();
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("" + API_BASE + "/api/burp/parse", { method: "POST", body: form, signal: ac.signal });
+      const res = await fetch(`${API_BASE}/api/burp/parse`, { method: "POST", body: form });
       const data = await res.json();
-      if (ac.signal.aborted) return;
       if (!res.ok) {
         setError(data.error || "Parse failed.");
         return;
       }
       setParsed(data);
     } catch (e) {
-      if (isAbortError(e)) return;
       setError("Network error: " + e.message);
     } finally {
-      if (!ac.signal.aborted) setParsing(false);
+      setParsing(false);
     }
   }
 

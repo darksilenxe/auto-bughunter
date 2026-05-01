@@ -82,7 +82,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, err = stdout.Write(encoded)
 		return err
 	}
-	return os.WriteFile(*output, encoded, 0o600)
+	return os.WriteFile(*output, encoded, 0o644)
 }
 
 func loadRuns(path string) ([]replay.HistoricalRun, error) {

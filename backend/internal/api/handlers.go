@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -371,8 +370,7 @@ func (s *Server) handleAgentWeights(w http.ResponseWriter, r *http.Request) {
 	}
 	weights, err := s.agentLearner.Weights(r.Context())
 	if err != nil {
-		log.Printf("api: %s %s: agent learner weights: %v", r.Method, r.URL.Path, err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable"})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent learner unreachable: " + err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, weights)
@@ -485,10 +483,6 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		req.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
 	if req.IdempotencyKey != "" {
-		if !isValidIdempotencyKey(req.IdempotencyKey) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid Idempotency-Key (allowed: up to 200 of [A-Za-z0-9._-])"})
-			return
-		}
 		if existing, err := s.repo.GetRecentJobByIdempotencyKey(r.Context(), req.IdempotencyKey, idempotencyTarget, time.Now().UTC().Add(-24*time.Hour)); err == nil && existing != nil {
 			writeJSON(w, http.StatusAccepted, map[string]string{"id": existing.ID, "status": existing.Status, "deduplicated": "true"})
 			return
@@ -1035,26 +1029,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// writeServerError responds with a generic 5xx body while logging the raw
-// error and request route server-side. Use this for any 5xx response whose
-// underlying error originates from internal infrastructure (database,
-// filesystem, third-party service) so we never leak internal paths,
-// connection strings, or stack traces back to the caller.
-//
-// Use writeJSON directly with a 4xx status when the error message is part of
-// the contract with the caller (e.g. validation feedback).
-func writeServerError(w http.ResponseWriter, r *http.Request, op string, err error) {
-	if err == nil {
-		err = errors.New("unknown error")
-	}
-	method, path := "?", "?"
-	if r != nil {
-		method, path = r.Method, r.URL.Path
-	}
-	log.Printf("api: %s %s: %s: %v", method, path, op, err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-}
-
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		allowed := applyCORSHeaders(w, r)
@@ -1170,7 +1144,7 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 
 	replayed, err := s.proxyServer.Replay(r.Context(), req.RequestID, req.OverrideHeaders, req.OverrideBody)
 	if err != nil {
-		writeServerError(w, r, "proxy replay", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, replayed)
@@ -4081,7 +4055,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
 	if input.Options.AutonomyEmergencyStop {
-		return nil, nil, errors.New("autonomy emergency stop is enabled; disable AutonomyEmergencyStop to resume operations")
+		return nil, nil, errors.New("autonomy emergency stop is enabled")
 	}
 	if s.agentFactory == nil {
 		return s.agentRegistry.RunAll(ctx, input)
@@ -4118,17 +4092,6 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		planner = aiPlanner
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
-	if !useAI {
-		// The static planner walks a finite, predefined pipeline. Convergence
-		// guards (no-novelty, consecutive-failure) are only meaningful for the AI
-		// planner which may schedule repeated passes indefinitely. Disable them so
-		// every registered agent gets a chance to run even when early pipeline
-		// steps find nothing or error out. Also ensure MaxRounds is at least as
-		// large as the pipeline so the outer loop does not cut it short.
-		orchestrator.MaxNoNoveltyRounds = 0
-		orchestrator.MaxConsecutiveFailureRounds = 0
-		orchestrator.MaxRounds = maxInt(orchestrator.MaxRounds, len(staticOrder))
-	}
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
 		orchestrator.MaxNoNoveltyRounds = input.Options.AutonomyMaxNoNoveltyRounds
 	}
@@ -4299,18 +4262,6 @@ func (s *Server) enforceTargetRateLimit(target string, options model.ScanOptions
 		return
 	}
 	s.rateMu.Lock()
-	// Opportunistically evict per-host entries that haven't been touched in
-	// the last hour so the map doesn't accumulate forever in long-running
-	// deployments. The eviction window is well above any realistic minGap so
-	// it won't perturb the rate-limit decision for an active host.
-	if len(s.targetLastRun) > 1024 {
-		cutoff := time.Now().Add(-1 * time.Hour)
-		for h, t := range s.targetLastRun {
-			if t.Before(cutoff) {
-				delete(s.targetLastRun, h)
-			}
-		}
-	}
 	last := s.targetLastRun[host]
 	now := time.Now()
 	var wait time.Duration
@@ -4450,7 +4401,10 @@ func collectToolHealth() []toolHealth {
 	// container. Use the sidecar health endpoint to determine availability
 	// instead of exec.LookPath so that applyHealthAwareExecutionGating does not
 	// incorrectly disable these integrations.
-	useHTTP := boolFromEnv("USE_HTTP_TOOL_SERVICES", false)
+	useHTTP := func() bool {
+		v := os.Getenv("USE_HTTP_TOOL_SERVICES")
+		return v == "true" || v == "1"
+	}()
 
 	checkNucleiHTTP := func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -4994,7 +4948,7 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		}
 		stat.Findings += len(out.Findings)
 		for _, f := range out.Findings {
-			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
+			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh {
 				stat.HighConfidenceFindings++
 			}
 		}
@@ -5206,28 +5160,6 @@ func diffAssets(previous, current []model.ScanAsset) []string {
 
 func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
 	return options.DeepScanOnHighSignal || options.RescanIntervalMinutes > 0
-}
-
-// isValidIdempotencyKey enforces a conservative shape for client-supplied
-// Idempotency-Key values: bounded length and a printable, URL-safe character
-// set. This prevents oversized or binary payloads from reaching the database
-// and keeps the key safe to log and to use as a composite lookup key.
-func isValidIdempotencyKey(key string) bool {
-	if key == "" || len(key) > 200 {
-		return false
-	}
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		switch {
-		case c >= 'A' && c <= 'Z':
-		case c >= 'a' && c <= 'z':
-		case c >= '0' && c <= '9':
-		case c == '-' || c == '_' || c == '.':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Server) appendAuditEvent(scanID, stage, message string) {

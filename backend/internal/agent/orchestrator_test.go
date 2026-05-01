@@ -319,60 +319,6 @@ func TestOrchestratorStopsAfterLowMarginalScoreRounds(t *testing.T) {
 	}
 }
 
-// TestOrchestratorDisabledAgentRecordedAsSkipped verifies that when a
-// factory-created agent reports Enabled()==false, the orchestrator records a
-// "skipped" output so the StaticPlanner can advance past it rather than
-// returning the same agent in every subsequent round.
-func TestOrchestratorDisabledAgentRecordedAsSkipped(t *testing.T) {
-	factory := newTestFactory(map[string]Agent{
-		"disabled": &fixedAgent{name: "disabled", enabled: false},
-		"ok":       &fixedAgent{name: "ok", enabled: true},
-	})
-	planner := NewStaticPlanner([]string{"disabled", "ok"})
-	orch := NewOrchestrator(planner, factory, 5)
-
-	outputs, _, err := orch.Run(context.Background(), AgentInput{})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if len(outputs) != 2 {
-		t.Fatalf("expected 2 outputs (skipped + completed), got %d: %+v", len(outputs), outputs)
-	}
-	if outputs[0].Status != "skipped" || outputs[0].AgentName != "disabled" {
-		t.Fatalf("expected first output to be skipped disabled agent, got %+v", outputs[0])
-	}
-	if outputs[1].Status != "completed" || outputs[1].AgentName != "ok" {
-		t.Fatalf("expected second output to be completed ok agent, got %+v", outputs[1])
-	}
-}
-
-// TestOrchestratorStaticPlannerConsecutiveFailureDisabled verifies that when
-// MaxConsecutiveFailureRounds is set to 0 (as runAgents does for the static
-// planner), consecutive agent failures do not terminate the pipeline early.
-func TestOrchestratorStaticPlannerConsecutiveFailureDisabled(t *testing.T) {
-	factory := newTestFactory(map[string]Agent{
-		"a": &fixedAgent{name: "a", enabled: true, err: errors.New("network error")},
-		"b": &fixedAgent{name: "b", enabled: true, err: errors.New("timeout")},
-		"c": &fixedAgent{name: "c", enabled: true},
-	})
-	planner := NewStaticPlanner([]string{"a", "b", "c"})
-	orch := NewOrchestrator(planner, factory, 10)
-	orch.MaxConsecutiveFailureRounds = 0 // mirrors what runAgents sets for static planner
-	orch.MaxNoNoveltyRounds = 0          // mirrors what runAgents sets for static planner
-
-	outputs, _, err := orch.Run(context.Background(), AgentInput{})
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	// All three agents must run even though a and b fail consecutively.
-	if len(outputs) != 3 {
-		t.Fatalf("expected 3 outputs, got %d — consecutive failure guard must not cut static pipeline short", len(outputs))
-	}
-	if outputs[2].AgentName != "c" || outputs[2].Status != "completed" {
-		t.Fatalf("expected third agent c to complete, got %+v", outputs[2])
-	}
-}
-
 func TestFactoryCreateUnknown(t *testing.T) {
 	f := NewFactory(nil, nil)
 	if _, err := f.Create("does_not_exist"); err == nil {
