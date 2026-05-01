@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
+import { isAbortError, useAbortable } from "../lib/useAbortable";
 
 const EMPTY_PROGRAM = {
   name: "",
@@ -62,15 +63,19 @@ export default function Settings() {
   const [datasetError, setDatasetError] = useState("");
   const [diagLogs, setDiagLogs] = useState(null);
   const [diagStatus, setDiagStatus] = useState("");
+  const newController = useAbortable();
 
   async function fetchDiagLogs() {
     setDiagStatus("Fetching…");
     setDiagLogs(null);
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/diag/logs`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setDiagStatus(data.error || "Failed to fetch diagnostic logs.");
         return;
@@ -78,6 +83,7 @@ export default function Settings() {
       setDiagLogs(data);
       setDiagStatus("Loaded.");
     } catch (err) {
+      if (isAbortError(err)) return;
       setDiagStatus(err.message || "Failed to fetch diagnostic logs.");
     }
   }
@@ -168,15 +174,18 @@ export default function Settings() {
 
   async function loadEnvironmentHealth() {
     setEnvironmentError("");
+    const ac = newController();
     try {
       const [healthRes, toolsRes, proxyRes] = await Promise.all([
-        fetch(`${API_BASE}/api/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
-        fetch(`${API_BASE}/api/tools/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
-        fetch(`${API_BASE}/api/proxy/settings`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } }),
+        fetch(`${API_BASE}/api/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID }, signal: ac.signal }),
+        fetch(`${API_BASE}/api/tools/health`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID }, signal: ac.signal }),
+        fetch(`${API_BASE}/api/proxy/settings`, { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID }, signal: ac.signal }),
       ]);
+      if (ac.signal.aborted) return;
       const healthData = await healthRes.json().catch(() => null);
       const toolsData = await toolsRes.json().catch(() => null);
       const proxyData = await proxyRes.json().catch(() => null);
+      if (ac.signal.aborted) return;
       if (healthRes.ok) setBackendHealth(healthData);
       if (toolsRes.ok) setToolsHealth(Array.isArray(toolsData?.tools) ? toolsData.tools : []);
       if (proxyRes.ok) setProxyHealth(proxyData);
@@ -184,6 +193,7 @@ export default function Settings() {
         setEnvironmentError("Some environment health checks could not be loaded.");
       }
     } catch (err) {
+      if (isAbortError(err)) return;
       setEnvironmentError(err.message || "Failed to load environment health.");
     }
   }
@@ -258,13 +268,16 @@ export default function Settings() {
       setFeedStatus("scanId and findingId are required.");
       return;
     }
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(payload),
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setFeedStatus(data.error || "Failed to submit enrichment feedback.");
         return;
@@ -272,59 +285,76 @@ export default function Settings() {
       setFeedStatus(`Recorded feedback ${data.id}.`);
       setFeedForm((prev) => ({ ...prev, notes: "", payoutUsd: "" }));
     } catch (err) {
+      if (isAbortError(err)) return;
       setFeedStatus(err.message || "Failed to submit enrichment feedback.");
     }
   }
 
   async function loadDatasetPreview() {
     setDatasetError("");
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/ml/engagements?limit=5`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setDatasetError(data.error || "Failed to load dataset preview.");
         return;
       }
       setDatasetPreview(Array.isArray(data) ? data : (data.items || []));
     } catch (err) {
+      if (isAbortError(err)) return;
       setDatasetError(err.message || "Failed to load dataset preview.");
     }
   }
 
   async function loadPolicyPacks() {
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/automation/policy-packs`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (res.ok) setPolicyPacks(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // noop
     }
   }
 
   async function loadPolicyAudit() {
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/automation/policy-audit`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (res.ok) setPolicyAudit(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // noop
     }
   }
 
   async function loadPolicyDefaults() {
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/automation/policy-profile-defaults`, {
         headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (res.ok) setPolicyDefaults(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // noop
     }
   }
@@ -332,13 +362,16 @@ export default function Settings() {
   async function savePolicyPack(event) {
     event.preventDefault();
     setPolicyStatus("");
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/automation/policy-packs`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
         body: JSON.stringify(policyForm),
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setPolicyStatus(data.error || "Failed to save policy pack.");
         return;
@@ -347,6 +380,7 @@ export default function Settings() {
       await loadPolicyPacks();
       await loadPolicyAudit();
     } catch (err) {
+      if (isAbortError(err)) return;
       setPolicyStatus(err.message || "Failed to save policy pack.");
     }
   }

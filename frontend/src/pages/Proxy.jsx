@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
+import { isAbortError, useAbortable } from "../lib/useAbortable";
 
 const TABS = [
   { id: "history", label: "HTTP history" },
@@ -32,10 +33,12 @@ export default function Proxy() {
   const [intruderMarker, setIntruderMarker] = useState("§");
   const [intruderPayloads, setIntruderPayloads] = useState("");
   const [intruderResults, setIntruderResults] = useState([]);
+  const newController = useAbortable();
 
   useEffect(() => {
     loadRequests();
     loadSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -43,10 +46,12 @@ export default function Proxy() {
       setSelected(null);
       return;
     }
+    const ac = newController();
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/proxy/requests/${encodeURIComponent(selectedId)}`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/api/proxy/requests/${encodeURIComponent(selectedId)}`, { headers: authHeaders(), signal: ac.signal });
         const data = await res.json();
+        if (ac.signal.aborted) return;
         if (!res.ok) {
           setError(data.error || "Failed to load request detail.");
           return;
@@ -57,32 +62,40 @@ export default function Proxy() {
         setRepeaterResult(null);
         setIntruderResults([]);
       } catch (err) {
+        if (isAbortError(err)) return;
         setError(err.message || "Failed to load request detail.");
       }
     })();
+    return () => ac.abort();
   }, [selectedId]);
 
   async function loadRequests() {
     setError("");
+    const ac = newController();
     try {
-      const res = await fetch(`${API_BASE}/api/proxy/requests`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/proxy/requests`, { headers: authHeaders(), signal: ac.signal });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setError(data.error || "Failed to load proxy history.");
         return;
       }
       setRequests(Array.isArray(data) ? data : []);
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err.message || "Failed to load proxy history.");
     }
   }
 
   async function loadSettings() {
+    const ac = newController();
     try {
-      const res = await fetch(`${API_BASE}/api/proxy/settings`, { headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/proxy/settings`, { headers: authHeaders(), signal: ac.signal });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (res.ok) setSettings(data);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return;
       // non-fatal
     }
   }
@@ -90,17 +103,23 @@ export default function Proxy() {
   async function clearHistory() {
     if (!window.confirm("Delete all captured proxy requests?")) return;
     setBusy(true);
+    const ac = newController();
     try {
-      const res = await fetch(`${API_BASE}/api/proxy/requests`, { method: "DELETE", headers: authHeaders() });
+      const res = await fetch(`${API_BASE}/api/proxy/requests`, { method: "DELETE", headers: authHeaders(), signal: ac.signal });
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        if (ac.signal.aborted) return;
         setError(data.error || "Failed to clear history.");
         return;
       }
       setSelectedId(null);
       await loadRequests();
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setError(err.message || "Failed to clear history.");
     } finally {
-      setBusy(false);
+      if (!ac.signal.aborted) setBusy(false);
     }
   }
 
@@ -108,6 +127,7 @@ export default function Proxy() {
     if (!selectedId) return;
     setBusy(true);
     setRepeaterResult(null);
+    const ac = newController();
     try {
       const overrideHeaders = textToHeaders(repeaterHeaders);
       const res = await fetch(`${API_BASE}/api/proxy/replay`, {
@@ -118,8 +138,10 @@ export default function Proxy() {
           overrideHeaders,
           overrideBody: repeaterBody,
         }),
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setError(data.error || "Replay failed.");
         return;
@@ -127,9 +149,10 @@ export default function Proxy() {
       setRepeaterResult(data);
       await loadRequests();
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err.message || "Replay failed.");
     } finally {
-      setBusy(false);
+      if (!ac.signal.aborted) setBusy(false);
     }
   }
 
@@ -142,6 +165,7 @@ export default function Proxy() {
     }
     setBusy(true);
     setIntruderResults([]);
+    const ac = newController();
     try {
       const overrideHeaders = textToHeaders(repeaterHeaders);
       const res = await fetch(`${API_BASE}/api/proxy/intruder`, {
@@ -154,17 +178,20 @@ export default function Proxy() {
           overrideHeaders,
           overrideBody: repeaterBody,
         }),
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setError(data.error || "Intruder failed.");
         return;
       }
       setIntruderResults(Array.isArray(data.results) ? data.results : []);
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err.message || "Intruder failed.");
     } finally {
-      setBusy(false);
+      if (!ac.signal.aborted) setBusy(false);
     }
   }
 

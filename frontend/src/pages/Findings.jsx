@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
+import { isAbortError, useAbortable } from "../lib/useAbortable";
 import { impactGoalMeta, proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
 const HACKTRICKS_URLS = {
@@ -51,6 +52,7 @@ export default function Findings() {
   const [proofFilter, setProofFilter] = useState("all");
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [lifecycleStatus, setLifecycleStatus] = useState({});
+  const newController = useAbortable();
 
   async function transitionFinding(findingId, nextStatus, currentStatus) {
     if (!job?.id) return;
@@ -65,6 +67,7 @@ export default function Findings() {
     }
 
     setLifecycleStatus((prev) => ({ ...prev, [findingId]: "Updating…" }));
+    const ac = newController();
     try {
       const res = await fetch(`${API_BASE}/api/finding-verification`, {
         method: "POST",
@@ -79,8 +82,10 @@ export default function Findings() {
           status: nextStatus,
           owner: owner.trim(),
         }),
+        signal: ac.signal,
       });
       const data = await res.json();
+      if (ac.signal.aborted) return;
       if (!res.ok) {
         setLifecycleStatus((prev) => ({ ...prev, [findingId]: data.error || `Failed (${res.status})` }));
         return;
@@ -90,6 +95,7 @@ export default function Findings() {
         [findingId]: `${currentStatus || "new"} → ${data.status}${data.owner ? ` (owner: ${data.owner})` : ""}`,
       }));
     } catch (err) {
+      if (isAbortError(err)) return;
       setLifecycleStatus((prev) => ({ ...prev, [findingId]: err.message || "Network error" }));
     }
   }
