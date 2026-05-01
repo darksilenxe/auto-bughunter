@@ -151,6 +151,9 @@ func buildImpactVerificationFinding(source model.Finding) model.Finding {
 }
 
 func promotedSeverity(source model.Finding) model.Severity {
+	if source.Severity == model.SeverityCritical {
+		return model.SeverityCritical
+	}
 	if source.BountyScore >= 0.8 || source.ImpactScore >= 0.85 {
 		return model.SeverityHigh
 	}

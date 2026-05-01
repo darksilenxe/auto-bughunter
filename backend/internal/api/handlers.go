@@ -4119,12 +4119,14 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
 	if !useAI {
-		// The static planner walks a finite, predefined pipeline. Consecutive-no-novelty
-		// stopping is only meaningful for the AI planner (which may schedule repeated
-		// passes indefinitely). Disable it so every registered agent gets to run even
-		// when early pipeline steps find nothing. Also ensure MaxRounds is at least as
-		// large as the pipeline so the outer loop does not cut the pipeline short.
+		// The static planner walks a finite, predefined pipeline. Convergence
+		// guards (no-novelty, consecutive-failure) are only meaningful for the AI
+		// planner which may schedule repeated passes indefinitely. Disable them so
+		// every registered agent gets a chance to run even when early pipeline
+		// steps find nothing or error out. Also ensure MaxRounds is at least as
+		// large as the pipeline so the outer loop does not cut it short.
 		orchestrator.MaxNoNoveltyRounds = 0
+		orchestrator.MaxConsecutiveFailureRounds = 0
 		orchestrator.MaxRounds = maxInt(orchestrator.MaxRounds, len(staticOrder))
 	}
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {

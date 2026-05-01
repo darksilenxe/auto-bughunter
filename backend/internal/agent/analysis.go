@@ -207,6 +207,8 @@ func scoreAndRankFindings(findings []model.Finding) []model.Finding {
 
 func severityScore(s model.Severity) int {
 	switch s {
+	case model.SeverityCritical:
+		return 5
 	case model.SeverityHigh:
 		return 4
 	case model.SeverityMedium:
