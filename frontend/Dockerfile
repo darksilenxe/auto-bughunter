@@ -1,7 +1,7 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-ARG VITE_API_BASE=http://localhost:8080
+ARG VITE_API_BASE=http://localhost:8080  # nosemgrep: dockerfile.security.secret-in-build-arg.secret-in-build-arg -- VITE_API_BASE is the public URL of the backend API, not a secret
 ENV VITE_API_BASE=${VITE_API_BASE}
 
 # Note: VITE_API_KEY is intentionally NOT a build arg. Vite would inline it

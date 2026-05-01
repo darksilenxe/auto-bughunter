@@ -2,6 +2,8 @@ module auto-bughunter/backend
 
 go 1.25.0
 
+toolchain go1.25.9
+
 require (
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0

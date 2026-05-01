@@ -159,7 +159,7 @@ def health() -> Response:
     # Verify nuclei binary is available
     try:
         binary = _resolve_nuclei_binary()
-        result = subprocess.run(  # nosemgrep - binary is resolved with shutil.which
+        result = subprocess.run(  # nosec B603 - nosemgrep - binary is resolved with shutil.which
             [binary, "-version"],
             capture_output=True,
             text=True,

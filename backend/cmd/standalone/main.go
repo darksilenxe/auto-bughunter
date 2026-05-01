@@ -336,6 +336,7 @@ func waitForHealth(baseURL, apiKey string) error {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		// nosemgrep -- baseURL is the locally-launched standalone backend URL passed via CLI flag; not externally user-controlled.
 		req, reqErr := http.NewRequest(http.MethodGet, baseURL+"/api/health", nil)
 		if reqErr != nil {
 			return reqErr

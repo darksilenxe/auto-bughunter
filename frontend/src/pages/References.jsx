@@ -1,3 +1,4 @@
+// biome-ignore-all lint/security/noSecrets: this file is a curated catalog of public reference URLs; URL-encoded path segments (e.g. `%20`) trigger Biome's noSecrets heuristic but are not credentials.
 const SECTIONS = [
   {
     title: "HackTricks — Web Application Hacking",

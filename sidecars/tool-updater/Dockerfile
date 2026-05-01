@@ -34,9 +34,19 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY manifest.json /etc/auto-bughunter/tool-updater/manifest.json
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Run as non-root user for least privilege. The entrypoint writes to
+# NUCLEI_TEMPLATES_DIR and TOOL_UPDATES_DIR, so those directories are
+# pre-created and chowned to the runtime user.
+RUN addgroup -S -g 1001 appuser \
+ && adduser  -S -u 1001 -G appuser -h /home/appuser -s /sbin/nologin appuser \
+ && mkdir -p /home/appuser/nuclei-templates /var/lib/auto-bughunter/updates \
+ && chown -R appuser:appuser /home/appuser /var/lib/auto-bughunter
+
 # Defaults; overridable via compose.
-ENV NUCLEI_TEMPLATES_DIR=/root/nuclei-templates \
+ENV NUCLEI_TEMPLATES_DIR=/home/appuser/nuclei-templates \
     TOOL_UPDATES_DIR=/var/lib/auto-bughunter/updates \
     TOOL_UPDATER_MANIFEST=/etc/auto-bughunter/tool-updater/manifest.json
+
+USER appuser
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

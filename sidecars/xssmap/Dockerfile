@@ -55,6 +55,13 @@ RUN apt-get update \
 COPY xssmap-wrapper.py /usr/local/bin/xssmap
 RUN chmod +x /usr/local/bin/xssmap
 
+# Run as non-root user for least privilege. The Playwright base image uses
+# a `pwuser` already; we create our own dedicated user and own /opt/xssmap.
+RUN groupadd --system --gid 1001 appuser \
+ && useradd  --system --uid 1001 --gid appuser --no-create-home --shell /sbin/nologin appuser \
+ && chown -R appuser:appuser /opt/xssmap
+USER appuser
+
 # Keep the container alive so the backend can `docker compose exec -T xssmap
 # xssmap ...` on demand (same pattern as nuclei/zap/sqlmap sidecars).
 ENTRYPOINT ["sh", "-c", "tail -f /dev/null"]

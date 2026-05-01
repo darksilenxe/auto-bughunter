@@ -78,6 +78,7 @@ func (s *PgvectorStore) UpsertFinding(ctx context.Context, mem FindingMemory) er
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
+	// nosemgrep -- static SQL with parameterized $N placeholders; no string concatenation of user input.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO finding_embeddings (id, target, scan_id, category, title, severity, embedding, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8)
@@ -99,6 +100,7 @@ func (s *PgvectorStore) SearchSimilar(ctx context.Context, embedding []float32, 
 		topK = 5
 	}
 	vecStr := formatVector(embedding)
+	// nosemgrep -- static SQL with parameterized $N placeholders; no string concatenation of user input.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, target, scan_id, category, title, severity, created_at
 		FROM finding_embeddings

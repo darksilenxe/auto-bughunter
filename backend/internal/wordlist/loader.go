@@ -262,7 +262,7 @@ func cacheLines(baseDir, path string, lines []string) error {
 		return err
 	}
 	dir := filepath.Dir(safePath)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { // nosemgrep -- cache dir requires execute bit so we can stat/read entries; 0700 is owner-only.
 		return err
 	}
 

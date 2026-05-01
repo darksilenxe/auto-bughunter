@@ -96,7 +96,9 @@ export default function AttackPathGraph({ events = [], job = null }) {
     e.stopPropagation();
     svgRef.current?.setPointerCapture(e.pointerId);
     const p   = svgPoint(e);
-    const off = nodeOffsets[nodeId] || { dx: 0, dy: 0 };
+    // Look up by `Object.hasOwn` to avoid passing arbitrary user-controlled
+    // strings into a property accessor (eslint-security/detect-object-injection).
+    const off = Object.hasOwn(nodeOffsets, nodeId) ? nodeOffsets[nodeId] : { dx: 0, dy: 0 };
     dragState.current = { id: nodeId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
     didDrag.current   = false;
   }
@@ -119,7 +121,9 @@ export default function AttackPathGraph({ events = [], job = null }) {
 
   /** Effective position of a named node accounting for user drag. */
   function effPos(name, basePos) {
-    const off = nodeOffsets[name];
+    // Look up by `Object.hasOwn` to avoid passing arbitrary user-controlled
+    // strings into a property accessor (eslint-security/detect-object-injection).
+    const off = Object.hasOwn(nodeOffsets, name) ? nodeOffsets[name] : undefined;
     return { x: basePos.x + (off?.dx || 0), y: basePos.y + (off?.dy || 0) };
   }
 

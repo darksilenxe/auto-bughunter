@@ -2158,6 +2158,7 @@ func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, r
 	if err != nil {
 		return nil, "", err
 	}
+	// nosemgrep -- static SQL with parameterized $N placeholders; no string concatenation of user input.
 	_, err = p.db.ExecContext(ctx, `
 		INSERT INTO api_keys (id, workspace_id, name, role, key_hash, key_prefix, active, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)
@@ -2203,6 +2204,7 @@ func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRe
 		return nil, "", err
 	}
 	now := time.Now().UTC()
+	// nosemgrep -- static SQL with parameterized $N placeholders; no string concatenation of user input.
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE api_keys
 		SET key_hash = $2, key_prefix = $3, rotated_at = $4, revoked_at = NULL, active = TRUE

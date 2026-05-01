@@ -487,7 +487,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, resolvedBinary, spec.Args...) //nolint:gosec // nosemgrep: allowlisted binary resolved via resolveToolBinary
+	cmd := exec.CommandContext(cmdCtx, resolvedBinary, spec.Args...) //nolint:gosec // nosemgrep -- allowlisted binary resolved via resolveToolBinary; spec.Args validated against per-tool allow-list.
 	cmd.Env = safeEnv()
 
 	var stdout, stderr bytes.Buffer

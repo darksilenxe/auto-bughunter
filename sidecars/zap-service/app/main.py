@@ -161,7 +161,7 @@ def execute_zap_baseline(req: ExecuteRequest) -> ExecuteResponse:
         )
 
     try:
-        result = subprocess.run(  # nosemgrep - args validated against allowlist
+        result = subprocess.run(  # nosec B603 - nosemgrep - args validated against allowlist
             [_ZAP_BASELINE] + validated_args,
             capture_output=True,
             text=True,
