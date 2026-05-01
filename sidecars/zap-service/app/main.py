@@ -15,7 +15,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-import subprocess
+import subprocess  # nosec B404
 from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, Request
@@ -161,11 +161,13 @@ def execute_zap_baseline(req: ExecuteRequest) -> ExecuteResponse:
         )
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosemgrep - args validated against allowlist
             [_ZAP_BASELINE] + validated_args,
             capture_output=True,
             text=True,
-            timeout=req.timeout
+            timeout=req.timeout,
+            shell=False,
+            check=False,
         )
 
         logger.info(f"zap-baseline.py completed with exit code {result.returncode}")

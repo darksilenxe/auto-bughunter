@@ -32,7 +32,7 @@ import argparse
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 from typing import Any
@@ -153,12 +153,13 @@ def _parse_stdout(raw: str) -> list[dict[str, Any]]:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return subprocess.run(  # nosemgrep - command is validated before invocation
         cmd,
         cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=timeout,
+        shell=False,
         check=False,
     )
 

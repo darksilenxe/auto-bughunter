@@ -15,7 +15,8 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-import subprocess
+import shutil
+import subprocess  # nosec B404
 from typing import List, Optional
 
 from fastapi import FastAPI, Request
@@ -52,6 +53,13 @@ def _coerce_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode(errors="replace")
     return value
+
+
+def _resolve_nuclei_binary() -> str:
+    binary = shutil.which("nuclei")
+    if not binary:
+        raise FileNotFoundError("nuclei binary not found in PATH")
+    return binary
 
 
 @app.middleware("http")
@@ -94,11 +102,14 @@ def health() -> Response:
     """Health check endpoint."""
     # Verify nuclei binary is available
     try:
-        result = subprocess.run(
-            ["nuclei", "-version"],
+        binary = _resolve_nuclei_binary()
+        result = subprocess.run(  # nosemgrep - binary is resolved with shutil.which
+            [binary, "-version"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            shell=False,
+            check=False,
         )
         version = result.stdout.strip() if result.returncode == 0 else "unknown"
         return JSONResponse(content={
@@ -209,12 +220,15 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
         )
 
     try:
+        binary = _resolve_nuclei_binary()
         # Execute nuclei with validated arguments
-        result = subprocess.run(
-            ["nuclei"] + sanitized_args,
+        result = subprocess.run(  # nosemgrep - args validated against allowlist
+            [binary] + sanitized_args,
             capture_output=True,
             text=True,
-            timeout=req.timeout
+            timeout=req.timeout,
+            shell=False,
+            check=False,
         )
 
         logger.info(f"Nuclei execution completed with exit code {result.returncode}")

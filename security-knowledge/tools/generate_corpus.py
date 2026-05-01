@@ -137,8 +137,9 @@ def extract_plain_text(body: bytes, content_type: str) -> str:
 
 
 def fetch_url_text(url: str, timeout: int) -> tuple[str, str]:
+    validate_url(url)
     request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - allowlisted curated URLs only
+    with urlopen(request, timeout=timeout) as response:  # nosec B310, nosemgrep - allowlisted curated URLs only
         content_type = response.headers.get("Content-Type", "text/plain")
         body = response.read()
     return extract_plain_text(body, content_type), content_type
