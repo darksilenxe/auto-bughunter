@@ -286,7 +286,7 @@ type ScanOptions struct {
 	// contract; command execution still flows through existing cmdbuilder,
 	// HackTricks, and toolbuilder safety controls.
 	UseAIToolCalling bool `json:"useAIToolCalling,omitempty"`
-	// HumanPaced inserts a randomised 2–6 second pause between consecutive
+	// HumanPaced inserts a randomised 1–2 minute pause between consecutive
 	// agent tool/action calls so the scan rhythm resembles a human pentester
 	// pausing to review results before issuing the next command.
 	HumanPaced bool `json:"humanPaced,omitempty"`

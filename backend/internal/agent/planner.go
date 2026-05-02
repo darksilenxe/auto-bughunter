@@ -319,7 +319,7 @@ func isUrgentReason(reason string) bool {
 		strings.Contains(reason, "auth")
 }
 
-// humanPacedSleep introduces a randomised 2–6 second delay between agent
+// humanPacedSleep introduces a randomised 1–2 minute delay between agent
 // tool/action calls when opts.HumanPaced is enabled, mimicking the natural
 // pause a human pentester takes before issuing the next command. It returns
 // early if the context is cancelled.
@@ -327,19 +327,19 @@ func humanPacedSleep(ctx context.Context, opts model.ScanOptions) {
 	if !opts.HumanPaced {
 		return
 	}
-	// 2000 ms base + up to 4000 ms of uniform jitter → 2–6 s range.
+	// 60 s base + up to 60 s of uniform jitter → 1–2 minute range.
 	// crypto/rand is used so the timing pattern is not predictable.
 	var buf [4]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		// Fall back to a fixed 3-second delay if entropy is unavailable.
+		// Fall back to a fixed 90-second delay if entropy is unavailable.
 		select {
 		case <-ctx.Done():
-		case <-time.After(3 * time.Second):
+		case <-time.After(90 * time.Second):
 		}
 		return
 	}
-	jitter := time.Duration(binary.LittleEndian.Uint32(buf[:])%4001) * time.Millisecond
-	delay := 2*time.Second + jitter
+	jitter := time.Duration(binary.LittleEndian.Uint32(buf[:])%60001) * time.Millisecond
+	delay := 60*time.Second + jitter
 	select {
 	case <-ctx.Done():
 	case <-time.After(delay):
