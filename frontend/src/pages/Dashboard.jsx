@@ -101,6 +101,7 @@ export default function Dashboard() {
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("bugbounty");
   const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
+  const [humanPaced, setHumanPaced] = useState(false);
   const [strictReporting, setStrictReporting] = useState(false);
   const [minReportConfidence, setMinReportConfidence] = useState("");
   const [loginSteps, setLoginSteps] = useState([]);
@@ -195,6 +196,7 @@ export default function Dashboard() {
         useFalsePositiveReview,
         useRemediationPlanner,
         aggressiveExploitation,
+        humanPaced: humanPaced || undefined,
         strictReporting: strictReporting || undefined,
         minReportConfidence: strictReporting && minReportConfidence.trim() ? Number(minReportConfidence) : undefined,
         impactGoals,
@@ -459,6 +461,7 @@ export default function Dashboard() {
                 <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
                 <label className="check"><input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />Remediation planner</label>
                 <label className="check"><input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />Aggressive exploitation</label>
+                <label className="check"><input type="checkbox" checked={humanPaced} onChange={(e) => setHumanPaced(e.target.checked)} />Human-paced (1–2 min between tools)</label>
                 <label className="check"><input type="checkbox" checked={strictReporting} onChange={(e) => setStrictReporting(e.target.checked)} />Strict reporting</label>
               </div>
               {strictReporting && (
