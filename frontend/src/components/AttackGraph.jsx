@@ -560,6 +560,13 @@ function FindingDetail({ node, scanStart }) {
           Asset discovered {scanStart > 0 ? `at T+${fmtMs(Math.max(0, node.ts - scanStart))}` : ""}.
         </p>
       )}
+
+      {/* Live-scan finding hint */}
+      {node.finding && node.live && (
+        <p style={{ margin: "4px 0 0", color: "rgba(255,255,255,0.3)", fontSize: "0.72rem", fontStyle: "italic" }}>
+          Full detail available once the scan completes.
+        </p>
+      )}
     </div>
   );
 }
@@ -581,18 +588,31 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
     return () => clearInterval(t);
   }, [isRunning]);
 
-  // Reset drag offsets whenever a new scan job starts.
-  useEffect(() => { setNodeOffsets({}); }, [job?.id]);
+  // Reset drag offsets and selection whenever a new scan job starts.
+  useEffect(() => { setNodeOffsets({}); setSelected(null); }, [job?.id]);
+
+  // When a scan transitions from live → complete the node IDs change
+  // (live_${title} → UUID-based), making any selected node stale.  Clear the
+  // selection so the panel doesn't stay stuck on "Click a node to see details".
+  useEffect(() => { if (job?.completedAt) setSelected(null); }, [job?.completedAt]);
 
   // ── Drag helpers ──────────────────────────────────────────────────────────
-  /** Convert a PointerEvent's client coordinates into SVG viewBox coordinates. */
+  /**
+   * Convert a PointerEvent's client coordinates into SVG viewBox coordinates.
+   * Guards against getScreenCTM() returning null, which happens when the SVG
+   * is detached from layout (e.g. the fullscreen overlay was closed while a
+   * drag was still in progress).  In that case we fall back to raw client
+   * coordinates so that the drag ends gracefully rather than crashing.
+   */
   function svgPoint(e) {
     const svg = svgRef.current;
     if (!svg) return { x: e.clientX, y: e.clientY };
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: e.clientX, y: e.clientY };
     const pt = svg.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
-    return pt.matrixTransform(svg.getScreenCTM().inverse());
+    return pt.matrixTransform(ctm.inverse());
   }
 
   function onNodePointerDown(e, nodeId) {
@@ -608,14 +628,17 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
 
   function onSVGPointerMove(e) {
     if (!dragState.current) return;
-    const p  = svgPoint(e);
-    const dx = dragState.current.origDx + (p.x - dragState.current.startX);
-    const dy = dragState.current.origDy + (p.y - dragState.current.startY);
-    if (Math.abs(p.x - dragState.current.startX) > 3 ||
-        Math.abs(p.y - dragState.current.startY) > 3) {
+    const p = svgPoint(e);
+    // Capture all fields from dragState synchronously before the async state
+    // updater runs — onPointerLeave/onPointerCancel may null dragState between
+    // scheduling the update and executing the callback, causing null.id crash.
+    const { id, origDx, origDy, startX, startY } = dragState.current;
+    const dx = origDx + (p.x - startX);
+    const dy = origDy + (p.y - startY);
+    if (Math.abs(p.x - startX) > 3 || Math.abs(p.y - startY) > 3) {
       didDrag.current = true;
     }
-    setNodeOffsets(prev => ({ ...prev, [dragState.current.id]: { dx, dy } }));
+    setNodeOffsets(prev => ({ ...prev, [id]: { dx, dy } }));
   }
 
   function onSVGPointerUp() {
@@ -785,6 +808,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
           onPointerMove={onSVGPointerMove}
           onPointerUp={onSVGPointerUp}
           onPointerLeave={onSVGPointerUp}
+          onPointerCancel={onSVGPointerUp}
           style={{
             background: "rgba(0,0,0,0.5)",
             borderLeft: "1px solid rgba(124,58,237,0.2)",

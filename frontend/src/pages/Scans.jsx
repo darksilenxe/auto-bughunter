@@ -1,12 +1,27 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useScan } from "../context/ScanContext";
 
 export default function Scans() {
-  const { scanHistory, historyLoading, loadHistory } = useScan();
+  const { scanHistory, historyLoading, loadHistory, loadScan } = useScan();
+  const navigate = useNavigate();
+  const [loadingId, setLoadingId] = useState(null);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     loadHistory();
   }, [loadHistory]);
+
+  const handleView = async (id) => {
+    setLoadingId(id);
+    const ok = await loadScan(id);
+    setLoadingId(null);
+    if (ok) {
+      navigate("/findings");
+    } else {
+      setLoadError("Failed to load scan — it may have been deleted or is inaccessible.");
+    }
+  };
 
   return (
     <div className="page page--wide">
@@ -26,6 +41,9 @@ export default function Scans() {
           </button>
         </div>
 
+        {loadError && (
+          <p className="error" style={{ marginTop: 8 }}>{loadError}</p>
+        )}
         {scanHistory.length === 0 && !historyLoading ? (
           <div className="empty-state">No completed scans have been recorded yet.</div>
         ) : (
@@ -39,6 +57,7 @@ export default function Scans() {
                   <th>Total findings</th>
                   <th>Started</th>
                   <th>Completed</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -57,6 +76,16 @@ export default function Scans() {
                     <td>{scan.findingCount}</td>
                     <td className="meta">{scan.createdAt ? new Date(scan.createdAt).toLocaleString() : "—"}</td>
                     <td className="meta">{scan.completedAt ? new Date(scan.completedAt).toLocaleString() : "—"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => handleView(scan.id)}
+                        disabled={loadingId === scan.id}
+                      >
+                        {loadingId === scan.id ? "Loading…" : "View"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -46,6 +46,8 @@ export default function Settings() {
   const [toolsHealth, setToolsHealth] = useState([]);
   const [proxyHealth, setProxyHealth] = useState(null);
   const [environmentError, setEnvironmentError] = useState("");
+  const [importError, setImportError] = useState("");
+  const importRef = useRef(null);
   const [aiConfig, setAIConfig] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("ai_model_preferences") || "{}");
@@ -162,6 +164,56 @@ export default function Settings() {
       savePrograms(next);
     }
     setEditing(null);
+  }
+
+  function handleExportPrograms() {
+    const json = JSON.stringify(programs, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `bug-bounty-programs-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleImportPrograms(e) {
+    setImportError("");
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so the same file can be re-selected after a failed import.
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!Array.isArray(parsed)) {
+          setImportError("Invalid file: expected a JSON array of program objects.");
+          return;
+        }
+        const valid = parsed.filter(
+          (p) => p && typeof p === "object" && typeof p.name === "string" && p.name.trim(),
+        );
+        if (valid.length === 0) {
+          setImportError("No valid program entries found in the file.");
+          return;
+        }
+        // Merge: keep existing programs that aren't already in the import
+        // (matched by name), then append the imported ones.
+        const importedNames = new Set(valid.map((p) => p.name.trim()));
+        const merged = [
+          ...programs.filter((p) => !importedNames.has(p.name.trim())),
+          ...valid,
+        ];
+        savePrograms(merged);
+      } catch (err) {
+        console.error("[Settings] program import failed:", err);
+        setImportError("Could not parse the file — make sure it is valid JSON.");
+      }
+    };
+    reader.readAsText(file);
   }
 
   function saveAIConfig() {
@@ -486,8 +538,28 @@ export default function Settings() {
             <h2>Bug bounty programs</h2>
             <p className="meta">Store reusable target scope, exclusions, and notes to pre-fill operator workflows.</p>
           </div>
-          <button type="button" onClick={openNew}>New program</button>
+          <div className="button-row">
+            {programs.length > 0 && (
+              <button type="button" className="button-secondary" onClick={handleExportPrograms}>
+                Export JSON
+              </button>
+            )}
+            <button type="button" className="button-secondary" onClick={() => { setImportError(""); importRef.current?.click(); }}>
+              Import JSON
+            </button>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: "none" }}
+              onChange={handleImportPrograms}
+            />
+            <button type="button" onClick={openNew}>New program</button>
+          </div>
         </div>
+        {importError && (
+          <p className="error" style={{ marginTop: 8 }}>{importError}</p>
+        )}
 
         {programs.length === 0 ? (
           <div className="empty-state">No programs configured yet.</div>

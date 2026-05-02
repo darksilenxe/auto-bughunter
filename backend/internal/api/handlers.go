@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -321,7 +323,23 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
-	return withCORS(s.authMiddleware(s.rateLimitMiddleware(mux)))
+	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))
+}
+
+// withRecovery wraps every HTTP handler in a deferred recover so that panics
+// in handler code are caught, logged with a stack trace, and returned to the
+// client as a 500 rather than crashing the entire server process.
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic recovered in HTTP handler [%s %s]: %v\n%s",
+					r.Method, r.URL.Path, rec, debug.Stack())
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleScanOrEvents routes /api/scan/{id} and /api/scan/{id}/events.

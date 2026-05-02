@@ -200,7 +200,8 @@ export function ScanProvider({ children }) {
       setLoading(false);
       setError("");
       return true;
-    } catch {
+    } catch (err) {
+      console.error("[ScanContext] loadScan failed:", err);
       return false;
     }
   }, []);
@@ -211,7 +212,7 @@ export function ScanProvider({ children }) {
       liveEvents, screenshots,
       scanHistory, historyLoading,
       programs, savePrograms,
-      startScan, stopScan, loadHistory,
+      startScan, stopScan, loadHistory, loadScan,
     }}>
       {children}
     </ScanContext.Provider>

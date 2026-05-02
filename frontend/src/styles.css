@@ -43,10 +43,12 @@ body {
   background:
     linear-gradient(rgba(89, 208, 255, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(89, 208, 255, 0.025) 1px, transparent 1px),
-    radial-gradient(900px 520px at 100% -5%, rgba(124, 92, 255, 0.16), transparent 52%),
-    radial-gradient(860px 520px at -10% 0%, rgba(89, 208, 255, 0.15), transparent 55%),
+    radial-gradient(900px 520px at 100% -5%,  rgba(124, 92, 255, 0.22), transparent 52%),
+    radial-gradient(860px 520px at -10% 0%,   rgba(89, 208, 255, 0.18), transparent 55%),
+    radial-gradient(720px 620px at 12% 100%,  rgba(87, 240, 193, 0.10), transparent 55%),
+    radial-gradient(660px 560px at 88% 95%,   rgba(255, 95, 122, 0.08), transparent 55%),
     linear-gradient(180deg, #07101b 0%, #050b15 44%, #04070f 100%);
-  background-size: 64px 64px, 64px 64px, auto, auto, auto;
+  background-size: 64px 64px, 64px 64px, auto, auto, auto, auto, auto;
   background-attachment: fixed;
 }
 
@@ -69,9 +71,34 @@ code {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.02), transparent 180px),
-    radial-gradient(circle at top, rgba(87, 240, 193, 0.1), transparent 42%);
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.025), transparent 180px),
+    radial-gradient(circle at 50% 0%,   rgba(87, 240, 193, 0.13), transparent 42%),
+    radial-gradient(800px 600px at 50% 96%, rgba(124, 92, 255, 0.07), transparent 60%);
   z-index: 0;
+}
+
+/* Animated ambient orbs — three slow-drifting light sources that add depth
+   without distracting from content.  The transform is small so movement is
+   barely perceptible; the real effect is the gentle opacity breathing. */
+.app-shell::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(580px 400px at 22% 64%, rgba(87, 240, 193, 0.07),  transparent 65%),
+    radial-gradient(500px 360px at 76% 38%, rgba(124, 92, 255, 0.09), transparent 60%),
+    radial-gradient(440px 320px at 54% 84%, rgba(89, 208, 255, 0.05),  transparent 65%);
+  animation: bg-orb-drift 24s ease-in-out infinite alternate;
+}
+
+@keyframes bg-orb-drift {
+  0%   { transform: translate(0px,   0px)   scale(1);    opacity: 0.7; }
+  25%  { transform: translate(26px, -18px)  scale(1.04); opacity: 1;   }
+  50%  { transform: translate(-16px, 14px)  scale(0.97); opacity: 0.85;}
+  75%  { transform: translate(20px,  22px)  scale(1.02); opacity: 0.95;}
+  100% { transform: translate(-22px, -10px) scale(1.01); opacity: 0.8; }
 }
 
 .app-main {
