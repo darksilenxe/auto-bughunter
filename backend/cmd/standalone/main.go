@@ -412,6 +412,7 @@ type scanFlagValues struct {
 	useFalsePositiveReview    bool
 	useRemediationPlanner     bool
 	wafBypass                 bool
+	humanPaced                bool
 	strictReporting           bool
 	minReportConfidence       float64
 	unsafeDynamicCommandFlags bool
@@ -455,6 +456,7 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.useFalsePositiveReview, "use-false-positive-review", false, "enable false positive review agent")
 	fs.BoolVar(&values.useRemediationPlanner, "use-remediation-planner", false, "enable remediation planner agent")
 	fs.BoolVar(&values.wafBypass, "waf-bypass", false, "enable WAF bypass payload variants")
+	fs.BoolVar(&values.humanPaced, "human-paced", false, "insert a 1–2 minute delay between consecutive agent tool calls")
 	fs.BoolVar(&values.strictReporting, "strict-reporting", false, "filter low-confidence findings from scan output")
 	fs.Float64Var(&values.minReportConfidence, "min-report-confidence", 0, "minimum confidence for strict reporting")
 	fs.BoolVar(&values.unsafeDynamicCommandFlags, "unsafe-dynamic-command-flags", false, "disable only per-tool dynamic command flag allow-list checks")
@@ -584,6 +586,9 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	}
 	if values.wafBypass {
 		req.Options.WAFBypass = true
+	}
+	if values.humanPaced {
+		req.Options.HumanPaced = true
 	}
 	if values.strictReporting {
 		req.Options.StrictReporting = true
@@ -1244,6 +1249,7 @@ Flags:
   -use-false-positive-review     Enable false positive review agent
   -use-remediation-planner       Enable remediation planner agent
   -waf-bypass                    Enable WAF bypass payload variants
+  -human-paced                   Insert a 1–2 minute delay between agent tool calls
   -strict-reporting              Filter low-confidence findings from output
   -min-report-confidence <n>     Minimum confidence for strict reporting
   -unsafe-dynamic-command-flags  Disable only per-tool dynamic flag allow-lists
