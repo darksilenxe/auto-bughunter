@@ -8,6 +8,7 @@
  *                      updating its form state.
  */
 import { useRef, useState } from "react";
+import { API_KEY } from "../context/ScanContext";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -34,7 +35,7 @@ export default function BurpImport({ onImport }) {
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(`${API_BASE}/api/burp/parse`, { method: "POST", body: form });
+      const res = await fetch(`${API_BASE}/api/burp/parse`, { method: "POST", body: form, headers: { "X-API-Key": API_KEY } });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Parse failed.");
