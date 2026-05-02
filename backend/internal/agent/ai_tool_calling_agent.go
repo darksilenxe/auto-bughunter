@@ -176,6 +176,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			allFindings = append(allFindings, findings...)
 			output.Findings = append(output.Findings, findings...)
 			history = appendToolHistory(history, summarizeCommandHistory(result, findings))
+			humanPacedSleep(ctx, input.Options)
 		case "run_hacktricks":
 			if hacktricksCalls >= maxAIToolHackTricksActions {
 				history = appendToolHistory(history, ai.ToolCallHistory{
@@ -196,6 +197,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				Status:  summarizeStatus(findings, failures == 0),
 				Summary: summary,
 			})
+			humanPacedSleep(ctx, input.Options)
 		case "generate_tool":
 			if generatedToolCalls >= maxAIToolGeneratedTools {
 				history = appendToolHistory(history, ai.ToolCallHistory{
@@ -223,6 +225,7 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				Status:  summarizeStatus(findings, true),
 				Summary: fmt.Sprintf("generated tool produced %d finding(s)", len(findings)),
 			})
+			humanPacedSleep(ctx, input.Options)
 		default:
 			history = appendToolHistory(history, ai.ToolCallHistory{
 				Action:  decision.Action,

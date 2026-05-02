@@ -206,6 +206,7 @@ Common scan flags:
 - `-automation-mode`
 - `-passive-only`
 - `-aggressive-exploitation`
+- `-human-paced`
 - `-poll-interval` (scan run)
 - `-wait-timeout` (scan run)
 
@@ -259,7 +260,8 @@ cat > /tmp/scan-request.json <<'EOF'
   "target": "https://demo.owasp-juice.shop",
   "options": {
     "automationMode": "conservative",
-    "passiveOnly": true
+    "passiveOnly": true,
+    "humanPaced": true
   }
 }
 EOF
@@ -787,6 +789,7 @@ candidate-minus-baseline improvement.
 - Disallowed test types can be enforced at request time with `disallowedTestTypes`.
 - Role-based authenticated coverage can be expanded with `authProfiles` (multiple role sessions).
 - Scanner request pacing/retry controls are available via `options.maxRetries`, `options.backoffMillis`, and `options.requestDelayMillis`.
+- Enable `options.humanPaced` (or the `-human-paced` CLI flag) to insert a randomised 1–2 minute pause between consecutive agent tool calls, matching the natural rhythm of a human pentester reviewing output before issuing the next command. This is useful when blending with manual testing sessions or avoiding rate-limit triggers on assessed targets.
 - Scan creation supports idempotent deduplication via `idempotencyKey` field or `Idempotency-Key` HTTP header.
 - Per-target rate limiting can be enforced with `options.targetRateLimitPerMinute`.
 - Global concurrent scan budgeting can be configured via `GLOBAL_SCAN_BUDGET`.

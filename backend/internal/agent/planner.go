@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -314,6 +317,33 @@ func isUrgentReason(reason string) bool {
 		strings.Contains(reason, "rce") ||
 		strings.Contains(reason, "exploit") ||
 		strings.Contains(reason, "auth")
+}
+
+// humanPacedSleep introduces a randomised 1–2 minute delay between agent
+// tool/action calls when opts.HumanPaced is enabled, mimicking the natural
+// pause a human pentester takes before issuing the next command. It returns
+// early if the context is cancelled.
+func humanPacedSleep(ctx context.Context, opts model.ScanOptions) {
+	if !opts.HumanPaced {
+		return
+	}
+	// 60 s base + up to 60 s of uniform jitter → 1–2 minute range.
+	// crypto/rand is used so the timing pattern is not predictable.
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Fall back to a fixed 90-second delay if entropy is unavailable.
+		select {
+		case <-ctx.Done():
+		case <-time.After(90 * time.Second):
+		}
+		return
+	}
+	jitter := time.Duration(binary.LittleEndian.Uint32(buf[:])%60001) * time.Millisecond
+	delay := 60*time.Second + jitter
+	select {
+	case <-ctx.Done():
+	case <-time.After(delay):
+	}
 }
 
 func itoa(n int) string {
