@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 import { API_BASE, useScan } from "../context/ScanContext";
 import { proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
@@ -27,7 +28,10 @@ export default function Reports() {
           <h1>Submission center</h1>
           <p>Generate polished pentest and bug bounty reports after a scan completes.</p>
         </header>
-        <section className="card empty-state">No scan data available. Run an engagement from the dashboard first.</section>
+        <section className="card empty-state">
+          No scan data available. Run an engagement from the dashboard first, or{" "}
+          <Link to="/scans">load a past scan from Engagement History</Link>.
+        </section>
       </div>
     );
   }

@@ -43,8 +43,9 @@ type integrationState struct {
 // cooldownAfterNuclei is a brief pause inserted after Nuclei finishes to let
 // it fully tear down child processes and release transient network/socket
 // pressure before any subsequent Phase 7 tool (vulnx, zap-baseline, xssmap)
-// starts.
-const cooldownAfterNuclei = 5 * time.Second
+// starts.  30 s gives Nuclei enough time to flush all child processes even on
+// busy targets; the previous 5 s value caused Phase 7 tools to time out.
+const cooldownAfterNuclei = 30 * time.Second
 
 const integrationPreflightTimeout = 3 * time.Second
 

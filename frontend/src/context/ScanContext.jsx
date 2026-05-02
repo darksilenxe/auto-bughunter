@@ -180,13 +180,39 @@ export function ScanProvider({ children }) {
     setHistoryLoading(false);
   }, []);
 
+  // ── Load a specific past scan by ID ───────────────────────────────────
+  // Closes any active SSE stream and replaces the current job with the
+  // fetched scan so that Findings, Reports, and Attack Graph all reflect
+  // the selected historical engagement.
+  const loadScan = useCallback(async (id) => {
+    if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/scan/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`,
+        { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } },
+      );
+      if (!res.ok) return false;
+      const data = await res.json();
+      setScanId(data.id);
+      setJob(data);
+      setLiveEvents([]);
+      setScreenshots([]);
+      setLoading(false);
+      setError("");
+      return true;
+    } catch (err) {
+      console.error("[ScanContext] loadScan failed:", err);
+      return false;
+    }
+  }, []);
+
   return (
     <ScanContext.Provider value={{
       scanId, job, loading, error,
       liveEvents, screenshots,
       scanHistory, historyLoading,
       programs, savePrograms,
-      startScan, stopScan, loadHistory,
+      startScan, stopScan, loadHistory, loadScan,
     }}>
       {children}
     </ScanContext.Provider>
