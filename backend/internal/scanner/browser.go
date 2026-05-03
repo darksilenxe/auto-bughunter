@@ -44,9 +44,6 @@ func configureBrowserProxy(ctx context.Context) error {
 	// Note: Actual proxy settings are configured at container level via docker-compose.yml
 	// This function provides runtime verification and logging
 
-	// Test proxy connectivity by attempting to navigate to a test endpoint through proxy
-	testURL := "http://backend:8081" // This should be the proxy endpoint
-
 	return chromedp.Run(ctx,
 		network.Enable(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
