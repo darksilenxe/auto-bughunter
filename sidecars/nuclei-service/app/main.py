@@ -1,0 +1,180 @@
+"""
+Nuclei HTTP Wrapper Service
+============================
+HTTP service that wraps the nuclei CLI tool, eliminating the need for
+Docker socket access. The backend communicates via HTTP instead of
+`docker compose exec`.
+
+Endpoints:
+  POST /v1/execute - Execute nuclei with provided arguments
+  GET  /health     - Health check
+"""
+
+from __future__ import annotations
+
+import hmac
+import logging
+import os
+import subprocess
+from typing import List, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger("nuclei-service")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+
+# Optional shared-secret auth between the backend and this sidecar
+SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
+_AUTH_EXEMPT_PATHS = {"/health"}
+
+# Maximum execution timeout (seconds)
+MAX_TIMEOUT = 600  # 10 minutes
+
+
+def _extract_bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if not header:
+        return ""
+    parts = header.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
+
+
+app = FastAPI(title="Nuclei HTTP Wrapper", version="1.0.0")
+
+
+@app.middleware("http")
+async def _require_sidecar_token(request: Request, call_next):
+    if SIDECAR_AUTH_TOKEN and request.url.path not in _AUTH_EXEMPT_PATHS:
+        provided = _extract_bearer_token(request)
+        if not provided or not hmac.compare_digest(provided, SIDECAR_AUTH_TOKEN):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "invalid or missing sidecar token"},
+            )
+    return await call_next(request)
+
+
+class ExecuteRequest(BaseModel):
+    """Request to execute nuclei with specific arguments."""
+    args: List[str] = Field(
+        default_factory=list,
+        description="Command-line arguments to pass to nuclei"
+    )
+    timeout: int = Field(
+        default=300,
+        ge=1,
+        le=MAX_TIMEOUT,
+        description="Execution timeout in seconds (max 600)"
+    )
+
+
+class ExecuteResponse(BaseModel):
+    """Response from nuclei execution."""
+    stdout: str = Field(description="Standard output from nuclei")
+    stderr: str = Field(description="Standard error from nuclei")
+    exit_code: int = Field(description="Exit code from nuclei process")
+    timed_out: bool = Field(description="Whether execution timed out")
+    error: Optional[str] = Field(default=None, description="Error message if execution failed")
+
+
+@app.get("/health")
+def health() -> Response:
+    """Health check endpoint."""
+    # Verify nuclei binary is available
+    try:
+        result = subprocess.run(
+            ["nuclei", "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        version = result.stdout.strip() if result.returncode == 0 else "unknown"
+        return JSONResponse(content={
+            "status": "ok",
+            "service": "nuclei-http-wrapper",
+            "nuclei_version": version,
+        })
+    except Exception as e:
+        logger.warning(f"Health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "service": "nuclei-http-wrapper",
+                "error": "nuclei binary not found or failed to execute",
+            },
+        )
+
+
+@app.post("/v1/execute", response_model=ExecuteResponse)
+def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
+    """
+    Execute nuclei with the provided arguments.
+
+    This endpoint runs nuclei in a subprocess and returns stdout, stderr,
+    and exit code. It enforces a timeout to prevent runaway processes.
+
+    Example request:
+    ```json
+    {
+      "args": ["-u", "https://example.com", "-severity", "medium,high,critical", "-silent"],
+      "timeout": 300
+    }
+    ```
+    """
+    logger.info(f"Executing nuclei with args: {req.args}")
+
+    # Validate args to prevent command injection
+    # Note: subprocess.run with list args is safe, but we add validation for defense in depth
+    for arg in req.args:
+        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
+            return ExecuteResponse(
+                stdout="",
+                stderr="",
+                exit_code=1,
+                timed_out=False,
+                error="Invalid argument: potentially dangerous characters detected"
+            )
+
+    try:
+        # Execute nuclei
+        result = subprocess.run(
+            ["nuclei"] + req.args,
+            capture_output=True,
+            text=True,
+            timeout=req.timeout
+        )
+
+        logger.info(f"Nuclei execution completed with exit code {result.returncode}")
+
+        return ExecuteResponse(
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            timed_out=False,
+            error=None
+        )
+
+    except subprocess.TimeoutExpired as e:
+        logger.warning(f"Nuclei execution timed out after {req.timeout}s")
+        return ExecuteResponse(
+            stdout=e.stdout.decode() if e.stdout else "",
+            stderr=e.stderr.decode() if e.stderr else "",
+            exit_code=-1,
+            timed_out=True,
+            error=f"Execution timed out after {req.timeout} seconds"
+        )
+
+    except Exception as e:
+        logger.error(f"Nuclei execution failed: {e}")
+        return ExecuteResponse(
+            stdout="",
+            stderr="",
+            exit_code=-1,
+            timed_out=False,
+            error=str(e)
+        )

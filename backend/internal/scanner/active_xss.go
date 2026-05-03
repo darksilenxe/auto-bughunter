@@ -1,0 +1,189 @@
+package scanner
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
+)
+
+// xssProbeParams are common parameter names that tend to be reflected into
+// HTML responses (search forms, "you said X" pages, error toasts, redirect
+// confirmation banners). Picked to maximise reflection probability without
+// touching identifiers/IDs that could mutate state.
+var xssProbeParams = []string{"q", "search", "query", "s", "keyword", "term", "text", "name", "title", "msg", "message"}
+
+// xssMarker is a deliberately distinctive payload chosen to be:
+//   - Cheap to send (a few dozen bytes per probe).
+//   - Obvious if reflected raw into HTML (contains "<", ">", quotes and a
+//     unique random-looking token so we don't false-positive on user content).
+//   - Harmless: there is no real script execution attempted; we look only for
+//     the literal payload appearing unescaped in the response body.
+const xssMarker = `"><svg/onload=abh_xss_7f9e2()><!--abh_xss_7f9e2-->`
+
+// xssMaxAttempts caps how many request/parameter combinations the active XSS
+// probe will attempt per scan to bound scan time. The same budget applies in
+// the existing contextual-probe code (12).
+const xssMaxAttempts = 12
+
+// runActiveXSSProbe is an active reflected-XSS scanner. For each in-scope
+// runtime endpoint it injects a distinctive HTML-context marker into common
+// reflective parameter names and inspects the response body for an unescaped
+// reflection. Only one finding is emitted per scan; the probe is silent when
+// no reflections are observed.
+//
+// The probe is intentionally non-destructive: it never sends mutating verbs,
+// never executes a real payload, and respects scope/SSRF safety on every
+// request. It is independent of the AI input_validation agent (which uses a
+// different, ad-hoc HTTP client) and benefits from doRequestWithRetry, the
+// runtime endpoint discovery already used elsewhere in the scanner, and
+// auth/scope plumbing.
+func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body string) []model.Finding {
+	if input.Options.PassiveOnly {
+		return nil
+	}
+	candidates := extractRuntimeEndpoints(input.Target, body, input.Scope, 10)
+	if len(input.Options.SeedRuntimeEndpoints) > 0 {
+		candidates = append(candidates, input.Options.SeedRuntimeEndpoints...)
+	}
+	if len(candidates) == 0 {
+		candidates = []string{input.Target}
+	}
+
+	if input.Emit != nil {
+		input.Emit(model.ScanEvent{
+			Type:    model.ScanEventCommand,
+			Command: fmt.Sprintf("active-xss %s", input.Target),
+			Message: "Probing for reflected XSS via context-aware payload injection",
+		})
+	}
+
+	type hit struct {
+		url   string
+		param string
+	}
+	var hits []hit
+	attempts := 0
+	for _, raw := range candidates {
+		if attempts >= xssMaxAttempts {
+			break
+		}
+		base, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || base.Scheme == "" || base.Host == "" {
+			continue
+		}
+		for _, p := range xssProbeParams {
+			if attempts >= xssMaxAttempts {
+				break
+			}
+			payloads := []string{xssMarker}
+			if input.Options.WAFBypass {
+				payloads = xssBypassVariants(xssMarker)
+			}
+			matched := false
+			for _, payload := range payloads {
+				if attempts >= xssMaxAttempts {
+					break
+				}
+				probe := *base
+				q := probe.Query()
+				q.Set(p, payload)
+				probe.RawQuery = q.Encode()
+				probeURL := probe.String()
+				if !scope.IsURLInScope(probeURL, input.Scope) {
+					continue
+				}
+				// safety.ValidateOutboundURL is intentionally not re-checked
+				// here: the host comes from input.Target (validated by Run)
+				// or from extractRuntimeEndpoints (which validates each
+				// candidate); modifying only the query string cannot change
+				// the host, so the check would be redundant.
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					continue
+				}
+				ApplyAuthProfile(req, input.AuthProfile)
+				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+				attempts++
+				if err != nil || resp == nil {
+					continue
+				}
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+				_ = resp.Body.Close()
+				if isHTMLContextReflection(string(respBody), payload) {
+					hits = append(hits, hit{url: probeURL, param: p})
+					matched = true
+					break
+				}
+			}
+			if matched {
+				// One reflection is enough to surface the issue; keep
+				// searching other endpoints to enrich evidence but don't
+				// loop indefinitely on the same parameter set.
+				break
+			}
+		}
+	}
+
+	if len(hits) == 0 {
+		return nil
+	}
+
+	urls := make([]string, 0, len(hits))
+	params := make([]string, 0, len(hits))
+	seenParam := map[string]struct{}{}
+	for _, h := range hits {
+		urls = append(urls, h.url)
+		if _, ok := seenParam[h.param]; !ok {
+			params = append(params, h.param)
+			seenParam[h.param] = struct{}{}
+		}
+	}
+
+	first := hits[0]
+	steps := []string{
+		fmt.Sprintf("Send GET %s", first.url),
+		fmt.Sprintf("Inspect the response body and confirm the literal payload %q appears unescaped (no HTML entity encoding) in an HTML context.", xssMarker),
+		fmt.Sprintf("Repeat with other reflective parameters (%s) to assess scope.", strings.Join(params, ", ")),
+	}
+	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
+
+	return []model.Finding{{
+		ID:                "active-xss-reflected",
+		Category:          "input-validation",
+		Severity:          model.SeverityHigh,
+		Title:             "Reflected Cross-Site Scripting (XSS) via unencoded parameter reflection",
+		Description:       "An HTML-context payload supplied via a query parameter was reflected into the response body without HTML encoding. An attacker who can craft a link to this endpoint can execute arbitrary script in a victim's browser, leading to session hijacking, credential theft and account takeover.",
+		Evidence:          fmt.Sprintf("Unescaped reflection of marker %q observed at: %s (parameters: %s)", xssMarker, strings.Join(limitStrings(urls, 6), ", "), strings.Join(params, ", ")),
+		Recommendation:    "Apply context-aware output encoding (HTML, attribute, JS, URL) at every sink that emits user-controlled data. Prefer a templating engine with auto-escaping, and add a strict Content-Security-Policy as defense-in-depth.",
+		Confidence:        0.9,
+		AffectedURL:       first.url,
+		AffectedParameter: first.param,
+		CWE:               "CWE-79",
+		OWASPCategory:     "A03:2021 - Injection",
+		Sources:           []string{"active-scanner"},
+		ReproductionSteps: steps,
+		PoC:               curl,
+		EvidenceFields: map[string]string{
+			"validationType": "active-probe",
+			"reproStep":      "Replay the listed URL and confirm the marker appears unescaped in the HTML body",
+			"curlReproducer": curl,
+		},
+	}}
+}
+
+// isHTMLContextReflection returns true when the marker appears literally in
+// the response body. It is intentionally conservative: HTML-encoded forms of
+// the marker (e.g. "&quot;&gt;&lt;svg…") are deliberately ignored because
+// those represent the *defended* case.
+func isHTMLContextReflection(body, marker string) bool {
+	if marker == "" || body == "" {
+		return false
+	}
+	return strings.Contains(body, marker)
+}

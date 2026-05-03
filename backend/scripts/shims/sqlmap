@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs sqlmap inside the `sqlmap` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec sqlmap sqlmap "$@"
