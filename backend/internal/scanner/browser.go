@@ -21,8 +21,11 @@ import (
 // (e.g. http://chromium:9222 in Docker Compose), it attaches to that
 // long-running headless-shell sidecar via the DevTools protocol instead of
 // trying to launch a local Chromium binary inside the slim backend image.
+<<<<<<< HEAD
 // The browser is ALWAYS configured to use the proxy for all requests during scanning.
 // The browser is always configured to use the proxy for all requests.
+=======
+>>>>>>> cc4140c (Resolving frontend issues.)
 func chromedpContext(parent context.Context) (context.Context, context.CancelFunc) {
 	remote := strings.TrimSpace(os.Getenv("CHROME_REMOTE_URL"))
 	if remote == "" {
@@ -37,6 +40,7 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	return ctx, cancel
 }
 
+<<<<<<< HEAD
 // configureBrowserProxy ensures the browser always uses the proxy for all requests.
 // This provides runtime verification and logging of proxy configuration.
 func configureBrowserProxy(ctx context.Context) error {
@@ -57,6 +61,8 @@ func configureBrowserProxy(ctx context.Context) error {
 	)
 }
 
+=======
+>>>>>>> cc4140c (Resolving frontend issues.)
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
@@ -64,12 +70,15 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 	ctx, timeoutCancel := context.WithTimeout(ctx, 35*time.Second)
 	defer timeoutCancel()
 
+<<<<<<< HEAD
 	// Ensure browser always uses proxy for all requests during scanning
 	if err := configureBrowserProxy(ctx); err != nil {
 		// Log warning but continue - container-level proxy config should still work
 		fmt.Printf("Warning: Failed to configure browser proxy programmatically: %v\n", err)
 	}
 
+=======
+>>>>>>> cc4140c (Resolving frontend issues.)
 	var formCount int
 	var csrfLikeCount int
 	var title string
