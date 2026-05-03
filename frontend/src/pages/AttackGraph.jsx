@@ -187,6 +187,7 @@ export default function AttackGraph() {
                 {[
                   { id: "chain", label: "Attack chain" },
                   { id: "pipeline", label: "Agent pipeline" },
+                  { id: "network", label: "Network graph" },
                 ].map(({ id, label }) => (
                   <button
                     key={id}
@@ -215,8 +216,10 @@ export default function AttackGraph() {
                   isRunning={isRunning}
                   onScreenshot={(b64) => setSelectedScreenshot(b64)}
                 />
-              ) : (
+              ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
+              ) : (
+                <ScanNetworkGraph job={job} />
               )}
             </div>
           </div>
