@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AttackGraphChart from "../components/AttackGraph";
 import AttackPathGraph from "../components/AttackPathGraph";
+import ScanNetworkGraph from "../components/ScanNetworkGraph";
 import { useScan } from "../context/ScanContext";
 import { summarizeFindings } from "../lib/impact";
 
@@ -84,13 +85,14 @@ export default function AttackGraph() {
               <div>
                 <h2 style={{ marginBottom: 6 }}>Operator graph views</h2>
                 <p className="meta">
-                  Toggle between impact chain view and agent pipeline view to understand what the AI is proving and why.
+                  Toggle between impact chain view, agent pipeline view, and network traffic to understand what the AI is proving and why.
                 </p>
               </div>
               <div className="filter-row">
                 {[
                   { id: "chain", label: "Attack chain" },
                   { id: "pipeline", label: "Agent pipeline" },
+                  { id: "network", label: "Network graph" },
                 ].map(({ id, label }) => (
                   <button
                     key={id}
@@ -120,8 +122,10 @@ export default function AttackGraph() {
                   isRunning={isRunning}
                   onScreenshot={(b64) => setSelectedScreenshot(b64)}
                 />
-              ) : (
+              ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
+              ) : (
+                <ScanNetworkGraph job={job} />
               )}
             </div>
           </section>
@@ -147,6 +151,10 @@ export default function AttackGraph() {
               <div className="meta-block" style={{ marginTop: 10 }}>
                 <b>Agent pipeline view</b>
                 <div>Shows which reasoning stages are active, completed, dynamically spawned, or blocked.</div>
+              </div>
+              <div className="meta-block" style={{ marginTop: 10 }}>
+                <b>Network graph view</b>
+                <div>Visualizes HTTP traffic flowing through the proxy during browser-based scanning and exploration.</div>
               </div>
               <div className="meta-block" style={{ marginTop: 10 }}>
                 <b>Primary target</b>

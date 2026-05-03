@@ -4329,6 +4329,7 @@ type toolHealth struct {
 
 func collectToolHealth() []toolHealth {
 	tools := []toolHealth{
+		{Name: "proxy", Binary: "proxy", Category: "network"},
 		{Name: "nuclei", Binary: envOrDefault("NUCLEI_BINARY", "nuclei"), Category: "vuln-scanning"},
 		{Name: "zap-baseline", Binary: envOrDefault("ZAP_BASELINE_BINARY", "zap-baseline.py"), Category: "vuln-scanning"},
 		{Name: "subfinder", Binary: envOrDefault("SUBFINDER_BINARY", "subfinder"), Category: "recon"},
@@ -4369,6 +4370,10 @@ func collectToolHealth() []toolHealth {
 
 	for i := range tools {
 		switch tools[i].Name {
+		case "proxy":
+			// Check if proxy is enabled and listening
+			tools[i].Installed = os.Getenv("ENABLE_PROXY") == "true"
+			continue
 		case "nuclei":
 			if useHTTP {
 				tools[i].Installed = checkNucleiHTTP()

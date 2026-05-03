@@ -114,6 +114,11 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 	ctx, timeoutCancel := context.WithTimeout(ctx, loginBootstrapTimeout)
 	defer timeoutCancel()
 
+	// Ensure browser always uses proxy for authentication requests
+	if err := configureBrowserProxy(ctx); err != nil {
+		fmt.Printf("Warning: Failed to configure browser proxy for authentication: %v\n", err)
+	}
+
 	extraHeaders := make(network.Headers)
 	for key, value := range profile.Headers {
 		if strings.TrimSpace(key) != "" {

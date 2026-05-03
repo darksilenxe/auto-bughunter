@@ -114,6 +114,11 @@ func (s *Service) RunDOMXSSProbe(
 			// helper that handles both local binary and remote sidecar.
 			taskCtx, taskCancel := chromedpContext(ctx)
 
+			// Ensure browser always uses proxy for XSS probing requests
+			if err := configureBrowserProxy(taskCtx); err != nil {
+				fmt.Printf("Warning: Failed to configure browser proxy for XSS probe: %v\n", err)
+			}
+
 			var titleVal, bodyText string
 
 			err := chromedp.Run(taskCtx,
@@ -178,12 +183,12 @@ func (s *Service) RunDOMXSSProbe(
 				},
 				BusinessTags: []string{"dom-xss", "client-side", "input-validation"},
 				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"domSource":      payload.source,
-					"markerInTitle":  fmt.Sprintf("%t", markerInTitle),
-					"markerInBody":   fmt.Sprintf("%t", markerInBody),
+					"validationType":  "active-probe",
+					"domSource":       payload.source,
+					"markerInTitle":   fmt.Sprintf("%t", markerInTitle),
+					"markerInBody":    fmt.Sprintf("%t", markerInBody),
 					"markerInConsole": fmt.Sprintf("%t", markerInConsole),
-					"targetURL":      targetURL,
+					"targetURL":       targetURL,
 				},
 			})
 		}
