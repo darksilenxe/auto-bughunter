@@ -232,7 +232,10 @@ func main() {
 				mode = "TLS-intercepting (install CA via /api/proxy/ca-certificate)"
 			}
 			log.Printf("intercepting proxy listening on :%s — %s — configure your browser to use localhost:%s as HTTP proxy", proxyPort, mode, proxyPort)
+<<<<<<< HEAD
 			log.Printf("browser proxy integration active — all headless browser requests during scanning will route through the proxy")
+=======
+>>>>>>> cc4140c (Resolving frontend issues.)
 			if err := proxyHttpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("proxy server error: %v", err)
 			}
