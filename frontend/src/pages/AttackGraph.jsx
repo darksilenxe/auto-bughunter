@@ -125,7 +125,7 @@ export default function AttackGraph() {
               ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
               ) : (
-                <ScanNetworkGraph job={job} />
+                <ScanNetworkGraph job={job} expanded={false} />
               )}
             </div>
           </section>
@@ -219,7 +219,7 @@ export default function AttackGraph() {
               ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
               ) : (
-                <ScanNetworkGraph job={job} />
+                <ScanNetworkGraph job={job} expanded={true} />
               )}
             </div>
           </div>

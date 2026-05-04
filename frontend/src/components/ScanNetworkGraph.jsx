@@ -44,7 +44,7 @@ const SVG_W = 800;
 const SCANNER_X = 80;
 const HOST_X = 580;
 
-export default function ScanNetworkGraph({ job = null }) {
+export default function ScanNetworkGraph({ job = null, expanded = false }) {
   const [requests, setRequests] = useState([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
@@ -123,12 +123,12 @@ export default function ScanNetworkGraph({ job = null }) {
   const recent = [...requests].reverse().slice(0, 12);
 
   if (initialLoading) {
-    return <div style={emptyStyle}>Loading proxy traffic…</div>;
+    return <div style={expanded ? { ...emptyStyle, flex: 1 } : emptyStyle}>Loading proxy traffic…</div>;
   }
 
   if (requests.length === 0) {
     return (
-      <div style={emptyStyle}>
+      <div style={expanded ? { ...emptyStyle, flex: 1 } : emptyStyle}>
         {error
           ? error
           : "No proxy traffic captured. Configure your browser or scanner to route through the intercepting proxy."}
@@ -137,7 +137,7 @@ export default function ScanNetworkGraph({ job = null }) {
   }
 
   return (
-    <div>
+    <div style={expanded ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 } : undefined}>
       {error && (
         <p style={{ color: "#f87171", fontSize: "0.8rem", marginBottom: 8 }}>{error}</p>
       )}
@@ -145,7 +145,12 @@ export default function ScanNetworkGraph({ job = null }) {
       <svg
         viewBox={`0 0 ${SVG_W} ${svgH}`}
         width="100%"
-        style={{ background: "rgba(0,0,0,0.35)", borderRadius: "10px", display: "block" }}
+        style={{
+          background: "rgba(0,0,0,0.35)",
+          borderRadius: "10px",
+          display: "block",
+          ...(expanded ? { flex: 1, minHeight: 320 } : {}),
+        }}
       >
         <defs>
           <marker id="ng-arrow" markerWidth="8" markerHeight="6" refX="6" refY="3" orient="auto">
