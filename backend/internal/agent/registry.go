@@ -364,8 +364,26 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 			spawned = append(spawned, "metasploit")
 		}
 	case "pentest_loop":
-		// After the inner loop agent, run chain synthesis and attack-path
-		// analysis over the enriched finding set.
+		// The pentest_loop completes its batch run. The adaptive probe agent
+		// then takes over as the primary AI-driven decision loop, examining
+		// every probe result in real time and choosing its next move based
+		// on actual evidence — not a predefined playbook.
+		spawned = append(spawned, "adaptive_probe")
+		if len(output.Findings) > 0 {
+			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
+		}
+		// Queue reasoning_iteration as a post-hoc reflective pass over the
+		// adaptive probe results.
+		spawned = append(spawned, "reasoning_iteration")
+	case "adaptive_probe":
+		// After the adaptive loop, synthesize any novel chains its pivoting
+		// uncovered and re-run attack-path analysis.
+		if len(output.Findings) > 0 {
+			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
+		}
+	case "reasoning_iteration":
+		// After adaptive reasoning, synthesize any novel chains the pivoting
+		// may have uncovered and re-run attack-path analysis.
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
 		}

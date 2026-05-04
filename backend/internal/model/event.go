@@ -13,6 +13,9 @@ const (
 	ScanEventCommand       ScanEventType = "command"
 	ScanEventScreenshot    ScanEventType = "screenshot"
 	ScanEventInfo          ScanEventType = "info"
+	// ScanEventReasoningLoop is emitted by the ReasoningIterationAgent after
+	// each reflection step so the frontend can show the live reasoning process.
+	ScanEventReasoningLoop ScanEventType = "reasoning_loop"
 )
 
 // ScanEvent is a structured real-time event emitted during scan execution.

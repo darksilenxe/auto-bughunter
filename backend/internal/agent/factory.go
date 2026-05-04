@@ -70,11 +70,24 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	// novel multi-step attack chains. Registered with nil AI client by default.
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(nil, true) })
 
+	// AdaptiveProbeAgent: true observe→decide→act loop where the AI chooses
+	// one probe at a time based on live HTTP observations.
+	f.Register("adaptive_probe", func() Agent {
+		return NewAdaptiveProbeAgent(nil, scanService, defaultAdaptiveStepBudget, true)
+	})
+
 	// PentestLoopAgent: drives the iterative hypothesis→verify→chain inner
 	// loop inside a single agent execution. Registered with nil AI client by
 	// default; SetAIClient upgrades it to LLM-powered hypothesis generation.
 	f.Register("pentest_loop", func() Agent {
 		return NewPentestLoopAgent(nil, scanService, defaultInnerRounds, true)
+	})
+
+	// ReasoningIterationAgent: adaptive, self-correcting pentest loop that
+	// reflects after each round to identify gaps and pivot strategy.
+	// Registered with nil AI client by default; SetAIClient upgrades it.
+	f.Register("reasoning_iteration", func() Agent {
+		return NewReasoningIterationAgent(nil, scanService, defaultReasoningRounds, true)
 	})
 
 	return f
@@ -86,6 +99,8 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 //   - "tool_builder" uses the coding model for on-the-fly Python tool synthesis.
 //   - "hacktricks_techniques" uses the coding model to adapt HackTricks templates.
 //   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
+//   - "adaptive_probe" uses the planning model for one-probe-at-a-time AI decisions.
+//   - "reasoning_iteration" uses the planning model for reflection and iteration rationale.
 //
 // This is called after NewFactory once the AI client is available. It is safe
 // to call concurrently with other factory operations.
@@ -100,6 +115,12 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })
 	f.Register("pentest_loop", func() Agent {
 		return NewPentestLoopAgent(c, scanService, defaultInnerRounds, true)
+	})
+	f.Register("adaptive_probe", func() Agent {
+		return NewAdaptiveProbeAgent(c, scanService, defaultAdaptiveStepBudget, true)
+	})
+	f.Register("reasoning_iteration", func() Agent {
+		return NewReasoningIterationAgent(c, scanService, defaultReasoningRounds, true)
 	})
 }
 

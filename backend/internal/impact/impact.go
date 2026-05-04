@@ -197,6 +197,8 @@ func BuildSubmissionAttachments(f model.Finding) []string {
 func scoreImpact(f model.Finding, goals []model.ImpactGoal) float64 {
 	score := 0.15
 	switch f.Severity {
+	case model.SeverityCritical:
+		score += 0.40
 	case model.SeverityHigh:
 		score += 0.28
 	case model.SeverityMedium:
@@ -473,6 +475,8 @@ func proofRank(s model.ProofState) int {
 
 func severityWeight(s model.Severity) int {
 	switch s {
+	case model.SeverityCritical:
+		return 5
 	case model.SeverityHigh:
 		return 4
 	case model.SeverityMedium:

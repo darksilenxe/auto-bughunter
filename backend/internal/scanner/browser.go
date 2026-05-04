@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
@@ -34,7 +35,7 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	}
 	return ctx, cancel
 }
-func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
+func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, []DiscoveredEndpoint, error) {
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
 
@@ -51,6 +52,33 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 	if u != nil {
 		host = u.Hostname()
 	}
+
+	// Intercept XHR/Fetch network requests to discover real SPA API surface.
+	var xhrMu sync.Mutex
+	var xhrEndpoints []DiscoveredEndpoint
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		switch e := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			rt := e.Type
+			if rt != network.ResourceTypeXHR && rt != network.ResourceTypeFetch {
+				return
+			}
+			rawURL := e.Request.URL
+			if rawURL == "" {
+				return
+			}
+			if !scope.IsURLInScope(rawURL, scanScope) {
+				return
+			}
+			method := strings.ToUpper(strings.TrimSpace(e.Request.Method))
+			if method == "" {
+				method = "GET"
+			}
+			xhrMu.Lock()
+			xhrEndpoints = append(xhrEndpoints, DiscoveredEndpoint{URL: rawURL, Method: method})
+			xhrMu.Unlock()
+		}
+	})
 
 	extraHeaders := make(network.Headers)
 	for key, value := range profile.Headers {
@@ -93,7 +121,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Emit screenshot of initial page load.
@@ -237,7 +265,7 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 		})
 	}
 
-	return findings, nil
+	return findings, xhrEndpoints, nil
 }
 
 func collectInternalLinks(target string, links []string, scanScope model.ScanScope, max int) []string {

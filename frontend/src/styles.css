@@ -1158,3 +1158,240 @@ details summary {
     gap: 4px;
   }
 }
+
+/* ── Reasoning Panel ─────────────────────────────────────────────────── */
+
+.reasoning-panel {
+  border-color: rgba(124, 92, 255, 0.28);
+}
+
+.reasoning-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+/* Rationale block — the AI's plain-English "why am I iterating" explanation */
+.reasoning-rationale {
+  background: rgba(124, 92, 255, 0.07);
+  border: 1px solid rgba(124, 92, 255, 0.22);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.reasoning-rationale__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #a78bfa;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reasoning-rationale__icon {
+  font-size: 1rem;
+}
+
+.reasoning-rationale__text {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.65;
+  font-size: 0.9rem;
+}
+
+/* Escalation warning */
+.reasoning-escalation {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 95, 122, 0.08);
+  border: 1px solid rgba(255, 95, 122, 0.22);
+  border-radius: 10px;
+  font-size: 0.82rem;
+  color: var(--sev-high);
+}
+
+.reasoning-escalation__icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+/* Focus area chips */
+.reasoning-focus {
+  margin-bottom: 14px;
+}
+
+.reasoning-focus__label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.reasoning-focus__skipped {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Category chips — colour-coded by vuln class */
+.reasoning-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--ink-soft);
+}
+
+.reasoning-chip--xss       { background: rgba(255, 95, 122, 0.12); border-color: rgba(255,95,122,0.3); color: #ff5f7a; }
+.reasoning-chip--sqli      { background: rgba(255, 173, 102, 0.12); border-color: rgba(255,173,102,0.3); color: #ffad66; }
+.reasoning-chip--cors      { background: rgba(89, 208, 255, 0.1); border-color: rgba(89,208,255,0.3); color: #59d0ff; }
+.reasoning-chip--ssrf      { background: rgba(167, 139, 250, 0.12); border-color: rgba(167,139,250,0.3); color: #a78bfa; }
+.reasoning-chip--idor      { background: rgba(255, 217, 102, 0.12); border-color: rgba(255,217,102,0.3); color: #ffd966; }
+.reasoning-chip--ssti      { background: rgba(87, 240, 193, 0.1); border-color: rgba(87,240,193,0.3); color: #57f0c1; }
+.reasoning-chip--redirect  { background: rgba(255, 191, 95, 0.1); border-color: rgba(255,191,95,0.3); color: #ffbf5f; }
+.reasoning-chip--auth      { background: rgba(255, 95, 122, 0.1); border-color: rgba(255,95,122,0.22); color: #ff8fa0; }
+.reasoning-chip--biz       { background: rgba(71, 215, 172, 0.1); border-color: rgba(71,215,172,0.28); color: #47d7ac; }
+.reasoning-chip--skip      { opacity: 0.5; }
+.reasoning-chip--default   { color: var(--ink-soft); }
+.chip--reasoning           { background: rgba(124, 92, 255, 0.12); border-color: rgba(124, 92, 255, 0.3); color: #a78bfa; }
+
+/* Coverage counter row */
+.reasoning-coverage {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.reasoning-stat {
+  flex: 1 1 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(115,146,194,0.1);
+  border-radius: 12px;
+  min-width: 60px;
+}
+
+.reasoning-stat__value {
+  font-size: 1.4rem;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.reasoning-stat__label {
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-top: 4px;
+  text-align: center;
+}
+
+/* Round timeline */
+.reasoning-timeline {
+  border-radius: 12px;
+  border: 1px solid rgba(115,146,194,0.1);
+  background: rgba(255,255,255,0.02);
+  padding: 10px 12px;
+}
+
+.reasoning-timeline__list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.reasoning-round {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.reasoning-round__badge {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(124, 92, 255, 0.18);
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #a78bfa;
+}
+
+.reasoning-round__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.reasoning-round__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.reasoning-round__step--reflect {
+  padding: 6px 10px;
+  background: rgba(124, 92, 255, 0.06);
+  border-radius: 8px;
+}
+
+.reasoning-round__rationale {
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.reasoning-round__meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Live-feed reasoning_loop item variants */
+.live-feed__item--reasoning {
+  background: rgba(124, 92, 255, 0.04);
+  border-radius: 6px;
+  margin: 2px 0;
+}
+
+/* ai_decision step — the AI's rationale before the probe runs */
+.live-feed__item--ai-decision {
+  border-left: 2px solid #a78bfa;
+  padding-left: 8px;
+  background: rgba(124, 92, 255, 0.06);
+}
+

@@ -67,7 +67,13 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 	// instead of the resolved end of the redirect chain, otherwise a 200
 	// from the canary host (which is unreachable anyway) would mask the
 	// finding.
-	noFollow := *s.httpClient
+	// Use the session client as base when available so the shared cookie jar
+	// is preserved; the shallow copy still shares the same jar pointer.
+	baseClient := s.httpClient
+	if input.Session != nil {
+		baseClient = input.Session.Client()
+	}
+	noFollow := *baseClient
 	noFollow.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
