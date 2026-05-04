@@ -155,8 +155,14 @@ func (s *Service) runCSRFProbe(ctx context.Context, input RunInput) []model.Find
 	}}
 }
 
-// csrfPost sends a POST to ep with the session's cookies but without (or with
-// a forged) CSRF token. It returns the status code.
+// csrfPost sends a POST to ep with the session's cookie jar active but without
+// automatically injecting the CSRF token from the TokenStore. This is the
+// correct behaviour for CSRF testing: we want authenticated session cookies
+// (from the jar) to be present, but we deliberately omit the CSRF token to
+// verify whether the server enforces it.
+//
+// When forgeToken is true, a syntactically-valid but incorrect token value is
+// included to distinguish between "token absent" and "token present but wrong".
 func (s *Service) csrfPost(ctx context.Context, input RunInput, ep string, body []byte, forgeToken bool) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(body))
 	if err != nil {
@@ -164,19 +170,45 @@ func (s *Service) csrfPost(ctx context.Context, input RunInput, ep string, body 
 	}
 	ApplyAuthProfile(req, input.AuthProfile)
 	req.Header.Set("Content-Type", "application/json")
-	// Explicitly unset any CSRF token that InjectIntoRequest would add.
-	req.Header.Del("X-CSRF-Token")
 	if forgeToken {
 		req.Header.Set("X-CSRF-Token", "invalid-forged-csrf-token-abh")
 	}
-
-	resp, err := s.doRequestWithSession(ctx, req, input.Options, input.Session)
-	if err != nil || resp == nil {
-		return 0, err
+	// Use the session's HTTP client (which carries the cookie jar) but bypass
+	// doRequestWithSession's InjectIntoRequest call, which would re-add the
+	// CSRF token from the TokenStore and defeat the test. We call the session
+	// client directly with a minimal retry loop.
+	client := s.httpClient
+	if input.Session != nil {
+		client = input.Session.Client()
 	}
-	_, _ = io.ReadAll(io.LimitReader(resp.Body, csrfBodyLimit))
-	_ = resp.Body.Close()
-	return resp.StatusCode, nil
+	maxRetries := s.cfg.DefaultMaxRetries
+	if input.Options.MaxRetries > 0 {
+		maxRetries = input.Options.MaxRetries
+	}
+	var lastStatus int
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		cloned := req.Clone(ctx)
+		resp, err := client.Do(cloned)
+		if err != nil {
+			if attempt == maxRetries {
+				return 0, err
+			}
+			continue
+		}
+		_, _ = io.ReadAll(io.LimitReader(resp.Body, csrfBodyLimit))
+		_ = resp.Body.Close()
+		if !isRetriableStatus(resp.StatusCode) {
+			return resp.StatusCode, nil
+		}
+		lastStatus = resp.StatusCode
+		if attempt == maxRetries {
+			break
+		}
+	}
+	if lastStatus != 0 {
+		return lastStatus, nil
+	}
+	return 0, nil
 }
 
 // collectCSRFCandidates returns in-scope state-changing endpoints from

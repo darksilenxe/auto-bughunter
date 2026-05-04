@@ -105,15 +105,10 @@ func (s *Service) RunFlowEngine(
 	options model.ScanOptions,
 	auth model.ScanAuthProfile,
 	emit func(model.ScanEvent),
-	sess ...*ScanSession,
+	sess *ScanSession,
 ) []model.Finding {
 	if options.PassiveOnly {
 		return nil
-	}
-
-	var session *ScanSession
-	if len(sess) > 0 {
-		session = sess[0]
 	}
 
 	base, err := url.Parse(strings.TrimSpace(target))
@@ -131,7 +126,7 @@ func (s *Service) RunFlowEngine(
 
 	var findings []model.Finding
 	for _, flow := range builtInFlows {
-		findings = append(findings, s.runSingleFlow(ctx, base, flow, scanScope, options, auth, session)...)
+		findings = append(findings, s.runSingleFlow(ctx, base, flow, scanScope, options, auth, sess)...)
 	}
 
 	sort.Slice(findings, func(i, j int) bool { return findings[i].ID < findings[j].ID })

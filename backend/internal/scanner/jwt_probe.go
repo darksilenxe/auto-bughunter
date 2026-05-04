@@ -80,11 +80,10 @@ func (s *Service) runJWTProbe(ctx context.Context, input RunInput) []model.Findi
 		return nil
 	}
 
-	header, payload, sig, err := parseJWT(raw)
+	_, payload, _, err := parseJWT(raw)
 	if err != nil {
 		return nil
 	}
-	_, _ = header, sig // intentionally unused in outer scope; used in sub-tests
 
 	if input.Emit != nil {
 		input.Emit(model.ScanEvent{

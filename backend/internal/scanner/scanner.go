@@ -273,14 +273,14 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 	if discovered := input.Session.DiscoveredURLs(); len(discovered) > 0 {
 		for _, du := range discovered {
-			alreadySeed := false
+			alreadySeeded := false
 			for _, existing := range input.Options.SeedRuntimeEndpoints {
 				if existing == du {
-					alreadySeed = true
+					alreadySeeded = true
 					break
 				}
 			}
-			if !alreadySeed {
+			if !alreadySeeded {
 				input.Options.SeedRuntimeEndpoints = append(input.Options.SeedRuntimeEndpoints, du)
 			}
 		}

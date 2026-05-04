@@ -194,43 +194,47 @@ func (s *Service) tryResetWithToken(ctx context.Context, input RunInput, base *u
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			continue
 		}
-		// Weak signal: 2xx + body contains success indicators.
+		// Weak signal: 2xx AND body contains success indicators.
 		lower := strings.ToLower(string(respBody))
-		if strings.Contains(lower, "success") || strings.Contains(lower, "password") ||
-			strings.Contains(lower, "updated") || strings.Contains(lower, "changed") || resp.StatusCode == 200 {
-			return &model.Finding{
-				ID:       "password-reset-token-disclosure",
-				Category: "authentication",
-				Severity: model.SeverityCritical,
-				Title:    "Password reset token disclosed in API response — account takeover confirmed",
-				Description: fmt.Sprintf(
-					"The API at %s disclosed a plaintext password-reset token in the JSON response body "+
-						"(%q). The token was successfully consumed at %s to demonstrate account takeover. "+
-						"Any party who can intercept the response (MITM, logging infrastructure, browser "+
-						"history) gains the ability to take over the associated account.",
-					resetEP, token, ep,
-				),
-				Evidence: fmt.Sprintf(
-					"POST %s → token=%q disclosed; POST %s with token → HTTP %d",
-					resetEP, truncateString(token, 20), ep, resp.StatusCode,
-				),
-				Recommendation: "Never return reset tokens in API responses. Send them only via a secure " +
-					"out-of-band channel (email). Tokens must be single-use, time-limited (≤15 min), " +
-					"and cryptographically random (≥128 bits). Expire them immediately upon use.",
-				Confidence:    0.90,
-				AffectedURL:   resetEP,
-				CWE:           "CWE-640",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "password-reset-probe"},
-				BusinessTags:  []string{"account-takeover", "password-reset", "token-disclosure"},
-				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"resetEndpoint":  resetEP,
-					"consumeEndpoint": ep,
-					"disclosedToken": truncateString(token, 20),
-					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
-				},
-			}
+		successIndicators := strings.Contains(lower, "success") ||
+			strings.Contains(lower, "updated") ||
+			strings.Contains(lower, "changed") ||
+			strings.Contains(lower, "password")
+		if !successIndicators {
+			continue
+		}
+		return &model.Finding{
+			ID:             "password-reset-token-disclosure",
+			Category:       "authentication",
+			Severity:       model.SeverityCritical,
+			Title:          "Password reset token disclosed in API response — account takeover confirmed",
+			Description: fmt.Sprintf(
+				"The API at %s disclosed a plaintext password-reset token in the JSON response body "+
+					"(%q). The token was successfully consumed at %s to demonstrate account takeover. "+
+					"Any party who can intercept the response (MITM, logging infrastructure, browser "+
+					"history) gains the ability to take over the associated account.",
+				resetEP, token, ep,
+			),
+			Evidence: fmt.Sprintf(
+				"POST %s → token=%q disclosed; POST %s with token → HTTP %d",
+				resetEP, truncateString(token, 20), ep, resp.StatusCode,
+			),
+			Recommendation: "Never return reset tokens in API responses. Send them only via a secure " +
+				"out-of-band channel (email). Tokens must be single-use, time-limited (≤15 min), " +
+				"and cryptographically random (≥128 bits). Expire them immediately upon use.",
+			Confidence:    0.90,
+			AffectedURL:   resetEP,
+			CWE:           "CWE-640",
+			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
+			Sources:       []string{"active-scanner", "password-reset-probe"},
+			BusinessTags:  []string{"account-takeover", "password-reset", "token-disclosure"},
+			EvidenceFields: map[string]string{
+				"validationType":  "active-probe",
+				"resetEndpoint":   resetEP,
+				"consumeEndpoint": ep,
+				"disclosedToken":  truncateString(token, 20),
+				"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
+			},
 		}
 	}
 	return nil
