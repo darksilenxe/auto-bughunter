@@ -621,8 +621,9 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
     // pointer leaves the node or the SVG boundary.
     svgRef.current?.setPointerCapture(e.pointerId);
     const p = svgPoint(e);
-    const off = nodeOffsets[nodeId] || { dx: 0, dy: 0 };
-    dragState.current = { id: nodeId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
+    const normalizedId = String(nodeId);
+    const off = nodeOffsets[normalizedId] || { dx: 0, dy: 0 };
+    dragState.current = { id: normalizedId, startX: p.x, startY: p.y, origDx: off.dx, origDy: off.dy };
     didDrag.current   = false;
   }
 
@@ -641,8 +642,18 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
     setNodeOffsets(prev => ({ ...prev, [id]: { dx, dy } }));
   }
 
-  function onSVGPointerUp() {
+  function onSVGPointerUp(e) {
+    if (!dragState.current) return;
+    const { id } = dragState.current;
+    const wasDrag = didDrag.current;
     dragState.current = null;
+    didDrag.current = false;
+    if (e?.pointerId != null) {
+      try { svgRef.current?.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
+    if (!wasDrag) {
+      setSelected((prev) => (String(prev) === String(id) ? null : String(id)));
+    }
   }
 
   /** Returns the effective (post-drag) screen position of a laid-out node. */
@@ -662,7 +673,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
   const { nodes, edges, scanStart, scanEnd } = laid;
   if (!nodes || nodes.length === 0) return null;
 
-  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  const byId = Object.fromEntries(nodes.map((n) => [String(n.id), n]));
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   // Use job.findings when complete; otherwise count from SSE events.
@@ -706,7 +717,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
     ms: ((scanEnd - scanStart) * i) / TICK_COUNT,
   }));
 
-  const selectedNode = selected ? byId[selected] : null;
+  const selectedNode = selected ? byId[String(selected)] : null;
 
   return (
     <div style={{ width: "100%", color: "rgba(255,255,255,0.85)" }}>
@@ -863,7 +874,8 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
           {/* Nodes */}
           {nodes.map(node => {
             const st          = nodeStyle(node);
-            const isSel       = selected === node.id;
+            const nodeId       = String(node.id);
+            const isSel       = String(selected) === nodeId;
             const isComp      = node.type === "compromise";
             const isHighFind  = node.type === "finding" && node.severity === "high";
             const showBadge   = isHighFind || isComp;
@@ -876,11 +888,7 @@ export default function AttackGraph({ job, liveEvents = [], isRunning = false, o
               <g
                 key={node.id}
                 transform={`translate(${lx},${ly})`}
-                onPointerDown={(e) => onNodePointerDown(e, node.id)}
-                onClick={() => {
-                  if (didDrag.current) { didDrag.current = false; return; }
-                  setSelected(isSel ? null : node.id);
-                }}
+                onPointerDown={(e) => onNodePointerDown(e, nodeId)}
                 style={{ cursor: "grab" }}
               >
                 {(isSel || isComp) && (
