@@ -50,10 +50,11 @@ type Store interface {
 // Server is an HTTP intercepting proxy. It implements http.Handler so it can
 // be plugged into any net/http server.
 type Server struct {
-	store     Store
-	transport *http.Transport
-	ca        *CA
-	mu        sync.Mutex
+	store        Store
+	transport    *http.Transport
+	ca           *CA
+	mu           sync.Mutex
+	passiveStore *PassiveScanStore
 }
 
 // NewServer creates a new intercepting proxy backed by the provided Store.
@@ -92,6 +93,37 @@ func (s *Server) MITMEnabled() bool { return s != nil && s.ca != nil }
 // Store returns the underlying persistence store.
 func (s *Server) Store() Store {
 	return s.store
+}
+
+// SetPassiveScanStore attaches a passive scan store to the proxy server.
+// Every HTTP request captured by the server is analysed and any new
+// deduplicated findings are recorded. Safe to call with nil to disable
+// passive scanning.
+func (s *Server) SetPassiveScanStore(store *PassiveScanStore) {
+	s.passiveStore = store
+}
+
+// PassiveStore returns the passive scan store, or nil if none is configured.
+func (s *Server) PassiveStore() *PassiveScanStore {
+	return s.passiveStore
+}
+
+// AnalyzeResponse passively analyses a raw HTTP response and records any
+// findings in the passive scan store. Intended for callers (e.g. the proxy
+// browse endpoint) that record traffic via RecordingTransport rather than
+// through handleHTTP. This method is nil-safe.
+func (s *Server) AnalyzeResponse(rawURL string, status int, respHeader http.Header, respBody []byte) {
+	if s == nil || s.passiveStore == nil {
+		return
+	}
+	pr := &model.ProxyRequest{
+		Method:          http.MethodGet,
+		URL:             rawURL,
+		ResponseStatus:  status,
+		ResponseHeaders: flattenHeaders(respHeader),
+		ResponseBody:    string(respBody),
+	}
+	s.passiveStore.Analyze(pr)
 }
 
 // ServeHTTP dispatches to handleHTTP (plain) or handleTunnel (CONNECT).
@@ -175,6 +207,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
+		if s.passiveStore != nil {
+			s.passiveStore.Analyze(captured)
+		}
 	}()
 }
 
@@ -402,6 +437,9 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
+		if s.passiveStore != nil {
+			s.passiveStore.Analyze(captured)
+		}
 	}()
 	return nil
 }

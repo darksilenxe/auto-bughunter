@@ -58,6 +58,7 @@ type Server struct {
 	autonomous                 bool
 	maxRounds                  int
 	proxyServer                *proxy.Server
+	passiveScanStore           *proxy.PassiveScanStore
 	mlService                  *ml.Service
 	knowledgeSvc               *knowledge.Client
 	agentLearner               *agentlearner.Client
@@ -123,10 +124,15 @@ func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
 
 // SetProxyServer replaces the API server's intercepting proxy with an
 // externally-built one (e.g. configured with a CA for HTTPS interception).
+// The passive scan store is transferred to the replacement server so findings
+// accumulated before and after the swap share the same store.
 // Safe to call with nil to leave the default proxy in place.
 func (s *Server) SetProxyServer(p *proxy.Server) {
 	if p == nil {
 		return
+	}
+	if s.passiveScanStore != nil {
+		p.SetPassiveScanStore(s.passiveScanStore)
 	}
 	s.proxyServer = p
 }
@@ -245,6 +251,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if scanTimeout <= 0 {
 		scanTimeout = 10 * time.Minute
 	}
+	passiveStore := proxy.NewPassiveScanStore()
+	defaultProxyServer := proxy.NewServer(proxyStore)
+	defaultProxyServer.SetPassiveScanStore(passiveStore)
 	s := &Server{
 		scanService:                scanService,
 		aiClient:                   aiClient,
@@ -253,7 +262,8 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		agentFactory:               factory,
 		autonomous:                 autonomous,
 		maxRounds:                  maxRounds,
-		proxyServer:                proxy.NewServer(proxyStore),
+		proxyServer:                defaultProxyServer,
+		passiveScanStore:           passiveStore,
 		mlService:                  mlService,
 		knowledgeSvc:               knowledgeSvc,
 		agentLearner:               agentLearner,
@@ -300,6 +310,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/ca-certificate", s.handleProxyCACertificate)
 	mux.HandleFunc("/api/proxy/intruder", s.handleProxyIntruder)
 	mux.HandleFunc("/api/proxy/browse", s.handleProxyBrowse)
+	mux.HandleFunc("/api/proxy/passive-findings", s.handleProxyPassiveFindings)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)

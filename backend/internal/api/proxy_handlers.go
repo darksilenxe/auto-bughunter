@@ -245,6 +245,11 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Del("Content-Security-Policy")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(bodyBytes)
+
+	// Run passive analysis on the captured page response so browse-tab traffic
+	// feeds the passive findings store alongside traffic captured by the proxy
+	// server itself.
+	s.proxyServer.AnalyzeResponse(rawURL, resp.StatusCode, resp.Header, bodyBytes)
 }
 
 // reHeadTag matches the first <head …> or <HEAD …> opening tag in HTML.
@@ -270,4 +275,24 @@ func injectBaseHref(body []byte, targetURL string) []byte {
 	}
 	// No <head> found — prepend so the browser still picks it up.
 	return append([]byte(base), body...)
+}
+
+// handleProxyPassiveFindings serves the passive-scan finding store.
+//
+//   GET    /api/proxy/passive-findings  — returns all deduplicated findings
+//   DELETE /api/proxy/passive-findings  — clears the finding store
+//
+// Findings are discovered automatically whenever traffic flows through the
+// intercepting proxy or through the proxy browse endpoint.
+func (s *Server) handleProxyPassiveFindings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		findings := s.passiveScanStore.List()
+		writeJSON(w, http.StatusOK, findings)
+	case http.MethodDelete:
+		s.passiveScanStore.Clear()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
