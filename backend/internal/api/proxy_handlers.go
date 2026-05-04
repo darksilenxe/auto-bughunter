@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,11 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
-
-	"github.com/google/uuid"
 )
 
 // handleProxySettings returns the operator-facing configuration of the
@@ -200,16 +196,22 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 	outReq.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
 	// Use a recording transport so the browse request appears in the proxy
-	// history and on the Network Graph.
+	// history and on the Network Graph.  RecordingTransport saves each
+	// request/response pair; no additional save is needed here.
 	rt := &proxy.RecordingTransport{
 		Store: s.proxyServer.Store(),
 	}
 	client := &http.Client{
 		Transport: rt,
 		Timeout:   20 * time.Second,
+		// Validate every redirect URL against the outbound safety policy to
+		// prevent SSRF via server-controlled Location headers.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("stopped after 5 redirects")
+			}
+			if err := safety.ValidateOutboundURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked by outbound safety policy: %w", err)
 			}
 			return nil
 		},
@@ -234,32 +236,6 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(strings.ToLower(contentType), "html") {
 		bodyBytes = injectBaseHref(bodyBytes, rawURL)
 	}
-
-	// Record the browse in the proxy store with the final (post-redirect) URL.
-	finalURL := rawURL
-	if resp.Request != nil && resp.Request.URL != nil {
-		finalURL = resp.Request.URL.String()
-	}
-	go func() {
-		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		respHeaders := make(map[string]string, len(resp.Header))
-		for k, vals := range resp.Header {
-			if len(vals) > 0 {
-				respHeaders[k] = vals[0]
-			}
-		}
-		_ = s.proxyServer.Store().SaveProxyRequest(saveCtx, &model.ProxyRequest{
-			ID:              uuid.NewString(),
-			CapturedAt:      time.Now().UTC(),
-			Method:          http.MethodGet,
-			URL:             finalURL,
-			RequestHeaders:  map[string]string{"User-Agent": outReq.Header.Get("User-Agent")},
-			ResponseStatus:  resp.StatusCode,
-			ResponseHeaders: respHeaders,
-			Notes:           "captured via proxy browser",
-		})
-	}()
 
 	// Serve the raw body with the original Content-Type.  Strip security
 	// headers that would block the response from being displayed in an iframe.
