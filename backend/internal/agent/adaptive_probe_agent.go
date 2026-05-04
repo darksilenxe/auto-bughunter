@@ -15,6 +15,10 @@ const (
 	// agent will execute. Each step costs one AI call and one HTTP request.
 	// The AI can stop earlier if it determines the surface is adequately covered.
 	defaultAdaptiveStepBudget = 20
+
+	// maxPayloadDisplayLength is the maximum number of characters of a payload
+	// shown inline in event messages, to keep log lines readable.
+	maxPayloadDisplayLength = 30
 )
 
 // AdaptiveProbeAgent implements a true observe → reason → act loop for web
@@ -297,8 +301,8 @@ func formatParam(param, payload string) string {
 		return ""
 	}
 	p := payload
-	if len(p) > 30 {
-		p = p[:30] + "…"
+	if len(p) > maxPayloadDisplayLength {
+		p = p[:maxPayloadDisplayLength] + "…"
 	}
 	return "[" + param + "=" + p + "]"
 }

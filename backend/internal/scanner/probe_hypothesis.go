@@ -211,6 +211,13 @@ func (s *Service) issueProbeRequest(
 		if !sameOrigin(endpoint, probeURL) {
 			return 0, "", probeURL, fmt.Errorf("origin mismatch after building probe URL")
 		}
+		// Defense-in-depth: validate the fully-constructed probe URL immediately
+		// before the request. appendQueryParam only touches the query string, but
+		// an explicit check on the final URL makes it clear to readers (and static
+		// analysis tools) that the destination is always safety-checked.
+		if err := safety.ValidateOutboundURL(probeURL); err != nil {
+			return 0, "", probeURL, fmt.Errorf("probe URL failed safety validation: %w", err)
+		}
 		noFollow := &http.Client{
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
