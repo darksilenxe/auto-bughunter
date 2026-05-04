@@ -77,6 +77,13 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 		return NewPentestLoopAgent(nil, scanService, defaultInnerRounds, true)
 	})
 
+	// ReasoningIterationAgent: adaptive, self-correcting pentest loop that
+	// reflects after each round to identify gaps and pivot strategy.
+	// Registered with nil AI client by default; SetAIClient upgrades it.
+	f.Register("reasoning_iteration", func() Agent {
+		return NewReasoningIterationAgent(nil, scanService, defaultReasoningRounds, true)
+	})
+
 	return f
 }
 
