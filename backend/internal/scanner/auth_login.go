@@ -113,7 +113,6 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 
 	ctx, timeoutCancel := context.WithTimeout(ctx, loginBootstrapTimeout)
 	defer timeoutCancel()
-
 	extraHeaders := make(network.Headers)
 	for key, value := range profile.Headers {
 		if strings.TrimSpace(key) != "" {
