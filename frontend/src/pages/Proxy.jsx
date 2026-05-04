@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const TABS = [
   { id: "history", label: "HTTP history" },
+  { id: "browser", label: "Proxy browser" },
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
   { id: "configure", label: "Configure browser" },
@@ -255,6 +256,8 @@ export default function Proxy() {
           selected={selected}
         />
       )}
+
+      {tab === "browser" && <BrowserTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} onRefreshHistory={loadRequests} />}
 
       {tab === "repeater" && (
         <RepeaterTab
@@ -570,6 +573,123 @@ PROXY_CA_AUTOGENERATE=true`}</pre>
         )}
       </section>
     </div>
+  );
+}
+
+function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
+  const [url, setUrl] = useState("https://");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [iframeSrc, setIframeSrc] = useState(null);
+  const [lastFetchedUrl, setLastFetchedUrl] = useState("");
+  const prevBlobRef = useRef(null);
+
+  async function navigate(targetUrl) {
+    const trimmed = targetUrl.trim();
+    if (!trimmed || trimmed === "https://" || trimmed === "http://") {
+      setError("Enter a URL to browse.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `${apiBase}/api/proxy/browse?url=${encodeURIComponent(trimmed)}`,
+        {
+          headers: {
+            "X-API-Key": apiKey,
+            "X-Workspace-ID": workspaceId,
+          },
+        },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || `Browse failed (${res.status}).`);
+        return;
+      }
+      const html = await res.text();
+      // Revoke the previous blob URL to avoid memory leaks.
+      if (prevBlobRef.current) {
+        URL.revokeObjectURL(prevBlobRef.current);
+      }
+      const blob = new Blob([html], { type: "text/html" });
+      const blobUrl = URL.createObjectURL(blob);
+      prevBlobRef.current = blobUrl;
+      setIframeSrc(blobUrl);
+      setLastFetchedUrl(trimmed);
+      // Refresh HTTP history so the new request shows up immediately.
+      onRefreshHistory();
+    } catch (err) {
+      setError(err.message || "Browse failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter") navigate(url);
+  }
+
+  return (
+    <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {/* Address bar */}
+      <div
+        className="toolbar"
+        style={{ padding: "12px 16px", background: "rgba(0,0,0,0.18)", borderBottom: "1px solid var(--border)", gap: 8 }}
+      >
+        <div>
+          <h2 style={{ marginBottom: 2 }}>Proxy browser</h2>
+          <p className="meta" style={{ marginBottom: 0 }}>
+            Fetches the page through the recording transport — traffic is captured in HTTP history.
+          </p>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, padding: "10px 16px", borderBottom: "1px solid var(--border)", alignItems: "center" }}>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="https://example.com"
+          spellCheck={false}
+          style={{ flex: 1, fontFamily: "monospace", fontSize: "0.85rem" }}
+        />
+        <button type="button" onClick={() => navigate(url)} disabled={loading} style={{ flexShrink: 0 }}>
+          {loading ? "Loading…" : "Go"}
+        </button>
+        {iframeSrc && (
+          <button type="button" className="button-secondary" style={{ flexShrink: 0 }} onClick={() => navigate(url)} disabled={loading}>
+            ↺ Reload
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ padding: "8px 16px" }}>
+          <p className="error" style={{ margin: 0 }}>{error}</p>
+        </div>
+      )}
+
+      {/* Browser viewport */}
+      {iframeSrc ? (
+        <iframe
+          src={iframeSrc}
+          title={`Proxy browser — ${lastFetchedUrl}`}
+          sandbox="allow-scripts allow-same-origin allow-forms"
+          style={{
+            width: "100%",
+            height: "640px",
+            border: "none",
+            display: "block",
+            background: "#fff",
+          }}
+        />
+      ) : (
+        <div className="empty-state" style={{ padding: "48px 24px" }}>
+          Enter a URL above and click <strong>Go</strong> to browse through the intercepting proxy.
+          The request will appear in HTTP history and on the Network Graph.
+        </div>
+      )}
+    </section>
   );
 }
 

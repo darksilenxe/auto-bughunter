@@ -2,11 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/proxy"
+	"auto-bughunter/backend/internal/safety"
 )
 
 // handleProxySettings returns the operator-facing configuration of the
@@ -133,4 +139,135 @@ func (s *Server) handleProxyIntruder(w http.ResponseWriter, r *http.Request) {
 		"marker":    marker,
 		"results":   results,
 	})
+}
+
+// handleProxyBrowse handles GET /api/proxy/browse?url=<target-url>.
+//
+// It fetches the requested URL using the proxy's recording transport so the
+// request appears in the proxy history (/api/proxy/requests) and is visible
+// on the Network Graph.  The response body is returned to the caller with its
+// original Content-Type header so the frontend can display it in an <iframe>
+// via a Blob URL.
+//
+// For HTML responses a <base href="<target-url>"> tag is injected after the
+// first <head> (or prepended to the body if no <head> is present) so that
+// relative links, stylesheets, and images resolve against the origin server
+// rather than the operator console origin.
+//
+// Request rate is bounded: only GET requests are supported, and the target
+// must pass the outbound safety policy.
+func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url query parameter is required"})
+		return
+	}
+
+	// Ensure the URL has a scheme so url.Parse produces a useful result.
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		rawURL = "https://" + rawURL
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid URL"})
+		return
+	}
+
+	if err := safety.ValidateOutboundURL(rawURL); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "URL blocked by outbound safety policy: " + err.Error()})
+		return
+	}
+
+	// Build the outbound request.
+	ctx := r.Context()
+	outReq, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build request: " + err.Error()})
+		return
+	}
+	outReq.Header.Set("User-Agent", "Mozilla/5.0 (auto-bughunter proxy-browser/1.0)")
+	outReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	outReq.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+	// Use a recording transport so the browse request appears in the proxy
+	// history and on the Network Graph.  RecordingTransport saves each
+	// request/response pair; no additional save is needed here.
+	rt := &proxy.RecordingTransport{
+		Store: s.proxyServer.Store(),
+	}
+	client := &http.Client{
+		Transport: rt,
+		Timeout:   20 * time.Second,
+		// Validate every redirect URL against the outbound safety policy to
+		// prevent SSRF via server-controlled Location headers.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
+			}
+			if err := safety.ValidateOutboundURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked by outbound safety policy: %w", err)
+			}
+			return nil
+		},
+	}
+
+	resp, err := client.Do(outReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream request failed: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // 2 MB cap
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "text/html; charset=utf-8"
+	}
+
+	// For HTML responses inject <base href> so relative URLs resolve correctly
+	// when the response is rendered inside a Blob URL iframe on a different origin.
+	if strings.Contains(strings.ToLower(contentType), "html") {
+		bodyBytes = injectBaseHref(bodyBytes, rawURL)
+	}
+
+	// Serve the raw body with the original Content-Type.  Strip security
+	// headers that would block the response from being displayed in an iframe.
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Proxy-Status", fmt.Sprintf("%d", resp.StatusCode))
+	w.Header().Del("X-Frame-Options")
+	w.Header().Del("Content-Security-Policy")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(bodyBytes)
+}
+
+// reHeadTag matches the first <head …> or <HEAD …> opening tag in HTML.
+var reHeadTag = regexp.MustCompile(`(?i)<head[^>]*>`)
+
+// injectBaseHref inserts <base href="<targetURL>"> immediately after the
+// first <head> tag found in the HTML body, or prepends it before the first
+// <html> / <!DOCTYPE> tag when no <head> is present.  This ensures that
+// relative links, stylesheets, scripts, and images in the fetched page
+// resolve against the origin server when the HTML is served from a Blob URL
+// in the operator console's iframe.
+func injectBaseHref(body []byte, targetURL string) []byte {
+	base := fmt.Sprintf(`<base href=%q>`, targetURL)
+	loc := reHeadTag.FindIndex(body)
+	if loc != nil {
+		// Insert after the closing > of the <head> tag.
+		insertAt := loc[1]
+		result := make([]byte, 0, len(body)+len(base))
+		result = append(result, body[:insertAt]...)
+		result = append(result, []byte(base)...)
+		result = append(result, body[insertAt:]...)
+		return result
+	}
+	// No <head> found — prepend so the browser still picks it up.
+	return append([]byte(base), body...)
 }

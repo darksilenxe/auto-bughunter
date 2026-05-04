@@ -277,6 +277,11 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 		cancelFuncs:                map[string]context.CancelFunc{},
 	}
+	// Wire the proxy store into the scanner so that all outbound HTTP
+	// requests made during scans are captured and shown in the Network Graph.
+	if proxyStore != nil {
+		scanService.SetProxyStore(proxyStore)
+	}
 	go s.runCampaignScheduler()
 	return s
 }
@@ -294,6 +299,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/settings", s.handleProxySettings)
 	mux.HandleFunc("/api/proxy/ca-certificate", s.handleProxyCACertificate)
 	mux.HandleFunc("/api/proxy/intruder", s.handleProxyIntruder)
+	mux.HandleFunc("/api/proxy/browse", s.handleProxyBrowse)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
