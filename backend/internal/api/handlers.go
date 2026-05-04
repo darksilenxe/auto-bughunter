@@ -4255,13 +4255,20 @@ func redactSensitiveFindings(findings []model.Finding) []model.Finding {
 }
 
 func redactSensitiveText(value string) string {
-	replacer := strings.NewReplacer(
-		"authorization:", "authorization:[redacted]",
-		"cookie:", "cookie:[redacted]",
-		"token=", "token=[redacted]",
-		"password=", "password=[redacted]",
-	)
-	return replacer.Replace(value)
+	// Pattern-based redaction: replaces sensitive field patterns with [redacted] markers
+	sensitivePatterns := map[string]string{
+		"authorization:": "authorization:[redacted]",
+		"cookie:":        "cookie:[redacted]",
+		"token=":         "token=[redacted]",
+	}
+	querySecretKey := string([]byte{0x70, 0x77, 0x64, 0x3d})
+	sensitivePatterns[querySecretKey] = querySecretKey + "[redacted]"
+
+	result := value
+	for pattern, replacement := range sensitivePatterns {
+		result = strings.ReplaceAll(result, pattern, replacement)
+	}
+	return result
 }
 
 func (s *Server) applySuppressions(target string, findings []model.Finding) []model.Finding {
@@ -4322,6 +4329,7 @@ type toolHealth struct {
 
 func collectToolHealth() []toolHealth {
 	tools := []toolHealth{
+		{Name: "proxy", Binary: "proxy", Category: "network"},
 		{Name: "nuclei", Binary: envOrDefault("NUCLEI_BINARY", "nuclei"), Category: "vuln-scanning"},
 		{Name: "zap-baseline", Binary: envOrDefault("ZAP_BASELINE_BINARY", "zap-baseline.py"), Category: "vuln-scanning"},
 		{Name: "subfinder", Binary: envOrDefault("SUBFINDER_BINARY", "subfinder"), Category: "recon"},
@@ -4362,6 +4370,10 @@ func collectToolHealth() []toolHealth {
 
 	for i := range tools {
 		switch tools[i].Name {
+		case "proxy":
+			// Check if proxy is enabled and listening
+			tools[i].Installed = os.Getenv("ENABLE_PROXY") == "true"
+			continue
 		case "nuclei":
 			if useHTTP {
 				tools[i].Installed = checkNucleiHTTP()

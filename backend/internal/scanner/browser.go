@@ -34,14 +34,12 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	}
 	return ctx, cancel
 }
-
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, error) {
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
 
 	ctx, timeoutCancel := context.WithTimeout(ctx, 35*time.Second)
 	defer timeoutCancel()
-
 	var formCount int
 	var csrfLikeCount int
 	var title string

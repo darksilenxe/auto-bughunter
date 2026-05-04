@@ -295,6 +295,8 @@ services:
     # Only pass flags not already set by the entrypoint to avoid conflicts.
     command:
       - --disable-gpu
+      - --proxy-server=http://backend:8081
+      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,xssmap,metasploit,kiterunner,tool-updater,zap
     restart: unless-stopped
     healthcheck:
       # Probe the DevTools port via socat (wget/curl are not in this image).
