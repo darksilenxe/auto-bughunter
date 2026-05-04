@@ -92,6 +92,11 @@ type RunInput struct {
 	Scope       model.ScanScope
 	// Emit publishes live events to the per-scan event bus. It is nil-safe.
 	Emit func(model.ScanEvent)
+	// Session is a per-scan stateful HTTP context that persists cookies, CSRF
+	// tokens, and XHR-discovered endpoints across all probes. When nil, Run
+	// creates one automatically; callers may pre-create a session to share
+	// state across multiple Run calls or external probe invocations.
+	Session *ScanSession
 }
 
 func NewService(cfg Config) *Service {
@@ -174,6 +179,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		return nil, fmt.Errorf("target is outside configured scan scope")
 	}
 
+	// Ensure a session exists for the lifetime of this scan.
+	if input.Session == nil {
+		input.Session = NewScanSession()
+	}
+
 	if input.Options.RequestDelayMillis > 0 {
 		select {
 		case <-ctx.Done():
@@ -187,6 +197,9 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		resolvedProfile, authFindings := bootstrapStandardAuthProfile(ctx, input.Target, input.AuthProfile, input.Scope, input.Emit)
 		input.AuthProfile = resolvedProfile
 		findings = append(findings, authFindings...)
+		// Seed the session cookie jar with any cookies obtained during login
+		// so all subsequent probes send them automatically.
+		input.Session.SeedCookies(input.Target, resolvedProfile.Cookies)
 	}
 
 	emitCmd := func(cmd, msg string) {
@@ -206,7 +219,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, safeTargetURL, nil)
 	ApplyAuthProfile(req, input.AuthProfile)
 	emitCmd(fmt.Sprintf("GET %s", safeTargetURL), "Probing target for security headers, cookies, and TLS")
-	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	resp, err := s.doRequestWithSession(ctx, req, input.Options, input.Session)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -221,6 +234,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	bodyText := string(bodyBytes)
+	// Harvest any tokens present in the baseline response body.
+	input.Session.HarvestFromResponse(resp, bodyBytes)
 
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
@@ -237,7 +252,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runSecretsInJSProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
-	browserFindings, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
+	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",
@@ -250,6 +265,33 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		})
 	} else {
 		findings = append(findings, browserFindings...)
+	}
+	// Record endpoints discovered by the SPA XHR interceptor and feed them
+	// back into the scan so all subsequent probes see the real API surface.
+	for _, ep := range browserEndpoints {
+		input.Session.AddDiscoveredEndpoint(ep)
+	}
+	if discovered := input.Session.DiscoveredURLs(); len(discovered) > 0 {
+		for _, du := range discovered {
+			alreadySeed := false
+			for _, existing := range input.Options.SeedRuntimeEndpoints {
+				if existing == du {
+					alreadySeed = true
+					break
+				}
+			}
+			if !alreadySeed {
+				input.Options.SeedRuntimeEndpoints = append(input.Options.SeedRuntimeEndpoints, du)
+			}
+		}
+	}
+
+	// Stateful probes that require a live session (cookies/tokens already harvested).
+	if !input.Options.PassiveOnly {
+		findings = append(findings, s.runStoredXSSProbe(ctx, input)...)
+		findings = append(findings, s.runJWTProbe(ctx, input)...)
+		findings = append(findings, s.runCSRFProbe(ctx, input)...)
+		findings = append(findings, s.runPasswordResetProbe(ctx, input)...)
 	}
 
 	integrationFindings := s.runOptionalIntegrations(ctx, input)
@@ -671,9 +713,17 @@ func filterAnyContains(items []string, keywords []string, max int) []string {
 	return out
 }
 
-func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, options model.ScanOptions) (*http.Response, error) {
+// doRequestWithSession executes req with retry logic, using the session's
+// HTTP client and token-injection when sess is non-nil. It falls back to
+// s.httpClient when sess is nil, preserving backward compatibility with all
+// existing callers of doRequestWithRetry.
+func (s *Service) doRequestWithSession(ctx context.Context, req *http.Request, options model.ScanOptions, sess *ScanSession) (*http.Response, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is nil")
+	}
+	client := s.httpClient
+	if sess != nil {
+		client = sess.Client()
 	}
 	maxRetries := s.cfg.DefaultMaxRetries
 	if options.MaxRetries > 0 {
@@ -687,15 +737,20 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		cloned := req.Clone(ctx)
+		// Inject CSRF/bearer tokens harvested earlier in this scan. The
+		// session cookie jar handles Cookie headers automatically.
+		if sess != nil {
+			sess.InjectIntoRequest(cloned)
+		}
 		metrics.OutboundProbeRequests.Inc()
-		resp, err := s.httpClient.Do(cloned)
+		resp, err := client.Do(cloned)
 		if err == nil && !isRetriableStatus(resp.StatusCode) {
+			// Harvest any authentication tokens present in response headers.
+			if sess != nil {
+				sess.HarvestFromResponse(resp, nil)
+			}
 			return resp, nil
 		}
-		// retryAfter is consulted before draining the body so we don't
-		// block on slow connections when the server has already told us
-		// to wait. It defaults to zero when no header is present or the
-		// response is nil.
 		var retryAfter time.Duration
 		if err == nil && resp != nil {
 			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
@@ -709,9 +764,6 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 			break
 		}
 		wait := backoff * time.Duration(attempt+1)
-		// Honour an explicit server-side Retry-After when it is larger
-		// than our default exponential backoff. We cap it at 30s to stop
-		// a misbehaving server from stalling the whole scan.
 		if retryAfter > wait {
 			if retryAfter > 30*time.Second {
 				retryAfter = 30 * time.Second
@@ -725,6 +777,10 @@ func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, opt
 		}
 	}
 	return nil, lastErr
+}
+
+func (s *Service) doRequestWithRetry(ctx context.Context, req *http.Request, options model.ScanOptions) (*http.Response, error) {
+	return s.doRequestWithSession(ctx, req, options, nil)
 }
 
 // parseRetryAfter parses the value of an HTTP Retry-After header. RFC 9110

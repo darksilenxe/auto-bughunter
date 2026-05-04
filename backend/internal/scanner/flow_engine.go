@@ -96,6 +96,8 @@ const flowStepTimeout = 10 * time.Second
 //
 // The engine runs built-in flows against the target. Each flow tests the happy
 // path first to confirm the server is responsive, then applies attack variants.
+// When sess is non-nil, requests share its cookie jar so session state (login
+// cookies, CSRF tokens) is preserved between steps.
 func (s *Service) RunFlowEngine(
 	ctx context.Context,
 	target string,
@@ -103,9 +105,15 @@ func (s *Service) RunFlowEngine(
 	options model.ScanOptions,
 	auth model.ScanAuthProfile,
 	emit func(model.ScanEvent),
+	sess ...*ScanSession,
 ) []model.Finding {
 	if options.PassiveOnly {
 		return nil
+	}
+
+	var session *ScanSession
+	if len(sess) > 0 {
+		session = sess[0]
 	}
 
 	base, err := url.Parse(strings.TrimSpace(target))
@@ -123,7 +131,7 @@ func (s *Service) RunFlowEngine(
 
 	var findings []model.Finding
 	for _, flow := range builtInFlows {
-		findings = append(findings, s.runSingleFlow(ctx, base, flow, scanScope, options, auth)...)
+		findings = append(findings, s.runSingleFlow(ctx, base, flow, scanScope, options, auth, session)...)
 	}
 
 	sort.Slice(findings, func(i, j int) bool { return findings[i].ID < findings[j].ID })
@@ -138,6 +146,7 @@ func (s *Service) runSingleFlow(
 	scanScope model.ScanScope,
 	options model.ScanOptions,
 	auth model.ScanAuthProfile,
+	sess *ScanSession,
 ) []model.Finding {
 	var findings []model.Finding
 
@@ -146,7 +155,7 @@ func (s *Service) runSingleFlow(
 		lastStep := flow.Steps[len(flow.Steps)-1]
 		ep := resolveFlowURL(base, lastStep.Path)
 		if scope.IsURLInScope(ep, scanScope) {
-			resp, _, err := s.flowSendStep(ctx, ep, lastStep, nil, auth, options)
+			resp, _, err := s.flowSendStep(ctx, ep, lastStep, nil, auth, options, sess)
 			if err == nil && resp != nil && is2xx(resp.StatusCode) {
 				findings = append(findings, model.Finding{
 					ID:       "flow-step-skip-" + flowSlug(flow.Name, lastStep.Name),
@@ -207,7 +216,7 @@ func (s *Service) runSingleFlow(
 			tamperedStep := step
 			tamperedStep.Body = tampered
 
-			resp, _, err := s.flowSendStep(ctx, ep, tamperedStep, nil, auth, options)
+			resp, _, err := s.flowSendStep(ctx, ep, tamperedStep, nil, auth, options, sess)
 			if err != nil || resp == nil {
 				continue
 			}
@@ -251,10 +260,81 @@ func (s *Service) runSingleFlow(
 		}
 	}
 
+	// 3. Double-submit: execute the full happy path then replay the last step.
+	// A well-implemented flow should reject the replay (idempotency key, used
+	// token, or TOCTOU guard). Acceptance indicates a double-spend risk.
+	if len(flow.Steps) >= 2 {
+		var prevBody []byte
+		allOK := true
+		for _, step := range flow.Steps {
+			ep := resolveFlowURL(base, step.Path)
+			if !scope.IsURLInScope(ep, scanScope) {
+				allOK = false
+				break
+			}
+			resp, body, err := s.flowSendStep(ctx, ep, step, prevBody, auth, options, sess)
+			if err != nil || resp == nil || !is2xx(resp.StatusCode) {
+				allOK = false
+				break
+			}
+			prevBody = body
+		}
+		if allOK {
+			// Replay the last step using the same session.
+			lastStep := flow.Steps[len(flow.Steps)-1]
+			ep := resolveFlowURL(base, lastStep.Path)
+			if scope.IsURLInScope(ep, scanScope) {
+				resp2, _, err := s.flowSendStep(ctx, ep, lastStep, prevBody, auth, options, sess)
+				if err == nil && resp2 != nil && is2xx(resp2.StatusCode) {
+					findings = append(findings, model.Finding{
+						ID:       "flow-double-submit-" + flowSlug(flow.Name, lastStep.Name),
+						Category: "access-control",
+						Severity: model.SeverityHigh,
+						Title:    fmt.Sprintf("[%s] Double-submit accepted at final step %q", flow.Name, lastStep.Name),
+						Description: fmt.Sprintf(
+							"After completing the full %s flow, replaying the final step %q returned HTTP %d. "+
+								"This indicates the server lacks an idempotency key, a used-token check, or a "+
+								"row-level guard that would prevent duplicate processing (double-spend, double-redeem).",
+							flow.Name, lastStep.Name, resp2.StatusCode,
+						),
+						Evidence: fmt.Sprintf(
+							"Full flow completed → replay POST %s → HTTP %d (expected 4xx rejection)",
+							ep, resp2.StatusCode,
+						),
+						Recommendation: "Implement server-side idempotency keys or mark transaction tokens as used " +
+							"immediately upon first consumption. Use database transactions with compare-and-swap " +
+							"semantics to prevent concurrent or sequential replay.",
+						Confidence:    0.75,
+						AffectedURL:   ep,
+						CWE:           "CWE-352",
+						OWASPCategory: "A04:2021 - Insecure Design",
+						Sources:       []string{"active-scanner", "flow-engine"},
+						BusinessTags:  []string{"double-submit", "replay", "business-logic", flow.Name},
+						EvidenceFields: map[string]string{
+							"validationType": "active-probe",
+							"flowName":       flow.Name,
+							"stepName":       lastStep.Name,
+							"stepURL":        ep,
+							"responseStatus": fmt.Sprintf("%d", resp2.StatusCode),
+						},
+					})
+				}
+				if resp2 != nil {
+					_, _ = io.ReadAll(io.LimitReader(resp2.Body, flowBodyLimit))
+					_ = resp2.Body.Close()
+				}
+			}
+		}
+	}
+
 	return findings
 }
 
 // flowSendStep sends a single flow step and returns the response.
+// When sess is non-nil, the session's HTTP client (with shared cookie jar)
+// is used so cookies set in step N are automatically sent in step N+1.
+// Token placeholders in the body are resolved against both the previous
+// response body and the session's TokenStore.
 func (s *Service) flowSendStep(
 	ctx context.Context,
 	ep string,
@@ -262,6 +342,7 @@ func (s *Service) flowSendStep(
 	previousBody []byte,
 	auth model.ScanAuthProfile,
 	options model.ScanOptions,
+	sess *ScanSession,
 ) (*http.Response, []byte, error) {
 	stepCtx, cancel := context.WithTimeout(ctx, flowStepTimeout)
 	defer cancel()
@@ -273,7 +354,12 @@ func (s *Service) flowSendStep(
 
 	var bodyReader io.Reader
 	if step.Body != nil {
-		bodyJSON, err := json.Marshal(interpolateBody(step.Body, previousBody))
+		resolved := interpolateBody(step.Body, previousBody)
+		// Also resolve placeholders from the session token store.
+		if sess != nil {
+			resolved = interpolateBodyWithTokens(resolved, sess.TokenStore)
+		}
+		bodyJSON, err := json.Marshal(resolved)
 		if err == nil {
 			bodyReader = bytes.NewReader(bodyJSON)
 		}
@@ -291,13 +377,17 @@ func (s *Service) flowSendStep(
 		req.Header.Set(k, v)
 	}
 
-	resp, err := s.doRequestWithRetry(stepCtx, req, options)
+	resp, err := s.doRequestWithSession(stepCtx, req, options, sess)
 	if err != nil || resp == nil {
 		return nil, nil, err
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, flowBodyLimit))
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
+	// Harvest tokens from the step response so later steps can use them.
+	if sess != nil {
+		sess.HarvestFromResponse(resp, respBody)
+	}
 	return resp, respBody, nil
 }
 
@@ -325,6 +415,26 @@ func interpolateBody(body map[string]interface{}, prevBody []byte) map[string]in
 		if s, ok := v.(string); ok && strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") {
 			key := strings.TrimSuffix(strings.TrimPrefix(s, "{{"), "}}")
 			if val, ok := prev[key]; ok {
+				out[k] = val
+			}
+		}
+	}
+	return out
+}
+
+// interpolateBodyWithTokens resolves remaining {{TOKEN}} placeholders in body
+// using values from the session TokenStore. It is applied after interpolateBody
+// so that explicit JSON body values take precedence over harvested tokens.
+func interpolateBodyWithTokens(body map[string]interface{}, store *TokenStore) map[string]interface{} {
+	if store == nil {
+		return body
+	}
+	out := cloneBody(body)
+	tokens := store.All()
+	for k, v := range out {
+		if s, ok := v.(string); ok && strings.HasPrefix(s, "{{") && strings.HasSuffix(s, "}}") {
+			key := strings.TrimSuffix(strings.TrimPrefix(s, "{{"), "}}")
+			if val, ok := tokens[key]; ok {
 				out[k] = val
 			}
 		}
