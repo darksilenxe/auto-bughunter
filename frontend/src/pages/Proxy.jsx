@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const TABS = [
   { id: "history", label: "HTTP history" },
   { id: "browser", label: "Proxy browser" },
+  { id: "passive", label: "Passive findings" },
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
   { id: "configure", label: "Configure browser" },
@@ -258,6 +259,8 @@ export default function Proxy() {
       )}
 
       {tab === "browser" && <BrowserTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} onRefreshHistory={loadRequests} />}
+
+      {tab === "passive" && <PassiveFindingsTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} />}
 
       {tab === "repeater" && (
         <RepeaterTab
@@ -582,48 +585,26 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
   const [error, setError] = useState("");
   const [iframeSrc, setIframeSrc] = useState(null);
   const [lastFetchedUrl, setLastFetchedUrl] = useState("");
-  const prevBlobRef = useRef(null);
 
-  async function navigate(targetUrl) {
+  function navigate(targetUrl) {
     const trimmed = targetUrl.trim();
     if (!trimmed || trimmed === "https://" || trimmed === "http://") {
       setError("Enter a URL to browse.");
       return;
     }
-    setLoading(true);
     setError("");
-    try {
-      const res = await fetch(
-        `${apiBase}/api/proxy/browse?url=${encodeURIComponent(trimmed)}`,
-        {
-          headers: {
-            "X-API-Key": apiKey,
-            "X-Workspace-ID": workspaceId,
-          },
-        },
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || `Browse failed (${res.status}).`);
-        return;
-      }
-      const html = await res.text();
-      // Revoke the previous blob URL to avoid memory leaks.
-      if (prevBlobRef.current) {
-        URL.revokeObjectURL(prevBlobRef.current);
-      }
-      const blob = new Blob([html], { type: "text/html" });
-      const blobUrl = URL.createObjectURL(blob);
-      prevBlobRef.current = blobUrl;
-      setIframeSrc(blobUrl);
-      setLastFetchedUrl(trimmed);
-      // Refresh HTTP history so the new request shows up immediately.
-      onRefreshHistory();
-    } catch (err) {
-      setError(err.message || "Browse failed.");
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true);
+    // Point the iframe directly at the backend browse endpoint so the browser
+    // handles content-type, encoding, and sub-resource loading natively.
+    // The api_key query param is accepted by the auth middleware alongside
+    // the X-API-Key header so the iframe can authenticate without custom headers.
+    const browseUrl =
+      `${apiBase}/api/proxy/browse` +
+      `?url=${encodeURIComponent(trimmed)}` +
+      `&api_key=${encodeURIComponent(apiKey)}`;
+    setIframeSrc(browseUrl);
+    setLastFetchedUrl(trimmed);
+    onRefreshHistory();
   }
 
   function handleKeyDown(e) {
@@ -640,7 +621,7 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
         <div>
           <h2 style={{ marginBottom: 2 }}>Proxy browser</h2>
           <p className="meta" style={{ marginBottom: 0 }}>
-            Fetches the page through the recording transport — traffic is captured in HTTP history.
+            Fetches the page through the recording transport — traffic is captured in HTTP history and passively scanned for vulnerabilities.
           </p>
         </div>
       </div>
@@ -672,9 +653,12 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
       {/* Browser viewport */}
       {iframeSrc ? (
         <iframe
+          key={iframeSrc}
           src={iframeSrc}
           title={`Proxy browser — ${lastFetchedUrl}`}
-          sandbox="allow-scripts allow-same-origin allow-forms"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          onLoad={() => setLoading(false)}
+          onError={() => { setLoading(false); setError("Failed to load page."); }}
           style={{
             width: "100%",
             height: "640px",
@@ -686,8 +670,160 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
       ) : (
         <div className="empty-state" style={{ padding: "48px 24px" }}>
           Enter a URL above and click <strong>Go</strong> to browse through the intercepting proxy.
-          The request will appear in HTTP history and on the Network Graph.
+          The request will appear in HTTP history and passive findings will be recorded automatically.
         </div>
+      )}
+    </section>
+  );
+}
+
+function PassiveFindingsTab({ apiBase, apiKey, workspaceId }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => {
+    loadFindings();
+  }, []);
+
+  async function loadFindings() {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/api/proxy/passive-findings`, {
+        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to load passive findings.");
+        return;
+      }
+      setFindings(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(err.message || "Failed to load passive findings.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function clearFindings() {
+    if (!window.confirm("Clear all passive findings?")) return;
+    try {
+      await fetch(`${apiBase}/api/proxy/passive-findings`, {
+        method: "DELETE",
+        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId },
+      });
+      loadFindings();
+    } catch (err) {
+      setError(err.message || "Failed to clear findings.");
+    }
+  }
+
+  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const sorted = [...findings].sort(
+    (a, b) => (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9),
+  );
+
+  return (
+    <section className="card">
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <div>
+          <h2 style={{ marginBottom: 2 }}>Passive findings</h2>
+          <p className="meta" style={{ marginBottom: 0 }}>
+            Vulnerabilities and misconfigurations detected automatically as you browse through the proxy.
+            Browse a site using the <strong>Proxy browser</strong> tab, or route your browser through the
+            intercepting proxy, to populate this list.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button type="button" className="button-secondary" onClick={loadFindings} disabled={loading}>
+            {loading ? "Refreshing…" : "↺ Refresh"}
+          </button>
+          {findings.length > 0 && (
+            <button type="button" className="button-secondary" onClick={clearFindings}>
+              Clear all
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
+
+      {sorted.length === 0 ? (
+        <div className="empty-state">
+          No passive findings yet. Browse through the proxy to start collecting results.
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+          {sorted.map((f) => {
+            const key = f.affectedUrl + ":" + f.id;
+            const isOpen = expanded === key;
+            return (
+              <li
+                key={key}
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  overflow: "hidden",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setExpanded(isOpen ? null : key)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 14px",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    color: "inherit",
+                  }}
+                >
+                  <span className={`severity-badge ${f.severity || "info"}`}>
+                    {(f.severity || "info").toUpperCase()}
+                  </span>
+                  <span style={{ flex: 1, fontWeight: 500 }}>{f.title}</span>
+                  <span className="meta" style={{ fontFamily: "monospace", fontSize: "0.78rem", flexShrink: 0, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {f.affectedUrl || ""}
+                  </span>
+                  <span style={{ flexShrink: 0, fontSize: "0.75rem", color: "var(--ink-soft)" }}>{isOpen ? "▲" : "▼"}</span>
+                </button>
+
+                {isOpen && (
+                  <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--border)" }}>
+                    {f.description && (
+                      <p style={{ marginTop: 10, marginBottom: 8, fontSize: "0.88rem" }}>{f.description}</p>
+                    )}
+                    {f.evidence && (
+                      <div style={{ marginBottom: 8 }}>
+                        <span className="meta">Evidence: </span>
+                        <code style={{ fontSize: "0.82rem", wordBreak: "break-all" }}>{f.evidence}</code>
+                      </div>
+                    )}
+                    {f.recommendation && (
+                      <div style={{ marginBottom: 8 }}>
+                        <span className="meta">Recommendation: </span>
+                        <span style={{ fontSize: "0.88rem" }}>{f.recommendation}</span>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                      <span className="chip chip--muted">{f.category}</span>
+                      {f.discoveredAt && (
+                        <span className="meta" style={{ fontSize: "0.78rem" }}>
+                          found {new Date(f.discoveredAt).toLocaleTimeString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </section>
   );
