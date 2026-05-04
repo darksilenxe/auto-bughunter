@@ -220,7 +220,7 @@ func (s *Service) runActiveNoSQLiProbe(ctx context.Context, input RunInput, body
 							len(baseBody), len(respBody),
 						),
 					})
-					goto doneQueryProbes
+					goto doneQueryProbes //nolint:gocritic // break nested loops
 				}
 			}
 		}
@@ -283,9 +283,8 @@ doneQueryProbes:
 							url:       base.String(),
 							param:     param,
 							technique: "json-body-operator-error",
-							evidence:  fmt.Sprintf("signature=%q payload=%s", sig, string(jsonBytes)),
+							evidence:  fmt.Sprintf("signature=%q payload=%s curl=%s", sig, string(jsonBytes), curl),
 						})
-						_ = curl
 						goto doneJSONProbes
 					}
 					// Auth-bypass heuristic: 200 response on a likely auth
@@ -301,11 +300,10 @@ doneQueryProbes:
 							param: param,
 							technique: "json-body-auth-bypass",
 							evidence: fmt.Sprintf(
-								"POST to likely auth endpoint returned 200 with operator payload %q in field %q",
-								pl.key, param,
+								"POST to likely auth endpoint returned 200 with operator payload %q in field %q; curl: %s",
+								pl.key, param, curl,
 							),
 						})
-						_ = curl
 						goto doneJSONProbes
 					}
 				}

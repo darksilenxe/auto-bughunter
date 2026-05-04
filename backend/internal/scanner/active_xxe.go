@@ -143,6 +143,10 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 		tok := s.oast.Issue("", "xxe-probe")
 		if tok.CallbackURL != "" {
 			oastPayload := strings.ReplaceAll(xxeOASTPayloadTemplate, "%%CALLBACK%%", tok.CallbackURL)
+			// Track which endpoints actually received the probe so the
+			// evidence URL can point at the real triggering endpoint rather
+			// than always using candidates[0].
+			var probedEndpoints []string
 			for _, ep := range candidates {
 				if oastAttempts >= xxeMaxAttempts {
 					break
@@ -161,20 +165,30 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				oastAttempts++
+				probedEndpoints = append(probedEndpoints, ep)
 				if err == nil && resp != nil {
 					_ = resp.Body.Close()
 				}
 			}
 			if oastHits := s.oast.Wait(tok.Token, defaultOASTSSRFWait); len(oastHits) > 0 {
 				h := oastHits[0]
+				// Use the first probed endpoint as a best-effort URL; we
+				// cannot know which endpoint caused the callback without
+				// per-request tokens, but recording all probed endpoints in
+				// the evidence makes the finding actionable.
+				triggerURL := ""
+				if len(probedEndpoints) > 0 {
+					triggerURL = probedEndpoints[0]
+				}
 				hits = append(hits, hit{
-					url:       candidates[0],
+					url:       triggerURL,
 					technique: "oast-out-of-band",
 					evidence: fmt.Sprintf(
-						"Inbound %s %s from %s at %s — XML parser resolved the external entity and fetched the OAST callback URL %s",
+						"Inbound %s %s from %s at %s — XML parser resolved the external entity and fetched the OAST callback URL %s (probed endpoints: %s)",
 						h.Method, h.Path, h.RemoteAddr,
 						h.ReceivedAt.UTC().Format("2006-01-02T15:04:05Z"),
 						tok.CallbackURL,
+						strings.Join(limitStrings(probedEndpoints, 4), ", "),
 					),
 				})
 			}
