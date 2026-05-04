@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AttackGraphChart from "../components/AttackGraph";
 import AttackPathGraph from "../components/AttackPathGraph";
-<<<<<<< HEAD
 import ScanNetworkGraph from "../components/ScanNetworkGraph";
-=======
->>>>>>> cc4140c (Resolving frontend issues.)
 import { useScan } from "../context/ScanContext";
 import { summarizeFindings } from "../lib/impact";
 
@@ -88,21 +85,14 @@ export default function AttackGraph() {
               <div>
                 <h2 style={{ marginBottom: 6 }}>Operator graph views</h2>
                 <p className="meta">
-<<<<<<< HEAD
                   Toggle between impact chain view, agent pipeline view, and network traffic to understand what the AI is proving and why.
-=======
-                  Toggle between impact chain view and agent pipeline view to understand what the AI is proving and why.
->>>>>>> cc4140c (Resolving frontend issues.)
                 </p>
               </div>
               <div className="filter-row">
                 {[
                   { id: "chain", label: "Attack chain" },
                   { id: "pipeline", label: "Agent pipeline" },
-<<<<<<< HEAD
                   { id: "network", label: "Network graph" },
-=======
->>>>>>> cc4140c (Resolving frontend issues.)
                 ].map(({ id, label }) => (
                   <button
                     key={id}
@@ -132,15 +122,10 @@ export default function AttackGraph() {
                   isRunning={isRunning}
                   onScreenshot={(b64) => setSelectedScreenshot(b64)}
                 />
-<<<<<<< HEAD
               ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
               ) : (
                 <ScanNetworkGraph job={job} />
-=======
-              ) : (
-                <AttackPathGraph events={liveEvents} job={job} />
->>>>>>> cc4140c (Resolving frontend issues.)
               )}
             </div>
           </section>
@@ -168,13 +153,10 @@ export default function AttackGraph() {
                 <div>Shows which reasoning stages are active, completed, dynamically spawned, or blocked.</div>
               </div>
               <div className="meta-block" style={{ marginTop: 10 }}>
-<<<<<<< HEAD
                 <b>Network graph view</b>
                 <div>Visualizes HTTP traffic flowing through the proxy during browser-based scanning and exploration.</div>
               </div>
               <div className="meta-block" style={{ marginTop: 10 }}>
-=======
->>>>>>> cc4140c (Resolving frontend issues.)
                 <b>Primary target</b>
                 <div>{job?.target || "n/a"}</div>
               </div>
@@ -205,10 +187,7 @@ export default function AttackGraph() {
                 {[
                   { id: "chain", label: "Attack chain" },
                   { id: "pipeline", label: "Agent pipeline" },
-<<<<<<< HEAD
                   { id: "network", label: "Network graph" },
-=======
->>>>>>> cc4140c (Resolving frontend issues.)
                 ].map(({ id, label }) => (
                   <button
                     key={id}
@@ -237,15 +216,10 @@ export default function AttackGraph() {
                   isRunning={isRunning}
                   onScreenshot={(b64) => setSelectedScreenshot(b64)}
                 />
-<<<<<<< HEAD
               ) : activeGraphTab === "pipeline" ? (
                 <AttackPathGraph events={liveEvents} job={job} />
               ) : (
                 <ScanNetworkGraph job={job} />
-=======
-              ) : (
-                <AttackPathGraph events={liveEvents} job={job} />
->>>>>>> cc4140c (Resolving frontend issues.)
               )}
             </div>
           </div>
