@@ -56,7 +56,7 @@ func (rt *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			RequestHeaders: reqHeaders,
 			RequestBody:    string(reqBodyBytes),
 			ResponseStatus: 0,
-			Notes:          "request failed: " + err.Error(),
+			Notes:          "scanner request failed: " + err.Error(),
 		})
 		return nil, err
 	}
