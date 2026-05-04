@@ -311,7 +311,7 @@ func nearMissObservation(category, endpoint, paramName, payload string, statusCo
 			return fmt.Sprintf(
 				"SQL injection probe on %s: the response body mentions a timeout, which may indicate a successful "+
 					"time-based injection. Confirm with `1; WAITFOR DELAY '0:0:5'--` (MSSQL) or `1 AND SLEEP(5)--` (MySQL).",
-				probeURL, statusCode,
+				probeURL,
 			)
 		}
 

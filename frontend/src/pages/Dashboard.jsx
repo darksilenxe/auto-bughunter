@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import BurpImport from "../components/BurpImport";
 import LiveFeed from "../components/LiveFeed";
+import ReasoningPanel from "../components/ReasoningPanel";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 import { useScan } from "../context/ScanContext";
 import { DEFAULT_IMPACT_GOALS, IMPACT_GOALS, impactGoalMeta, summarizeFindings, topGoals } from "../lib/impact";
@@ -526,6 +527,8 @@ export default function Dashboard() {
           </section>
 
           <LiveFeed events={liveEvents} isRunning={isRunning} />
+
+          <ReasoningPanel events={liveEvents} isRunning={isRunning} />
 
           {job && job.status !== "running" && (
             <>

@@ -92,7 +92,6 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 
 	// Reflection state carried between rounds.
 	var lastReflection *ai.ReflectionResult
-	var lastTriedHypotheses []ai.VulnerabilityHypothesis
 
 	for round := 1; round <= a.MaxRounds; round++ {
 		select {
@@ -155,7 +154,6 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 			break
 		}
 		totalHypotheses += len(hypotheses)
-		lastTriedHypotheses = hypotheses
 
 		// Emit round-start event so the frontend shows which categories are
 		// being targeted this round.
@@ -175,29 +173,36 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 
 		// ── Step 3: verify hypotheses ─────────────────────────────────────
 		roundFindings := make([]model.Finding, 0, len(hypotheses))
+		roundProbeResults := make([]model.ProbeResult, 0, len(hypotheses))
+
 		for i, h := range hypotheses {
 			endpoint := strings.TrimSpace(h.Endpoint)
 			if endpoint == "" {
 				continue
 			}
 
-			coverage.RecordTried(h.Category, endpoint, h.ParamName, h.PayloadHint)
-
-			f := a.scanService.RunHypothesisVerification(
+			// ProbeHypothesis issues the HTTP request and captures the full
+			// observation — status code, body signals, WAF/near-miss detection —
+			// even when no finding is confirmed. This gives Reflect() the raw
+			// evidence it needs to reason about WHY a probe failed.
+			pr := a.scanService.ProbeHypothesis(
 				ctx,
+				h.Category,
 				endpoint,
 				h.ParamName,
 				h.PayloadHint,
-				h.Category,
 				input.AuthProfile,
 				input.Options,
 			)
-			if f == nil {
+			coverage.RecordTried(h.Category, endpoint, h.ParamName, h.PayloadHint)
+			roundProbeResults = append(roundProbeResults, pr)
+
+			if pr.Finding == nil {
 				continue
 			}
 
 			coverage.RecordConfirmed(h.Category, endpoint, h.ParamName)
-
+			f := pr.Finding
 			f.ID = fmt.Sprintf("reasoning-r%d-h%d-%s", round, i+1, strings.ToLower(strings.TrimSpace(h.Category)))
 			f.Sources = appendUnique(f.Sources, "reasoning-iteration-agent")
 			if f.EvidenceFields == nil {
@@ -243,13 +248,16 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 		}
 
 		// ── Step 5: reflect ───────────────────────────────────────────────
+		// Pass all probe results — including unconfirmed ones — so the AI can
+		// read the actual HTTP observations (WAF blocks, near-misses, server
+		// errors) and explain WHY another iteration is or isn't warranted.
 		coverageMap := coverage.CoverageSummary()
 		reflection := a.aiClient.Reflect(
 			ctx,
 			input.Target,
 			round,
 			accumulated,
-			lastTriedHypotheses,
+			roundProbeResults,
 			coverageMap,
 		)
 		lastReflection = &reflection
