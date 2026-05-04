@@ -255,30 +255,31 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 		lastReflection = &reflection
 
 		// Emit reflection event — this is the core of the "reiterate" UX.
+		// The IterationRationale is the AI's own explanation of why another
+		// round is warranted, written in plain English using the app's AI model.
 		refinedCount := len(reflection.RefinedHints)
 		Emit(input.Emit, model.ScanEvent{
 			Type:      model.ScanEventReasoningLoop,
 			AgentName: a.Name(),
 			Message: fmt.Sprintf(
-				"[reasoning r%d reflection] %s | Next focus: %s%s",
+				"[reasoning r%d reflection] %s",
 				round,
-				reflection.GapAnalysis,
-				strings.Join(reflection.FocusAreas, ", "),
-				escalationSuffix(reflection),
+				reflection.IterationRationale,
 			),
 			Metadata: map[string]string{
-				"round":            itoa(round),
-				"status":           "reflection",
-				"gapAnalysis":      reflection.GapAnalysis,
-				"focusAreas":       strings.Join(reflection.FocusAreas, ","),
-				"skipCategories":   strings.Join(reflection.SkipCategories, ","),
-				"shouldEscalate":   boolStr(reflection.ShouldEscalate),
-				"escalationReason": reflection.EscalationReason,
-				"refinedHints":     itoa(refinedCount),
-				"totalTried":       itoa(coverage.TotalTried()),
-				"totalConfirmed":   itoa(coverage.TotalConfirmed()),
-				"roundFindings":    itoa(len(roundFindings)),
-				"roundChains":      itoa(len(chainFindings)),
+				"round":              itoa(round),
+				"status":             "reflection",
+				"iterationRationale": reflection.IterationRationale,
+				"gapAnalysis":        reflection.GapAnalysis,
+				"focusAreas":         strings.Join(reflection.FocusAreas, ","),
+				"skipCategories":     strings.Join(reflection.SkipCategories, ","),
+				"shouldEscalate":     boolStr(reflection.ShouldEscalate),
+				"escalationReason":   reflection.EscalationReason,
+				"refinedHints":       itoa(refinedCount),
+				"totalTried":         itoa(coverage.TotalTried()),
+				"totalConfirmed":     itoa(coverage.TotalConfirmed()),
+				"roundFindings":      itoa(len(roundFindings)),
+				"roundChains":        itoa(len(chainFindings)),
 			},
 		})
 

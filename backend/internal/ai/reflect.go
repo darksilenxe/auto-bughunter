@@ -16,6 +16,14 @@ type ReflectionResult struct {
 	// classes, endpoints, or parameter patterns have NOT been adequately tested.
 	GapAnalysis string `json:"gapAnalysis"`
 
+	// IterationRationale is the AI's plain-language explanation of WHY
+	// another iteration is warranted: what signals in the current findings,
+	// response patterns, or coverage gaps justify continuing rather than
+	// stopping. This is the primary text shown to the operator in the UI.
+	// When the AI decides no further iteration is needed, this field explains
+	// that conclusion instead.
+	IterationRationale string `json:"iterationRationale"`
+
 	// FocusAreas lists the top-priority vulnerability categories to target in
 	// the next round (e.g. "idor", "ssti", "business_logic").
 	FocusAreas []string `json:"focusAreas"`
@@ -106,13 +114,17 @@ func (c *Client) Reflect(
 		"coverageMap":     coverageMap,
 		"instructions": "You are an expert penetration tester reflecting on a completed scan iteration. " +
 			"Analyse what vulnerability classes, endpoints, and parameters have been tested and which have NOT. " +
+			"Write a clear iterationRationale (2–3 sentences) that explains in plain English WHY another " +
+			"iteration is warranted: cite the specific signals (untested categories, response anomalies, " +
+			"partial hits) that justify continuing rather than stopping. If no further iteration is useful, " +
+			"explain that conclusion in iterationRationale instead. " +
 			"Identify gaps in coverage, note any partially-confirmed signals that warrant refinement, and " +
 			"recommend up to 3 corrective or evasion-variant payloads as refinedHints. " +
 			"List focusAreas (up to 4 category names) that the next round should target. " +
 			"Set shouldEscalate to true if the findings suggest deeper (authenticated, WAF-bypass) probing is needed. " +
 			"List skipCategories that are fully confirmed or exhausted. " +
 			"Reply with strict JSON only: " +
-			`{"gapAnalysis":string,"focusAreas":[string],"refinedHints":[{"category":string,"endpoint":string,"paramName":string,"payloadHint":string,"rationale":string}],"shouldEscalate":bool,"escalationReason":string,"skipCategories":[string]}`,
+			`{"gapAnalysis":string,"iterationRationale":string,"focusAreas":[string],"refinedHints":[{"category":string,"endpoint":string,"paramName":string,"payloadHint":string,"rationale":string}],"shouldEscalate":bool,"escalationReason":string,"skipCategories":[string]}`,
 	}
 
 	userJSON, err := json.Marshal(payload)
@@ -256,14 +268,75 @@ func localReasonerReflect(
 		escalationReason = "No findings after " + itoa(round) + " rounds; escalate to authenticated or WAF-bypass probing."
 	}
 
+	// IterationRationale: rule-based explanation of why another round is needed.
+	iterationRationale := buildLocalIterationRationale(round, gaps, focusAreas, refinedHints, shouldEscalate, escalationReason, confirmed)
+
 	return ReflectionResult{
-		GapAnalysis:      gapAnalysis,
-		FocusAreas:       focusAreas,
-		RefinedHints:     refinedHints,
-		ShouldEscalate:   shouldEscalate,
-		EscalationReason: escalationReason,
-		SkipCategories:   skipCats,
+		GapAnalysis:        gapAnalysis,
+		IterationRationale: iterationRationale,
+		FocusAreas:         focusAreas,
+		RefinedHints:       refinedHints,
+		ShouldEscalate:     shouldEscalate,
+		EscalationReason:   escalationReason,
+		SkipCategories:     skipCats,
 	}
+}
+
+// buildLocalIterationRationale generates a plain-English explanation of why
+// the reasoning loop should (or should not) continue, without calling an AI
+// provider. It mirrors what the AI would write, using the same rule-based
+// signals that drove the rest of the local-reasoner output.
+func buildLocalIterationRationale(
+	round int,
+	gaps, focusAreas []string,
+	refinedHints []RefinedHint,
+	shouldEscalate bool,
+	escalationReason string,
+	confirmed map[string]bool,
+) string {
+	if len(gaps) == 0 && len(refinedHints) == 0 && !shouldEscalate {
+		if len(confirmed) > 0 {
+			cats := make([]string, 0, len(confirmed))
+			for c := range confirmed {
+				cats = append(cats, c)
+			}
+			return "Round " + itoa(round) + " completed with confirmed findings in: " +
+				strings.Join(cats, ", ") + ". " +
+				"All standard vulnerability categories have been probed and the attack surface appears well covered. " +
+				"No further iteration is required."
+		}
+		return "Round " + itoa(round) + " completed. Coverage appears exhaustive and no additional signals justify a further iteration."
+	}
+
+	var b strings.Builder
+	b.WriteString("Round " + itoa(round) + " complete. ")
+
+	if len(gaps) > 0 {
+		b.WriteString("The following vulnerability categories remain untested: ")
+		b.WriteString(strings.Join(gaps, ", "))
+		b.WriteString(". ")
+		b.WriteString("Iterating to ensure full coverage before concluding the engagement. ")
+	}
+
+	if len(refinedHints) > 0 {
+		b.WriteString("Additionally, ")
+		b.WriteString(itoa(len(refinedHints)))
+		b.WriteString(" previous payload(s) were blocked or returned ambiguous results — ")
+		b.WriteString("the next round will retry with evasion-variant payloads to rule out filtering artefacts. ")
+	}
+
+	if shouldEscalate && escalationReason != "" {
+		b.WriteString(escalationReason)
+		b.WriteString(" ")
+	}
+
+	if len(focusAreas) > 0 {
+		b.WriteString("Next round will prioritise: ")
+		b.WriteString(strings.Join(focusAreas, ", "))
+		b.WriteString(".")
+	}
+
+	return strings.TrimSpace(b.String())
 }
 
 // alternativePayload returns a WAF-evasion or structural variant of payload for

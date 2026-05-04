@@ -93,6 +93,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 //   - "tool_builder" uses the coding model for on-the-fly Python tool synthesis.
 //   - "hacktricks_techniques" uses the coding model to adapt HackTricks templates.
 //   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
+//   - "reasoning_iteration" uses the planning model for reflection and iteration rationale.
 //
 // This is called after NewFactory once the AI client is available. It is safe
 // to call concurrently with other factory operations.
@@ -107,6 +108,9 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })
 	f.Register("pentest_loop", func() Agent {
 		return NewPentestLoopAgent(c, scanService, defaultInnerRounds, true)
+	})
+	f.Register("reasoning_iteration", func() Agent {
+		return NewReasoningIterationAgent(c, scanService, defaultReasoningRounds, true)
 	})
 }
 

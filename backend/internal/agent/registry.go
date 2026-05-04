@@ -369,6 +369,15 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if len(output.Findings) > 0 {
 			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
 		}
+		// Queue the reasoning iteration agent to reflect on the pentest-loop
+		// output and adaptively reiterate with coverage-aware pivoting.
+		spawned = append(spawned, "reasoning_iteration")
+	case "reasoning_iteration":
+		// After adaptive reasoning, synthesize any novel chains the pivoting
+		// may have uncovered and re-run attack-path analysis.
+		if len(output.Findings) > 0 {
+			spawned = append(spawned, "llm_chain_synthesis", "attack_path")
+		}
 	case "attack_path":
 		// After attack path analysis, if RCE indicators exist escalate to Metasploit.
 		if hasRCEIndicator || hasHigh {
