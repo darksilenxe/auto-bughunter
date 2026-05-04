@@ -32,7 +32,7 @@ COPY --from=nuclei-bin /usr/local/bin/nuclei /usr/local/bin/nuclei
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY manifest.json /etc/auto-bughunter/tool-updater/manifest.json
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 
 # Defaults; overridable via compose.
 ENV NUCLEI_TEMPLATES_DIR=/root/nuclei-templates \

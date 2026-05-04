@@ -41,14 +41,13 @@ body {
   line-height: 1.5;
   color: var(--ink);
   background:
-    linear-gradient(rgba(89, 208, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(89, 208, 255, 0.025) 1px, transparent 1px),
-    radial-gradient(900px 520px at 100% -5%,  rgba(124, 92, 255, 0.22), transparent 52%),
-    radial-gradient(860px 520px at -10% 0%,   rgba(89, 208, 255, 0.18), transparent 55%),
-    radial-gradient(720px 620px at 12% 100%,  rgba(87, 240, 193, 0.10), transparent 55%),
-    radial-gradient(660px 560px at 88% 95%,   rgba(255, 95, 122, 0.08), transparent 55%),
-    linear-gradient(180deg, #07101b 0%, #050b15 44%, #04070f 100%);
-  background-size: 64px 64px, 64px 64px, auto, auto, auto, auto, auto;
+    linear-gradient(rgba(71, 215, 172, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(71, 215, 172, 0.014) 1px, transparent 1px),
+    radial-gradient(900px 520px at 100% -5%, rgba(27, 132, 97, 0.18), transparent 52%),
+    radial-gradient(860px 520px at -10% 0%, rgba(22, 104, 78, 0.17), transparent 55%),
+    radial-gradient(760px 620px at 12% 100%, rgba(11, 56, 44, 0.16), transparent 58%),
+    linear-gradient(180deg, #060d0b 0%, #040a08 44%, #030705 100%);
+  background-size: 56px 56px, 56px 56px, auto, auto, auto, auto;
   background-attachment: fixed;
 }
 
@@ -71,9 +70,16 @@ code {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.025), transparent 180px),
-    radial-gradient(circle at 50% 0%,   rgba(87, 240, 193, 0.13), transparent 42%),
-    radial-gradient(800px 600px at 50% 96%, rgba(124, 92, 255, 0.07), transparent 60%);
+    repeating-linear-gradient(
+      180deg,
+      rgba(124, 255, 172, 0.03) 0px,
+      rgba(124, 255, 172, 0.03) 1px,
+      transparent 1px,
+      transparent 14px
+    ),
+    radial-gradient(circle at 50% 0%, rgba(71, 215, 172, 0.12), transparent 42%),
+    radial-gradient(800px 600px at 50% 96%, rgba(16, 116, 84, 0.09), transparent 60%);
+  animation: matrix-scanline 12s linear infinite;
   z-index: 0;
 }
 
@@ -87,10 +93,25 @@ code {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(580px 400px at 22% 64%, rgba(87, 240, 193, 0.07),  transparent 65%),
-    radial-gradient(500px 360px at 76% 38%, rgba(124, 92, 255, 0.09), transparent 60%),
-    radial-gradient(440px 320px at 54% 84%, rgba(89, 208, 255, 0.05),  transparent 65%);
+    radial-gradient(580px 400px at 22% 64%, rgba(71, 215, 172, 0.08), transparent 65%),
+    radial-gradient(500px 360px at 76% 38%, rgba(42, 178, 120, 0.09), transparent 60%),
+    radial-gradient(440px 320px at 54% 84%, rgba(18, 95, 71, 0.06), transparent 65%);
   animation: bg-orb-drift 24s ease-in-out infinite alternate;
+}
+
+@keyframes matrix-scanline {
+  0% {
+    transform: translateY(-8px);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translateY(8px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-8px);
+    opacity: 0.7;
+  }
 }
 
 @keyframes bg-orb-drift {
