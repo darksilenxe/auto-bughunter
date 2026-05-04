@@ -17,6 +17,7 @@ import (
 	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/oast"
+	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
 )
@@ -25,6 +26,7 @@ type Service struct {
 	httpClient *http.Client
 	cfg        Config
 	oast       *oast.Service
+	proxyStore proxy.Store
 }
 
 const supplementalResourceFetchMaxURLs = 8
@@ -42,6 +44,11 @@ func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
 
 // OAST returns the attached OAST service or nil.
 func (s *Service) OAST() *oast.Service { return s.oast }
+
+// SetProxyStore attaches a proxy store so that all outbound HTTP requests made
+// by the scanner are recorded and visible in the Network Graph UI. Safe to
+// call with nil to disable recording.
+func (s *Service) SetProxyStore(store proxy.Store) { s.proxyStore = store }
 
 type Config struct {
 	EnableSubfinder   bool
@@ -724,6 +731,18 @@ func (s *Service) doRequestWithSession(ctx context.Context, req *http.Request, o
 	client := s.httpClient
 	if sess != nil {
 		client = sess.Client()
+	}
+	// Wrap the client with a recording transport when a proxy store is
+	// configured so that all scanner-initiated requests appear in the
+	// Network Graph UI (GET /api/proxy/requests).
+	if s.proxyStore != nil {
+		wrapped := *client // shallow copy — shares the cookie Jar
+		base := wrapped.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		wrapped.Transport = &proxy.RecordingTransport{Wrapped: base, Store: s.proxyStore}
+		client = &wrapped
 	}
 	maxRetries := s.cfg.DefaultMaxRetries
 	if options.MaxRetries > 0 {
