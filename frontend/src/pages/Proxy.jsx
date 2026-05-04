@@ -678,6 +678,7 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
 }
 
 function PassiveFindingsTab({ apiBase, apiKey, workspaceId }) {
+  const [findings, setFindings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(null);
@@ -756,7 +757,7 @@ function PassiveFindingsTab({ apiBase, apiKey, workspaceId }) {
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
           {sorted.map((f) => {
-            const key = f.affectedUrl + ":" + f.id;
+            const key = encodeURIComponent(f.affectedUrl || "") + "|" + f.id;
             const isOpen = expanded === key;
             return (
               <li

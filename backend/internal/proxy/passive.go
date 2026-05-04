@@ -144,7 +144,14 @@ func passiveCheckCookies(pr *model.ProxyRequest) []model.Finding {
 		})
 	}
 	if strings.HasPrefix(strings.ToLower(pr.URL), "https://") {
-		if !strings.Contains(lower, "; secure") && !strings.Contains(lower, ";secure") {
+		// The Secure attribute appears as "; secure" or "; secure;" after any
+		// cookie in the combined header value. A case-insensitive check on the
+		// lower-cased string handles all standard representations.
+		hasSecure := strings.Contains(lower, "; secure") ||
+			strings.Contains(lower, ";secure") ||
+			strings.HasPrefix(lower, "secure;") ||
+			lower == "secure"
+		if !hasSecure {
 			findings = append(findings, model.Finding{
 				ID:          "proxy-cookie-no-secure",
 				Category:    "cookies",

@@ -207,7 +207,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
-		s.passiveStore.Analyze(captured)
+		if s.passiveStore != nil {
+			s.passiveStore.Analyze(captured)
+		}
 	}()
 }
 
@@ -435,7 +437,9 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
-		s.passiveStore.Analyze(captured)
+		if s.passiveStore != nil {
+			s.passiveStore.Analyze(captured)
+		}
 	}()
 	return nil
 }
