@@ -485,7 +485,7 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 	const staleTargetThresholdDays = 30
 	if roiProfile, ok := memory.TargetROISignals[host]; ok {
 		isHighDrift := roiProfile.DriftScore >= 1.0
-		isStale := !roiProfile.LastNovelFindingAt.IsZero() && roiProfile.LastNovelFindingAt.Before(time.Now().UTC().AddDate(0, 0, -staleTargetThresholdDays))
+		isStale := !roiProfile.LastNovelFindingAt.IsZero() && roiProfile.LastNovelFindingAt.Before(time.Now().UTC().Add(-time.Duration(staleTargetThresholdDays)*24*time.Hour))
 
 		if isHighDrift {
 			for _, name := range available {

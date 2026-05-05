@@ -4979,10 +4979,10 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 			agents := findingAgents[fid]
 			if len(agents) > 0 {
 				// Distribute the payout evenly across all contributing agents
-				// and normalise by $10 000 so the weight stays in a [0, ∞)
+				// and normalize by $10 000 so the weight stays in a [0, ∞)
 				// range that is comparable across programs without overflow.
-				const payoutNormalisation = 10_000.0
-				share := (item.PayoutUSD / float64(len(agents))) / payoutNormalisation
+				const payoutNormalization = 10_000.0
+				share := (item.PayoutUSD / float64(len(agents))) / payoutNormalization
 				for _, agentName := range agents {
 					memory.AgentPayoutWeights[agentName] += share
 				}
