@@ -4892,6 +4892,9 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	if memory.AgentStats == nil {
 		memory.AgentStats = map[string]model.AutonomyAgentStat{}
 	}
+	if memory.AgentPayoutWeights == nil {
+		memory.AgentPayoutWeights = map[string]float64{}
+	}
 	if !memory.LastRunAt.IsZero() {
 		daysSince := int(time.Since(memory.LastRunAt).Hours() / 24)
 		if daysSince > 0 {
@@ -4909,9 +4912,18 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 				stat.DecisionQualitySamples = int(float64(stat.DecisionQualitySamples) * (1 - decay))
 				memory.AgentStats[name] = stat
 			}
+			// Apply the same decay to payout weights so stale payout data
+			// loses influence gradually over time.
+			for name, w := range memory.AgentPayoutWeights {
+				memory.AgentPayoutWeights[name] = w * (1 - decay)
+			}
 		}
 	}
 	sequence := make([]string, 0, len(outputs))
+	// findingAgents maps findingID → the set of agent names that produced it.
+	// It is built from Finding.Sources when available, falling back to the
+	// AgentName of the output that contained the finding.
+	findingAgents := map[string][]string{}
 	for _, out := range outputs {
 		name := strings.TrimSpace(out.AgentName)
 		if name == "" {
@@ -4931,6 +4943,17 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 			if f.Confidence >= 0.85 || f.Severity == model.SeverityHigh {
 				stat.HighConfidenceFindings++
 			}
+			// Build findingAgents index using Sources when set, otherwise
+			// attribute the finding to the agent that emitted this output.
+			fid := strings.TrimSpace(f.ID)
+			if fid == "" {
+				continue
+			}
+			if len(f.Sources) > 0 {
+				findingAgents[fid] = uniqueStrings(append(findingAgents[fid], f.Sources...))
+			} else {
+				findingAgents[fid] = uniqueStrings(append(findingAgents[fid], name))
+			}
 		}
 		if out.DurationMs > 0 {
 			minutes := float64(out.DurationMs) / 60000.0
@@ -4949,7 +4972,23 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		memory.AgentStats[name] = stat
 	}
 	for _, item := range feedback {
-		if strings.ToLower(strings.TrimSpace(item.Category)) != "autonomy-action" {
+		category := strings.ToLower(strings.TrimSpace(item.Category))
+		// Attribute payout credit to the agents that produced this finding.
+		if item.PayoutUSD > 0 {
+			fid := strings.TrimSpace(item.FindingID)
+			agents := findingAgents[fid]
+			if len(agents) > 0 {
+				// Distribute the payout evenly across all contributing agents
+				// and normalise by $10 000 so the weight stays in a [0, ∞)
+				// range that is comparable across programs without overflow.
+				const payoutNormalisation = 10_000.0
+				share := (item.PayoutUSD / float64(len(agents))) / payoutNormalisation
+				for _, agentName := range agents {
+					memory.AgentPayoutWeights[agentName] += share
+				}
+			}
+		}
+		if category != "autonomy-action" {
 			continue
 		}
 		agentName := parseOperatorFeedbackAgent(item.Notes)
