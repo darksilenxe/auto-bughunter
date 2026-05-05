@@ -37,22 +37,59 @@ func (a *InputValidationAgent) Run(ctx context.Context, input AgentInput) (Agent
 		Status:    "completed",
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Use shorter timeout per request (3 seconds) since this agent
+	// tests many payloads sequentially. Also check context before each test.
+	client := &http.Client{Timeout: 3 * time.Second}
 
-	// Test for SQL injection
-	output.Findings = append(output.Findings, testSQLInjection(ctx, client, input.Target, input.AuthProfile)...)
+	// Early exit if context is already cancelled
+	select {
+	case <-ctx.Done():
+		return output, ctx.Err()
+	default:
+	}
 
-	// Test for XSS vulnerabilities
-	output.Findings = append(output.Findings, testXSSVulnerability(ctx, client, input.Target, input.AuthProfile)...)
+	// Test for SQL injection - early exit on first finding to avoid timeouts
+	if findings := testSQLInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
+		output.Findings = append(output.Findings, findings...)
+		output.DebugNotes = "Input validation testing completed early (SQL injection found)"
+		return output, nil
+	}
 
-	// Test for path traversal
-	output.Findings = append(output.Findings, testPathTraversal(ctx, client, input.Target, input.AuthProfile)...)
+	// Test for XSS vulnerabilities - only if context still valid
+	if ctx.Err() == nil {
+		if findings := testXSSVulnerability(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
+			output.Findings = append(output.Findings, findings...)
+			output.DebugNotes = "Input validation testing completed early (XSS found)"
+			return output, nil
+		}
+	}
 
-	// Test for XXE injection
-	output.Findings = append(output.Findings, testXXEInjection(ctx, client, input.Target, input.AuthProfile)...)
+	// Test for path traversal - only if context still valid
+	if ctx.Err() == nil {
+		if findings := testPathTraversal(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
+			output.Findings = append(output.Findings, findings...)
+			output.DebugNotes = "Input validation testing completed early (path traversal found)"
+			return output, nil
+		}
+	}
 
-	// Test for command injection
-	output.Findings = append(output.Findings, testCommandInjection(ctx, client, input.Target, input.AuthProfile)...)
+	// Test for XXE injection - only if context still valid
+	if ctx.Err() == nil {
+		if findings := testXXEInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
+			output.Findings = append(output.Findings, findings...)
+			output.DebugNotes = "Input validation testing completed early (XXE found)"
+			return output, nil
+		}
+	}
+
+	// Test for command injection - only if context still valid
+	if ctx.Err() == nil {
+		if findings := testCommandInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
+			output.Findings = append(output.Findings, findings...)
+			output.DebugNotes = "Input validation testing completed early (command injection found)"
+			return output, nil
+		}
+	}
 
 	output.Metadata["findings_count"] = strconv.Itoa(len(output.Findings))
 	output.DebugNotes = "Input validation testing completed. Tested for SQL injection, XSS, path traversal, XXE, and command injection."
@@ -62,12 +99,16 @@ func (a *InputValidationAgent) Run(ctx context.Context, input AgentInput) (Agent
 func testSQLInjection(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
 	findings := make([]model.Finding, 0)
 
+	// Check if context is already done before starting
+	if ctx.Err() != nil {
+		return findings
+	}
+
 	sqlPayloads := []string{
 		"' OR '1'='1",
 		"' OR 1=1 --",
 		"' UNION SELECT NULL --",
 		`" OR "1"="1`,
-		"1' AND SLEEP(5) --",
 	}
 
 	errorPatterns := []string{
@@ -90,15 +131,30 @@ func testSQLInjection(ctx context.Context, client *http.Client, target string, p
 	// Test query parameters
 	if u.RawQuery != "" {
 		for _, payload := range sqlPayloads {
+			// Early exit on context cancellation
+			if ctx.Err() != nil {
+				return findings
+			}
+
 			testURL := addQueryParam(u.String(), "test", payload)
 
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+			// Create request with short timeout per payload (2 seconds)
+			reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, testURL, nil)
+			if err != nil {
+				cancel()
+				continue
+			}
+
 			scanner.ApplyAuthProfile(req, profile)
 			resp, err := client.Do(req)
+			cancel()
+
 			if err != nil {
 				continue
 			}
 
+			// Ensure body is closed even on error
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
@@ -126,50 +182,64 @@ func testSQLInjection(ctx context.Context, client *http.Client, target string, p
 func testXSSVulnerability(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
 	findings := make([]model.Finding, 0)
 
+	// Check if context is already done before starting
+	if ctx.Err() != nil {
+		return findings
+	}
+
 	xssPayloads := []string{
 		`<script>alert('xss')</script>`,
 		`"><script>alert('xss')</script>`,
 		`<img src=x onerror="alert('xss')">`,
 		`<svg onload="alert('xss')">`,
-		`javascript:alert('xss')`,
 	}
 
 	if _, err := url.Parse(target); err != nil {
 		return findings
 	}
 
-	detectedXSS := false
 	for _, payload := range xssPayloads {
+		// Early exit on context cancellation
+		if ctx.Err() != nil {
+			return findings
+		}
+
 		testURL := addQueryParam(target, "search", payload)
 
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+		// Create request with short timeout per payload (2 seconds)
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, testURL, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+
 		scanner.ApplyAuthProfile(req, profile)
 		resp, err := client.Do(req)
+		cancel()
+
 		if err != nil {
 			continue
 		}
 
+		// Ensure body is closed
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		respStr := string(body)
 		// Unescaped reflection in response indicates potential XSS
 		if strings.Contains(respStr, payload) || strings.Contains(strings.ToLower(respStr), strings.ToLower(url.QueryEscape(payload))) {
-			detectedXSS = true
-			break
+			findings = append(findings, model.Finding{
+				ID:             "xss-reflection-potential",
+				Category:       "input_validation",
+				Severity:       model.SeverityHigh,
+				Title:          "Potential Cross-Site Scripting (XSS) vulnerability",
+				Description:    "Application may reflect user input directly in responses without proper encoding.",
+				Evidence:       "XSS payload appeared unescaped in response",
+				Recommendation: "HTML-encode all user-controlled output. Use Content-Security-Policy. Use templating engines with auto-escaping.",
+			})
+			return findings
 		}
-	}
-
-	if detectedXSS {
-		findings = append(findings, model.Finding{
-			ID:             "xss-reflection-potential",
-			Category:       "input_validation",
-			Severity:       model.SeverityHigh,
-			Title:          "Potential Cross-Site Scripting (XSS) vulnerability",
-			Description:    "Application may reflect user input directly in responses without proper encoding.",
-			Evidence:       "XSS payload appeared unescaped in response",
-			Recommendation: "HTML-encode all user-controlled output. Use Content-Security-Policy. Use templating engines with auto-escaping.",
-		})
 	}
 
 	return findings
@@ -178,11 +248,15 @@ func testXSSVulnerability(ctx context.Context, client *http.Client, target strin
 func testPathTraversal(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
 	findings := make([]model.Finding, 0)
 
+	// Check if context is already done before starting
+	if ctx.Err() != nil {
+		return findings
+	}
+
 	pathTraversalPayloads := []string{
 		"../../../../../etc/passwd",
 		"..\\..\\..\\..\\windows\\win.ini",
 		"....//....//....//etc/passwd",
-		"..%252F..%252F..%252Fetc%252Fpasswd",
 	}
 
 	if _, err := url.Parse(target); err != nil {
@@ -190,15 +264,30 @@ func testPathTraversal(ctx context.Context, client *http.Client, target string, 
 	}
 
 	for _, payload := range pathTraversalPayloads {
+		// Early exit on context cancellation
+		if ctx.Err() != nil {
+			return findings
+		}
+
 		testURL := addQueryParam(target, "file", payload)
 
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+		// Create request with short timeout per payload (2 seconds)
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, testURL, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+
 		scanner.ApplyAuthProfile(req, profile)
 		resp, err := client.Do(req)
+		cancel()
+
 		if err != nil {
 			continue
 		}
 
+		// Ensure body is closed
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
@@ -224,15 +313,26 @@ func testPathTraversal(ctx context.Context, client *http.Client, target string, 
 func testXXEInjection(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
 	findings := make([]model.Finding, 0)
 
+	// Check if context is already done before starting
+	if ctx.Err() != nil {
+		return findings
+	}
+
+	// Use very short timeout for XXE (1 second) since external entity resolution
+	// should fail quickly if security is in place; long timeout indicates XXE vulnerability
+	xxeCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
 	xxePayload := `<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>`
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(xxePayload))
+	req, err := http.NewRequestWithContext(xxeCtx, http.MethodPost, target, strings.NewReader(xxePayload))
+	if err != nil {
+		return findings
+	}
+
 	req.Header.Set("Content-Type", "application/xml")
 	scanner.ApplyAuthProfile(req, profile)
 
-	xxeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	req = req.WithContext(xxeCtx)
 	resp, err := client.Do(req)
 	if err != nil {
 		return findings
@@ -261,12 +361,16 @@ func testXXEInjection(ctx context.Context, client *http.Client, target string, p
 func testCommandInjection(ctx context.Context, client *http.Client, target string, profile model.ScanAuthProfile) []model.Finding {
 	findings := make([]model.Finding, 0)
 
+	// Check if context is already done before starting
+	if ctx.Err() != nil {
+		return findings
+	}
+
 	cmdPayloads := []string{
 		"; echo 'vuln'",
 		"| whoami",
 		"`id`",
 		"$(id)",
-		"& dir &",
 	}
 
 	if _, err := url.Parse(target); err != nil {
@@ -274,15 +378,30 @@ func testCommandInjection(ctx context.Context, client *http.Client, target strin
 	}
 
 	for _, payload := range cmdPayloads {
+		// Early exit on context cancellation
+		if ctx.Err() != nil {
+			return findings
+		}
+
 		testURL := addQueryParam(target, "cmd", payload)
 
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+		// Create request with short timeout per payload (2 seconds)
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, testURL, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+
 		scanner.ApplyAuthProfile(req, profile)
 		resp, err := client.Do(req)
+		cancel()
+
 		if err != nil {
 			continue
 		}
 
+		// Ensure body is closed
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
