@@ -19,15 +19,14 @@ import (
 var sstiProbeParams = []string{"q", "search", "name", "title", "msg", "message", "subject", "preview"}
 
 // sstiPayloads is a dictionary of "harmless arithmetic" markers, one per
-// major template engine family. Each pair is the rendered-input/expected-
+// major template engine family. Each entry is the rendered-input/expected-
 // output combination that confirms server-side evaluation. We deliberately
 // pick `7*7` rather than `49*7` etc. to avoid double-counting natural-text
 // `49` occurrences in the response.
-var sstiPayloads = []struct {
-	engine  string
-	payload string
-	expect  string
-}{
+//
+// The slice uses the sstiVariant type (defined in waf_bypass.go) so that
+// techPrioritizedSSTIPayloads can reorder it without any type conversion.
+var sstiPayloads = []sstiVariant{
 	// Jinja2 / Twig / Liquid (Python, PHP, Ruby).
 	{"jinja2/twig", "{{7*7}}", "49"},
 	// AngularJS / Vue (client-side, but listed for completeness — the same
@@ -40,6 +39,55 @@ var sstiPayloads = []struct {
 	// Mustache/Handlebars don't evaluate expressions, so we do not include
 	// a `{{7*7}}` -> `49` payload for those — the marker would simply be
 	// echoed verbatim and we would false-positive.
+}
+
+// techPrioritizedSSTIPayloads returns the canonical SSTI payload list
+// reordered so the engine family most consistent with the detected tech stack
+// is attempted first. All payloads are still returned; only the ordering
+// changes, so no signal is lost when the inferred engine is wrong.
+func techPrioritizedSSTIPayloads(tech TechStack) []sstiVariant {
+	primary := sstiEngineFamily(tech)
+	if primary == "" {
+		// No tech signal — keep the default order.
+		out := make([]sstiVariant, len(sstiPayloads))
+		copy(out, sstiPayloads)
+		return out
+	}
+	out := make([]sstiVariant, 0, len(sstiPayloads))
+	// Matching engine family first, then the rest in original order.
+	for _, p := range sstiPayloads {
+		if p.engine == primary {
+			out = append(out, p)
+		}
+	}
+	for _, p := range sstiPayloads {
+		if p.engine != primary {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// techPrioritizedSSTIBypassVariants returns the WAF bypass SSTI variant list
+// with the detected engine family's variants moved to the front.
+func techPrioritizedSSTIBypassVariants(tech TechStack) []sstiVariant {
+	all := sstiBypassVariants()
+	primary := sstiEngineFamily(tech)
+	if primary == "" {
+		return all
+	}
+	out := make([]sstiVariant, 0, len(all))
+	for _, v := range all {
+		if v.engine == primary {
+			out = append(out, v)
+		}
+	}
+	for _, v := range all {
+		if v.engine != primary {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // sstiMaxAttempts caps probe budget per scan.
@@ -98,12 +146,9 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 			}
 			var payloads []sstiVariant
 			if input.Options.WAFBypass {
-				payloads = sstiBypassVariants()
+				payloads = techPrioritizedSSTIBypassVariants(input.DetectedTech)
 			} else {
-				payloads = make([]sstiVariant, 0, len(sstiPayloads))
-				for _, v := range sstiPayloads {
-					payloads = append(payloads, sstiVariant{engine: v.engine, payload: v.payload, expect: v.expect})
-				}
+				payloads = techPrioritizedSSTIPayloads(input.DetectedTech)
 			}
 			for _, payload := range payloads {
 				if attempts >= sstiMaxAttempts {

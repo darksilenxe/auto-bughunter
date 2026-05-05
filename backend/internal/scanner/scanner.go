@@ -104,6 +104,12 @@ type RunInput struct {
 	// creates one automatically; callers may pre-create a session to share
 	// state across multiple Run calls or external probe invocations.
 	Session *ScanSession
+	// DetectedTech holds the technology stack fingerprinted from the baseline
+	// HTTP response. Probes use it to prioritize the most-likely payload
+	// variants (e.g. Jinja2 payloads first for Python backends, SpEL first
+	// for Java, etc.) so the fixed probe budget is used more efficiently.
+	// Populated automatically by Run(); callers may pre-set it to override.
+	DetectedTech TechStack
 }
 
 func NewService(cfg Config) *Service {
@@ -243,6 +249,13 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	bodyText := string(bodyBytes)
 	// Harvest any tokens present in the baseline response body.
 	input.Session.HarvestFromResponse(resp, bodyBytes)
+
+	// Fingerprint the tech stack from the baseline response so all subsequent
+	// probes can prioritize payloads toward the detected engine family.
+	// Only override when the caller hasn't pre-populated DetectedTech.
+	if len(input.DetectedTech.Labels()) == 0 {
+		input.DetectedTech = detectTechStack(resp.Header, bodyBytes)
+	}
 
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)

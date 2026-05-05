@@ -40,12 +40,33 @@ func DefaultGoals() []model.ImpactGoal {
 }
 
 func GoalsOrDefault(opts model.ScanOptions) []model.ImpactGoal {
-	if len(opts.ImpactGoals) == 0 {
+	return GoalsOrDefaultWithPack(opts)
+}
+
+// GoalsOrDefaultWithPack resolves the effective impact goals from opts.
+// When opts.ImpactGoals is empty and a ProgramProfilePack with its own
+// ImpactGoals is present, those are used before falling back to the global
+// default set. Vertical presets are also applied when ImpactGoals is empty.
+func GoalsOrDefaultWithPack(opts model.ScanOptions) []model.ImpactGoal {
+	goals := opts.ImpactGoals
+
+	// Allow the ProgramProfilePack to supply its own goal set when none
+	// have been explicitly specified at the scan level.
+	if len(goals) == 0 && opts.ProgramProfilePack != nil && len(opts.ProgramProfilePack.ImpactGoals) > 0 {
+		goals = opts.ProgramProfilePack.ImpactGoals
+	}
+
+	// Apply vertical preset when still no goals resolved.
+	if len(goals) == 0 && opts.ProgramProfilePack != nil {
+		goals = verticalPresetGoals(opts.ProgramProfilePack.Vertical)
+	}
+
+	if len(goals) == 0 {
 		return append([]model.ImpactGoal(nil), DefaultGoals()...)
 	}
-	out := make([]model.ImpactGoal, 0, len(opts.ImpactGoals))
+	out := make([]model.ImpactGoal, 0, len(goals))
 	seen := map[model.ImpactGoal]struct{}{}
-	for _, goal := range opts.ImpactGoals {
+	for _, goal := range goals {
 		goal = model.ImpactGoal(strings.TrimSpace(string(goal)))
 		if goal == "" {
 			continue
@@ -60,6 +81,46 @@ func GoalsOrDefault(opts model.ScanOptions) []model.ImpactGoal {
 		return append([]model.ImpactGoal(nil), DefaultGoals()...)
 	}
 	return out
+}
+
+// verticalPresetGoals returns the canonical impact-goal ordering for well-known
+// industry verticals. Returns nil when the vertical is unrecognised so the
+// caller can fall back to the global default goal set.
+func verticalPresetGoals(vertical string) []model.ImpactGoal {
+	switch strings.ToLower(strings.TrimSpace(vertical)) {
+	case "fintech":
+		return []model.ImpactGoal{
+			model.ImpactGoalPaymentAbuse,
+			model.ImpactGoalAccountTakeover,
+			model.ImpactGoalCrossTenantAccess,
+			model.ImpactGoalAuthBypass,
+			model.ImpactGoalSensitiveDataExposure,
+		}
+	case "healthcare":
+		return []model.ImpactGoal{
+			model.ImpactGoalSensitiveDataExposure,
+			model.ImpactGoalCrossTenantAccess,
+			model.ImpactGoalAuthBypass,
+			model.ImpactGoalAccountTakeover,
+		}
+	case "saas":
+		return []model.ImpactGoal{
+			model.ImpactGoalCrossTenantAccess,
+			model.ImpactGoalAccountTakeover,
+			model.ImpactGoalAuthBypass,
+			model.ImpactGoalSensitiveDataExposure,
+			model.ImpactGoalStoredXSS,
+		}
+	case "api-first", "api_first", "api":
+		return []model.ImpactGoal{
+			model.ImpactGoalCrossTenantAccess,
+			model.ImpactGoalAuthBypass,
+			model.ImpactGoalSSRFInternalAccess,
+			model.ImpactGoalSensitiveDataExposure,
+			model.ImpactGoalAccountTakeover,
+		}
+	}
+	return nil
 }
 
 func GoalPrompt(goals []model.ImpactGoal) string {
@@ -103,7 +164,13 @@ func MatchingPlaybooks(goals []model.ImpactGoal) []Playbook {
 }
 
 func EnrichFinding(f model.Finding, goals []model.ImpactGoal) model.Finding {
-	goals = GoalsOrDefault(model.ScanOptions{ImpactGoals: goals})
+	return EnrichFindingWithPack(f, goals, nil)
+}
+
+// EnrichFindingWithPack enriches a finding like EnrichFinding but also applies
+// program-specific payout multipliers from pack when non-nil.
+func EnrichFindingWithPack(f model.Finding, goals []model.ImpactGoal, pack *model.ProgramProfilePack) model.Finding {
+	goals = GoalsOrDefaultWithPack(model.ScanOptions{ImpactGoals: goals, ProgramProfilePack: pack})
 	matchedGoals := matchedGoalsForFinding(f, goals)
 	if len(f.ImpactGoals) == 0 {
 		f.ImpactGoals = matchedGoals
@@ -112,7 +179,7 @@ func EnrichFinding(f model.Finding, goals []model.ImpactGoal) model.Finding {
 	}
 	f.ProofArtifacts = mergeArtifacts(f.ProofArtifacts, deriveArtifacts(f))
 	f.ImpactScore = MaxFloat(f.ImpactScore, scoreImpact(f, matchedGoals))
-	f.BountyScore = MaxFloat(f.BountyScore, scoreBounty(f, matchedGoals))
+	f.BountyScore = MaxFloat(f.BountyScore, scoreBountyWithPack(f, matchedGoals, pack))
 	f.ProofState = maxProofState(f.ProofState, deriveProofState(f))
 	if strings.TrimSpace(f.Impact) == "" {
 		f.Impact = deriveImpactNarrative(f, matchedGoals)
@@ -141,12 +208,18 @@ func EnrichFinding(f model.Finding, goals []model.ImpactGoal) model.Finding {
 }
 
 func RankFindings(findings []model.Finding, goals []model.ImpactGoal) []model.Finding {
+	return RankFindingsWithPack(findings, goals, nil)
+}
+
+// RankFindingsWithPack enriches and sorts findings like RankFindings but also
+// applies program-specific payout multipliers from pack when non-nil.
+func RankFindingsWithPack(findings []model.Finding, goals []model.ImpactGoal, pack *model.ProgramProfilePack) []model.Finding {
 	if len(findings) == 0 {
 		return nil
 	}
 	out := make([]model.Finding, 0, len(findings))
 	for _, f := range findings {
-		out = append(out, EnrichFinding(f, goals))
+		out = append(out, EnrichFindingWithPack(f, goals, pack))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].BountyScore != out[j].BountyScore {
@@ -245,6 +318,13 @@ func scoreImpact(f model.Finding, goals []model.ImpactGoal) float64 {
 }
 
 func scoreBounty(f model.Finding, goals []model.ImpactGoal) float64 {
+	return scoreBountyWithPack(f, goals, nil)
+}
+
+// scoreBountyWithPack computes a [0,1] bounty-desirability score.  When pack
+// is non-nil its CategoryPayoutMultipliers are applied on top of the base
+// heuristic, allowing program-specific payout calibration.
+func scoreBountyWithPack(f model.Finding, goals []model.ImpactGoal, pack *model.ProgramProfilePack) float64 {
 	score := scoreImpact(f, goals) * 0.65
 	if strings.Contains(strings.ToLower(f.Category), "access") || strings.Contains(strings.ToLower(f.Category), "auth") {
 		score += 0.08
@@ -260,6 +340,12 @@ func scoreBounty(f model.Finding, goals []model.ImpactGoal) float64 {
 	}
 	if f.ProofState == model.ProofStateSubmissionReady {
 		score += 0.15
+	}
+	if pack != nil && len(pack.CategoryPayoutMultipliers) > 0 {
+		cat := strings.ToLower(strings.TrimSpace(f.Category))
+		if mult, ok := pack.CategoryPayoutMultipliers[cat]; ok && mult > 0 {
+			score *= mult
+		}
 	}
 	return clamp01(score)
 }

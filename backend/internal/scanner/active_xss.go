@@ -18,6 +18,51 @@ import (
 // touching identifiers/IDs that could mutate state.
 var xssProbeParams = []string{"q", "search", "query", "s", "keyword", "term", "text", "name", "title", "msg", "message"}
 
+// techAwareXSSProbeParams returns the XSS parameter probe list reordered so
+// parameters most likely to be reflected by the detected technology stack are
+// tried first. This reduces probe budget waste when the tech stack implies a
+// well-known parameter naming convention (e.g. "search" for CMS platforms,
+// "query" / "q" for SPA APIs).
+//
+// All default parameters are still included; only the ordering changes.
+func techAwareXSSProbeParams(tech TechStack) []string {
+	// Determine which parameter names to front-load based on detected tech.
+	var priority []string
+	switch {
+	case tech.Has("wordpress") || tech.Has("drupal") || tech.Has("joomla"):
+		// CMS search boxes almost universally use "s" (WordPress) or
+		// "search" (Drupal/Joomla).
+		priority = []string{"s", "search", "q"}
+	case tech.Has("django"):
+		// Django views typically expose "q" or "query" for search.
+		priority = []string{"q", "query", "search"}
+	case tech.Has("react") || tech.Has("next.js") || tech.Has("vue.js") || tech.Has("angularjs") || tech.Has("angular"):
+		// SPA/API frontends often surface parameters as "query", "q", or
+		// "term" via JSON-powered search endpoints.
+		priority = []string{"query", "q", "term", "search"}
+	case tech.Has("ruby on rails"):
+		// Rails conventions favour "q" (Ransack gem) and "search".
+		priority = []string{"q", "search", "query"}
+	}
+
+	if len(priority) == 0 {
+		return xssProbeParams
+	}
+
+	seen := make(map[string]struct{}, len(xssProbeParams))
+	out := make([]string, 0, len(xssProbeParams))
+	for _, p := range priority {
+		out = append(out, p)
+		seen[p] = struct{}{}
+	}
+	for _, p := range xssProbeParams {
+		if _, ok := seen[p]; !ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // xssMarker is a deliberately distinctive payload chosen to be:
 //   - Cheap to send (a few dozen bytes per probe).
 //   - Obvious if reflected raw into HTML (contains "<", ">", quotes and a
@@ -77,7 +122,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, p := range xssProbeParams {
+		for _, p := range techAwareXSSProbeParams(input.DetectedTech) {
 			if attempts >= xssMaxAttempts {
 				break
 			}

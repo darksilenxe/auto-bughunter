@@ -295,6 +295,14 @@ type ScanOptions struct {
 	// bug-bounty-relevant outcomes. When empty, the backend applies a
 	// default impact-first goal set.
 	ImpactGoals []ImpactGoal `json:"impactGoals,omitempty"`
+	// PolicyPack is the active policy profile name (e.g. "safe", "autonomous",
+	// "aggressive"). Propagated into the AI planner system prompt so it can
+	// select an appropriate probe/exploitation strategy.
+	PolicyPack string `json:"policyPack,omitempty"`
+	// ProgramProfilePack carries per-program payout signals and vertical
+	// presets. When set, bounty scoring and impact-goal selection shift toward
+	// the highest-paying vulnerability classes for that program context.
+	ProgramProfilePack *ProgramProfilePack `json:"programProfilePack,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
@@ -746,6 +754,59 @@ type AutonomyMemory struct {
 	AgentStats         map[string]AutonomyAgentStat `json:"agentStats,omitempty"`
 	LastRunAt          time.Time                    `json:"lastRunAt,omitempty"`
 	RetentionAppliedAt time.Time                    `json:"retentionAppliedAt,omitempty"`
+	// AgentPayoutWeights accumulates a payout-weighted score per agent name,
+	// derived from ReportFeedback.PayoutUSD attributed to agent-sourced findings.
+	// Higher values steer contextPreferredAgents toward agents with a track
+	// record of producing high-bounty findings on this target/program.
+	AgentPayoutWeights map[string]float64 `json:"agentPayoutWeights,omitempty"`
+	// TargetROISignals carries per-target adaptive strategy signals derived
+	// from historical scan results (drift rate, high-payout categories, etc.).
+	TargetROISignals map[string]TargetROIProfile `json:"targetRoiSignals,omitempty"`
+}
+
+// TargetROIProfile carries lightweight ROI signals for a specific target URL,
+// used to steer adaptive agent scheduling toward high-value areas.
+type TargetROIProfile struct {
+	// LastNovelFindingAt is the timestamp of the most recent scan that
+	// produced at least one finding not seen in a prior scan. Stale targets
+	// (long since last novel finding) are assigned a lighter agent profile.
+	LastNovelFindingAt time.Time `json:"lastNovelFindingAt,omitempty"`
+	// HighPayoutCategories lists finding categories that have historically
+	// produced paid bug-bounty payouts on this target (e.g. "access_control",
+	// "injection"). Used to promote agents that cover those categories.
+	HighPayoutCategories []string `json:"highPayoutCategories,omitempty"`
+	// DriftScore is the average number of novel findings per scan on this
+	// target, computed from historical runs. Higher values indicate an active
+	// attack surface worth deep scanning.
+	DriftScore float64 `json:"driftScore,omitempty"`
+}
+
+// ProgramProfilePack bundles payout-tuning data for a specific bug-bounty
+// program or industry vertical. When set on ScanOptions it shifts impact-goal
+// selection and bounty scoring toward the vulnerability classes that
+// historically pay well in that context.
+type ProgramProfilePack struct {
+	// Name is a human-readable identifier, e.g. "fintech", "healthcare",
+	// "saas", "api-first", or a program handle like "acme-corp-vdp".
+	Name string `json:"name,omitempty"`
+	// Vertical is a broad industry tag used to pre-select ImpactGoals when
+	// ImpactGoals is empty. Recognised values: "fintech", "healthcare",
+	// "saas", "api-first".
+	Vertical string `json:"vertical,omitempty"`
+	// ImpactGoals overrides the default goal set for this program, allowing
+	// per-program prioritisation (e.g. a payments program always targets
+	// payment_abuse and account_takeover first).
+	ImpactGoals []ImpactGoal `json:"impactGoals,omitempty"`
+	// CategoryPayoutMultipliers maps lower-cased finding category strings
+	// (e.g. "access_control", "injection") to a scalar multiplier (1.0 =
+	// baseline) applied on top of the base bounty score.  Values > 1 boost
+	// findings in high-paying categories; values < 1 de-prioritise noisy
+	// low-paying ones.
+	CategoryPayoutMultipliers map[string]float64 `json:"categoryPayoutMultipliers,omitempty"`
+	// EstimatedPayoutUSD maps lower-cased finding categories to the
+	// program's historical average payout for that class. Used to surface a
+	// dollar-amount estimate in submission bundles and ranking rationale.
+	EstimatedPayoutUSD map[string]float64 `json:"estimatedPayoutUSD,omitempty"`
 }
 
 type AutonomyAgentStat struct {

@@ -174,7 +174,7 @@ type fakeCaller struct {
 	err   error
 }
 
-func (f *fakeCaller) Plan(_ context.Context, _ string, _ []any, _ []map[string]string, _ []string, _ []model.ImpactGoal) ([]map[string]string, bool, error) {
+func (f *fakeCaller) Plan(_ context.Context, _ string, _ []any, _ []map[string]string, _ []string, _ []model.ImpactGoal, _ string) ([]map[string]string, bool, error) {
 	return f.specs, f.done, f.err
 }
 

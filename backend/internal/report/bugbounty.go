@@ -305,8 +305,10 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 	zw := zip.NewWriter(&buf)
 
 	target := ""
+	var pack *model.ProgramProfilePack
 	if job != nil {
 		target = job.Target
+		pack = job.Options.ProgramProfilePack
 	}
 
 	var index strings.Builder
@@ -319,10 +321,11 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 		index.WriteString("**Scan ID:** " + job.ID + "  \n")
 		index.WriteString("\n")
 	}
-	index.WriteString("| # | Severity | Title | File |\n|---|----------|-------|------|\n")
+	index.WriteString("| # | Severity | Title | BountyScore | Payout Estimate | Ranking Rationale | File |\n")
+	index.WriteString("|---|----------|-------|-------------|-----------------|-------------------|------|\n")
 
 	if job != nil {
-		findings := impact.RankFindings(job.Findings, job.Options.ImpactGoals)
+		findings := impact.RankFindingsWithPack(job.Findings, job.Options.ImpactGoals, pack)
 		for i, f := range findings {
 			fname := fmt.Sprintf("%02d-%s-%s.md", i+1, strings.ToLower(string(f.Severity)), safeFilename(f.ID))
 			content := RenderBugBountyMarkdownForPlatform(f, target, platform)
@@ -333,7 +336,14 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 			if _, err := fileWriter.Write([]byte(content)); err != nil {
 				return nil, err
 			}
-			index.WriteString(fmt.Sprintf("| %d | %s | %s | %s |\n", i+1, sevDisplay(f.Severity), f.Title, fname))
+			payoutEst := payoutEstimate(f, pack)
+			rationale := payoutRationale(f, i+1, pack)
+			bountyStr := ""
+			if f.BountyScore > 0 {
+				bountyStr = fmt.Sprintf("%.2f", f.BountyScore)
+			}
+			index.WriteString(fmt.Sprintf("| %d | %s | %s | %s | %s | %s | %s |\n",
+				i+1, sevDisplay(f.Severity), f.Title, bountyStr, payoutEst, rationale, fname))
 		}
 	}
 
@@ -348,4 +358,37 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// payoutEstimate returns a human-readable estimated payout string for a
+// finding using the ProgramProfilePack's EstimatedPayoutUSD map. Returns an
+// empty string when no estimate is available.
+func payoutEstimate(f model.Finding, pack *model.ProgramProfilePack) string {
+	if pack == nil || len(pack.EstimatedPayoutUSD) == 0 {
+		return ""
+	}
+	cat := strings.ToLower(strings.TrimSpace(f.Category))
+	if amt, ok := pack.EstimatedPayoutUSD[cat]; ok && amt > 0 {
+		return fmt.Sprintf("$%.0f", amt)
+	}
+	return ""
+}
+
+// payoutRationale builds a brief ranking rationale string for the INDEX.md
+// table, explaining the top contributing factors to the finding's rank.
+func payoutRationale(f model.Finding, rank int, pack *model.ProgramProfilePack) string {
+	parts := []string{fmt.Sprintf("Ranked #%d", rank)}
+	if len(f.ImpactGoals) > 0 {
+		parts = append(parts, strings.ReplaceAll(string(f.ImpactGoals[0]), "_", " ")+" goal match")
+	}
+	if f.BountyScore > 0 {
+		parts = append(parts, fmt.Sprintf("BountyScore %.2f", f.BountyScore))
+	}
+	if pack != nil && len(pack.EstimatedPayoutUSD) > 0 {
+		cat := strings.ToLower(strings.TrimSpace(f.Category))
+		if amt, ok := pack.EstimatedPayoutUSD[cat]; ok && amt > 0 {
+			parts = append(parts, fmt.Sprintf("est. $%.0f", amt))
+		}
+	}
+	return strings.Join(parts, " — ")
 }

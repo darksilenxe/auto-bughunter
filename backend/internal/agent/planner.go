@@ -79,7 +79,7 @@ func (p *StaticPlanner) Plan(_ context.Context, _ AgentInput, history []AgentOut
 // It is satisfied by *ai.Client.Plan and is declared here to avoid an import
 // cycle between the agent and ai packages.
 type AIPlanCaller interface {
-	Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal) ([]map[string]string, bool, error)
+	Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal, policyPack string) ([]map[string]string, bool, error)
 }
 
 // AIPlanner asks the configured AI provider what to run next, falling back to
@@ -141,12 +141,14 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 
 	findings := make([]any, 0, len(input.AllFindings))
 	for _, f := range input.AllFindings {
-		findings = append(findings, map[string]string{
-			"id":       f.ID,
-			"category": f.Category,
-			"severity": string(f.Severity),
-			"title":    f.Title,
-		})
+		entry := map[string]string{
+			"id":          f.ID,
+			"category":    f.Category,
+			"severity":    string(f.Severity),
+			"title":       f.Title,
+			"bountyScore": formatBountyScore(f.BountyScore),
+		}
+		findings = append(findings, entry)
 	}
 
 	historySummary := make([]map[string]string, 0, len(history))
@@ -163,7 +165,7 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		})
 	}
 
-	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals)
+	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals, input.Options.PolicyPack)
 	if err != nil {
 		if p.Fallback != nil {
 			return p.Fallback.Plan(ctx, input, history)
@@ -175,9 +177,9 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	for _, name := range p.AvailableAgents {
 		available[name] = struct{}{}
 	}
-	blocked := buildBlockedAgents(stats, input.AutonomyMemory)
+	blocked := buildBlockedAgents(stats, input.AutonomyMemory, input.AllFindings)
 	preferredSet := toNameSet(input.AutonomyMemory.PreferredAgents)
-	contextPreferredSet := contextPreferredAgents(input.Target, input.AllFindings, p.AvailableAgents)
+	contextPreferredSet := contextPreferredAgents(input.Target, input.AllFindings, p.AvailableAgents, input.AutonomyMemory)
 
 	agents := make([]AgentSpec, 0, len(specs))
 	for _, s := range specs {
@@ -274,7 +276,7 @@ func computeAgentRunStats(history []AgentOutput) map[string]agentRunStats {
 	return stats
 }
 
-func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMemory) map[string]bool {
+func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMemory, allFindings []model.Finding) map[string]bool {
 	blocked := map[string]bool{}
 	for _, name := range memory.SuppressedAgents {
 		name = strings.TrimSpace(name)
@@ -295,7 +297,52 @@ func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMem
 			blocked[name] = true
 		}
 	}
+
+	// Relax blocking when high-payout-potential findings are present and the
+	// blocked agent is contextually relevant to exploiting them. This prevents
+	// error-history suppression from hiding a critical follow-up path.
+	if len(allFindings) > 0 {
+		unblockForHighPayoutFindings(blocked, allFindings)
+	}
+
 	return blocked
+}
+
+// unblockForHighPayoutFindings removes agents from the blocked set when the
+// current finding set contains at least one high-payout-potential finding
+// (BountyScore >= 0.75 or Critical severity) and the agent is in the primary
+// attack surface for that finding's goal.
+func unblockForHighPayoutFindings(blocked map[string]bool, findings []model.Finding) {
+	// Maps goal → agents that should be unblocked to pursue it.
+	goalAgents := map[string][]string{
+		"account_takeover":       {"auth_bypass", "pentest_loop", "adaptive_probe"},
+		"auth_bypass":            {"auth_bypass", "pentest_loop"},
+		"ssrf_internal_access":   {"ssrf", "pentest_loop"},
+		"cross_tenant_access":    {"access_control", "pentest_loop"},
+		"payment_abuse":          {"input_validation", "pentest_loop"},
+		"sensitive_data_exposure": {"information_disclosure", "scanning"},
+	}
+	for _, f := range findings {
+		isHighPayout := f.BountyScore >= 0.75 || f.Severity == model.SeverityCritical
+		if !isHighPayout {
+			continue
+		}
+		for _, goal := range f.ImpactGoals {
+			for _, agentName := range goalAgents[string(goal)] {
+				delete(blocked, agentName)
+			}
+		}
+		// Also unblock by category signals even when goals are not yet populated.
+		cat := strings.ToLower(strings.TrimSpace(f.Category))
+		switch {
+		case strings.Contains(cat, "auth") || strings.Contains(cat, "access"):
+			delete(blocked, "auth_bypass")
+		case strings.Contains(cat, "ssrf"):
+			delete(blocked, "ssrf")
+		case strings.Contains(cat, "injection"):
+			delete(blocked, "input_validation")
+		}
+	}
 }
 
 // shouldBlockForHighErrorRate suppresses an agent only when repeated runs show
@@ -379,7 +426,7 @@ func toNameSet(names []string) map[string]bool {
 	return out
 }
 
-func contextPreferredAgents(target string, findings []model.Finding, available []string) map[string]bool {
+func contextPreferredAgents(target string, findings []model.Finding, available []string, memory model.AutonomyMemory) map[string]bool {
 	preferred := map[string]bool{}
 	host := strings.ToLower(strings.TrimSpace(target))
 	if u, err := url.Parse(target); err == nil {
@@ -415,6 +462,68 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 			preferred[name] = true
 		}
 	}
+
+	// Promote agents with a strong payout track record for this target/program.
+	// payoutWeightThreshold is the minimum accumulated payout-weighted score an
+	// agent must have (across all historical findings attributed to it via
+	// ReportFeedback.PayoutUSD) before it is promoted to the preferred set.
+	// A value of 0.5 corresponds to roughly one medium-bounty payout attribution.
+	const payoutWeightThreshold = 0.5
+	if len(memory.AgentPayoutWeights) > 0 {
+		for agentName, weight := range memory.AgentPayoutWeights {
+			if weight >= payoutWeightThreshold {
+				preferred[agentName] = true
+			}
+		}
+	}
+
+	// When a TargetROIProfile exists for this target, promote deep agents for
+	// high-drift targets and high-payout categories; suppress deep agents for
+	// stale low-ROI targets.
+	// staleTargetThresholdDays is the number of days without a novel finding
+	// after which a target is considered stale and assigned a lighter scan profile.
+	const staleTargetThresholdDays = 30
+	if roiProfile, ok := memory.TargetROISignals[host]; ok {
+		isHighDrift := roiProfile.DriftScore >= 1.0
+		isStale := !roiProfile.LastNovelFindingAt.IsZero() && roiProfile.LastNovelFindingAt.Before(time.Now().UTC().Add(-time.Duration(staleTargetThresholdDays)*24*time.Hour))
+
+		if isHighDrift {
+			for _, name := range available {
+				lc := strings.ToLower(strings.TrimSpace(name))
+				if strings.Contains(lc, "pentest") || strings.Contains(lc, "adaptive") || strings.Contains(lc, "reasoning") {
+					preferred[name] = true
+				}
+			}
+		}
+
+		if isStale {
+			// For stale targets, demote deep agents (remove from preferred)
+			// so lighter surface agents run first.
+			for _, name := range available {
+				lc := strings.ToLower(strings.TrimSpace(name))
+				if strings.Contains(lc, "pentest") || strings.Contains(lc, "adaptive") {
+					delete(preferred, name)
+				}
+			}
+		}
+
+		// Promote agents covering high-payout categories seen on this target.
+		catToAgent := map[string][]string{
+			"access_control":    {"access_control", "auth_bypass"},
+			"injection":         {"input_validation", "scanning"},
+			"ssrf":              {"ssrf"},
+			"information_disclosure": {"information_disclosure", "analysis"},
+		}
+		for _, cat := range roiProfile.HighPayoutCategories {
+			lcat := strings.ToLower(strings.TrimSpace(cat))
+			if agents, ok := catToAgent[lcat]; ok {
+				for _, a := range agents {
+					preferred[a] = true
+				}
+			}
+		}
+	}
+
 	return preferred
 }
 
@@ -505,4 +614,14 @@ func shouldStopForLowMarginalValue(history []AgentOutput, minMarginalScore float
 		checked++
 	}
 	return checked == 2
+}
+
+// formatBountyScore formats a BountyScore for inclusion in the AI planner
+// finding context. Returns an empty string for zero scores to reduce token
+// usage on findings that have not been bounty-enriched yet.
+func formatBountyScore(score float64) string {
+	if score <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(score, 'f', 2, 64)
 }
