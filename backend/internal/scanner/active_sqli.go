@@ -63,6 +63,76 @@ var sqlErrorSignatures = []string{
 	"odbc driver",
 }
 
+// sqlErrorSignaturesByDB groups the above signatures by database family so
+// that techPrioritizedSQLiSignatures can move the most-likely DB's patterns
+// to the front of the matching pass.
+var sqlErrorSignaturesByDB = map[string][]string{
+	"mysql": {
+		"you have an error in your sql syntax",
+		"warning: mysql",
+		"mysql_fetch",
+		"mysql_num_rows",
+		"mysqlclient.",
+		"unclosed quotation mark after the character string",
+	},
+	"postgresql": {
+		"pg_query():",
+		"pg_exec():",
+		"unterminated quoted string at or near",
+		"syntax error at or near \"'\"",
+		"postgresql query failed",
+	},
+	"mssql": {
+		"microsoft odbc sql server driver",
+		"unclosed quotation mark before the character string",
+		"incorrect syntax near",
+		"system.data.sqlclient.sqlexception",
+	},
+	"oracle": {
+		"ora-00933:",
+		"ora-00921:",
+		"ora-01756:",
+		"oracle error",
+	},
+	"sqlite": {
+		"sqlite3::",
+		"sqlite_error",
+		"sqliteexception",
+		"unrecognized token:",
+	},
+}
+
+// techPrioritizedSQLiSignatures returns the full sqlErrorSignatures list
+// reordered so the patterns for the database family most consistent with the
+// detected tech stack are checked first. This does not affect probe request
+// count (we still send the same payloads) but makes error detection fire
+// earlier in the signature scan for the expected DB engine, saving CPU on
+// large response bodies.
+func techPrioritizedSQLiSignatures(tech TechStack) []string {
+	family := sqlDBFamily(tech)
+	if family == "" {
+		return sqlErrorSignatures
+	}
+	primary, ok := sqlErrorSignaturesByDB[family]
+	if !ok {
+		return sqlErrorSignatures
+	}
+	seen := make(map[string]struct{}, len(sqlErrorSignatures))
+	out := make([]string, 0, len(sqlErrorSignatures))
+	// Primary DB family first.
+	for _, sig := range primary {
+		out = append(out, sig)
+		seen[sig] = struct{}{}
+	}
+	// Remaining signatures in their original order.
+	for _, sig := range sqlErrorSignatures {
+		if _, ok := seen[sig]; !ok {
+			out = append(out, sig)
+		}
+	}
+	return out
+}
+
 // sqliMaxAttempts caps probe budget per scan. Same rationale as
 // xssMaxAttempts.
 const sqliMaxAttempts = 12
@@ -151,7 +221,7 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 				_ = resp.Body.Close()
-				if sig := matchSQLErrorSignature(string(respBody)); sig != "" {
+				if sig := matchSQLErrorSignatureFrom(string(respBody), techPrioritizedSQLiSignatures(input.DetectedTech)); sig != "" {
 					hits = append(hits, hit{url: probeURL, param: p, signature: sig})
 					matched = true
 					break
@@ -211,11 +281,19 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 // signatures that are inherently case-stable; this avoids the cost of a full
 // case-fold of the (potentially large) response body for each pattern.
 func matchSQLErrorSignature(body string) string {
+	return matchSQLErrorSignatureFrom(body, sqlErrorSignatures)
+}
+
+// matchSQLErrorSignatureFrom is the underlying matcher used by both
+// matchSQLErrorSignature and runActiveSQLiProbe (which passes in a
+// tech-prioritized signature list). It returns the first matching signature
+// or "" when none is found.
+func matchSQLErrorSignatureFrom(body string, sigs []string) string {
 	if body == "" {
 		return ""
 	}
 	lower := strings.ToLower(body)
-	for _, sig := range sqlErrorSignatures {
+	for _, sig := range sigs {
 		if strings.Contains(lower, sig) {
 			return sig
 		}
