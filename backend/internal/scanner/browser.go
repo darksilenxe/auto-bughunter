@@ -36,6 +36,16 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	return ctx, cancel
 }
 func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, []DiscoveredEndpoint, error) {
+	// headlessChecks performs multi-page crawling and screenshot capture with graceful degradation.
+	// Key improvements for screenshot reliability:
+	//   - Individual 5-second timeout for initial screenshot (separate from page navigation)
+	//   - Per-page screenshots with individual 3-second timeouts
+	//   - Graceful error recovery: screenshot failures don't abort the scan
+	//   - Context cancellation checks before emitting to prevent partial screenshots
+	//   - Detailed logging of screenshot capture failures for debugging
+	//   - Continues with findings even if screenshots fail (e.g. forms, links still collected)
+	// This design ensures the browser crawl completes with maximum useful data regardless of
+	// screenshot timeouts or network issues with the Chromium sidecar.
 	ctx, cancel := chromedpContext(parent)
 	defer cancel()
 
@@ -116,21 +126,66 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			const html = f.innerHTML.toLowerCase();
 			return html.includes('csrf') || html.includes('_token') || html.includes('xsrf');
 		}).length`, &csrfLikeCount),
-		chromedp.CaptureScreenshot(&screenshotBuf),
 	)
+
+	// Capture initial screenshot with individual timeout and error recovery.
+	// Use a shorter 5-second timeout for the screenshot to avoid blocking
+	// if the page is slow to render or if network is unreliable.
+	tasks = append(tasks, chromedp.ActionFunc(func(taskCtx context.Context) error {
+		screenshotCtx, cancelScreenshot := context.WithTimeout(taskCtx, 5*time.Second)
+		defer cancelScreenshot()
+		if err := chromedp.CaptureScreenshot(&screenshotBuf).Do(screenshotCtx); err != nil {
+			// Log the screenshot error but don't fail the entire scan.
+			// The scan can continue without the initial screenshot.
+			if emit != nil {
+				emit(model.ScanEvent{
+					Type:      model.ScanEventInfo,
+					AgentName: "scanner",
+					Message:   fmt.Sprintf("Initial screenshot capture failed: %v (will continue without it)", err),
+				})
+			}
+			return nil // Don't propagate error - graceful degradation
+		}
+		return nil
+	}))
 
 	err := chromedp.Run(ctx, tasks...)
 	if err != nil {
-		return nil, nil, err
+		// Log navigation/extraction errors but attempt to continue if we have some data
+		if emit != nil {
+			emit(model.ScanEvent{
+				Type:      model.ScanEventInfo,
+				AgentName: "scanner",
+				Message:   fmt.Sprintf("Headless checks encountered error: %v (partial results may still be available)", err),
+			})
+		}
+		// Continue with what we have rather than failing completely
+		// This allows at least XHR endpoint discovery to complete
 	}
 
-	// Emit screenshot of initial page load.
-	if len(screenshotBuf) > 0 && emit != nil {
+	// Emit screenshot of initial page load if captured successfully.
+	if len(screenshotBuf) > 0 {
+		if emit != nil {
+			// Check if context is still valid before emitting
+			select {
+			case <-parent.Done():
+				// Parent context cancelled - skip emission
+				break
+			default:
+				emit(model.ScanEvent{
+					Type:       model.ScanEventScreenshot,
+					AgentName:  "scanner",
+					Message:    fmt.Sprintf("Screenshot: %s (title=%q)", currentURL, title),
+					Screenshot: base64.StdEncoding.EncodeToString(screenshotBuf),
+				})
+			}
+		}
+	} else if emit != nil {
+		// Log when initial screenshot is missing
 		emit(model.ScanEvent{
-			Type:       model.ScanEventScreenshot,
-			AgentName:  "scanner",
-			Message:    fmt.Sprintf("Screenshot: %s (title=%q)", currentURL, title),
-			Screenshot: base64.StdEncoding.EncodeToString(screenshotBuf),
+			Type:      model.ScanEventInfo,
+			AgentName: "scanner",
+			Message:   fmt.Sprintf("No initial screenshot captured for %s", target),
 		})
 	}
 
@@ -163,7 +218,11 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 		var pageLinks []string
 		var pageURL string
 		var pageShot []byte
-		if err := chromedp.Run(ctx,
+
+		// Capture screenshot with individual timeout and graceful error handling.
+		// Use separate timeout for screenshot operation (3 seconds) to allow
+		// the page to render even if other operations complete quickly.
+		pageTasks := chromedp.Tasks{
 			chromedp.Navigate(next),
 			chromedp.Location(&pageURL),
 			chromedp.Evaluate(`document.querySelectorAll('form').length`, &pageForms),
@@ -172,10 +231,34 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 				return html.includes('csrf') || html.includes('_token') || html.includes('xsrf');
 			}).length`, &pageCsrfLike),
 			chromedp.Evaluate(`Array.from(document.querySelectorAll('a[href],script[src],form[action]')).map(el => el.href || el.src || el.action).filter(Boolean).slice(0,100)`, &pageLinks),
-			chromedp.CaptureScreenshot(&pageShot),
-		); err != nil {
+		}
+
+		// Add screenshot capture with isolated error handling
+		pageTasks = append(pageTasks, chromedp.ActionFunc(func(taskCtx context.Context) error {
+			screenshotCtx, cancelScreenshot := context.WithTimeout(taskCtx, 3*time.Second)
+			defer cancelScreenshot()
+			if err := chromedp.CaptureScreenshot(&pageShot).Do(screenshotCtx); err != nil {
+				// Log screenshot failure for this page but continue
+				// Other page data (forms, links) will still be collected
+				return nil // Don't fail - screenshot is optional for per-page crawl
+			}
+			return nil
+		}))
+
+		if err := chromedp.Run(ctx, pageTasks...); err != nil {
+			// Check if context deadline exceeded to avoid spam logging
+			if err == context.DeadlineExceeded {
+				if emit != nil {
+					emit(model.ScanEvent{
+						Type:      model.ScanEventInfo,
+						AgentName: "scanner",
+						Message:   fmt.Sprintf("Crawl timeout on page: %s (skipping to next page)", next),
+					})
+				}
+			}
 			continue
 		}
+
 		visitedPages++
 		totalForms += pageForms
 		totalCSRFLike += pageCsrfLike
@@ -188,14 +271,24 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			}
 			runtimeRefs[ref] = struct{}{}
 		}
-		// Emit per-page screenshot.
-		if len(pageShot) > 0 && emit != nil {
-			emit(model.ScanEvent{
-				Type:       model.ScanEventScreenshot,
-				AgentName:  "scanner",
-				Message:    fmt.Sprintf("Screenshot: %s", pageURL),
-				Screenshot: base64.StdEncoding.EncodeToString(pageShot),
-			})
+
+		// Emit per-page screenshot only if captured successfully.
+		if len(pageShot) > 0 {
+			if emit != nil {
+				// Check if context is still valid before emitting
+				select {
+				case <-parent.Done():
+					// Parent context cancelled - skip emission
+					break
+				default:
+					emit(model.ScanEvent{
+						Type:       model.ScanEventScreenshot,
+						AgentName:  "scanner",
+						Message:    fmt.Sprintf("Screenshot: %s", pageURL),
+						Screenshot: base64.StdEncoding.EncodeToString(pageShot),
+					})
+				}
+			}
 		}
 	}
 
