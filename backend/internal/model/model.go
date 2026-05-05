@@ -806,7 +806,7 @@ type ProgramProfilePack struct {
 	// EstimatedPayoutUSD maps lower-cased finding categories to the
 	// program's historical average payout for that class. Used to surface a
 	// dollar-amount estimate in submission bundles and ranking rationale.
-	EstimatedPayoutUSD map[string]float64 `json:"estimatedPayoutUsd,omitempty"`
+	EstimatedPayoutUSD map[string]float64 `json:"estimatedPayoutUSD,omitempty"`
 }
 
 type AutonomyAgentStat struct {

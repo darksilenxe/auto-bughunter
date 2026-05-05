@@ -111,7 +111,7 @@ func verticalPresetGoals(vertical string) []model.ImpactGoal {
 			model.ImpactGoalSensitiveDataExposure,
 			model.ImpactGoalStoredXSS,
 		}
-	case "api-first", "api_first":
+	case "api-first", "api_first", "api":
 		return []model.ImpactGoal{
 			model.ImpactGoalCrossTenantAccess,
 			model.ImpactGoalAuthBypass,

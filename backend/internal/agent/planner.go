@@ -464,8 +464,12 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 	}
 
 	// Promote agents with a strong payout track record for this target/program.
+	// payoutWeightThreshold is the minimum accumulated payout-weighted score an
+	// agent must have (across all historical findings attributed to it via
+	// ReportFeedback.PayoutUSD) before it is promoted to the preferred set.
+	// A value of 0.5 corresponds to roughly one medium-bounty payout attribution.
+	const payoutWeightThreshold = 0.5
 	if len(memory.AgentPayoutWeights) > 0 {
-		const payoutWeightThreshold = 0.5
 		for agentName, weight := range memory.AgentPayoutWeights {
 			if weight >= payoutWeightThreshold {
 				preferred[agentName] = true
@@ -476,9 +480,12 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 	// When a TargetROIProfile exists for this target, promote deep agents for
 	// high-drift targets and high-payout categories; suppress deep agents for
 	// stale low-ROI targets.
+	// staleTargetThresholdDays is the number of days without a novel finding
+	// after which a target is considered stale and assigned a lighter scan profile.
+	const staleTargetThresholdDays = 30
 	if roiProfile, ok := memory.TargetROISignals[host]; ok {
 		isHighDrift := roiProfile.DriftScore >= 1.0
-		isStale := !roiProfile.LastNovelFindingAt.IsZero() && roiProfile.LastNovelFindingAt.Before(time.Now().UTC().AddDate(0, 0, -30))
+		isStale := !roiProfile.LastNovelFindingAt.IsZero() && roiProfile.LastNovelFindingAt.Before(time.Now().UTC().AddDate(0, 0, -staleTargetThresholdDays))
 
 		if isHighDrift {
 			for _, name := range available {
