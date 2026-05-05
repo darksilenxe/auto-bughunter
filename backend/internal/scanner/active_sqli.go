@@ -73,7 +73,6 @@ var sqlErrorSignaturesByDB = map[string][]string{
 		"mysql_fetch",
 		"mysql_num_rows",
 		"mysqlclient.",
-		"unclosed quotation mark after the character string",
 	},
 	"postgresql": {
 		"pg_query():",
@@ -84,7 +83,9 @@ var sqlErrorSignaturesByDB = map[string][]string{
 	},
 	"mssql": {
 		"microsoft odbc sql server driver",
+		// Both "before" and "after" variants are SQL Server error messages.
 		"unclosed quotation mark before the character string",
+		"unclosed quotation mark after the character string",
 		"incorrect syntax near",
 		"system.data.sqlclient.sqlexception",
 	},
