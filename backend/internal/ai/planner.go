@@ -18,7 +18,7 @@ import (
 // The method always returns done=true with a nil error when the AI provider
 // is not configured so callers can fall back to a deterministic planner
 // without needing to special-case the offline mode.
-func (c *Client) Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal) ([]map[string]string, bool, error) {
+func (c *Client) Plan(ctx context.Context, target string, findings []any, history []map[string]string, availableAgents []string, goals []model.ImpactGoal, policyPack string) ([]map[string]string, bool, error) {
 	if c == nil {
 		return nil, true, nil
 	}
@@ -39,6 +39,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 		"instructions": "Pick zero or more agents to run next from the available_agents list. " +
 			"You may repeat agents from history when new findings warrant it. " +
 			"Bias toward agents that can prove business impact matching impact_goals. " +
+			"Prioritize findings with high bountyScore when selecting follow-up agents. " +
 			"Set done=true once additional agents are unlikely to surface new value. " +
 			"Reply with strict JSON only: {\"agents\":[{\"name\":string,\"reason\":string}],\"done\":bool}",
 	}
@@ -48,7 +49,7 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	}
 
 	messages := []Message{
-		{Role: "system", Content: buildPlannerSystemPrompt(target, goals)},
+		{Role: "system", Content: buildPlannerSystemPrompt(target, goals, policyPack)},
 		{Role: "user", Content: string(userJSON)},
 	}
 	content, err := c.planningComplete(ctx, messages, 0.1, true)
@@ -84,9 +85,25 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 	return specs, parsed.Done, nil
 }
 
+// policyPromptProfiles maps lower-cased policy pack names to a short system
+// prompt fragment that steers the planner toward the appropriate risk/depth
+// trade-off for that operating mode.
+var policyPromptProfiles = map[string]string{
+	"safe": "POLICY: safe mode — prefer passive observation and low-noise, high-confidence checks. " +
+		"Avoid active exploitation agents (metasploit, burp active, file_upload). " +
+		"Prioritize findings with Confidence >= 0.8 before scheduling follow-up probes.",
+	"autonomous": "POLICY: autonomous mode — pursue long-horizon multi-step attack chain analysis. " +
+		"Chain adaptive_probe → reasoning_iteration → llm_chain_synthesis when novel findings emerge. " +
+		"Balance coverage breadth with depth; do not stop early on partial evidence.",
+	"aggressive": "POLICY: aggressive mode — unlock Metasploit, Burp active scan, and exploit-chain " +
+		"prioritization. Schedule metasploit or burp immediately on any High/Critical finding. " +
+		"Prefer depth over breadth; repeat pentest_loop until all critical paths are exhausted.",
+}
+
 // buildPlannerSystemPrompt builds the AI planner system prompt, injecting a
-// domain-specific profile pack when the target URL matches a known domain.
-func buildPlannerSystemPrompt(target string, goals []model.ImpactGoal) string {
+// domain-specific profile pack when the target URL matches a known domain, and
+// a policy-specific fragment when policyPack is set.
+func buildPlannerSystemPrompt(target string, goals []model.ImpactGoal, policyPack string) string {
 	base := "You are an autonomous defensive AppSec orchestrator. Decide which scanning/analysis agents to run next. Reply with strict JSON."
 	base += "\n\nCurrent impact goals: " + impact.GoalPrompt(goals) + "."
 	if playbooks := impact.PlaybookPrompt(goals); playbooks != "" {
@@ -94,6 +111,11 @@ func buildPlannerSystemPrompt(target string, goals []model.ImpactGoal) string {
 	}
 	if pack := SelectDomainProfile(target); pack != nil {
 		base += "\n\nDOMAIN CONTEXT (" + pack.Name + "): " + pack.SystemInstruction
+	}
+	if policyPack != "" {
+		if fragment, ok := policyPromptProfiles[strings.ToLower(strings.TrimSpace(policyPack))]; ok {
+			base += "\n\n" + fragment
+		}
 	}
 	return base
 }

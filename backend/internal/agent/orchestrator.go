@@ -259,7 +259,15 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			timeToSignalMs = roundDurationMs
 		}
 		if timeToSignalMs > 0 {
-			roundScore -= clamp01(float64(timeToSignalMs)/timeToSignalPenaltyThresholdMs) * timeToSignalPenaltyWeight
+			ttsWeight := timeToSignalPenaltyWeight
+			// When high-signal findings are present the agent was clearly
+			// productive despite being slow — cap the time-to-signal penalty
+			// at half its normal weight so a critical finding is never
+			// penalised more than a lightweight empty round.
+			if roundHighSignal > 0 {
+				ttsWeight *= 0.5
+			}
+			roundScore -= clamp01(float64(timeToSignalMs)/timeToSignalPenaltyThresholdMs) * ttsWeight
 		}
 		if o.MaxRoundCostUnits > 0 && roundCostUnits > o.MaxRoundCostUnits {
 			excess := float64(roundCostUnits-o.MaxRoundCostUnits) / float64(o.MaxRoundCostUnits)
@@ -315,7 +323,10 @@ func computeActionQuality(output AgentOutput) float64 {
 	highSignal := 0
 	lowSignal := 0
 	for _, f := range output.Findings {
-		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+		if f.Severity == model.SeverityCritical {
+			// Critical findings carry more weight than High.
+			highSignal += 2
+		} else if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
 			highSignal++
 		}
 		if f.Confidence > 0 && f.Confidence < 0.4 {
@@ -349,7 +360,10 @@ func computeActionCostUnits(output AgentOutput) int {
 func countHighSignalFindings(findings []model.Finding) int {
 	count := 0
 	for _, f := range findings {
-		if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
+		if f.Severity == model.SeverityCritical {
+			// Critical counts double — it outweighs a single High finding.
+			count += 2
+		} else if f.Severity == model.SeverityHigh || f.Confidence >= 0.85 {
 			count++
 		}
 	}
