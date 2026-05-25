@@ -861,7 +861,7 @@ func (s *Service) ScoreFindings(findings []model.Finding) []ScoredFinding {
 		out = append(out, ScoredFinding{
 			Finding:        f,
 			Score:          round2(score),
-			Confidence:     round2(min(0.97, max(0.4, f.Confidence))),
+			Confidence:     round2(calibratedFindingConfidence(f)),
 			Exploitability: exploit,
 		})
 	}
@@ -908,29 +908,130 @@ func (s *Service) BuildRemediationPlan(findings []model.Finding, limit int) []st
 func (s *Service) FindPotentialFalsePositives(findings []model.Finding) []ScoredFinding {
 	out := make([]ScoredFinding, 0)
 	for _, f := range findings {
-		fpScore := 0.0
-		lower := strings.ToLower(f.Title + " " + f.Description)
-		if strings.Contains(lower, "info") || f.Severity == model.SeverityInfo {
-			fpScore += 0.3
-		}
-		if f.Confidence < 0.6 {
-			fpScore += 0.25
-		}
-		if strings.Contains(lower, "potential") || strings.Contains(lower, "possible") {
-			fpScore += 0.2
-		}
-		if fpScore < 0.4 {
+		fpScore := falsePositiveSignalScore(f)
+		if fpScore < falsePositiveThreshold(f.Severity) {
 			continue
 		}
 		out = append(out, ScoredFinding{
 			Finding:        f,
 			Score:          round2(clamp(fpScore, 0, 1)),
-			Confidence:     round2(max(0.3, 1.0-fpScore)),
+			Confidence:     round2(clamp(0.35+fpScore*0.55, 0.35, 0.97)),
 			Exploitability: "unlikely",
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out
+}
+
+func calibratedFindingConfidence(f model.Finding) float64 {
+	conf := f.Confidence
+	if conf <= 0 {
+		conf = 0.45
+	}
+	conf = clamp(conf, 0.1, 0.99)
+	conf += validationStrengthSignal(f) * 0.45
+	if hasUncertainLanguage(f) {
+		conf -= 0.08
+	}
+	if strings.EqualFold(strings.TrimSpace(f.DriftStatus), "resolved") {
+		conf -= 0.06
+	}
+	return clamp(conf, 0.2, 0.99)
+}
+
+func falsePositiveSignalScore(f model.Finding) float64 {
+	score := 0.0
+	conf := calibratedFindingConfidence(f)
+
+	if conf < 0.45 {
+		score += 0.34
+	} else if conf < 0.6 {
+		score += 0.18
+	}
+	if hasUncertainLanguage(f) {
+		score += 0.22
+	}
+	if f.Severity == model.SeverityInfo {
+		score += 0.18
+	}
+	if strings.EqualFold(strings.TrimSpace(f.DriftStatus), "resolved") {
+		score += 0.12
+	}
+	if weakEvidenceSignal(f) {
+		score += 0.18
+	}
+
+	score -= validationStrengthSignal(f) * 0.7
+	return clamp(score, 0, 1)
+}
+
+func falsePositiveThreshold(sev model.Severity) float64 {
+	switch sev {
+	case model.SeverityCritical, model.SeverityHigh:
+		return 0.72
+	case model.SeverityMedium:
+		return 0.62
+	default:
+		return 0.52
+	}
+}
+
+func weakEvidenceSignal(f model.Finding) bool {
+	if len(f.ReproductionSteps) > 0 || f.PoC != "" || len(f.ProofArtifacts) > 0 {
+		return false
+	}
+	if strings.TrimSpace(f.Evidence) != "" || len(f.EvidenceFields) > 0 {
+		return false
+	}
+	return strings.TrimSpace(f.AffectedURL) == ""
+}
+
+func validationStrengthSignal(f model.Finding) float64 {
+	signal := 0.0
+	if f.Exploitability != nil && f.Exploitability.Reachable {
+		signal += 0.45
+		switch strings.ToLower(strings.TrimSpace(f.Exploitability.VerifiedStatus)) {
+		case "validated", "verified":
+			signal += 0.2
+		case "exploited", "impact_demonstrated", "submission_ready":
+			signal += 0.3
+		}
+	}
+	switch f.ProofState {
+	case model.ProofStateValidated:
+		signal += 0.2
+	case model.ProofStateExploited, model.ProofStateImpactDemonstrated, model.ProofStateSubmissionReady:
+		signal += 0.35
+	}
+	if len(f.ReproductionSteps) > 0 {
+		signal += 0.12
+	}
+	if f.PoC != "" {
+		signal += 0.14
+	}
+	if len(f.ProofArtifacts) > 0 {
+		signal += 0.1
+	}
+	switch strings.ToLower(strings.TrimSpace(f.EvidenceQualityTier)) {
+	case "high", "strong", "corroborated":
+		signal += 0.14
+	case "medium":
+		signal += 0.06
+	}
+	return clamp(signal, 0, 1)
+}
+
+func hasUncertainLanguage(f model.Finding) bool {
+	lower := strings.ToLower(strings.Join([]string{
+		f.Title, f.Description, f.Evidence,
+	}, " "))
+	terms := []string{"potential", "possible", "likely", "suspected", "may indicate", "might be"}
+	for _, term := range terms {
+		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) postJSON(ctx context.Context, path string, payload any, out any) bool {
