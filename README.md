@@ -16,6 +16,34 @@ OpenHack-inspired agent prompt references are available under
 This project is designed for defensive testing on systems you own or are explicitly authorized to test.
 Do not scan third-party systems without written permission.
 
+## Outbound traffic encryption (HTTPS guard)
+
+At startup, the backend validates every URL it has been configured to call
+for **internal sidecars and third-party APIs** (AI providers, knowledge
+service, agent learner, nuclei/zap wrappers, optional Burp / Metasploit
+RPC, Chromium DevTools, XSSMap Ollama, etc.). The validator runs in
+`backend/internal/secureurl` and enforces:
+
+- HTTPS for any public-internet host (multi-label DNS or public IP).
+- Plain HTTP is allowed only for loopback, RFC1918 / link-local IPs, and
+  single-label hostnames (treated as docker-compose service names on a
+  private overlay network — e.g. `http://ollama:11434`).
+- Set `ALLOW_INSECURE_OUTBOUND_URLS=true` to bypass the guard (escape
+  hatch for environments where another layer — e.g. a service mesh —
+  already provides confidentiality).
+
+The env vars covered today: `AI_API_BASE`, `AI_CODING_API_BASE`,
+`KNOWLEDGE_SERVICE_URL`, `AGENT_LEARNER_URL`, `ML_SERVICE_URL`,
+`NUCLEI_SERVICE_URL`, `ZAP_SERVICE_URL`, `BURP_API_URL`, `MSF_RPC_URL`,
+`CHROME_REMOTE_URL`, `XSSMAP_OLLAMA_URL`.
+
+**Explicitly out of scope:** scan-target URLs supplied at request time,
+OAST callback payloads, and any HTTP requests the scanner sends at the
+target. Those must remain protocol-agnostic because the platform's
+purpose is to probe arbitrary web targets — including HTTP-only ones —
+and forcing HTTPS would break scanner coverage. Confidentiality of
+scanner→target traffic is a property of the target, not of this tool.
+
 ## Stack
 
 - Backend: Go API (`net/http`) with modular scanners

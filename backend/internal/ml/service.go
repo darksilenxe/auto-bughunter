@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/sidecartls"
 )
 
 type Repository interface {
@@ -52,11 +53,13 @@ func NewService(cfg Config) *Service {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
+	httpClient := &http.Client{Timeout: timeout}
+	sidecartls.ConfigureClient(httpClient)
 	return &Service{
 		salt:        salt,
 		externalURL: strings.TrimRight(strings.TrimSpace(cfg.ExternalURL), "/"),
 		authToken:   strings.TrimSpace(cfg.AuthToken),
-		httpClient:  &http.Client{Timeout: timeout},
+		httpClient:  httpClient,
 	}
 }
 

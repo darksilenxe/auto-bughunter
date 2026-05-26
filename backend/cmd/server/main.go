@@ -19,6 +19,7 @@ import (
 	"auto-bughunter/backend/internal/oast"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/scanner"
+	"auto-bughunter/backend/internal/secureurl"
 	"auto-bughunter/backend/internal/storage"
 	"auto-bughunter/backend/internal/wordlist"
 )
@@ -27,6 +28,29 @@ func main() {
 	port := getenv("PORT", "8080")
 	proxyPort := getenv("PROXY_PORT", "8081")
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
+
+	// Enforce HTTPS (or private-network HTTP) for all env-configured outbound
+	// endpoints. This guards against accidentally pointing the backend at a
+	// cleartext public-internet service such as `http://api.openai.com`.
+	// Set ALLOW_INSECURE_OUTBOUND_URLS=true to bypass.
+	//
+	// NOTE: This does NOT constrain scan-target URLs, OAST callbacks, or
+	// any scanner-issued requests — those must remain protocol-agnostic.
+	if err := secureurl.ValidateMany(map[string]string{
+		"AI_API_BASE":           os.Getenv("AI_API_BASE"),
+		"AI_CODING_API_BASE":    os.Getenv("AI_CODING_API_BASE"),
+		"KNOWLEDGE_SERVICE_URL": os.Getenv("KNOWLEDGE_SERVICE_URL"),
+		"AGENT_LEARNER_URL":     os.Getenv("AGENT_LEARNER_URL"),
+		"ML_SERVICE_URL":        os.Getenv("ML_SERVICE_URL"),
+		"NUCLEI_SERVICE_URL":    os.Getenv("NUCLEI_SERVICE_URL"),
+		"ZAP_SERVICE_URL":       os.Getenv("ZAP_SERVICE_URL"),
+		"BURP_API_URL":          os.Getenv("BURP_API_URL"),
+		"MSF_RPC_URL":           os.Getenv("MSF_RPC_URL"),
+		"CHROME_REMOTE_URL":     os.Getenv("CHROME_REMOTE_URL"),
+		"XSSMAP_OLLAMA_URL":     os.Getenv("XSSMAP_OLLAMA_URL"),
+	}, getbool("ALLOW_INSECURE_OUTBOUND_URLS", false)); err != nil {
+		log.Fatalf("insecure outbound URL configuration: %v", err)
+	}
 
 	enableSecLists := getbool("ENABLE_SECLISTS_WORDLISTS", true)
 	enableKiterunner := getbool("ENABLE_KITERUNNER_WORDLISTS", true)

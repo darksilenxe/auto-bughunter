@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"auto-bughunter/backend/internal/sidecartls"
 )
 
 // ZapClient communicates with the ZAP baseline HTTP wrapper service.
@@ -22,15 +24,17 @@ type ZapClient struct {
 func NewZapClient() *ZapClient {
 	baseURL := os.Getenv("ZAP_SERVICE_URL")
 	if baseURL == "" {
-		baseURL = "http://zap-service:8094"
+		baseURL = "https://zap-service:8094"
 	}
 
+	httpClient := &http.Client{
+		Timeout: 15 * time.Minute, // Longer timeout for ZAP scans
+	}
+	sidecartls.ConfigureClient(httpClient)
 	return &ZapClient{
-		baseURL:   baseURL,
-		authToken: os.Getenv("SIDECAR_AUTH_TOKEN"),
-		httpClient: &http.Client{
-			Timeout: 15 * time.Minute, // Longer timeout for ZAP scans
-		},
+		baseURL:    baseURL,
+		authToken:  os.Getenv("SIDECAR_AUTH_TOKEN"),
+		httpClient: httpClient,
 	}
 }
 
