@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/sidecartls"
 )
 
 // Client communicates with the autonomous agents service (agents container).
@@ -35,10 +36,12 @@ func NewClientWithToken(baseURL, authToken string) *Client {
 	if baseURL == "" {
 		return nil
 	}
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	sidecartls.ConfigureClient(httpClient)
 	return &Client{
 		baseURL:    baseURL,
 		authToken:  strings.TrimSpace(authToken),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: httpClient,
 	}
 }
 

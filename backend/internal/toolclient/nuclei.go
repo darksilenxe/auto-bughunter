@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"auto-bughunter/backend/internal/sidecartls"
 )
 
 // NucleiClient communicates with the nuclei HTTP wrapper service.
@@ -25,15 +27,17 @@ type NucleiClient struct {
 func NewNucleiClient() *NucleiClient {
 	baseURL := os.Getenv("NUCLEI_SERVICE_URL")
 	if baseURL == "" {
-		baseURL = "http://nuclei-service:8093"
+		baseURL = "https://nuclei-service:8093"
 	}
 
+	httpClient := &http.Client{
+		Timeout: 15 * time.Minute, // Longer timeout for nuclei scans
+	}
+	sidecartls.ConfigureClient(httpClient)
 	return &NucleiClient{
-		baseURL:   baseURL,
-		authToken: os.Getenv("SIDECAR_AUTH_TOKEN"),
-		httpClient: &http.Client{
-			Timeout: 15 * time.Minute, // Longer timeout for nuclei scans
-		},
+		baseURL:    baseURL,
+		authToken:  os.Getenv("SIDECAR_AUTH_TOKEN"),
+		httpClient: httpClient,
 	}
 }
 

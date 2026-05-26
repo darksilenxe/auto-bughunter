@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/sidecartls"
 )
 
 type Config struct {
@@ -33,10 +34,12 @@ func NewClient(cfg Config) *Client {
 	if base == "" {
 		return nil
 	}
+	httpClient := &http.Client{Timeout: timeout}
+	sidecartls.ConfigureClient(httpClient)
 	return &Client{
 		externalURL: base,
 		authToken:   strings.TrimSpace(cfg.AuthToken),
-		httpClient:  &http.Client{Timeout: timeout},
+		httpClient:  httpClient,
 	}
 }
 
