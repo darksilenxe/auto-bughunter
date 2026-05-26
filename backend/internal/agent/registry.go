@@ -363,6 +363,13 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		if hasRCEIndicator {
 			spawned = append(spawned, "metasploit")
 		}
+		// Run the OpenHack expert review pass over the consolidated finding
+		// set so each finding gets root-cause-family due diligence before
+		// triage.
+		spawned = append(spawned, "openhack_expert")
+	case "openhack_expert":
+		// Follow the OpenHack flow: expert review → finding triage.
+		spawned = append(spawned, "openhack_triage")
 	case "pentest_loop":
 		// The pentest_loop completes its batch run. The adaptive probe agent
 		// then takes over as the primary AI-driven decision loop, examining

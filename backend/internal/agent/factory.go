@@ -90,6 +90,15 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 		return NewReasoningIterationAgent(nil, scanService, defaultReasoningRounds, true)
 	})
 
+	// OpenHack expert / triage agents: drive the LLM with the imported
+	// OpenHack prompt pack (docs/openhack/) and enrich findings with
+	// expert-grade review and finding-triage decisions. Registered with a
+	// nil AI client by default; SetAIClient upgrades them. The embedded
+	// prompt pack is loaded lazily inside each constructor so the agents
+	// always have prompt text regardless of how they were registered.
+	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(nil, nil, true) })
+	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(nil, nil, true) })
+
 	return f
 }
 
@@ -122,6 +131,12 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("reasoning_iteration", func() Agent {
 		return NewReasoningIterationAgent(c, scanService, defaultReasoningRounds, true)
 	})
+	// OpenHack agents share the same AI client so local Ollama deployments
+	// and external OpenAI/Anthropic/Gemini/Bedrock providers both drive
+	// the embedded OpenHack expert/triage prompts via the standard
+	// provider routing in ai.Client (planningComplete).
+	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(c, nil, true) })
+	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(c, nil, true) })
 }
 
 // Register adds or replaces a builder for the given agent name.

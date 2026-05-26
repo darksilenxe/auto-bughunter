@@ -41,6 +41,15 @@ Do not scan third-party systems without written permission.
   - **False Positive Review Agent**: Confidence-based shortlist for analyst verification
   - **Remediation Planner Agent**: AI-assisted prioritized remediation sequence generation
   - **Reporting Agent**: Executive summaries, top-risk identification
+  - **OpenHack Expert Agent**: routes each finding to the matching OpenHack expert prompt
+    (injection, broken-access-control, …) embedded from [`docs/openhack/`](./docs/openhack/)
+    and asks the configured AI model for root-cause-family due diligence. Works with
+    local OpenAI-compatible models (e.g. Ollama) and external OpenAI / Anthropic /
+    Gemini / Bedrock providers via the shared `ai.Client` plumbing; falls back to a
+    deterministic OpenHack quality-gate annotation when no AI provider is configured.
+  - **OpenHack Triage Agent**: runs the OpenHack finding-triage prompt on each
+    candidate to re-rate severity, enforce evidence quality, and suppress
+    `rejected`/`duplicate` candidates before reporting.
 - Built-in checks:
   - Security headers
   - Cookie flags
