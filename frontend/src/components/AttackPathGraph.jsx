@@ -178,6 +178,16 @@ export default function AttackPathGraph({ events = [], job = null }) {
     }
   }
 
+  const terminalStatus = String(job?.status || "").toLowerCase();
+  if (terminalStatus === "completed" || terminalStatus === "failed" || terminalStatus === "cancelled") {
+    const fallbackState = terminalStatus === "completed" ? "complete" : "failed";
+    for (const name of Object.keys(nodeStates)) {
+      if (nodeStates[name] === "running") {
+        nodeStates[name] = fallbackState;
+      }
+    }
+  }
+
   // Build a mutable layout copy so we never mutate the module-level const.
   const layout = { ...LAYOUT };
   let dynamicY = 360;

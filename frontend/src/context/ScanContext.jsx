@@ -48,6 +48,17 @@ export function ScanProvider({ children }) {
     es.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
+        const message = String(evt?.message || "");
+        if (/^scan completed:/i.test(message)) {
+          setJob((prev) => ({ ...(prev || {}), status: "completed" }));
+          setLoading(false);
+        } else if (/^scan cancelled/i.test(message)) {
+          setJob((prev) => ({ ...(prev || {}), status: "cancelled" }));
+          setLoading(false);
+        } else if (/^scan failed:/i.test(message)) {
+          setJob((prev) => ({ ...(prev || {}), status: "failed" }));
+          setLoading(false);
+        }
         setLiveEvents((prev) => [...prev, evt]);
         if (evt.type === "screenshot" && evt.screenshot) {
           setScreenshots((prev) => [
