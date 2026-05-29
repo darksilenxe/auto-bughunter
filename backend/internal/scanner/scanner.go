@@ -355,6 +355,9 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runSensitiveFileProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runCRLFInjectionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runForbiddenBypassProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runCachePoisoningProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runParamPollutionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runVhostDiscoveryProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
