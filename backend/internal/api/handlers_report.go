@@ -228,6 +228,16 @@ func (s *Server) writePentestReport(w http.ResponseWriter, job *model.ScanJob, o
 	case "json":
 		data := report.BuildPentestReportData(job, opts, ctx)
 		writeJSON(w, http.StatusOK, data)
+	case "sarif":
+		sarifBytes, err := report.RenderSARIF(job, opts, ctx)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate SARIF"})
+			return
+		}
+		writeBytes(w, "application/sarif+json", fmt.Sprintf("scan-report-%s.sarif", scanID), sarifBytes, false)
+	case "csv":
+		csvBytes := report.RenderFindingsCSV(job, opts, ctx)
+		writeBytes(w, "text/csv; charset=utf-8", fmt.Sprintf("scan-report-%s.csv", scanID), csvBytes, true)
 	case "", "pdf":
 		// Default to PDF for backward compatibility with the original
 		// /api/report/{scanId} endpoint.
