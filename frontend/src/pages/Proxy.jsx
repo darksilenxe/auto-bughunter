@@ -530,11 +530,23 @@ function ConfigureTab({ settings }) {
   }
 
   const proxyURL = `${settings.host}:${settings.port}`;
+  const caDownloadURL = `${API_BASE}/api/proxy/ca-certificate?api_key=${encodeURIComponent(API_KEY)}`;
   return (
     <div className="two-column-grid">
       <section className="card">
         <h2>Browser bootstrap</h2>
-        <div className="meta-block">
+        {settings.mitmEnabled && (
+          <div className="meta-block">
+            <b>Proxy CA certificate</b>
+            <p className="meta" style={{ marginTop: 6 }}>
+              Download the auto-generated CA certificate and import it into your browser/OS trust store so HTTPS requests are intercepted without warnings.
+            </p>
+            <div className="button-row" style={{ marginTop: 10 }}>
+              <a href={caDownloadURL} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
+            </div>
+          </div>
+        )}
+        <div className="meta-block" style={{ marginTop: settings.mitmEnabled ? 10 : 0 }}>
           <b>Firefox</b>
           <pre className="summary" style={{ marginTop: 10 }}>{`Settings → Network Settings → Manual proxy configuration
 HTTP Proxy: ${settings.host}    Port: ${settings.port}
@@ -560,7 +572,7 @@ HTTP Proxy: ${settings.host}    Port: ${settings.port}
               {settings.caNotAfter && <li>Expires: <code>{settings.caNotAfter}</code></li>}
             </ul>
             <div className="button-row" style={{ marginTop: 14 }}>
-              <a href={`${API_BASE}/api/proxy/ca-certificate`} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
+              <a href={caDownloadURL} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
             </div>
             <pre className="summary" style={{ marginTop: 14 }}>{`Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import…
 macOS:   open auto-bughunter-proxy-ca.pem → Keychain Access → set "Always Trust"
