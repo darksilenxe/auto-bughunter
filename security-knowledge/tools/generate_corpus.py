@@ -25,8 +25,8 @@ PASSAGE_MAX_LENGTH = 320
 WEBSITE_TEXT_MAX_LENGTH = 12000
 LOW_CONFIDENCE_MIN_WORDS = 120
 # Maximum length of full-text body stored on a corpus document. Full-text
-# ingestion is opt-in (see --allow-full-text) and only ever applies to entries
-# explicitly flagged with "fullText": true in the source file.
+# ingestion is ON by default (owner sign-off; disable with --no-full-text) and
+# only ever applies to entries explicitly flagged with "fullText": true.
 FULL_TEXT_MAX_LENGTH = WEBSITE_TEXT_MAX_LENGTH
 
 
@@ -222,7 +222,7 @@ def fetch_website_texts(source_path: Path, output_path: Path, timeout: int = 20)
     return output
 
 
-def build_corpus(source_path: Path, output_path: Path, review_path: Path, website_text_path: Path | None = None, allow_full_text: bool = False) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def build_corpus(source_path: Path, output_path: Path, review_path: Path, website_text_path: Path | None = None, allow_full_text: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = load_sources(source_path)
     allowlists = payload.get("allowlists") or {}
     allowed_source_types = set(allowlists.get("sourceTypes") or [])
@@ -317,12 +317,13 @@ def build_corpus(source_path: Path, output_path: Path, review_path: Path, websit
                         }
                     )
 
-            # Full-text ingestion is opt-in via --allow-full-text (explicit
-            # operator sign-off) and only applies to entries flagged with
-            # "fullText": true. The fetched body is stored in a separate
-            # "content" field; the short curated "passage" is always retained,
-            # and source URL / license attribution stay on the document so the
-            # provenance of mirrored text is never lost.
+            # Full-text ingestion is ON by default (the repository owner has
+            # signed off on mirroring HackTricks / PayloadsAllTheThings bodies
+            # into the corpus) and applies to entries flagged "fullText": true.
+            # It can be disabled for hermetic/offline builds with --no-full-text.
+            # The fetched body is stored in a separate "content" field; the short
+            # curated "passage" is always retained, and source URL / license
+            # attribution stay on the document so provenance is never lost.
             wants_full_text = bool(raw_entry.get("fullText"))
             if allow_full_text and wants_full_text:
                 if website_text and website_text.get("text") and not website_text.get("error"):
@@ -346,7 +347,7 @@ def build_corpus(source_path: Path, output_path: Path, review_path: Path, websit
                         "level": "info",
                         "id": entry["id"],
                         "type": "full-text-skipped",
-                        "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body",
+                        "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text",
                     }
                 )
 
@@ -396,11 +397,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     build_parser.add_argument("--website-text", type=Path, default=DEFAULT_WEBSITE_TEXT_PATH)
     build_parser.add_argument(
         "--allow-full-text",
+        dest="allow_full_text",
         action="store_true",
+        default=True,
         help=(
-            "Explicit operator sign-off to mirror fetched full-text bodies into the "
-            "corpus 'content' field for entries flagged \"fullText\": true. Source URL "
-            "and license attribution are always retained. Off by default."
+            "Mirror fetched full-text bodies into the corpus 'content' field for "
+            "entries flagged \"fullText\": true. ON by default (owner sign-off). "
+            "Source URL and license attribution are always retained."
+        ),
+    )
+    build_parser.add_argument(
+        "--no-full-text",
+        dest="allow_full_text",
+        action="store_false",
+        help=(
+            "Disable full-text ingestion for hermetic/offline builds; fullText "
+            "entries are stored as curated notes only (no network fetch mirrored)."
         ),
     )
 

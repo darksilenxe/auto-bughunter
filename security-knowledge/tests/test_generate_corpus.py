@@ -53,7 +53,7 @@ class GenerateCorpusTests(unittest.TestCase):
                 self.assertTrue(validated.id)
                 self.assertTrue(validated.title)
 
-    def test_full_text_ingested_only_with_sign_off(self) -> None:
+    def test_full_text_ingestion_default_on_with_opt_out(self) -> None:
         app_main = load_module(APP_MAIN_PATH, "security_knowledge_main")
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -112,17 +112,17 @@ class GenerateCorpusTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            # Without sign-off: full text is NOT mirrored into the corpus.
+            # Opt-out (--no-full-text): full text is NOT mirrored into the corpus.
             out_no = temp_path / "corpus_no.json"
             rev_no = temp_path / "review_no.json"
             corpus_no, _ = generator.build_corpus(source_path, out_no, rev_no, website_text_path, allow_full_text=False)
             self.assertEqual(corpus_no[0].get("content", ""), "")
 
-            # With explicit sign-off: the fetched body is stored in `content`
-            # while passage, url and license attribution are retained.
+            # Default (owner sign-off, no arg): the fetched body is stored in
+            # `content` while passage, url and license attribution are retained.
             out_yes = temp_path / "corpus_yes.json"
             rev_yes = temp_path / "review_yes.json"
-            corpus_yes, _ = generator.build_corpus(source_path, out_yes, rev_yes, website_text_path, allow_full_text=True)
+            corpus_yes, _ = generator.build_corpus(source_path, out_yes, rev_yes, website_text_path)
             self.assertIn("Full HackTricks XSS chapter body", corpus_yes[0]["content"])
             self.assertEqual(corpus_yes[0]["contentSource"], "website-import")
             self.assertTrue(corpus_yes[0]["url"].startswith("https://hacktricks.wiki/"))

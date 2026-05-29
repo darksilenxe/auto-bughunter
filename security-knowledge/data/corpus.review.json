@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-29T12:59:03+00:00",
+  "generatedAt": "2026-05-29T13:11:47+00:00",
   "phase": "phase-1",
   "summary": {
     "sourceEntries": 37,
@@ -12,175 +12,175 @@
       "level": "info",
       "id": "hacktricks-xss",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-xss",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-sqli",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-sqli",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-ssrf",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-ssrf",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-idor",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-idor",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-ssti",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-ssti",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-path-traversal",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-path-traversal",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-xxe",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-xxe",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-command-injection",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-command-injection",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-jwt",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-jwt",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-open-redirect",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-open-redirect",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-cors",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-cors",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-auth-bypass",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-mass-assignment",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-mass-assignment",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-request-smuggling",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "payloadsallthethings-request-smuggling",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-subdomain-takeover",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     },
     {
       "level": "info",
       "id": "hacktricks-info-disclosure",
       "type": "full-text-skipped",
-      "message": "fullText entry stored as curated note only; rerun build with --allow-full-text to ingest body"
+      "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text"
     }
   ]
 }
