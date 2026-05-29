@@ -678,17 +678,49 @@ func (s *Server) computeEnrichment(ctx context.Context, target string, findings 
 		return s.enrichmentHook(ctx, target, findings, jobSnapshot)
 	}
 	var res enrichmentResult
-	if s.knowledgeSvc != nil {
-		res.knowledgeCtx = s.knowledgeSvc.RetrieveForJob(ctx, "ai-summary", jobSnapshot, 5)
-	}
-	res.aiSummary = s.aiClient.SummarizeWithKnowledge(ctx, target, findings, res.knowledgeCtx)
+	var (
+		wg sync.WaitGroup
+		mu sync.Mutex
+	)
+
+	// Knowledge retrieval and AI summary are dependent, so keep them in a single
+	// chain; run this chain in parallel with narrative generation and ML scoring.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var knowledgeCtx *model.SecurityKnowledgeContext
+		if s.knowledgeSvc != nil {
+			knowledgeCtx = s.knowledgeSvc.RetrieveForJob(ctx, "ai-summary", jobSnapshot, 5)
+		}
+		aiSummary := s.aiClient.SummarizeWithKnowledge(ctx, target, findings, knowledgeCtx)
+		mu.Lock()
+		res.knowledgeCtx = knowledgeCtx
+		res.aiSummary = aiSummary
+		mu.Unlock()
+	}()
+
 	if s.aiClient != nil && len(findings) > 0 {
-		res.narrative = s.aiClient.GenerateNarrativeReport(ctx, target, findings)
-		res.haveNarr = true
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			narrative := s.aiClient.GenerateNarrativeReport(ctx, target, findings)
+			mu.Lock()
+			res.narrative = narrative
+			res.haveNarr = true
+			mu.Unlock()
+		}()
 	}
 	if s.mlService != nil {
-		res.recs = s.mlService.RecommendFromHistory(ctx, s.repo, s.proxyServer.Store(), jobSnapshot)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			recs := s.mlService.RecommendFromHistory(ctx, s.repo, s.proxyServer.Store(), jobSnapshot)
+			mu.Lock()
+			res.recs = recs
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return res
 }
 
