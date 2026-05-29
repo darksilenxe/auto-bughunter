@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/impact"
@@ -37,6 +40,52 @@ type Client struct {
 	// selection, tool/command generation) in curated HackTricks /
 	// PayloadsAllTheThings guidance. When nil, prompts are built without it.
 	knowledge KnowledgeRetriever
+
+	// sem bounds the number of outbound LLM requests that may be in flight
+	// simultaneously across the whole process. Every AI-backed agent and the
+	// post-scan enrichment phase share a single *Client, so without this gate
+	// many agents (and concurrent scans) fan out requests to the same LLM
+	// backend at once, overloading it and creating a throughput bottleneck.
+	// The semaphore is created lazily by semOnce so Clients constructed via
+	// direct field assignment (the legacy path) are still limited.
+	semOnce sync.Once
+	sem     chan struct{}
+}
+
+// defaultMaxConcurrentAIRequests bounds simultaneous outbound LLM requests when
+// AI_MAX_CONCURRENT_REQUESTS is unset or invalid. A small default keeps a single
+// LLM backend (local Ollama, rate-limited API, etc.) from being saturated by the
+// many AI-backed agents that run during a scan.
+const defaultMaxConcurrentAIRequests = 2
+
+// aiConcurrencyLimit resolves the maximum number of concurrent LLM requests from
+// AI_MAX_CONCURRENT_REQUESTS, falling back to defaultMaxConcurrentAIRequests.
+func aiConcurrencyLimit() int {
+	if v := strings.TrimSpace(os.Getenv("AI_MAX_CONCURRENT_REQUESTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxConcurrentAIRequests
+}
+
+// acquire blocks until a concurrency slot is free (or ctx is cancelled) and
+// returns a release func that frees the slot. It is safe to call on a Client
+// built by NewClient or by direct field assignment; the semaphore is created on
+// first use. The returned release func is always non-nil and safe to defer.
+func (c *Client) acquire(ctx context.Context) (func(), error) {
+	if c == nil {
+		return func() {}, nil
+	}
+	c.semOnce.Do(func() {
+		c.sem = make(chan struct{}, aiConcurrencyLimit())
+	})
+	select {
+	case c.sem <- struct{}{}:
+		return func() { <-c.sem }, nil
+	case <-ctx.Done():
+		return func() {}, ctx.Err()
+	}
 }
 
 // KnowledgeRetriever retrieves curated security knowledge for an in-scan
@@ -134,8 +183,15 @@ func (c *Client) ConfigureCodingModel(baseURL, apiKey, model string) {
 func (c *Client) completeWith(ctx context.Context, p Provider, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
 	if p == nil {
 		// Fallback: use the legacy OpenAI-compatible path via c.HTTP directly.
+		// legacyComplete acquires its own concurrency slot, so we must not
+		// acquire here too (that would double-count and could deadlock).
 		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, model, messages, temperature, jsonMode)
 	}
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	t0 := time.Now()
 	text, err := p.Complete(ctx, model, messages, temperature, jsonMode)
 	metrics.AICall("provider_complete", time.Since(t0).Seconds(), err != nil)
@@ -198,6 +254,11 @@ func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model stri
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	release, err := c.acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	t0 := time.Now()
 	resp, err := c.HTTP.Do(req)
 	metrics.AICall("legacy_complete", time.Since(t0).Seconds(), err != nil)

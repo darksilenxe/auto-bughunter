@@ -939,6 +939,7 @@ candidate-minus-baseline improvement.
 - Scan creation supports idempotent deduplication via `idempotencyKey` field or `Idempotency-Key` HTTP header.
 - Per-target rate limiting can be enforced with `options.targetRateLimitPerMinute`.
 - Global concurrent scan budgeting can be configured via `GLOBAL_SCAN_BUDGET`.
+- The number of simultaneous outbound LLM requests is bounded by `AI_MAX_CONCURRENT_REQUESTS` (default `2`). All AI-backed agents and the post-scan enrichment phase share a single AI client, so this caps how hard they collectively load the LLM backend — keep it low (1–2) for a single local Ollama instance and raise it for a high-throughput hosted API.
 - Outbound probe and proxy targets are protected by SSRF safety checks (localhost/private/link-local/metadata IP blocks).
 - Runtime surface expansion now mines in-scope endpoint hints from response/DOM artifacts (including JS/OpenAPI/GraphQL-style markers) to increase attack-surface coverage.
 - Scanner includes safe context-aware parameter probing to surface high-signal reflection/error paths for targeted follow-up testing.
