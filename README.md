@@ -863,6 +863,7 @@ candidate-minus-baseline improvement.
 - ShuffleDNS and Certificate Transparency discovery are available as optional integrations behind `ENABLE_SHUFFLEDNS_INTEGRATION` and `ENABLE_CERTIFICATE_TRANSPARENCY_INTEGRATION`.
 - Native Go Amass discovery is available behind `ENABLE_AMASS_INTEGRATION`.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.
+- Kiterunner API route-discovery integration is available behind `ENABLE_KITERUNNER_INTEGRATION` (uses the `kr` binary and curated Assetnote `.kite`/`.txt` route wordlists).
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
 - Scans execute agents in sequence: reconnaissance → JavaScript SAST → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.

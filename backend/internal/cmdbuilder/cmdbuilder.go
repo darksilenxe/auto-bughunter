@@ -71,6 +71,7 @@ var allowedBinaries = map[string]bool{
 	"tlsx":       true,
 	"ffuf":       true,
 	"gobuster":   true,
+	"kr":         true,
 	"nikto":      true,
 	"wpscan":     true,
 	"sqlmap":     true,

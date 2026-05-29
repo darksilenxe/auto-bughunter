@@ -413,6 +413,7 @@ type scanFlagValues struct {
 	useSQLMap                 bool
 	useFFUF                   bool
 	useGobuster               bool
+	useKiterunner             bool
 	useGau                    bool
 	useArjun                  bool
 	useCommix                 bool
@@ -464,6 +465,7 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.useSQLMap, "use-sqlmap", false, "enable native Go SQLMap integration")
 	fs.BoolVar(&values.useFFUF, "use-ffuf", false, "enable FFUF integration")
 	fs.BoolVar(&values.useGobuster, "use-gobuster", false, "enable Gobuster integration")
+	fs.BoolVar(&values.useKiterunner, "use-kiterunner", false, "enable Kiterunner API route discovery integration")
 	fs.BoolVar(&values.useGau, "use-gau", false, "enable gau passive URL discovery integration")
 	fs.BoolVar(&values.useArjun, "use-arjun", false, "enable Arjun hidden-parameter discovery integration")
 	fs.BoolVar(&values.useCommix, "use-commix", false, "enable commix OS command injection integration (requires ALLOW_DESTRUCTIVE_CHECKS)")
@@ -504,6 +506,7 @@ func enableAllGoScanOptions(options *model.ScanOptions) {
 	options.UseSQLMapIntegration = true
 	options.UseFFUFIntegration = true
 	options.UseGobusterIntegration = true
+	options.UseKiterunnerIntegration = true
 	options.UseGauIntegration = true
 	options.UseArjunIntegration = true
 	options.UseCommixIntegration = true
@@ -598,6 +601,9 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	}
 	if values.useGobuster {
 		req.Options.UseGobusterIntegration = true
+	}
+	if values.useKiterunner {
+		req.Options.UseKiterunnerIntegration = true
 	}
 	if values.useGau {
 		req.Options.UseGauIntegration = true

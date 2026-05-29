@@ -55,7 +55,7 @@ const integrationPreflightTimeout = 3 * time.Second
 //	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana, ffuf, gobuster, gau, arjun, linkfinder
+//	Phase 4 — Crawling:    katana, ffuf, gobuster, kiterunner, gau, arjun, linkfinder
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
@@ -173,6 +173,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("gobuster", "dir -u "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
 			return s.runGobuster(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseKiterunnerIntegration {
+		emitCmd("kiterunner", "scan "+input.Target)
+		findings = append(findings, s.runInstrumentedTool(ctx, "kiterunner", func() []model.Finding {
+			return s.runKiterunner(ctx, input.Target, input.Scope)
 		})...)
 	}
 	if input.Options.UseGauIntegration {
@@ -2456,6 +2462,203 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 		Sources:        []string{"gobuster"},
 		Confidence:     0.8,
 	}}
+}
+
+// runKiterunner executes kiterunner (kr) to brute-force API routes against the
+// target using an API-route wordlist. It mirrors the disabled/binary-missing/
+// timeout/no-paths finding contract used by the ffuf and gobuster integrations.
+func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableKiterunner {
+		return []model.Finding{{
+			ID:             "kiterunner-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner integration requested but disabled",
+			Description:    "The job requested Kiterunner but ENABLE_KITERUNNER_INTEGRATION is false.",
+			Evidence:       "ENABLE_KITERUNNER_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.KiterunnerBinary); err != nil {
+		return []model.Finding{{
+			ID:             "kiterunner-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner binary not found",
+			Description:    "Kiterunner integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install Kiterunner or set KITERUNNER_BINARY to the binary path.",
+		}}
+	}
+
+	// Prefer a curated API-route wordlist (.kite/.txt) when one is available.
+	// The kiterunner sidecar pre-downloads Assetnote route wordlists into
+	// ASSETNOTE_WORDLIST_DIR (/wordlists); fall back to the shared scratch dir
+	// and finally to a temporary wordlist derived from the common-directory
+	// list (the same source ffuf/gobuster use).
+	wordlistPath := findKiterunnerWordlistFile(os.Getenv("ASSETNOTE_WORDLIST_DIR"))
+	if wordlistPath == "" {
+		wordlistPath = findKiterunnerWordlistFile(os.Getenv("SHARED_TMP_DIR"))
+	}
+	cleanup := func() {}
+	if wordlistPath == "" {
+		tmp, err := writeTemporaryWordlist(wordlist.GetCommonDirectoriesWithExternal(ctx))
+		if err != nil {
+			return []model.Finding{{
+				ID:             "kiterunner-wordlist-error",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Kiterunner wordlist preparation failed",
+				Description:    "Could not prepare a temporary wordlist for Kiterunner.",
+				Evidence:       err.Error(),
+				Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+			}}
+		}
+		wordlistPath = tmp
+		cleanup = func() { os.Remove(tmp) }
+	}
+	defer cleanup()
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.KiterunnerBinary, "scan", strings.TrimRight(target, "/"), "-w", wordlistPath, "-x", "5", "-o", "text")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "kiterunner-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner timed out",
+			Description:    "Kiterunner did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	paths := parseKiterunnerHits(outb.String(), target, scanScope)
+	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	if len(paths) == 0 {
+		return []model.Finding{{
+			ID:             "kiterunner-no-paths",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner found no candidate API routes",
+			Description:    "Kiterunner completed but did not report in-scope API route matches from the configured wordlist.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try a broader API-route wordlist (.kite) or authenticated profiles.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "kiterunner-route-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "Kiterunner discovered candidate API routes",
+		Description:    "Kiterunner discovered in-scope API endpoint candidates using route brute-force.",
+		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+		Recommendation: "Review discovered API routes for authentication, authorization, and input-validation flaws.",
+		Sources:        []string{"kiterunner"},
+		Confidence:     0.8,
+	}}
+}
+
+// parseKiterunnerHits parses kiterunner text output. Each result line places the
+// HTTP method and status first, with the matched URL as a later whitespace
+// field (e.g. "GET 200 [ 363, 10, 1] https://host/api/v1/users 0cf6841"). It
+// isolates the URL column, keeps only in-scope http(s) results, and returns a
+// sorted, de-duplicated list of paths.
+func parseKiterunnerHits(rawOutput, target string, scanScope model.ScanScope) []string {
+	lines := strings.Split(rawOutput, "\n")
+	paths := make([]string, 0)
+	seen := map[string]struct{}{}
+	methods := map[string]bool{
+		"GET": true, "POST": true, "PUT": true, "DELETE": true,
+		"PATCH": true, "HEAD": true, "OPTIONS": true, "CONNECT": true, "TRACE": true,
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		// Result lines begin with an HTTP method token (e.g. "GET 200 ...").
+		// This skips kiterunner's log/banner lines such as "[*] Scanning ...".
+		if !methods[strings.ToUpper(fields[0])] {
+			continue
+		}
+		// Locate the first http(s) field in the line; the leading fields are the
+		// method, status and size columns, which must not be captured as a path.
+		var rawURL string
+		for _, field := range fields {
+			if strings.HasPrefix(field, "http://") || strings.HasPrefix(field, "https://") {
+				rawURL = field
+				break
+			}
+		}
+		if rawURL == "" {
+			continue
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		path := parsed.EscapedPath()
+		if path == "" {
+			path = "/"
+		}
+		if !scope.IsURLInScope(rawURL, scanScope) {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// findKiterunnerWordlistFile locates a curated API-route wordlist within dir. It
+// prefers a compiled ".kite" file under a "kiterunner" subdirectory, then falls
+// back to any ".txt" file in dir. It returns "" when dir is empty, missing, or
+// contains no suitable file.
+func findKiterunnerWordlistFile(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	sub := filepath.Join(dir, "kiterunner")
+	if entries, err := os.ReadDir(sub); err == nil {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".kite") {
+				names = append(names, e.Name())
+			}
+		}
+		if len(names) > 0 {
+			sort.Strings(names)
+			return filepath.Join(sub, names[0])
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".txt") {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return filepath.Join(dir, names[0])
 }
 
 // runGau executes gau (GetAllUrls) to passively harvest historical URLs for the

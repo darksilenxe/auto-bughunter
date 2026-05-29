@@ -203,6 +203,7 @@ type ScanOptions struct {
 	UseSQLMapIntegration      bool     `json:"useSqlMapIntegration,omitempty"`
 	UseFFUFIntegration        bool     `json:"useFfufIntegration,omitempty"`
 	UseGobusterIntegration    bool     `json:"useGobusterIntegration,omitempty"`
+	UseKiterunnerIntegration  bool     `json:"useKiterunnerIntegration,omitempty"`
 	UseGauIntegration         bool     `json:"useGauIntegration,omitempty"`
 	UseArjunIntegration       bool     `json:"useArjunIntegration,omitempty"`
 	UseCommixIntegration      bool     `json:"useCommixIntegration,omitempty"`
