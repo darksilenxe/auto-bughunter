@@ -344,53 +344,99 @@ func TestRegistryFactoryFallback(t *testing.T) {
 // blockingAgent ignores ctx and blocks until unblock is closed, simulating an
 // agent stuck on a slow external/AI call.
 type blockingAgent struct {
-name    string
-unblock chan struct{}
-started chan struct{}
+	name    string
+	unblock chan struct{}
+	started chan struct{}
 }
 
 func (a *blockingAgent) Name() string  { return a.name }
 func (a *blockingAgent) Enabled() bool { return true }
 func (a *blockingAgent) Run(_ context.Context, _ AgentInput) (AgentOutput, error) {
-if a.started != nil {
-close(a.started)
-}
-<-a.unblock
-return AgentOutput{AgentName: a.name}, nil
+	if a.started != nil {
+		close(a.started)
+	}
+	<-a.unblock
+	return AgentOutput{AgentName: a.name}, nil
 }
 
 func TestOrchestratorHonoursContextWhenAgentBlocks(t *testing.T) {
-unblock := make(chan struct{})
-started := make(chan struct{})
-defer close(unblock)
-factory := newTestFactory(map[string]Agent{
-"stuck": &blockingAgent{name: "stuck", unblock: unblock, started: started},
-})
-planner := NewStaticPlanner([]string{"stuck"})
-orch := NewOrchestrator(planner, factory, 3)
+	unblock := make(chan struct{})
+	started := make(chan struct{})
+	defer close(unblock)
+	factory := newTestFactory(map[string]Agent{
+		"stuck": &blockingAgent{name: "stuck", unblock: unblock, started: started},
+	})
+	planner := NewStaticPlanner([]string{"stuck"})
+	orch := NewOrchestrator(planner, factory, 3)
 
-ctx, cancel := context.WithCancel(context.Background())
-done := make(chan struct{})
-var outputs []AgentOutput
-var err error
-go func() {
-outputs, _, err = orch.Run(ctx, AgentInput{Target: "https://example.com"})
-close(done)
-}()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var outputs []AgentOutput
+	var err error
+	go func() {
+		outputs, _, err = orch.Run(ctx, AgentInput{Target: "https://example.com"})
+		close(done)
+	}()
 
-<-started
-cancel()
+	<-started
+	cancel()
 
-select {
-case <-done:
-case <-time.After(5 * time.Second):
-t.Fatal("orchestrator did not return after context cancellation while agent was blocked")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("orchestrator did not return after context cancellation while agent was blocked")
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if len(outputs) != 1 || !outputs[0].TimedOut {
+		t.Fatalf("expected one timed-out output, got %+v", outputs)
+	}
 }
 
-if !errors.Is(err, context.Canceled) {
-t.Fatalf("expected context.Canceled, got %v", err)
+// blockingPlanner ignores ctx and blocks in Plan until unblock is closed,
+// simulating a planner stuck on a slow/unresponsive dependency (AI provider,
+// knowledge retrieval, learner RPC) between agent runs.
+type blockingPlanner struct {
+	unblock chan struct{}
+	started chan struct{}
 }
-if len(outputs) != 1 || !outputs[0].TimedOut {
-t.Fatalf("expected one timed-out output, got %+v", outputs)
+
+func (p *blockingPlanner) Plan(_ context.Context, _ AgentInput, _ []AgentOutput) (PlannerDecision, error) {
+	if p.started != nil {
+		close(p.started)
+	}
+	<-p.unblock
+	return PlannerDecision{IsDone: true}, nil
 }
+
+func TestOrchestratorHonoursContextWhenPlannerBlocks(t *testing.T) {
+	unblock := make(chan struct{})
+	started := make(chan struct{})
+	defer close(unblock)
+	factory := newTestFactory(map[string]Agent{})
+	planner := &blockingPlanner{unblock: unblock, started: started}
+	orch := NewOrchestrator(planner, factory, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, _, err = orch.Run(ctx, AgentInput{Target: "https://example.com"})
+		close(done)
+	}()
+
+	<-started
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("orchestrator did not return after context cancellation while planner was blocked")
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
 }
