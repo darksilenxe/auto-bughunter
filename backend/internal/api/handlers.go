@@ -339,6 +339,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/oast/hits/", s.handleOASTHits)
 	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
+	mux.HandleFunc("/api/admin/logs", s.handleSystemLogs)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))
