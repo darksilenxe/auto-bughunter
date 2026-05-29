@@ -52,15 +52,16 @@ const integrationPreflightTimeout = 3 * time.Second
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
+//	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana, ffuf, gobuster, kiterunner
+//	Phase 4 — Crawling:    katana, ffuf, gobuster, gau, arjun, linkfinder
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
 //	Phase 6c — SQL inject: SQLMap (native Go; error-based, boolean-blind, time-based blind)
-//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), vulnx, zap
+//	Phase 6d — Cmd inject: commix (OS command injection; gated by ALLOW_DESTRUCTIVE_CHECKS)
+//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), vulnx, retire.js, trufflehog, zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
@@ -110,6 +111,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("amass", "enum -d "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "amass", func() []model.Finding {
 			return s.runAmassNative(ctx, input.Target, state, input.Scope)
+		})...)
+	}
+	if input.Options.UseUncoverIntegration {
+		emitCmd("uncover", "-q "+hostFromTarget(input.Target))
+		findings = append(findings, s.runInstrumentedTool(ctx, "uncover", func() []model.Finding {
+			return s.runUncover(ctx, input.Target, state, input.Scope)
 		})...)
 	}
 
@@ -168,10 +175,22 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			return s.runGobuster(ctx, input.Target, input.Scope)
 		})...)
 	}
-	if input.Options.UseKiterunnerIntegration {
-		emitCmd("kiterunner", "scan "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "kiterunner", func() []model.Finding {
-			return s.runKiterunner(ctx, input.Target, input.Scope)
+	if input.Options.UseGauIntegration {
+		emitCmd("gau", hostFromTarget(input.Target))
+		findings = append(findings, s.runInstrumentedTool(ctx, "gau", func() []model.Finding {
+			return s.runGau(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseArjunIntegration {
+		emitCmd("arjun", "-u "+input.Target)
+		findings = append(findings, s.runInstrumentedTool(ctx, "arjun", func() []model.Finding {
+			return s.runArjun(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseLinkFinderIntegration {
+		emitCmd("linkfinder", "-i "+input.Target+" -o cli")
+		findings = append(findings, s.runInstrumentedTool(ctx, "linkfinder", func() []model.Finding {
+			return s.runLinkFinder(ctx, input.Target, input.Scope)
 		})...)
 	}
 
@@ -322,6 +341,53 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 	}
 
+	// Phase 6d — OS command injection scanning (commix).
+	if input.Options.UseCommixIntegration {
+		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("commix", "scanner", "skipped", 0)
+			findings = append(findings, model.Finding{
+				ID:             "commix-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "commix blocked by safety policy",
+				Description:    "commix actively injects OS command payloads against the target. Destructive or high-impact checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active command-injection testing.",
+			})
+		} else {
+			emitCmd("commix", "--url="+input.Target)
+			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				return s.runCommix(ctx, input.Target, input.AuthProfile)
+			})...)
+		}
+	} else if s.cfg.EnableCommix {
+		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("commix", "scanner", "skipped", 0)
+			findings = append(findings, model.Finding{
+				ID:             "commix-auto-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "commix auto-run blocked by safety policy",
+				Description:    "commix auto-run was skipped because destructive checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, model.Finding{
+				ID:             "commix-auto-triggered",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "commix auto-triggered",
+				Description:    "commix ran without an explicit per-scan request because ENABLE_COMMIX_INTEGRATION is true in the server configuration.",
+				Evidence:       "target=" + input.Target,
+				Recommendation: "Review the commix findings below for OS command injection vulnerabilities.",
+			})
+			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				return s.runCommix(ctx, input.Target, input.AuthProfile)
+			})...)
+		}
+	}
+
 	// Phase 7 — Vulnerability scanning (primary target + discovered hosts).
 	nucleiPhaseRan := false
 	if input.Options.UseNucleiIntegration {
@@ -369,6 +435,18 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("vulnx", "search --limit 20 --silent "+hostFromTarget(input.Target))
 		findings = append(findings, s.runInstrumentedTool(ctx, "vulnx", func() []model.Finding {
 			return s.runVulnx(ctx, input.Target)
+		})...)
+	}
+	if input.Options.UseRetireJSIntegration {
+		emitCmd("retire", "--path <downloaded-js> --outputformat json")
+		findings = append(findings, s.runInstrumentedTool(ctx, "retire", func() []model.Finding {
+			return s.runRetireJS(ctx, input)
+		})...)
+	}
+	if input.Options.UseTruffleHogIntegration {
+		emitCmd("trufflehog", "filesystem <downloaded-js> --json")
+		findings = append(findings, s.runInstrumentedTool(ctx, "trufflehog", func() []model.Finding {
+			return s.runTruffleHog(ctx, input)
 		})...)
 	}
 	if input.Options.UseZAPBaselineIntegration {
@@ -2380,187 +2458,1108 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 	}}
 }
 
-// runKiterunner executes Assetnote's `kr` against the target to brute-force
-// API content and routes, mirroring the FFUF/Gobuster integration pattern.
-// It prefers an Assetnote wordlist already cached on the shared /wordlists
-// volume (populated by the kiterunner sidecar) and falls back to a temporary
-// wordlist built from the common API-endpoint list when that volume is not
-// mounted (for example when running the backend binary outside Docker).
-func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
-	if !s.cfg.EnableKiterunner {
+// runGau executes gau (GetAllUrls) to passively harvest historical URLs for the
+// target host from open sources (Wayback Machine, Common Crawl, etc.). It is a
+// passive, non-destructive integration: it queries third-party archives rather
+// than the target itself.
+func (s *Service) runGau(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableGau {
 		return []model.Finding{{
-			ID:             "kiterunner-disabled",
+			ID:             "gau-disabled",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
-			Title:          "Kiterunner integration requested but disabled",
-			Description:    "The job requested Kiterunner but ENABLE_KITERUNNER_INTEGRATION is false.",
-			Evidence:       "ENABLE_KITERUNNER_INTEGRATION=false",
+			Title:          "gau integration requested but disabled",
+			Description:    "The job requested gau but ENABLE_GAU_INTEGRATION is false.",
+			Evidence:       "ENABLE_GAU_INTEGRATION=false",
 			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
 		}}
 	}
-	if _, err := exec.LookPath(s.cfg.KiterunnerBinary); err != nil {
+	if _, err := exec.LookPath(s.cfg.GauBinary); err != nil {
 		return []model.Finding{{
-			ID:             "kiterunner-binary-missing",
+			ID:             "gau-binary-missing",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
-			Title:          "Kiterunner binary not found",
-			Description:    "Kiterunner integration is enabled but the binary is not available in PATH.",
+			Title:          "gau binary not found",
+			Description:    "gau integration is enabled but the binary is not available in PATH.",
 			Evidence:       err.Error(),
-			Recommendation: "Install Kiterunner (kr) or set KITERUNNER_BINARY to the binary path.",
+			Recommendation: "Install gau or set GAU_BINARY to the binary path.",
 		}}
 	}
 
-	wordlistPath, cleanup, err := resolveKiterunnerWordlist(ctx)
-	if err != nil {
+	host := hostFromTarget(target)
+	if host == "" {
 		return []model.Finding{{
-			ID:             "kiterunner-wordlist-error",
+			ID:             "gau-invalid-target",
 			Category:       "integration",
-			Severity:       model.SeverityLow,
-			Title:          "Kiterunner wordlist preparation failed",
-			Description:    "Could not prepare a wordlist for Kiterunner.",
-			Evidence:       err.Error(),
-			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+			Severity:       model.SeverityInfo,
+			Title:          "gau could not derive a host from the target",
+			Description:    "gau requires a hostname derived from the target URL.",
+			Evidence:       "target=" + target,
+			Recommendation: "Provide a target with a valid hostname.",
 		}}
 	}
-	defer cleanup()
 
 	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ictx, s.cfg.KiterunnerBinary, "scan", strings.TrimRight(target, "/"), "-w", wordlistPath, "-o", "text", "--fail-status-codes", "400,404")
+	cmd := exec.CommandContext(ictx, s.cfg.GauBinary, "--subs", "--threads", "5", host)
 	var outb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &outb
 	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
 		return []model.Finding{{
-			ID:             "kiterunner-timeout",
+			ID:             "gau-timeout",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
-			Title:          "Kiterunner timed out",
-			Description:    "Kiterunner did not complete before the integration timeout.",
+			Title:          "gau timed out",
+			Description:    "gau did not complete before the integration timeout.",
 			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
 
-	paths := parseKiterunnerHits(outb.String(), target, scanScope)
-	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
-	if len(paths) == 0 {
+	urls := parseGauURLs(outb.String(), scanScope)
+	if len(urls) == 0 {
 		return []model.Finding{{
-			ID:             "kiterunner-no-paths",
+			ID:             "gau-no-urls",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
-			Title:          "Kiterunner found no candidate routes",
-			Description:    "Kiterunner completed but did not report in-scope API routes from the configured wordlist.",
-			Evidence:       "target=" + target,
-			Recommendation: "Try broader API wordlists, authenticated profiles, or compiled .kite route collections.",
+			Title:          "gau found no archived URLs",
+			Description:    "gau completed but did not return any in-scope archived URLs for the target host.",
+			Evidence:       "host=" + host,
+			Recommendation: "The target may have little public history; combine with active crawling (katana) for coverage.",
 		}}
 	}
 	return []model.Finding{{
-		ID:             "kiterunner-route-discovery",
+		ID:             "gau-url-discovery",
 		Category:       "discovery",
 		Severity:       model.SeverityInfo,
-		Title:          "Kiterunner discovered candidate API routes",
-		Description:    "Kiterunner discovered in-scope API route candidates using content/route brute-forcing.",
-		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
-		Recommendation: "Review discovered routes for authentication, authorization, and input-validation flaws.",
-		Sources:        []string{"kiterunner"},
+		Title:          "gau discovered archived URLs",
+		Description:    "gau harvested historical, in-scope URLs from public archives (Wayback Machine, Common Crawl, etc.).",
+		Evidence:       fmt.Sprintf("count=%d; %s", len(urls), strings.Join(limitStrings(urls, 20), ", ")),
+		Recommendation: "Review archived URLs for forgotten endpoints, parameters, and exposed functionality, then probe in-scope candidates.",
+		Sources:        []string{"gau"},
 		Confidence:     0.8,
 	}}
 }
 
-// resolveKiterunnerWordlist prefers an Assetnote wordlist cached on the shared
-// /wordlists volume (compiled .kite collections first, then plain .txt route
-// lists). When no such file is present it falls back to a temporary wordlist
-// derived from the common API-endpoint list. The returned cleanup function
-// removes the temporary file (it is a no-op for shared-volume hits).
-func resolveKiterunnerWordlist(ctx context.Context) (string, func(), error) {
-	noop := func() {}
-	dir := strings.TrimSpace(os.Getenv("WORDLIST_DIR"))
-	if dir == "" {
-		dir = "/wordlists"
-	}
-	if found := findKiterunnerWordlistFile(dir); found != "" {
-		return found, noop, nil
-	}
-	path, err := writeTemporaryWordlist(wordlist.GetCommonAPIEndpointsWithExternal(ctx))
-	if err != nil {
-		return "", noop, err
-	}
-	return path, func() { os.Remove(path) }, nil
-}
-
-// findKiterunnerWordlistFile walks the wordlist directory and returns the most
-// suitable Assetnote wordlist: a compiled .kite collection if present,
-// otherwise a plain-text wordlist. Returns "" when the directory is missing or
-// contains no usable file.
-func findKiterunnerWordlistFile(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return ""
-	}
-	var kiteFile, txtFile string
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		switch strings.ToLower(filepath.Ext(d.Name())) {
-		case ".kite":
-			if kiteFile == "" {
-				kiteFile = path
-			}
-		case ".txt":
-			if txtFile == "" {
-				txtFile = path
-			}
-		}
-		if kiteFile != "" {
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if kiteFile != "" {
-		return kiteFile
-	}
-	return txtFile
-}
-
-// parseKiterunnerHits extracts in-scope request paths from `kr` text output.
-// Each kr result line is formatted as
-//
-//	<METHOD> <STATUS> [size, words, lines] <URL> <kite-source>
-//
-// so (unlike ffuf/gobuster) the path is not the first whitespace field. This
-// helper isolates the http(s) URL (or absolute path) token from each line and
-// then reuses parsePathHits for scope filtering and normalisation.
-func parseKiterunnerHits(rawOutput, target string, scanScope model.ScanScope) []string {
-	httpMethods := map[string]struct{}{
-		"GET": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {},
-		"HEAD": {}, "OPTIONS": {}, "TRACE": {}, "CONNECT": {},
-	}
+// parseGauURLs parses gau stdout (one URL per line), keeps only in-scope,
+// well-formed http(s) URLs, and returns a sorted, de-duplicated list.
+func parseGauURLs(rawOutput string, scanScope model.ScanScope) []string {
 	lines := strings.Split(rawOutput, "\n")
-	urlLines := make([]string, 0, len(lines))
+	urls := make([]string, 0)
+	seen := map[string]struct{}{}
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		// kr result rows always begin with the HTTP method that hit the
-		// route (e.g. "GET 200 [...] https://host/path source"). Skip
-		// banner/log lines so embedded URLs are not mistaken for hits.
-		if _, ok := httpMethods[strings.ToUpper(fields[0])]; !ok {
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
 			continue
 		}
-		for _, field := range fields {
-			if strings.HasPrefix(field, "http://") || strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "/") {
-				urlLines = append(urlLines, field)
-				break
-			}
+		if _, err := url.Parse(line); err != nil {
+			continue
+		}
+		if !scope.IsURLInScope(line, scanScope) {
+			continue
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		urls = append(urls, line)
+	}
+	sort.Strings(urls)
+	return urls
+}
+
+// runArjun executes Arjun to discover hidden HTTP query/body parameters on the
+// target endpoint. Arjun sends many requests with candidate parameter names but
+// does not send exploit payloads, so it is treated as non-destructive.
+func (s *Service) runArjun(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableArjun {
+		return []model.Finding{{
+			ID:             "arjun-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun integration requested but disabled",
+			Description:    "The job requested Arjun but ENABLE_ARJUN_INTEGRATION is false.",
+			Evidence:       "ENABLE_ARJUN_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.ArjunBinary); err != nil {
+		return []model.Finding{{
+			ID:             "arjun-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun binary not found",
+			Description:    "Arjun integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install Arjun or set ARJUN_BINARY to the binary path.",
+		}}
+	}
+	if !scope.IsURLInScope(target, scanScope) {
+		return []model.Finding{{
+			ID:             "arjun-out-of-scope",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun target out of scope",
+			Description:    "The target URL is not in scope for parameter discovery.",
+			Evidence:       "target=" + target,
+			Recommendation: "Adjust the scan scope to include the target before running Arjun.",
+		}}
+	}
+
+	// Arjun writes machine-readable results to a JSON file that must live in a
+	// directory shared with the arjun sidecar (SHARED_TMP_DIR), mirroring the
+	// wordlist sharing used by ffuf/gobuster.
+	outDir := os.Getenv("SHARED_TMP_DIR")
+	if outDir != "" {
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return []model.Finding{{
+				ID:             "arjun-output-error",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Arjun output preparation failed",
+				Description:    "Could not prepare a shared output directory for Arjun.",
+				Evidence:       err.Error(),
+				Recommendation: "Ensure SHARED_TMP_DIR is writable by the backend container.",
+			}}
 		}
 	}
-	return parsePathHits(strings.Join(urlLines, "\n"), target, scanScope)
+	outFile, err := os.CreateTemp(outDir, "auto-bughunter-arjun-*.json")
+	if err != nil {
+		return []model.Finding{{
+			ID:             "arjun-output-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Arjun output preparation failed",
+			Description:    "Could not create a temporary output file for Arjun.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+		}}
+	}
+	outPath := outFile.Name()
+	outFile.Close()
+	defer os.Remove(outPath)
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.ArjunBinary, "-u", target, "-oJ", outPath, "-t", "10", "-q")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "arjun-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun timed out",
+			Description:    "Arjun did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		data = nil
+	}
+	params := parseArjunParams(data)
+	if len(params) == 0 {
+		return []model.Finding{{
+			ID:             "arjun-no-params",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun found no hidden parameters",
+			Description:    "Arjun completed but did not discover any hidden parameters on the target endpoint.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try additional endpoints, HTTP methods, or larger parameter wordlists.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "arjun-parameter-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityLow,
+		Title:          "Arjun discovered hidden parameters",
+		Description:    "Arjun discovered HTTP parameters that are not linked from the page but are accepted by the endpoint. Hidden parameters frequently expose additional, less-tested input-handling code paths.",
+		Evidence:       fmt.Sprintf("target=%s; params=%s", target, strings.Join(limitStrings(params, 30), ", ")),
+		Recommendation: "Fuzz the discovered parameters for injection, access-control, and business-logic flaws.",
+		Sources:        []string{"arjun"},
+		Confidence:     0.75,
+	}}
+}
+
+// parseArjunParams parses Arjun's JSON output (-oJ). Arjun versions emit either
+// {"<url>": ["p1","p2"]} or {"<url>": {"params": ["p1"], "method": "GET"}}, so
+// both shapes are handled. Returns a sorted, de-duplicated list of parameters.
+func parseArjunParams(data []byte) []string {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil
+	}
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	params := make([]string, 0)
+	add := func(list []string) {
+		for _, p := range list {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			params = append(params, p)
+		}
+	}
+	for _, v := range raw {
+		var list []string
+		if err := json.Unmarshal(v, &list); err == nil {
+			add(list)
+			continue
+		}
+		var obj struct {
+			Params []string `json:"params"`
+		}
+		if err := json.Unmarshal(v, &obj); err == nil {
+			add(obj.Params)
+		}
+	}
+	sort.Strings(params)
+	return params
+}
+
+// runCommix executes commix to detect OS command injection on the target. It is
+// an active, destructive integration and must only run when AllowDestructive is
+// enabled (enforced by the caller in runOptionalIntegrations).
+func (s *Service) runCommix(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+	if !s.cfg.EnableCommix {
+		return []model.Finding{{
+			ID:             "commix-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix integration requested but disabled",
+			Description:    "The job requested commix but ENABLE_COMMIX_INTEGRATION is false.",
+			Evidence:       "ENABLE_COMMIX_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.CommixBinary); err != nil {
+		return []model.Finding{{
+			ID:             "commix-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix binary not found",
+			Description:    "commix integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install commix or set COMMIX_BINARY to the binary path.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	args := []string{"--url=" + target, "--batch", "--disable-coloring"}
+	if cookie := joinCookieHeader(authProfile.Cookies); cookie != "" {
+		args = append(args, "--cookie="+cookie)
+	}
+	cmd := exec.CommandContext(ictx, s.cfg.CommixBinary, args...)
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "commix-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix timed out",
+			Description:    "commix did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	if commixReportsVulnerable(outb.String()) {
+		return []model.Finding{{
+			ID:             "commix-command-injection",
+			Category:       "command-injection",
+			Severity:       model.SeverityCritical,
+			Title:          "commix detected OS command injection",
+			Description:    "commix reported that the target appears vulnerable to OS command injection, which can allow arbitrary command execution on the host.",
+			Evidence:       "target=" + target,
+			Recommendation: "Treat as critical: validate the injection point manually, then remediate by removing shell invocation or strictly allow-listing and escaping inputs.",
+			Sources:        []string{"commix"},
+			Confidence:     0.85,
+		}}
+	}
+	return []model.Finding{{
+		ID:             "commix-no-injection",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          "commix found no command injection",
+		Description:    "commix completed but did not report an OS command injection vulnerability on the target.",
+		Evidence:       "target=" + target,
+		Recommendation: "Re-run against specific parameterised endpoints or with authenticated profiles for deeper coverage.",
+	}}
+}
+
+// joinCookieHeader renders an auth profile cookie map as a single Cookie
+// header value (name1=value1; name2=value2) with deterministic ordering.
+func joinCookieHeader(cookies map[string]string) string {
+	if len(cookies) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(cookies))
+	for k := range cookies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+cookies[k])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// commixReportsVulnerable scans commix stdout for its vulnerability markers.
+func commixReportsVulnerable(output string) bool {
+	lower := strings.ToLower(output)
+	markers := []string{
+		"is vulnerable",
+		"appears to be injectable",
+		"injectable",
+		"the ('--technique') option",
+		"command injection vulnerability",
+	}
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// jsDownloadMaxScripts caps how many in-scope script bundles the retire.js and
+// trufflehog integrations download per scan, mirroring the secrets-in-JS probe
+// budget so scan time stays bounded on apps that load many third-party scripts.
+const jsDownloadMaxScripts = 8
+
+// jsDownloadMaxBytes caps how much of any single script (or the target HTML) is
+// read into memory before the retire.js / trufflehog scans run.
+const jsDownloadMaxBytes int64 = 1 << 20
+
+// runUncover queries Uncover (ProjectDiscovery) to surface internet-exposed
+// hosts/services for the target from third-party search engines (Shodan,
+// Censys, Fofa, …). It is a passive, non-destructive integration: it queries
+// the configured search-engine APIs rather than the target itself. In-scope
+// hosts are added to the shared discovery state so later phases can probe them.
+func (s *Service) runUncover(ctx context.Context, target string, state *integrationState, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableUncover {
+		return []model.Finding{{
+			ID:             "uncover-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Uncover integration requested but disabled",
+			Description:    "The job requested Uncover but ENABLE_UNCOVER_INTEGRATION is false.",
+			Evidence:       "ENABLE_UNCOVER_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.UncoverBinary); err != nil {
+		return []model.Finding{{
+			ID:             "uncover-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Uncover binary not found",
+			Description:    "Uncover integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install uncover or set UNCOVER_BINARY to the binary path.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	if host == "" {
+		return []model.Finding{{
+			ID:             "uncover-invalid-target",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Uncover could not derive a host from the target",
+			Description:    "Uncover requires a hostname derived from the target URL.",
+			Evidence:       "target=" + target,
+			Recommendation: "Provide a target with a valid hostname.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.UncoverBinary, "-q", host, "-silent")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "uncover-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Uncover timed out",
+			Description:    "Uncover did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or configure search-engine API keys for faster results.",
+		}}
+	}
+
+	subScope := defaultSubdomainScope(target)
+	inScope := make([]string, 0)
+	endpoints := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(outb.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		hostPart := line
+		// Uncover prints "host:port"; keep only the host portion for scoping.
+		if idx := strings.LastIndex(line, ":"); idx > 0 && !strings.Contains(line[idx+1:], ".") {
+			hostPart = line[:idx]
+		}
+		nh := normalizeDiscoveredHost(hostPart)
+		if nh == "" {
+			continue
+		}
+		if _, ok := seen[nh]; ok {
+			continue
+		}
+		seen[nh] = struct{}{}
+		endpoints = append(endpoints, line)
+		if scope.IsHostInScope(nh, subScope) {
+			inScope = append(inScope, nh)
+		} else if state != nil {
+			state.OutOfScopeHosts = append(state.OutOfScopeHosts, nh)
+			state.SkippedReasons["discovered_out_of_scope"]++
+		}
+	}
+	addDiscoveredHosts(state, inScope)
+	sort.Strings(endpoints)
+
+	if len(endpoints) == 0 {
+		return []model.Finding{{
+			ID:             "uncover-no-hosts",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Uncover found no exposed hosts",
+			Description:    "Uncover completed but returned no exposed hosts/services for the target. Search-engine API keys may be required for results.",
+			Evidence:       "host=" + host,
+			Recommendation: "Configure Shodan/Censys/Fofa API keys for Uncover, or rely on other discovery integrations.",
+		}}
+	}
+	severity := model.SeverityInfo
+	title := "Uncover discovered exposed hosts"
+	if len(inScope) > 0 {
+		severity = model.SeverityMedium
+	}
+	return []model.Finding{{
+		ID:             "uncover-exposed-hosts",
+		Category:       "discovery",
+		Severity:       severity,
+		Title:          title,
+		Description:    "Uncover surfaced internet-exposed hosts/services for the target from third-party search engines (Shodan, Censys, Fofa, …).",
+		Evidence:       fmt.Sprintf("inScope=%d; results=%s", len(inScope), strings.Join(limitStrings(endpoints, 20), ", ")),
+		Recommendation: "Review exposed services for unintended exposure (admin panels, databases, staging hosts) and probe in-scope candidates.",
+		Sources:        []string{"uncover"},
+		Confidence:     0.8,
+	}}
+}
+
+// runLinkFinder executes LinkFinder to extract endpoints/paths embedded in the
+// target's JavaScript. LinkFinder fetches the page/JS and regex-parses it; it
+// never injects payloads, so it is treated as passive/non-destructive.
+func (s *Service) runLinkFinder(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableLinkFinder {
+		return []model.Finding{{
+			ID:             "linkfinder-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "LinkFinder integration requested but disabled",
+			Description:    "The job requested LinkFinder but ENABLE_LINKFINDER_INTEGRATION is false.",
+			Evidence:       "ENABLE_LINKFINDER_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.LinkFinderBinary); err != nil {
+		return []model.Finding{{
+			ID:             "linkfinder-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "LinkFinder binary not found",
+			Description:    "LinkFinder integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install LinkFinder or set LINKFINDER_BINARY to the binary path.",
+		}}
+	}
+	if !scope.IsURLInScope(target, scanScope) {
+		return []model.Finding{{
+			ID:             "linkfinder-out-of-scope",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "LinkFinder target out of scope",
+			Description:    "The target URL is not in scope for endpoint discovery.",
+			Evidence:       "target=" + target,
+			Recommendation: "Adjust the scan scope to include the target before running LinkFinder.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.LinkFinderBinary, "-i", target, "-o", "cli")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "linkfinder-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "LinkFinder timed out",
+			Description:    "LinkFinder did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	endpoints := parseLinkFinderEndpoints(outb.String(), target, scanScope)
+	if len(endpoints) == 0 {
+		return []model.Finding{{
+			ID:             "linkfinder-no-endpoints",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "LinkFinder found no endpoints",
+			Description:    "LinkFinder completed but did not extract any in-scope endpoints from the target's JavaScript.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try additional JS bundles or combine with active crawling (katana) for coverage.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "linkfinder-endpoint-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "LinkFinder discovered endpoints in JavaScript",
+		Description:    "LinkFinder extracted endpoints/paths referenced from the target's client-side JavaScript. These frequently expose API routes and functionality not linked from the rendered UI.",
+		Evidence:       fmt.Sprintf("count=%d; %s", len(endpoints), strings.Join(limitStrings(endpoints, 20), ", ")),
+		Recommendation: "Review the discovered endpoints for forgotten APIs and undocumented functionality, then probe in-scope candidates for access-control and injection flaws.",
+		Sources:        []string{"linkfinder"},
+		Confidence:     0.75,
+	}}
+}
+
+// parseLinkFinderEndpoints parses LinkFinder's CLI output (one endpoint per
+// line), resolves relative endpoints against the target, keeps only in-scope
+// http(s) URLs, and returns a sorted, de-duplicated list.
+func parseLinkFinderEndpoints(rawOutput, target string, scanScope model.ScanScope) []string {
+	base, err := url.Parse(target)
+	if err != nil {
+		base = nil
+	}
+	endpoints := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(rawOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// LinkFinder prints raw endpoint strings; skip obvious non-endpoints.
+		if !strings.Contains(line, "/") && !strings.HasPrefix(line, "http") {
+			continue
+		}
+		var abs string
+		switch {
+		case strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://"):
+			abs = line
+		case base != nil:
+			ref, perr := url.Parse(line)
+			if perr != nil {
+				continue
+			}
+			abs = base.ResolveReference(ref).String()
+		default:
+			continue
+		}
+		if !strings.HasPrefix(abs, "http://") && !strings.HasPrefix(abs, "https://") {
+			continue
+		}
+		if !scope.IsURLInScope(abs, scanScope) {
+			continue
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		endpoints = append(endpoints, abs)
+	}
+	sort.Strings(endpoints)
+	return endpoints
+}
+
+// downloadInScopeScripts fetches the target's HTML, resolves the in-scope,
+// SSRF-safe JavaScript bundles it references, and downloads each (subject to
+// budgets) into a fresh directory under SHARED_TMP_DIR so the retire.js and
+// trufflehog sidecars can scan them at the same path. The caller owns the
+// returned directory and must remove it. Returns the directory and the number
+// of scripts written.
+func (s *Service) downloadInScopeScripts(ctx context.Context, input RunInput) (string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	ApplyAuthProfile(req, input.AuthProfile)
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	if err != nil || resp == nil {
+		return "", 0, err
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, jsDownloadMaxBytes))
+	_ = resp.Body.Close()
+
+	scriptURLs := extractScriptURLs(input.Target, string(body), input.Scope)
+	if len(scriptURLs) == 0 {
+		return "", 0, nil
+	}
+	if len(scriptURLs) > jsDownloadMaxScripts {
+		scriptURLs = scriptURLs[:jsDownloadMaxScripts]
+	}
+
+	base := os.Getenv("SHARED_TMP_DIR")
+	if base != "" {
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return "", 0, err
+		}
+	}
+	dir, err := os.MkdirTemp(base, "auto-bughunter-js-*")
+	if err != nil {
+		return "", 0, err
+	}
+
+	count := 0
+	for i, scriptURL := range scriptURLs {
+		// extractScriptURLs already validated scope + SSRF safety.
+		r, err := http.NewRequestWithContext(ctx, http.MethodGet, scriptURL, nil)
+		if err != nil {
+			continue
+		}
+		ApplyAuthProfile(r, input.AuthProfile)
+		rp, err := s.doRequestWithRetry(ctx, r, input.Options)
+		if err != nil || rp == nil {
+			continue
+		}
+		content, _ := io.ReadAll(io.LimitReader(rp.Body, jsDownloadMaxBytes))
+		_ = rp.Body.Close()
+		if len(content) == 0 {
+			continue
+		}
+		fp := filepath.Join(dir, fmt.Sprintf("script-%d.js", i))
+		if err := os.WriteFile(fp, content, 0o644); err != nil {
+			continue
+		}
+		count++
+	}
+	return dir, count, nil
+}
+
+// runRetireJS downloads the target's in-scope JavaScript bundles and runs
+// retire.js against them to detect JavaScript libraries with publicly known
+// vulnerabilities. It is passive/non-destructive: it only reads resources the
+// application already serves.
+func (s *Service) runRetireJS(ctx context.Context, input RunInput) []model.Finding {
+	if !s.cfg.EnableRetireJS {
+		return []model.Finding{{
+			ID:             "retirejs-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "retire.js integration requested but disabled",
+			Description:    "The job requested retire.js but ENABLE_RETIREJS_INTEGRATION is false.",
+			Evidence:       "ENABLE_RETIREJS_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.RetireJSBinary); err != nil {
+		return []model.Finding{{
+			ID:             "retirejs-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "retire.js binary not found",
+			Description:    "retire.js integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install retire.js (npm i -g retire) or set RETIREJS_BINARY to the binary path.",
+		}}
+	}
+
+	dir, count, err := s.downloadInScopeScripts(ctx, input)
+	if dir != "" {
+		defer os.RemoveAll(dir)
+	}
+	if err != nil {
+		return []model.Finding{{
+			ID:             "retirejs-fetch-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "retire.js could not prepare JavaScript bundles",
+			Description:    "Fetching or storing the target's JavaScript bundles for retire.js failed.",
+			Evidence:       err.Error(),
+			Recommendation: "Ensure SHARED_TMP_DIR is writable and the target is reachable, then retry.",
+		}}
+	}
+	if count == 0 {
+		return []model.Finding{{
+			ID:             "retirejs-no-scripts",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "retire.js found no JavaScript to scan",
+			Description:    "No in-scope JavaScript bundles were discovered on the target, so retire.js had nothing to analyse.",
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Combine with active crawling (katana) to discover additional script bundles.",
+		}}
+	}
+
+	outFile, err := os.CreateTemp(dir, "retire-*.json")
+	if err != nil {
+		return []model.Finding{{
+			ID:             "retirejs-output-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "retire.js output preparation failed",
+			Description:    "Could not create a temporary output file for retire.js.",
+			Evidence:       err.Error(),
+			Recommendation: "Ensure SHARED_TMP_DIR is writable by the backend container.",
+		}}
+	}
+	outPath := outFile.Name()
+	outFile.Close()
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.RetireJSBinary,
+		"--path", dir, "--outputformat", "json", "--outputpath", outPath, "--exitwith", "0")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if runErr := cmd.Run(); runErr != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "retirejs-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "retire.js timed out",
+			Description:    "retire.js did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	data, _ := os.ReadFile(outPath)
+	vulns := parseRetireJSVulns(data)
+	if len(vulns) == 0 {
+		return []model.Finding{{
+			ID:             "retirejs-no-vulns",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "retire.js found no vulnerable libraries",
+			Description:    fmt.Sprintf("retire.js scanned %d JavaScript bundle(s) but did not flag any libraries with known vulnerabilities.", count),
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Re-scan periodically; new CVEs are published against client-side libraries regularly.",
+		}}
+	}
+	highest := model.SeverityLow
+	for _, v := range vulns {
+		if severityRank(v.severity) > severityRank(highest) {
+			highest = v.severity
+		}
+	}
+	lines := make([]string, 0, len(vulns))
+	for _, v := range vulns {
+		entry := fmt.Sprintf("%s@%s (%s)", v.component, v.version, v.severity)
+		if len(v.identifiers) > 0 {
+			entry += " " + strings.Join(limitStrings(v.identifiers, 4), ",")
+		}
+		lines = append(lines, entry)
+	}
+	return []model.Finding{{
+		ID:             "retirejs-vulnerable-libraries",
+		Category:       "vulnerable-dependency",
+		Severity:       highest,
+		Title:          "retire.js detected vulnerable JavaScript libraries",
+		Description:    "retire.js identified client-side JavaScript libraries with publicly known vulnerabilities. Outdated front-end libraries frequently expose XSS, prototype-pollution, and ReDoS issues that are exploitable in the browser.",
+		Evidence:       fmt.Sprintf("vulnerable=%d; %s", len(vulns), strings.Join(limitStrings(lines, 12), "; ")),
+		Recommendation: "Upgrade the flagged libraries to a patched version and add a CI check (retire.js / npm audit) to prevent regressions.",
+		CWE:            "CWE-1104",
+		OWASPCategory:  "A06:2021 - Vulnerable and Outdated Components",
+		Sources:        []string{"retire.js"},
+		Confidence:     0.8,
+	}}
+}
+
+// retireVuln is a flattened view of one vulnerable component reported by
+// retire.js.
+type retireVuln struct {
+	component   string
+	version     string
+	severity    model.Severity
+	identifiers []string
+}
+
+// parseRetireJSVulns parses retire.js JSON output (--outputformat json),
+// handling both the newer object form ({"data": [...]}) and the older
+// top-level array form. Returns a flattened list of vulnerable components.
+func parseRetireJSVulns(data []byte) []retireVuln {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil
+	}
+	type identifiers struct {
+		CVE     []string `json:"CVE"`
+		Issue   string   `json:"issue"`
+		Summary string   `json:"summary"`
+	}
+	type vulnerability struct {
+		Severity    string      `json:"severity"`
+		Identifiers identifiers `json:"identifiers"`
+	}
+	type result struct {
+		Component       string          `json:"component"`
+		Version         string          `json:"version"`
+		Vulnerabilities []vulnerability `json:"vulnerabilities"`
+	}
+	type fileEntry struct {
+		File    string   `json:"file"`
+		Results []result `json:"results"`
+	}
+
+	var entries []fileEntry
+	var wrapper struct {
+		Data []fileEntry `json:"data"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err == nil && len(wrapper.Data) > 0 {
+		entries = wrapper.Data
+	} else if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+
+	out := make([]retireVuln, 0)
+	seen := map[string]struct{}{}
+	for _, fe := range entries {
+		for _, r := range fe.Results {
+			if len(r.Vulnerabilities) == 0 {
+				continue
+			}
+			key := r.Component + "@" + r.Version
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			highest := model.SeverityLow
+			ids := make([]string, 0)
+			idSeen := map[string]struct{}{}
+			for _, v := range r.Vulnerabilities {
+				if sv := mapRetireSeverity(v.Severity); severityRank(sv) > severityRank(highest) {
+					highest = sv
+				}
+				for _, cve := range v.Identifiers.CVE {
+					cve = strings.TrimSpace(cve)
+					if cve == "" {
+						continue
+					}
+					if _, ok := idSeen[cve]; ok {
+						continue
+					}
+					idSeen[cve] = struct{}{}
+					ids = append(ids, cve)
+				}
+			}
+			out = append(out, retireVuln{
+				component:   r.Component,
+				version:     r.Version,
+				severity:    highest,
+				identifiers: ids,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].component < out[j].component })
+	return out
+}
+
+// mapRetireSeverity maps a retire.js severity string to a model.Severity.
+func mapRetireSeverity(raw string) model.Severity {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "critical":
+		return model.SeverityCritical
+	case "high":
+		return model.SeverityHigh
+	case "medium":
+		return model.SeverityMedium
+	case "low":
+		return model.SeverityLow
+	default:
+		return model.SeverityLow
+	}
+}
+
+// severityRank orders model.Severity values so the highest-impact finding can
+// be selected when several vulnerabilities are reported for one component.
+func severityRank(sev model.Severity) int {
+	switch sev {
+	case model.SeverityCritical:
+		return 5
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	case model.SeverityInfo:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// runTruffleHog downloads the target's in-scope JavaScript bundles and runs
+// TruffleHog against them to detect committed credentials/secrets. It is
+// passive/non-destructive in that it only reads resources the application
+// already serves (it may verify discovered secrets against their provider).
+func (s *Service) runTruffleHog(ctx context.Context, input RunInput) []model.Finding {
+	if !s.cfg.EnableTruffleHog {
+		return []model.Finding{{
+			ID:             "trufflehog-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "TruffleHog integration requested but disabled",
+			Description:    "The job requested TruffleHog but ENABLE_TRUFFLEHOG_INTEGRATION is false.",
+			Evidence:       "ENABLE_TRUFFLEHOG_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.TruffleHogBinary); err != nil {
+		return []model.Finding{{
+			ID:             "trufflehog-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "TruffleHog binary not found",
+			Description:    "TruffleHog integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install TruffleHog or set TRUFFLEHOG_BINARY to the binary path.",
+		}}
+	}
+
+	dir, count, err := s.downloadInScopeScripts(ctx, input)
+	if dir != "" {
+		defer os.RemoveAll(dir)
+	}
+	if err != nil {
+		return []model.Finding{{
+			ID:             "trufflehog-fetch-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "TruffleHog could not prepare JavaScript bundles",
+			Description:    "Fetching or storing the target's JavaScript bundles for TruffleHog failed.",
+			Evidence:       err.Error(),
+			Recommendation: "Ensure SHARED_TMP_DIR is writable and the target is reachable, then retry.",
+		}}
+	}
+	if count == 0 {
+		return []model.Finding{{
+			ID:             "trufflehog-no-scripts",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "TruffleHog found no JavaScript to scan",
+			Description:    "No in-scope JavaScript bundles were discovered on the target, so TruffleHog had nothing to analyse.",
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Combine with active crawling (katana) to discover additional script bundles.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.TruffleHogBinary, "filesystem", dir, "--json", "--no-update")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if runErr := cmd.Run(); runErr != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "trufflehog-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "TruffleHog timed out",
+			Description:    "TruffleHog did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	detectors, verified := parseTruffleHogSecrets(outb.String())
+	if len(detectors) == 0 {
+		return []model.Finding{{
+			ID:             "trufflehog-no-secrets",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "TruffleHog found no secrets",
+			Description:    fmt.Sprintf("TruffleHog scanned %d JavaScript bundle(s) but did not detect any credentials.", count),
+			Evidence:       "target=" + input.Target,
+			Recommendation: "Re-scan periodically and after deployments; client-side bundles occasionally leak rotated keys.",
+		}}
+	}
+	severity := model.SeverityHigh
+	if verified {
+		severity = model.SeverityCritical
+	}
+	return []model.Finding{{
+		ID:             "trufflehog-secrets-in-js",
+		Category:       "information-disclosure",
+		Severity:       severity,
+		Title:          "TruffleHog detected secret(s) in client-side JavaScript",
+		Description:    "TruffleHog matched credential patterns in JavaScript served to every visitor. Anything in a public bundle should be considered compromised; an attacker can extract and abuse it without any application access.",
+		Evidence:       fmt.Sprintf("verified=%t; detectors=%s", verified, strings.Join(limitStrings(detectors, 12), ", ")),
+		Recommendation: "Treat the matched values as compromised: rotate them immediately and move secrets server-side. Add a CI secret-scanning check (TruffleHog/gitleaks) to prevent regressions.",
+		CWE:            "CWE-798",
+		OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+		Sources:        []string{"trufflehog"},
+		Confidence:     0.85,
+	}}
+}
+
+// parseTruffleHogSecrets parses TruffleHog's line-delimited JSON output and
+// returns the sorted, de-duplicated detector names that fired plus whether any
+// detection was verified against its provider.
+func parseTruffleHogSecrets(rawOutput string) ([]string, bool) {
+	detectors := make([]string, 0)
+	seen := map[string]struct{}{}
+	verified := false
+	for _, line := range strings.Split(rawOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var rec struct {
+			DetectorName string `json:"DetectorName"`
+			Verified     bool   `json:"Verified"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		name := strings.TrimSpace(rec.DetectorName)
+		if name == "" {
+			continue
+		}
+		if rec.Verified {
+			verified = true
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		detectors = append(detectors, name)
+	}
+	sort.Strings(detectors)
+	return detectors, verified
 }
 
 func writeTemporaryWordlist(entries []string) (string, error) {

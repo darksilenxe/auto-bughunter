@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs retire inside the `retire` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec retire retire "$@"

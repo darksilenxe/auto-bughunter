@@ -3928,8 +3928,26 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	if disable("gobuster") {
 		options.UseGobusterIntegration = false
 	}
-	if disable("kiterunner") {
-		options.UseKiterunnerIntegration = false
+	if disable("gau") {
+		options.UseGauIntegration = false
+	}
+	if disable("arjun") {
+		options.UseArjunIntegration = false
+	}
+	if disable("commix") {
+		options.UseCommixIntegration = false
+	}
+	if disable("linkfinder") {
+		options.UseLinkFinderIntegration = false
+	}
+	if disable("retire") {
+		options.UseRetireJSIntegration = false
+	}
+	if disable("trufflehog") {
+		options.UseTruffleHogIntegration = false
+	}
+	if disable("uncover") {
+		options.UseUncoverIntegration = false
 	}
 	if disable("wpscan") {
 		options.UseWPScanIntegration = false
@@ -4380,7 +4398,13 @@ func collectToolHealth() []toolHealth {
 		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
-		{Name: "kiterunner", Binary: envOrDefault("KITERUNNER_BINARY", "kr"), Category: "content-discovery"},
+		{Name: "gau", Binary: envOrDefault("GAU_BINARY", "gau"), Category: "content-discovery"},
+		{Name: "arjun", Binary: envOrDefault("ARJUN_BINARY", "arjun"), Category: "content-discovery"},
+		{Name: "commix", Binary: envOrDefault("COMMIX_BINARY", "commix"), Category: "vuln-scanning"},
+		{Name: "linkfinder", Binary: envOrDefault("LINKFINDER_BINARY", "linkfinder"), Category: "content-discovery"},
+		{Name: "retire", Binary: envOrDefault("RETIREJS_BINARY", "retire"), Category: "vuln-scanning"},
+		{Name: "trufflehog", Binary: envOrDefault("TRUFFLEHOG_BINARY", "trufflehog"), Category: "vuln-scanning"},
+		{Name: "uncover", Binary: envOrDefault("UNCOVER_BINARY", "uncover"), Category: "recon"},
 		{Name: "vulnx", Binary: envOrDefault("VULNX_BINARY", "vulnx"), Category: "vuln-scanning"},
 	}
 
@@ -4444,7 +4468,13 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
-		"kiterunner":   options.UseKiterunnerIntegration,
+		"gau":          options.UseGauIntegration,
+		"arjun":        options.UseArjunIntegration,
+		"commix":       options.UseCommixIntegration,
+		"linkfinder":   options.UseLinkFinderIntegration,
+		"retire":       options.UseRetireJSIntegration,
+		"trufflehog":   options.UseTruffleHogIntegration,
+		"uncover":      options.UseUncoverIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4546,7 +4576,13 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
-		"kiterunner":   options.UseKiterunnerIntegration,
+		"gau":          options.UseGauIntegration,
+		"arjun":        options.UseArjunIntegration,
+		"commix":       options.UseCommixIntegration,
+		"linkfinder":   options.UseLinkFinderIntegration,
+		"retire":       options.UseRetireJSIntegration,
+		"trufflehog":   options.UseTruffleHogIntegration,
+		"uncover":      options.UseUncoverIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4584,8 +4620,20 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseFFUFIntegration = false
 		case "gobuster":
 			options.UseGobusterIntegration = false
-		case "kiterunner":
-			options.UseKiterunnerIntegration = false
+		case "gau":
+			options.UseGauIntegration = false
+		case "arjun":
+			options.UseArjunIntegration = false
+		case "commix":
+			options.UseCommixIntegration = false
+		case "linkfinder":
+			options.UseLinkFinderIntegration = false
+		case "retire":
+			options.UseRetireJSIntegration = false
+		case "trufflehog":
+			options.UseTruffleHogIntegration = false
+		case "uncover":
+			options.UseUncoverIntegration = false
 		case "vulnx":
 			options.UseVulnxIntegration = false
 		}

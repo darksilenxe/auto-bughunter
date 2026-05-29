@@ -203,7 +203,13 @@ type ScanOptions struct {
 	UseSQLMapIntegration      bool     `json:"useSqlMapIntegration,omitempty"`
 	UseFFUFIntegration        bool     `json:"useFfufIntegration,omitempty"`
 	UseGobusterIntegration    bool     `json:"useGobusterIntegration,omitempty"`
-	UseKiterunnerIntegration  bool     `json:"useKiterunnerIntegration,omitempty"`
+	UseGauIntegration         bool     `json:"useGauIntegration,omitempty"`
+	UseArjunIntegration       bool     `json:"useArjunIntegration,omitempty"`
+	UseCommixIntegration      bool     `json:"useCommixIntegration,omitempty"`
+	UseLinkFinderIntegration  bool     `json:"useLinkFinderIntegration,omitempty"`
+	UseRetireJSIntegration    bool     `json:"useRetireJsIntegration,omitempty"`
+	UseTruffleHogIntegration  bool     `json:"useTruffleHogIntegration,omitempty"`
+	UseUncoverIntegration     bool     `json:"useUncoverIntegration,omitempty"`
 	RescanIntervalMinutes     int      `json:"rescanIntervalMinutes,omitempty"`
 	Priority                  int      `json:"priority,omitempty"`
 	MaxRetries                int      `json:"maxRetries,omitempty"`

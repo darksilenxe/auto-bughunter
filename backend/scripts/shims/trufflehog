@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs trufflehog inside the `trufflehog` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec trufflehog trufflehog "$@"

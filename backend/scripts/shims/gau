@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs gau inside the `gau` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec gau gau "$@"
