@@ -68,13 +68,25 @@ type ScanSession struct {
 }
 
 // NewScanSession creates a ScanSession backed by a stdlib cookie jar.
+// The returned client uses the default Go transport (direct connections).
 func NewScanSession() *ScanSession {
+	return NewScanSessionWithTransport(nil)
+}
+
+// NewScanSessionWithTransport is like NewScanSession but installs the given
+// http.RoundTripper on the session's client. Pass nil to use the default
+// transport. Used to route scanner traffic through an upstream proxy.
+func NewScanSessionWithTransport(rt http.RoundTripper) *ScanSession {
 	jar, _ := cookiejar.New(nil)
+	c := &http.Client{
+		Jar:     jar,
+		Timeout: 15 * time.Second,
+	}
+	if rt != nil {
+		c.Transport = rt
+	}
 	return &ScanSession{
-		client: &http.Client{
-			Jar:     jar,
-			Timeout: 15 * time.Second,
-		},
+		client:     c,
 		TokenStore: newTokenStore(),
 	}
 }

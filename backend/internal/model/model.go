@@ -303,6 +303,15 @@ type ScanOptions struct {
 	// presets. When set, bounty scoring and impact-goal selection shift toward
 	// the highest-paying vulnerability classes for that program context.
 	ProgramProfilePack *ProgramProfilePack `json:"programProfilePack,omitempty"`
+	// UseProxy optionally overrides the server-wide SCANNER_USE_PROXY setting
+	// for this scan. When nil, the server-level setting applies. When
+	// non-nil, the dereferenced value forces proxying on or off for this
+	// scan only.
+	UseProxy *bool `json:"useProxy,omitempty"`
+	// ProxyURL optionally overrides SCANNER_PROXY_URL for this scan. Empty
+	// inherits the server-level URL. Honoured only when proxying is on
+	// (either via the server default or UseProxy=true).
+	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.
