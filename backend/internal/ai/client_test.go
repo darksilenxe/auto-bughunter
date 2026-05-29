@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeCompletion builds a minimal OpenAI-compatible chat completion response
@@ -143,4 +145,77 @@ func TestPlanToolCall_InvalidActionReturnsNil(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected nil for invalid action, got %+v", got)
 	}
+}
+
+// countingProvider records the peak number of concurrent Complete calls so a
+// test can assert the Client's concurrency limiter is enforced.
+type countingProvider struct {
+mu      sync.Mutex
+current int
+peak    int
+hold    time.Duration
+}
+
+func (p *countingProvider) Complete(ctx context.Context, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
+p.mu.Lock()
+p.current++
+if p.current > p.peak {
+p.peak = p.current
+}
+p.mu.Unlock()
+
+time.Sleep(p.hold)
+
+p.mu.Lock()
+p.current--
+p.mu.Unlock()
+return "ok", nil
+}
+
+func (p *countingProvider) peakConcurrency() int {
+p.mu.Lock()
+defer p.mu.Unlock()
+return p.peak
+}
+
+func TestClientLimitsConcurrentAIRequests(t *testing.T) {
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS", "2")
+
+prov := &countingProvider{hold: 25 * time.Millisecond}
+c := &Client{Model: "test-model", provider: prov}
+
+const callers = 12
+var wg sync.WaitGroup
+wg.Add(callers)
+for i := 0; i < callers; i++ {
+go func() {
+defer wg.Done()
+if _, err := c.primaryComplete(context.Background(), []Message{{Role: "user", Content: "hi"}}, 0, false); err != nil {
+t.Errorf("primaryComplete: %v", err)
+}
+}()
+}
+wg.Wait()
+
+if peak := prov.peakConcurrency(); peak > 2 {
+t.Fatalf("peak concurrent AI requests = %d, want <= 2", peak)
+}
+}
+
+func TestAcquireRespectsContextCancellation(t *testing.T) {
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS", "1")
+c := &Client{}
+
+// Take the only slot and never release it.
+release, err := c.acquire(context.Background())
+if err != nil {
+t.Fatalf("first acquire: %v", err)
+}
+defer release()
+
+ctx, cancel := context.WithCancel(context.Background())
+cancel()
+if _, err := c.acquire(ctx); err == nil {
+t.Fatal("expected acquire to fail on cancelled context, got nil error")
+}
 }
