@@ -288,7 +288,9 @@ func (ws *WordlistScanner) probeMultiple(ctx context.Context, target string, pat
 	for _, path := range paths {
 		select {
 		case <-ctx.Done():
-			goto done
+			// Stop scheduling new probes, but still wait for in-flight
+			// workers below so they cannot race with the sort/return.
+			goto wait
 		default:
 		}
 
@@ -315,9 +317,9 @@ func (ws *WordlistScanner) probeMultiple(ctx context.Context, target string, pat
 		}(path)
 	}
 
+wait:
 	wg.Wait()
 
-done:
 	sort.Slice(discovered, func(i, j int) bool {
 		if discovered[i].Score == discovered[j].Score {
 			return discovered[i].Path < discovered[j].Path

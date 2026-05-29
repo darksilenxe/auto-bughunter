@@ -653,7 +653,11 @@ func scoreFindingWithComponents(f model.Finding) (float64, map[string]float64) {
 	components := map[string]float64{}
 	severity := severityWeight(f.Severity) * 0.15
 	components["severity"] = round2(severity)
-	confidence := min(0.35, max(0, f.Confidence)*0.35)
+	// Use the same calibrated confidence as the false-positive path so a
+	// finding with omitted (zero) confidence is treated consistently across
+	// ranking and triage instead of being silently down-ranked.
+	calibrated := calibratedFindingConfidence(f)
+	confidence := min(0.35, max(0, calibrated)*0.35)
 	components["confidence"] = round2(confidence)
 	base := 0.35 + severity + confidence
 	if f.Exploitability != nil && f.Exploitability.Reachable {

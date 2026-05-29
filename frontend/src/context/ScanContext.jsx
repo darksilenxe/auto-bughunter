@@ -101,14 +101,23 @@ export function ScanProvider({ children }) {
 
   // Ref for the background interval so we can cancel it on unmount.
   const bgPollRef = useRef(null);
+  // Ref tracking the currently-active poll generation. Incremented whenever
+  // a new scan starts or a historical scan is loaded so any in-flight active
+  // polling loop for a previous scan stops mutating state.
+  const pollGenRef = useRef(0);
 
-  const pollScan = useCallback(async (id) => {
-    // Cancel any existing background interval from a previous scan before
-    // starting a new active-poll loop, preventing interval leaks on re-use.
+  const cancelActivePolling = useCallback(() => {
+    pollGenRef.current += 1;
     if (bgPollRef.current) {
       clearInterval(bgPollRef.current);
       bgPollRef.current = null;
     }
+  }, []);
+
+  const pollScan = useCallback(async (id) => {
+    // Invalidate any previous poll loop and clear background interval.
+    cancelActivePolling();
+    const myGen = pollGenRef.current;
 
     // Active phase: poll every 5 s for up to 10 min while the loading
     // indicator is shown.
@@ -116,9 +125,11 @@ export function ScanProvider({ children }) {
     let done = false;
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 5000));
+      if (pollGenRef.current !== myGen) return; // superseded by a new scan
       done = await fetchJobStatus(id);
       if (done) break;
     }
+    if (pollGenRef.current !== myGen) return;
     setLoading(false);
 
     // Background phase: if the scan is still running after the active-poll
@@ -126,6 +137,11 @@ export function ScanProvider({ children }) {
     // eventually reflects the terminal state without a manual refresh.
     if (!done) {
       bgPollRef.current = setInterval(async () => {
+        if (pollGenRef.current !== myGen) {
+          clearInterval(bgPollRef.current);
+          bgPollRef.current = null;
+          return;
+        }
         const terminal = await fetchJobStatus(id);
         if (terminal) {
           clearInterval(bgPollRef.current);
@@ -133,15 +149,12 @@ export function ScanProvider({ children }) {
         }
       }, 30000);
     }
-  }, [fetchJobStatus]);
+  }, [fetchJobStatus, cancelActivePolling]);
 
   // Clean up the background interval on unmount.
   useEffect(() => () => {
-    if (bgPollRef.current) {
-      clearInterval(bgPollRef.current);
-      bgPollRef.current = null;
-    }
-  }, []);
+    cancelActivePolling();
+  }, [cancelActivePolling]);
 
   // ── Stop a running scan ───────────────────────────────────────────────
   const stopScan = useCallback(async (id) => {
@@ -197,6 +210,9 @@ export function ScanProvider({ children }) {
   // the selected historical engagement.
   const loadScan = useCallback(async (id) => {
     if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    // Cancel any active polling loops so they cannot overwrite the loaded
+    // historical scan with a later status from a previous live scan.
+    cancelActivePolling();
     try {
       const res = await fetch(
         `${API_BASE}/api/scan/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`,
@@ -215,7 +231,7 @@ export function ScanProvider({ children }) {
       console.error("[ScanContext] loadScan failed:", err);
       return false;
     }
-  }, []);
+  }, [cancelActivePolling]);
 
   return (
     <ScanContext.Provider value={{
