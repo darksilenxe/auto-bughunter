@@ -149,6 +149,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 		if len(outputs) > 0 {
 			input.Previous = outputs[len(outputs)-1]
 		}
+		input.History = outputs
 		input.AllFindings = append([]model.Finding(nil), cumulativeFindings...)
 
 		Emit(input.Emit, model.ScanEvent{

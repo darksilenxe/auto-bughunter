@@ -61,6 +61,7 @@ scanner→target traffic is a property of the target, not of this tool.
 - Authenticated scan profiles (headers, cookies, basic auth, user-agent)
 - Multi-agent architecture:
   - **Reconnaissance Agent**: DNS resolution, service discovery, tech stack probing
+  - **JavaScript SAST Agent**: captures the in-scope JavaScript bundles a target ships and runs a static analysis pass over them. It (a) flags client-side weakness sinks (DOM XSS, `eval`/`new Function`, insecure `postMessage`, secrets in client storage, …), (b) detects genuine code defects/bugs in the JavaScript itself (assignment-in-condition, comparison against `NaN`, empty `catch` blocks, leftover `debugger` statements), and (c) extracts web-application routes referenced from the code. The discovered routes seed a faster, focused wordlist pass and the discovered weakness classes tailor which active probes run next. When the static pass finds no vulnerabilities, full-coverage scanning continues unchanged.
   - **Scanning Agent**: Core security checks (headers, cookies, TLS, headless browser)
   - **Wordlist Agent**: Directory, subdomain, and API endpoint fuzzing
   - **Analysis Agent**: Finding deduplication, severity-based ranking
@@ -857,7 +858,7 @@ candidate-minus-baseline improvement.
 - FFUF and Gobuster directory-discovery integrations are available behind `ENABLE_FFUF_INTEGRATION` and `ENABLE_GOBUSTER_INTEGRATION`.
 - Destructive/high-impact checks are disabled by default; set `ALLOW_DESTRUCTIVE_CHECKS=true` only for explicitly authorized programs.
 - Auth secrets are used only at execution time; persisted job data stores auth metadata summary only.
-- Scans execute agents in sequence: reconnaissance → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.
+- Scans execute agents in sequence: reconnaissance → JavaScript SAST → scanning → specialized security agents → wordlist → analysis → ML triage → attack path synthesis → false-positive review → remediation planning → reporting. Each agent enriches the findings pipeline.
 - Autonomous orchestration is enabled by default (`ENABLE_AUTONOMOUS_ORCHESTRATION=true`): when an AI provider is configured, an AI planner picks the next agent to run after every step and may dynamically spawn additional agents (including repeating earlier stages) based on findings observed so far. The loop is bounded by `MAX_ORCHESTRATION_ROUNDS` (default `10`); when disabled or no AI key is set, the system falls back to the deterministic static pipeline above.
 - ML agents can be controlled per deployment with `ENABLE_ML_TRIAGE_AGENT`, `ENABLE_ATTACK_PATH_AGENT`, `ENABLE_FALSE_POSITIVE_REVIEW_AGENT`, and `ENABLE_REMEDIATION_PLANNER_AGENT`.
 - ML agents can also be toggled per scan request via scan `options` in the API or frontend form.
