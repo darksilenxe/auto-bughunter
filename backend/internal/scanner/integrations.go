@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,7 +55,7 @@ const integrationPreflightTimeout = 3 * time.Second
 //	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana, ffuf, gobuster
+//	Phase 4 — Crawling:    katana, ffuf, gobuster, kiterunner
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
@@ -165,6 +166,12 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("gobuster", "dir -u "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
 			return s.runGobuster(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseKiterunnerIntegration {
+		emitCmd("kiterunner", "scan "+input.Target)
+		findings = append(findings, s.runInstrumentedTool(ctx, "kiterunner", func() []model.Finding {
+			return s.runKiterunner(ctx, input.Target, input.Scope)
 		})...)
 	}
 
@@ -2371,6 +2378,189 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 		Sources:        []string{"gobuster"},
 		Confidence:     0.8,
 	}}
+}
+
+// runKiterunner executes Assetnote's `kr` against the target to brute-force
+// API content and routes, mirroring the FFUF/Gobuster integration pattern.
+// It prefers an Assetnote wordlist already cached on the shared /wordlists
+// volume (populated by the kiterunner sidecar) and falls back to a temporary
+// wordlist built from the common API-endpoint list when that volume is not
+// mounted (for example when running the backend binary outside Docker).
+func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableKiterunner {
+		return []model.Finding{{
+			ID:             "kiterunner-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner integration requested but disabled",
+			Description:    "The job requested Kiterunner but ENABLE_KITERUNNER_INTEGRATION is false.",
+			Evidence:       "ENABLE_KITERUNNER_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.KiterunnerBinary); err != nil {
+		return []model.Finding{{
+			ID:             "kiterunner-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner binary not found",
+			Description:    "Kiterunner integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install Kiterunner (kr) or set KITERUNNER_BINARY to the binary path.",
+		}}
+	}
+
+	wordlistPath, cleanup, err := resolveKiterunnerWordlist(ctx)
+	if err != nil {
+		return []model.Finding{{
+			ID:             "kiterunner-wordlist-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Kiterunner wordlist preparation failed",
+			Description:    "Could not prepare a wordlist for Kiterunner.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+		}}
+	}
+	defer cleanup()
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.KiterunnerBinary, "scan", strings.TrimRight(target, "/"), "-w", wordlistPath, "-o", "text", "--fail-status-codes", "400,404")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "kiterunner-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner timed out",
+			Description:    "Kiterunner did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	paths := parseKiterunnerHits(outb.String(), target, scanScope)
+	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	if len(paths) == 0 {
+		return []model.Finding{{
+			ID:             "kiterunner-no-paths",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Kiterunner found no candidate routes",
+			Description:    "Kiterunner completed but did not report in-scope API routes from the configured wordlist.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try broader API wordlists, authenticated profiles, or compiled .kite route collections.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "kiterunner-route-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "Kiterunner discovered candidate API routes",
+		Description:    "Kiterunner discovered in-scope API route candidates using content/route brute-forcing.",
+		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+		Recommendation: "Review discovered routes for authentication, authorization, and input-validation flaws.",
+		Sources:        []string{"kiterunner"},
+		Confidence:     0.8,
+	}}
+}
+
+// resolveKiterunnerWordlist prefers an Assetnote wordlist cached on the shared
+// /wordlists volume (compiled .kite collections first, then plain .txt route
+// lists). When no such file is present it falls back to a temporary wordlist
+// derived from the common API-endpoint list. The returned cleanup function
+// removes the temporary file (it is a no-op for shared-volume hits).
+func resolveKiterunnerWordlist(ctx context.Context) (string, func(), error) {
+	noop := func() {}
+	dir := strings.TrimSpace(os.Getenv("WORDLIST_DIR"))
+	if dir == "" {
+		dir = "/wordlists"
+	}
+	if found := findKiterunnerWordlistFile(dir); found != "" {
+		return found, noop, nil
+	}
+	path, err := writeTemporaryWordlist(wordlist.GetCommonAPIEndpointsWithExternal(ctx))
+	if err != nil {
+		return "", noop, err
+	}
+	return path, func() { os.Remove(path) }, nil
+}
+
+// findKiterunnerWordlistFile walks the wordlist directory and returns the most
+// suitable Assetnote wordlist: a compiled .kite collection if present,
+// otherwise a plain-text wordlist. Returns "" when the directory is missing or
+// contains no usable file.
+func findKiterunnerWordlistFile(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return ""
+	}
+	var kiteFile, txtFile string
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(d.Name())) {
+		case ".kite":
+			if kiteFile == "" {
+				kiteFile = path
+			}
+		case ".txt":
+			if txtFile == "" {
+				txtFile = path
+			}
+		}
+		if kiteFile != "" {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if kiteFile != "" {
+		return kiteFile
+	}
+	return txtFile
+}
+
+// parseKiterunnerHits extracts in-scope request paths from `kr` text output.
+// Each kr result line is formatted as
+//
+//	<METHOD> <STATUS> [size, words, lines] <URL> <kite-source>
+//
+// so (unlike ffuf/gobuster) the path is not the first whitespace field. This
+// helper isolates the http(s) URL (or absolute path) token from each line and
+// then reuses parsePathHits for scope filtering and normalisation.
+func parseKiterunnerHits(rawOutput, target string, scanScope model.ScanScope) []string {
+	httpMethods := map[string]struct{}{
+		"GET": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {},
+		"HEAD": {}, "OPTIONS": {}, "TRACE": {}, "CONNECT": {},
+	}
+	lines := strings.Split(rawOutput, "\n")
+	urlLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		// kr result rows always begin with the HTTP method that hit the
+		// route (e.g. "GET 200 [...] https://host/path source"). Skip
+		// banner/log lines so embedded URLs are not mistaken for hits.
+		if _, ok := httpMethods[strings.ToUpper(fields[0])]; !ok {
+			continue
+		}
+		for _, field := range fields {
+			if strings.HasPrefix(field, "http://") || strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "/") {
+				urlLines = append(urlLines, field)
+				break
+			}
+		}
+	}
+	return parsePathHits(strings.Join(urlLines, "\n"), target, scanScope)
 }
 
 func writeTemporaryWordlist(entries []string) (string, error) {

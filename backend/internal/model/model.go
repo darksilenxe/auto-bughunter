@@ -203,6 +203,7 @@ type ScanOptions struct {
 	UseSQLMapIntegration      bool     `json:"useSqlMapIntegration,omitempty"`
 	UseFFUFIntegration        bool     `json:"useFfufIntegration,omitempty"`
 	UseGobusterIntegration    bool     `json:"useGobusterIntegration,omitempty"`
+	UseKiterunnerIntegration  bool     `json:"useKiterunnerIntegration,omitempty"`
 	RescanIntervalMinutes     int      `json:"rescanIntervalMinutes,omitempty"`
 	Priority                  int      `json:"priority,omitempty"`
 	MaxRetries                int      `json:"maxRetries,omitempty"`

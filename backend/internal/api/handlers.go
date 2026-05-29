@@ -3901,6 +3901,7 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 			set["nikto"] = struct{}{}
 			set["ffuf"] = struct{}{}
 			set["gobuster"] = struct{}{}
+			set["kiterunner"] = struct{}{}
 		}
 	}
 	disable := func(tool string) bool {
@@ -3924,6 +3925,9 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	}
 	if disable("gobuster") {
 		options.UseGobusterIntegration = false
+	}
+	if disable("kiterunner") {
+		options.UseKiterunnerIntegration = false
 	}
 	if disable("wpscan") {
 		options.UseWPScanIntegration = false
@@ -4374,6 +4378,7 @@ func collectToolHealth() []toolHealth {
 		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
+		{Name: "kiterunner", Binary: envOrDefault("KITERUNNER_BINARY", "kr"), Category: "content-discovery"},
 		{Name: "vulnx", Binary: envOrDefault("VULNX_BINARY", "vulnx"), Category: "vuln-scanning"},
 	}
 
@@ -4437,6 +4442,7 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"kiterunner":   options.UseKiterunnerIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4538,6 +4544,7 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"kiterunner":   options.UseKiterunnerIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4575,6 +4582,8 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseFFUFIntegration = false
 		case "gobuster":
 			options.UseGobusterIntegration = false
+		case "kiterunner":
+			options.UseKiterunnerIntegration = false
 		case "vulnx":
 			options.UseVulnxIntegration = false
 		}
