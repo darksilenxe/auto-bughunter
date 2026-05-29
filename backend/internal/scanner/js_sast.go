@@ -143,6 +143,22 @@ var sastSinkPatterns = []sastSinkPattern{
 		label:    "Token/credential stored in localStorage/sessionStorage",
 		pattern:  regexp.MustCompile(`(?:local|session)Storage\.setItem\s*\(\s*['"][^'"]*(?:token|jwt|secret|password|api[_-]?key)`),
 	},
+	{
+		id:       "prototype-pollution-proto",
+		category: "prototype-pollution",
+		severity: model.SeverityHigh,
+		cwe:      "CWE-1321",
+		label:    "Direct write to __proto__/constructor.prototype (prototype pollution sink)",
+		pattern:  regexp.MustCompile(`(?:\[\s*['"]__proto__['"]\s*\]|\.__proto__|constructor\s*\.\s*prototype|\[\s*['"]constructor['"]\s*\]\s*\[\s*['"]prototype['"]\s*\])\s*[.\[=]`),
+	},
+	{
+		id:       "prototype-pollution-merge",
+		category: "prototype-pollution",
+		severity: model.SeverityMedium,
+		cwe:      "CWE-1321",
+		label:    "Recursive merge/extend over untrusted keys (potential prototype pollution gadget)",
+		pattern:  regexp.MustCompile(`(?i)(?:function\s+(?:deep)?(?:merge|extend|assign)|(?:deep)(?:merge|extend))\s*\([^)]*\)[\s\S]{0,80}for\s*\(\s*(?:var|let|const)?\s*\w+\s+in\b`),
+	},
 }
 
 // sastBugCategory is the category used for genuine code-defect findings

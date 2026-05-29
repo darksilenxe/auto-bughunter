@@ -746,6 +746,40 @@ CWE-639 / OWASP A01 finding when two identities receive equivalent
 successful responses (matching status code and body length within 64
 bytes). Anonymous-vs-authenticated parity is reported at high severity.
 
+The following additional native probes run on every active (non
+`passiveOnly`) scan. They reuse the in-scan HTTP client, honour scope and
+outbound-safety validation, and are detection-oriented (no destructive or
+persistent payloads):
+
+- `sensitive-file-exposure` — requests well-known sensitive paths
+  (`.git/HEAD`/`.git/config`, `.svn/entries`, `.hg/requires`, `.env`,
+  `.DS_Store`, `composer.lock`, `WEB-INF/web.xml`, …) and confirms exposure
+  via content signatures so HTML catch-all pages are not misreported.
+- `crlf-injection` — injects encoded CR/LF sequences into the URL to attempt
+  response-header splitting and confirms a planted marker header lands in the
+  real response headers.
+- `forbidden-bypass` — re-requests 401/403 resources with path mutations and
+  override headers (`X-Original-URL`, `X-Rewrite-URL`,
+  `X-Forwarded-For`/`-Host`, …) and flags any that yield a 2xx.
+- `cache-poisoning` — reflects a unique canary through unkeyed request
+  headers and reports when the canary is reflected on a cacheable response.
+- `param-pollution` — sends duplicate query parameters (HPP) and flags
+  server-side parsing differentials (status change or significant body
+  delta).
+- `vhost-discovery` — rotates the `Host` header against the same IP to
+  surface distinct virtual hosts / internal apps.
+- `graphql-abuse` — for discovered GraphQL endpoints, checks field-suggestion
+  leakage, alias-based amplification, and query batching acceptance.
+- `request-smuggling` — performs a detection-only CL.TE/TE.CL timing-desync
+  test (self-timeout technique; never forwards a complete smuggled request
+  that could poison another user's connection). Reported at reduced
+  confidence and flagged for manual confirmation.
+
+Client-side prototype-pollution sinks (`Object.prototype`/`__proto__`
+assignment and unsafe deep-merge patterns) are detected statically by the
+JavaScript SAST agent rather than via an active probe, to avoid persistent
+server-side pollution affecting other users.
+
 Admin API:
 
 - `GET /api/oast/tokens[?scanId=...]` — list active tokens.
@@ -764,7 +798,7 @@ submissions in multiple formats. All endpoints are served under `/api/report/`.
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/report/{scanId}` | Main report. Defaults to PDF for backward compatibility. |
-| `GET /api/report/{scanId}?format=pdf\|md\|html\|json&type=pentest\|executive\|compliance` | Format / report-type negotiation via query string. |
+| `GET /api/report/{scanId}?format=pdf\|md\|html\|json\|sarif\|csv&type=pentest\|executive\|compliance` | Format / report-type negotiation via query string. `sarif` emits a SARIF 2.1.0 document (GitHub code scanning / DefectDojo ingestion); `csv` emits a flat one-row-per-finding export for spreadsheets and issue trackers. |
 | `POST /api/report/{scanId}` | Same as GET but accepts `ReportTemplateOptions` (company name, classification, contact, program handle, logo path, report type) in the JSON body for cover-page customization. Query-string parameters take precedence. |
 | `GET /api/report/{scanId}/finding/{findingId}?format=md\|pdf\|json&platform=hackerone\|bugcrowd\|intigriti` | Single bug-bounty submission for one finding. Defaults to Markdown. The optional `platform` query adds a platform-specific submission banner. |
 | `GET /api/report/{scanId}/bugbounty.zip?platform=hackerone\|bugcrowd\|intigriti` | Zip bundle containing one Markdown submission per finding plus a top-level `INDEX.md`. The optional `platform` query is forwarded to every submission file. |
