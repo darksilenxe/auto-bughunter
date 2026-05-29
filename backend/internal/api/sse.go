@@ -26,9 +26,14 @@ func (s *Server) handleScanEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the scan exists.
-	if _, err := s.repo.GetJob(r.Context(), id); err != nil {
+	// Verify the scan exists and that the caller has access to its workspace.
+	job, err := s.repo.GetJob(r.Context(), id)
+	if err != nil || job == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
 

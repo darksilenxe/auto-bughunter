@@ -141,11 +141,26 @@ func targetForRateLimit(r *http.Request) string {
 	if r.Body == nil {
 		return ""
 	}
-	raw, err := ioReadAllLimited(r.Body, 1<<20)
+	// Read enough of the body to extract the JSON `target` field without
+	// truncating large payloads. We restore the original body bytes after
+	// peeking so downstream handlers still receive the full request.
+	const peekLimit = 8 << 20 // 8 MiB — large enough for any scan payload
+	raw, err := ioReadAllLimited(r.Body, peekLimit)
 	if err != nil {
+		// Restore whatever we managed to read so the handler can still parse it.
+		r.Body = ioNopCloserFromBytes(raw)
 		return ""
 	}
-	r.Body = ioNopCloserFromBytes(raw)
+	// If we hit the peek limit there may be more bytes; preserve them by
+	// concatenating with the unread remainder.
+	if int64(len(raw)) >= peekLimit {
+		r.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(raw), r.Body), r.Body}
+	} else {
+		r.Body = ioNopCloserFromBytes(raw)
+	}
 	var payload struct {
 		Target string `json:"target"`
 	}

@@ -35,9 +35,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxCaptureBody is the maximum number of bytes captured from a request or
-// response body to keep storage bounded.
+// maxCaptureBody is the maximum number of bytes retained from a request or
+// response body for storage to keep persistence bounded. Bodies larger than
+// this are forwarded in full to the destination but truncated for capture.
 const maxCaptureBody = 128 * 1024
+
+// maxForwardBody is the maximum number of bytes read into memory when
+// forwarding a request or response body through the proxy. This bounds
+// memory usage while still being large enough for typical web traffic.
+const maxForwardBody = 50 * 1024 * 1024
+
+// truncateForCapture returns up to maxCaptureBody bytes from b for storage.
+func truncateForCapture(b []byte) []byte {
+	if len(b) <= maxCaptureBody {
+		return b
+	}
+	return b[:maxCaptureBody]
+}
 
 // Store is the persistence interface used by the proxy.
 type Store interface {
@@ -151,11 +165,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Capture request body.
+	// Read the full request body (bounded by maxForwardBody) so it can be
+	// forwarded intact upstream; a truncated copy is captured for storage.
 	var reqBodyBytes []byte
 	if r.Body != nil {
-		limited := io.LimitReader(r.Body, maxCaptureBody)
-		reqBodyBytes, _ = io.ReadAll(limited)
+		reqBodyBytes, _ = io.ReadAll(io.LimitReader(r.Body, maxForwardBody))
 		r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(reqBodyBytes))
 	}
@@ -179,8 +193,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Capture response body.
-	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxCaptureBody))
+	// Read full response body (bounded) so the client gets complete bytes.
+	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody))
 
 	// Write response back to client.
 	for k, vals := range resp.Header {
@@ -191,17 +205,17 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBodyBytes)
 
-	// Persist captured pair asynchronously.
+	// Persist captured pair asynchronously (truncated for storage).
 	captured := &model.ProxyRequest{
 		ID:              uuid.NewString(),
 		CapturedAt:      time.Now().UTC(),
 		Method:          r.Method,
 		URL:             r.URL.String(),
 		RequestHeaders:  flattenHeaders(r.Header),
-		RequestBody:     string(reqBodyBytes),
+		RequestBody:     string(truncateForCapture(reqBodyBytes)),
 		ResponseStatus:  resp.StatusCode,
 		ResponseHeaders: flattenHeaders(resp.Header),
-		ResponseBody:    string(respBodyBytes),
+		ResponseBody:    string(truncateForCapture(respBodyBytes)),
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -266,8 +280,8 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pass-through tunnel path (no CA configured).
-	defer destConn.Close()
+	// Pass-through tunnel path (no CA configured). destConn is already
+	// deferred above; do not defer it again.
 
 	// Record the tunnel (no body content available without MitM).
 	captured := &model.ProxyRequest{
@@ -290,16 +304,24 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.SaveProxyRequest(ctx, captured)
 	}()
 
-	// Pipe bytes bidirectionally.
+	// Pipe bytes bidirectionally. When either copy finishes (EOF or
+	// error), close both connections so the other goroutine unblocks
+	// and we don't leak the tunnel until the idle side times out.
+	closeBoth := func() {
+		_ = clientConn.Close()
+		_ = destConn.Close()
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(destConn, clientConn)
+		closeBoth()
 	}()
 	go func() {
 		defer wg.Done()
 		_, _ = io.Copy(clientConn, destConn)
+		closeBoth()
 	}()
 	wg.Wait()
 }
@@ -379,10 +401,10 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 		return nil
 	}
 
-	// Capture request body.
+	// Read full request body (bounded) so it forwards intact upstream.
 	var reqBodyBytes []byte
 	if req.Body != nil {
-		reqBodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, maxCaptureBody))
+		reqBodyBytes, _ = io.ReadAll(io.LimitReader(req.Body, maxForwardBody))
 	}
 
 	outReq, err := http.NewRequest(req.Method, req.URL.String(), bytes.NewReader(reqBodyBytes))
@@ -402,7 +424,7 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 	}
 	defer resp.Body.Close()
 
-	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxCaptureBody))
+	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody))
 
 	// Write the response back to the client over the same TLS connection.
 	out := &http.Response{
@@ -427,10 +449,10 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 		Method:          req.Method,
 		URL:             req.URL.String(),
 		RequestHeaders:  flattenHeaders(req.Header),
-		RequestBody:     string(reqBodyBytes),
+		RequestBody:     string(truncateForCapture(reqBodyBytes)),
 		ResponseStatus:  resp.StatusCode,
 		ResponseHeaders: flattenHeaders(resp.Header),
-		ResponseBody:    string(respBodyBytes),
+		ResponseBody:    string(truncateForCapture(respBodyBytes)),
 		Notes:           "captured via TLS interception",
 	}
 	go func() {

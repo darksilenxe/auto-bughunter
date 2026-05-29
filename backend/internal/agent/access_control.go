@@ -119,20 +119,27 @@ func testIDOR(ctx context.Context, client *http.Client, target string, profile m
 						req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, newURL, nil)
 						scanner.ApplyAuthProfile(req2, profile)
 						resp2, err := client.Do(req2)
-						if err == nil && resp2.StatusCode == http.StatusOK {
-							body2, _ := io.ReadAll(resp2.Body)
-							resp2.Body.Close()
-							if len(body2) > 100 {
-								findings = append(findings, model.Finding{
-									ID:             "idor-potential",
-									Category:       "access_control",
-									Severity:       model.SeverityHigh,
-									Title:          "Insecure Direct Object Reference (IDOR) vulnerability",
-									Description:    "Application may allow accessing other users' resources by tampering with ID parameters.",
-									Evidence:       fmt.Sprintf("Different IDs return data without validation: %s vs %s", testURL, newURL),
-									Recommendation: "Verify authorization on all resource access. Don't rely on client-provided IDs. Use UUIDs instead of sequential IDs.",
-								})
-								return findings
+						if err == nil {
+							if resp2.StatusCode == http.StatusOK {
+								body2, _ := io.ReadAll(resp2.Body)
+								resp2.Body.Close()
+								if len(body2) > 100 {
+									findings = append(findings, model.Finding{
+										ID:             "idor-potential",
+										Category:       "access_control",
+										Severity:       model.SeverityHigh,
+										Title:          "Insecure Direct Object Reference (IDOR) vulnerability",
+										Description:    "Application may allow accessing other users' resources by tampering with ID parameters.",
+										Evidence:       fmt.Sprintf("Different IDs return data without validation: %s vs %s", testURL, newURL),
+										Recommendation: "Verify authorization on all resource access. Don't rely on client-provided IDs. Use UUIDs instead of sequential IDs.",
+									})
+									return findings
+								}
+							} else {
+								// Close the body for non-OK responses so we
+								// don't leak the connection.
+								_, _ = io.Copy(io.Discard, resp2.Body)
+								resp2.Body.Close()
 							}
 						}
 					}

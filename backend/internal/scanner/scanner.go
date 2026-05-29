@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -854,9 +855,35 @@ func (s *Service) doRequestWithSession(ctx context.Context, req *http.Request, o
 		backoff = time.Duration(options.BackoffMillis) * time.Millisecond
 	}
 
+	// Buffer the request body once so each retry can rewind it. Without
+	// this, req.Clone() shares the original body reader, which is drained
+	// after the first attempt and produces empty-body POSTs on retries.
+	var bodyBytes []byte
+	if req.Body != nil && req.GetBody == nil {
+		b, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+		bodyBytes = b
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+		}
+		req.ContentLength = int64(len(bodyBytes))
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		cloned := req.Clone(ctx)
+		// Refresh the cloned body so retried POST/PUT requests send the
+		// full payload instead of the already-drained reader from the
+		// previous attempt.
+		if req.GetBody != nil {
+			if body, err := req.GetBody(); err == nil {
+				cloned.Body = body
+			}
+		}
 		// Inject CSRF/bearer tokens harvested earlier in this scan. The
 		// session cookie jar handles Cookie headers automatically.
 		if sess != nil {

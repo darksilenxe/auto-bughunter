@@ -679,6 +679,19 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if err != nil || job == nil {
 		return
 	}
+	// Stop scans cancelled while still queued: handleStop marks the job
+	// "cancelled" when no cancel func is registered yet (i.e. before this
+	// goroutine reached runJob). Without this guard we would flip the
+	// status back to "running" and execute a scan the operator already
+	// stopped.
+	if job.Status == "cancelled" {
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Scan cancelled: stopped before execution started",
+		})
+		s.appendAuditEvent(id, "cancelled", "Scan was cancelled while queued; runJob skipped execution")
+		return
+	}
 	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
 	persistedState, _ := s.repo.GetScanState(context.Background(), target)
 	if persistedState != nil && len(persistedState.KnownRuntimeEndpoints) > 0 {
