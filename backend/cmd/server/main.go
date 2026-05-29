@@ -54,7 +54,12 @@ func main() {
 
 	enableSecLists := getbool("ENABLE_SECLISTS_WORDLISTS", true)
 	enableKiterunner := getbool("ENABLE_KITERUNNER_WORDLISTS", true)
-	wordlist.InitLoader(enableSecLists, enableKiterunner)
+	wordlist.InitLoaderWithConfig(wordlist.LoaderConfig{
+		EnableSecLists:   enableSecLists,
+		EnableKiterunner: enableKiterunner,
+		Profile:          os.Getenv("WORDLIST_PROFILE"),
+		SecListsDir:      os.Getenv("SECLISTS_DIR"),
+	})
 
 	repo, err := storage.NewPostgres(context.Background(), databaseURL)
 	if err != nil {

