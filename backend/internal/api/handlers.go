@@ -75,6 +75,8 @@ type Server struct {
 	gateHighBlock              int
 	gateMedBlock               int
 	scanTimeout                time.Duration
+	postProcessBudget          time.Duration
+	enrichmentHook             func(ctx context.Context, target string, findings []model.Finding, jobSnapshot *model.ScanJob) enrichmentResult
 	eventBus                   *EventBus
 	oast                       *oast.Service
 	attackGraphDB              AttackGraphStore
@@ -279,6 +281,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateHighBlock:              maxInt(0, intFromEnv("POLICY_GATE_HIGH_BLOCK", 1)),
 		gateMedBlock:               maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:                scanTimeout,
+		postProcessBudget:          postProcessTimeout,
 		eventBus:                   NewEventBus(),
 		apiRateLimiter:             newAPIRateLimiter(),
 		defaultMinROI:              maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
@@ -652,6 +655,43 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": "cancelled"})
 }
 
+// enrichmentResult holds the best-effort post-scan enrichment outputs
+// (security-knowledge retrieval, AI summary, narrative report, ML
+// recommendations). It is produced by computeEnrichment under a watchdog so
+// that a step which hangs while ignoring ctx cancellation cannot block scan
+// finalization.
+type enrichmentResult struct {
+	knowledgeCtx *model.SecurityKnowledgeContext
+	aiSummary    string
+	narrative    ai.NarrativeReport
+	haveNarr     bool
+	recs         *model.ModelRecommendations
+}
+
+// computeEnrichment runs the post-scan enrichment steps over immutable
+// snapshots of the job. It honours ctx where the underlying providers do, but
+// callers must still bound it with a watchdog because some local/CPU-bound
+// fallbacks do not observe cancellation. A test hook (enrichmentHook) may
+// override the implementation to inject deterministic timing.
+func (s *Server) computeEnrichment(ctx context.Context, target string, findings []model.Finding, jobSnapshot *model.ScanJob) enrichmentResult {
+	if s.enrichmentHook != nil {
+		return s.enrichmentHook(ctx, target, findings, jobSnapshot)
+	}
+	var res enrichmentResult
+	if s.knowledgeSvc != nil {
+		res.knowledgeCtx = s.knowledgeSvc.RetrieveForJob(ctx, "ai-summary", jobSnapshot, 5)
+	}
+	res.aiSummary = s.aiClient.SummarizeWithKnowledge(ctx, target, findings, res.knowledgeCtx)
+	if s.aiClient != nil && len(findings) > 0 {
+		res.narrative = s.aiClient.GenerateNarrativeReport(ctx, target, findings)
+		res.haveNarr = true
+	}
+	if s.mlService != nil {
+		res.recs = s.mlService.RecommendFromHistory(ctx, s.repo, s.proxyServer.Store(), jobSnapshot)
+	}
+	return res
+}
+
 func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope) {
 	// Track how many jobs are waiting for a global execution slot.
 	// The defer is a safety net in case acquireGlobalSlot panics; the
@@ -868,30 +908,70 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.Dashboard = buildDecisionDashboard(job)
-	// Create a bounded context for external service calls (knowledge, AI, ML).
-	// These calls should complete within a reasonable time and must not block
-	// the scan result from being persisted indefinitely.
-	postCtx, postCancel := context.WithTimeout(context.Background(), postProcessTimeout)
+	// Best-effort post-scan enrichment (security-knowledge retrieval, AI
+	// summary, narrative report, ML recommendations). These calls run on
+	// external providers/sidecars or CPU-bound computations and must never
+	// block scan finalization: the job is only persisted as "completed" and
+	// the terminal "Scan completed" event emitted *after* this phase, so a
+	// step that hangs while ignoring ctx cancellation would otherwise leave
+	// the job stuck reporting "running" even though scanning is done.
+	//
+	// Bound the whole phase with a watchdog (mirroring the orchestrator's
+	// agent/planner guards): the enrichment runs in a goroutine over immutable
+	// snapshots and we proceed with whatever completed within the budget. A
+	// step that overruns is abandoned to finish in the background; because it
+	// only reads snapshots its result is simply discarded.
+	budget := s.postProcessBudget
+	if budget <= 0 {
+		budget = postProcessTimeout
+	}
+	postCtx, postCancel := context.WithTimeout(context.Background(), budget)
 	defer postCancel()
-	knowledgeCtx := (*model.SecurityKnowledgeContext)(nil)
+
 	if s.knowledgeSvc != nil {
 		emit(model.ScanEvent{
 			Type:    model.ScanEventInfo,
 			Message: "Retrieving security knowledge context…",
 		})
-		knowledgeCtx = s.knowledgeSvc.RetrieveForJob(postCtx, "ai-summary", job, 5)
-		if knowledgeCtx != nil {
-			s.appendAuditEvent(id, "security-knowledge", fmt.Sprintf("Retrieved %d curated references", len(knowledgeCtx.References)))
-		}
 	}
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
 		Message: "Generating AI summary…",
 	})
-	job.AISummary = s.aiClient.SummarizeWithKnowledge(postCtx, target, job.Findings, knowledgeCtx)
+	if s.mlService != nil {
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Computing ML recommendations…",
+		})
+	}
+
+	// Snapshot the inputs the enrichment goroutine needs so it can never race
+	// with the mutations the main goroutine performs on `job` after this phase.
+	findingsSnapshot := append([]model.Finding(nil), job.Findings...)
+	jobSnapshot := *job
+	jobSnapshot.Findings = findingsSnapshot
+
+	resultCh := make(chan enrichmentResult, 1)
+	go func() {
+		resultCh <- s.computeEnrichment(postCtx, target, findingsSnapshot, &jobSnapshot)
+	}()
+
+	var enrich enrichmentResult
+	select {
+	case enrich = <-resultCh:
+	case <-postCtx.Done():
+		log.Printf("api: scan %s post-processing enrichment exceeded budget %s; finalizing with partial AI/ML results: %v", id, budget, postCtx.Err())
+		s.appendAuditEvent(id, "post-processing", "AI summary/ML enrichment exceeded time budget; scan finalized with partial results")
+	}
+
+	knowledgeCtx := enrich.knowledgeCtx
+	if knowledgeCtx != nil {
+		s.appendAuditEvent(id, "security-knowledge", fmt.Sprintf("Retrieved %d curated references", len(knowledgeCtx.References)))
+	}
+	job.AISummary = enrich.aiSummary
 	// Generate domain-aware narrative report enriching the AI summary.
-	if s.aiClient != nil && len(job.Findings) > 0 {
-		narrative := s.aiClient.GenerateNarrativeReport(postCtx, target, job.Findings)
+	if enrich.haveNarr {
+		narrative := enrich.narrative
 		if strings.TrimSpace(narrative.ExecutiveSummary) != "" && strings.TrimSpace(job.AISummary) != "" {
 			// Prepend the narrative executive summary and attack narrative to the AI summary.
 			enhancedSummary := narrative.ExecutiveSummary
@@ -912,16 +992,10 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.NextActions = buildNextActions(job)
-	if s.mlService != nil {
-		emit(model.ScanEvent{
-			Type:    model.ScanEventInfo,
-			Message: "Computing ML recommendations…",
-		})
-		job.ModelRecommendations = s.mlService.RecommendFromHistory(postCtx, s.repo, s.proxyServer.Store(), job)
-		if job.ModelRecommendations != nil {
-			job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
-			s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
-		}
+	if enrich.recs != nil {
+		job.ModelRecommendations = enrich.recs
+		job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
+		s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
 	}
 	if knowledgeCtx != nil {
 		if job.ModelRecommendations == nil {
