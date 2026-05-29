@@ -497,6 +497,51 @@ The codebase supports both modes simultaneously for gradual migration:
 
 ## API
 
+All `/api/*` endpoints require an API key. The key is matched against either the
+bootstrap admin key (`BOOTSTRAP_ADMIN_API_KEY` from your `.env`) or any key
+provisioned in persistent storage via `POST /api/admin/apikeys`. Requests
+without a valid key receive `401 Unauthorized`.
+
+### Authenticating requests
+
+Supply the key using any one of the following (checked in this order):
+
+- `X-API-Key: <key>` request header (recommended)
+- `Authorization` request header using the `Bearer` scheme (the word `Bearer`,
+  a space, then your key)
+- `api_key=<key>` query-string parameter (handy for quick links; avoid where the
+  URL may be logged)
+
+Some endpoints also accept an optional `X-Workspace-ID` header to scope the
+request to a workspace (defaults to `default`).
+
+The backend listens on `PORT` (default `8080`), so the base URL is typically
+`http://localhost:8080`.
+
+### Accessing the API with `curl`
+
+Export your key once, then reuse it:
+
+```bash
+export API_KEY="change-this-bootstrap-key"   # matches BOOTSTRAP_ADMIN_API_KEY
+export API_BASE="http://localhost:8080"
+
+# Health check (verifies the key works)
+curl -s -H "X-API-Key: $API_KEY" "$API_BASE/api/health"
+
+# Start a scan
+curl -s -X POST "$API_BASE/api/scan" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"target":"https://example.com"}'
+
+# Fetch a scan by id (Authorization header, Bearer-token form)
+curl -s -H "Authorization: Bearer $API_KEY" "$API_BASE/api/scan/<scan-id>"
+
+# List recent scans (query-parameter form)
+curl -s "$API_BASE/api/scans?api_key=$API_KEY"
+```
+
 ### `POST /api/scan`
 
 Body:
@@ -629,6 +674,23 @@ Returns open auto-managed remediation tickets (optionally filtered by `?target=`
 ### `GET /api/tools/health`
 
 Returns scanner toolchain readiness (binary presence by category) to verify bug bounty execution coverage.
+
+### `GET /api/admin/logs`
+
+Downloads the most recent backend system logs as a plain-text attachment
+(`Content-Disposition: attachment`). The server keeps the latest ~1 MiB of
+standard-logger output in an in-memory ring buffer, so this returns recent
+activity without requiring access to the container's stdout/stderr.
+
+Requires an **admin** API key (`403 Forbidden` otherwise). Example:
+
+```bash
+# Save recent logs to a timestamped file
+curl -s -OJ -H "X-API-Key: $API_KEY" "$API_BASE/api/admin/logs"
+
+# Or stream them to your terminal
+curl -s -H "X-API-Key: $API_KEY" "$API_BASE/api/admin/logs"
+```
 
 ### Out-of-band (OAST) callback service
 

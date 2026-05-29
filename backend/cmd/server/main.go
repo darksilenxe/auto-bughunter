@@ -14,6 +14,7 @@ import (
 	"auto-bughunter/backend/internal/api"
 	"auto-bughunter/backend/internal/graphdb"
 	"auto-bughunter/backend/internal/knowledge"
+	"auto-bughunter/backend/internal/logbuffer"
 	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/oast"
@@ -25,6 +26,11 @@ import (
 )
 
 func main() {
+	// Capture standard-logger output into a bounded in-memory ring buffer so
+	// recent system logs can be downloaded via GET /api/admin/logs while still
+	// being emitted to stderr.
+	logbuffer.Install()
+
 	port := getenv("PORT", "8080")
 	proxyPort := getenv("PROXY_PORT", "8081")
 	databaseURL := getenv("DATABASE_URL", "postgres://auto:auto@db:5432/autobughunter?sslmode=disable")
