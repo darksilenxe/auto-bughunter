@@ -97,7 +97,18 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			input.Previous = AgentOutput{}
 		}
 
-		decision, err := o.Planner.Plan(ctx, input, outputs)
+		decision, err, planTimedOut := runPlannerWithContext(ctx, o.Planner, input, outputs)
+		if planTimedOut {
+			// The scan context was cancelled (e.g. SCAN_TIMEOUT_SECONDS
+			// elapsed) while the planner was still deciding the next batch of
+			// agents. Without this guard a planner that blocks on a slow or
+			// unresponsive dependency would stall the whole scan between
+			// steps — the previous agent (e.g. analysis) completes but no
+			// further agent is ever scheduled. Stop the loop instead of
+			// blocking indefinitely.
+			log.Printf("orchestrator: round %d planning cancelled (scan context ended): %v", round+1, ctx.Err())
+			return outputs, combineFindingsWithDedup(allFindings), ctx.Err()
+		}
 		if err != nil {
 			log.Printf("orchestrator: round %d planning failed: %v", round+1, err)
 			return outputs, combineFindingsWithDedup(allFindings), err
@@ -355,6 +366,48 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 
 	log.Printf("orchestrator: reached max rounds (%d); pipeline complete with %d agent run(s)", o.MaxRounds, len(outputs))
 	return outputs, combineFindingsWithDedup(allFindings), nil
+}
+
+// runPlannerWithContext runs Planner.Plan in a watchdog goroutine so the
+// orchestrator honours ctx cancellation (e.g. the scan-wide timeout) even when
+// a planner blocks on a slow/unresponsive dependency (AI provider, knowledge
+// retrieval, learner RPC) and does not observe ctx itself. It returns the
+// planner decision, any planning error, and a timedOut flag that is true when
+// ctx fired before the planner returned.
+//
+// This mirrors runAgentWithContext: agents were already protected against
+// hanging the scan, but the planning step that runs *between* agents was not.
+// A blocking planner therefore manifested as "the previous step completed but
+// no next step ever starts" — the exact symptom this guard prevents.
+//
+// When timedOut is true the watchdog goroutine is intentionally left to finish
+// in the background; its result is discarded. This is safe because the scan
+// context is already cancelled, so well-behaved downstream work unwinds and the
+// orchestrator stops scheduling further agents.
+func runPlannerWithContext(ctx context.Context, planner Planner, input AgentInput, history []AgentOutput) (PlannerDecision, error, bool) {
+	type planResult struct {
+		decision PlannerDecision
+		err      error
+	}
+	done := make(chan planResult, 1)
+	go func() {
+		decision, err := planner.Plan(ctx, input, history)
+		done <- planResult{decision: decision, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Give the planner a brief grace period to return its own
+		// context-cancelled result before abandoning it.
+		select {
+		case res := <-done:
+			return res.decision, res.err, true
+		case <-time.After(agentCancelGracePeriod):
+			return PlannerDecision{}, ctx.Err(), true
+		}
+	case res := <-done:
+		return res.decision, res.err, false
+	}
 }
 
 // runAgentWithContext runs agent.Run in a watchdog goroutine so the
