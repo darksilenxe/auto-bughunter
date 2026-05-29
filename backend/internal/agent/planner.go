@@ -436,6 +436,7 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 	hasAccessControlSignal := false
 	hasInputValidationSignal := false
 	hasInfoDisclosureSignal := false
+	hasRedirectSignal := false
 	for _, f := range findings {
 		cat := strings.ToLower(strings.TrimSpace(f.Category))
 		switch cat {
@@ -443,10 +444,12 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 			hasAPI = true
 		case "access-control", "idor", "authorization":
 			hasAccessControlSignal = true
-		case "injection", "input-validation", "xss", "sql-injection":
+		case "injection", "input-validation", "xss", "sql-injection", "code-injection":
 			hasInputValidationSignal = true
 		case "information-disclosure", "misconfiguration", "secrets":
 			hasInfoDisclosureSignal = true
+		case "open-redirect", "cors":
+			hasRedirectSignal = true
 		}
 	}
 	for _, name := range available {
@@ -459,6 +462,8 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 		case hasInputValidationSignal && (strings.Contains(lc, "input") || strings.Contains(lc, "scan")):
 			preferred[name] = true
 		case hasInfoDisclosureSignal && (strings.Contains(lc, "information") || strings.Contains(lc, "analysis")):
+			preferred[name] = true
+		case hasRedirectSignal && (strings.Contains(lc, "cors") || strings.Contains(lc, "redirect")):
 			preferred[name] = true
 		}
 	}
