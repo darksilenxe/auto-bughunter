@@ -348,6 +348,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runActiveCORSProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runActiveSSTIProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runActiveGraphQLIntrospectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runGraphQLAbuseProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runSecretsInJSProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runActiveNoSQLiProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runActivePathTraversalProbe(ctx, input, bodyText)...)
@@ -358,6 +359,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runCachePoisoningProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runParamPollutionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runVhostDiscoveryProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runRequestSmugglingProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
