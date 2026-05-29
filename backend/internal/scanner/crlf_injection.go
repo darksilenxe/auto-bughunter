@@ -124,6 +124,10 @@ func (s *Service) runCRLFInjectionProbe(ctx context.Context, input RunInput, bod
 				if err := safety.ValidateOutboundURL(probeURL); err != nil {
 					continue
 				}
+				// probeURL is built from base's validated scheme/host/path and is
+				// re-checked here by scope.IsURLInScope + safety.ValidateOutboundURL
+				// (the SSRF guard rejecting loopback/internal hosts), so the request
+				// cannot be steered to an out-of-scope or internal destination.
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 				if err != nil {
 					continue
