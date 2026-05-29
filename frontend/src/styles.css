@@ -40,20 +40,21 @@ body {
   font-size: 15px;
   line-height: 1.5;
   color: var(--ink);
-  background:
-    linear-gradient(180deg, rgba(3, 8, 6, 0.82) 0%, rgba(3, 7, 5, 0.9) 52%, rgba(2, 5, 4, 0.94) 100%),
-    url("/backgrounds/matrix-code-bg.webp") center center / cover no-repeat fixed,
-    linear-gradient(rgba(71, 215, 172, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(71, 215, 172, 0.014) 1px, transparent 1px),
-    radial-gradient(900px 520px at 100% -5%, rgba(27, 132, 97, 0.18), transparent 52%),
-    radial-gradient(860px 520px at -10% 0%, rgba(22, 104, 78, 0.17), transparent 55%),
-    radial-gradient(760px 620px at 12% 100%, rgba(11, 56, 44, 0.16), transparent 58%),
-    linear-gradient(180deg, #060d0b 0%, #040a08 44%, #030705 100%);
-  background-size: auto, auto, 56px 56px, 56px 56px, auto, auto, auto, auto;
-  background-position: 0 0, 50% 50%, 0 0, 0 0, 100% -5%, -10% 0%, 12% 100%, 0 0;
-  background-attachment: fixed;
-  animation: matrix-bg-pan 18s ease-in-out infinite alternate;
-  will-change: background-position;
+  background: #000;
+}
+
+/* Full-viewport canvas that hosts the falling-glyph Matrix rain. Sits
+   behind every page, ignores pointer events, and is hidden from a11y
+   tools via aria-hidden on the element itself. */
+.matrix-rain {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+  display: block;
+  background: #000;
 }
 
 a {

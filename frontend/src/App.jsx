@@ -1,5 +1,6 @@
 import { Routes, Route } from "react-router-dom";
 import ErrorBoundary from "./components/ErrorBoundary";
+import MatrixRain from "./components/MatrixRain";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./pages/Dashboard";
 import AttackGraph from "./pages/AttackGraph";
@@ -13,6 +14,7 @@ import References from "./pages/References";
 export default function App() {
   return (
     <div className="app-shell">
+      <MatrixRain />
       <Sidebar />
       <main className="app-main">
         <ErrorBoundary>
