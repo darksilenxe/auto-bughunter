@@ -225,6 +225,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	factory.SetAIClient(aiClient, scanService)
 	reg.RegisterFactory(factory)
 	reg.Register(agent.NewReconnaissanceAgent(true))
+	reg.Register(agent.NewJavaScriptSASTAgent(scanService, true))
 	reg.Register(agent.NewScanningAgent(scanService, true))
 	reg.Register(agent.NewInputValidationAgent(true))
 	reg.Register(agent.NewInformationDisclosureAgent(true))
@@ -1040,6 +1041,7 @@ func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
 	reg := agent.NewRegistry()
 
 	reg.Register(agent.NewReconnaissanceAgent(true))
+	reg.Register(agent.NewJavaScriptSASTAgent(s.scanService, true))
 	reg.Register(agent.NewScanningAgent(s.scanService, true))
 	reg.Register(agent.NewInputValidationAgent(true))
 	reg.Register(agent.NewInformationDisclosureAgent(true))
@@ -3901,6 +3903,7 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 			set["nikto"] = struct{}{}
 			set["ffuf"] = struct{}{}
 			set["gobuster"] = struct{}{}
+			set["kiterunner"] = struct{}{}
 		}
 	}
 	disable := func(tool string) bool {

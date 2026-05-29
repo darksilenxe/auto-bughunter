@@ -42,6 +42,18 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	dirs := a.wordlistScanner.ScanDirectories(ctx, input.Target, input.AuthProfile, input.Scope)
 	output.Findings = append(output.Findings, dirs...)
 
+	// When the JavaScript SAST agent has already surfaced routes from the
+	// target's own code, probe those confirmed endpoints directly first. This
+	// is a faster, higher-signal pass than the blind wordlist sweep because the
+	// route list is small and known-relevant.
+	seedRoutes := sastDiscoveredRoutes(input.History)
+	var seeded []model.Finding
+	if len(seedRoutes) > 0 {
+		seeded = a.wordlistScanner.ScanSeedRoutes(ctx, input.Target, seedRoutes, input.AuthProfile, input.Scope)
+		output.Findings = append(output.Findings, seeded...)
+		output.Metadata["code_discovered_routes_probed"] = fmt.Sprintf("%d", len(seedRoutes))
+	}
+
 	subs := a.wordlistScanner.ScanSubdomains(ctx, input.Target, input.Scope)
 	output.Findings = append(output.Findings, subs...)
 

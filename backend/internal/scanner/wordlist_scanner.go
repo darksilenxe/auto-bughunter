@@ -268,6 +268,44 @@ func (ws *WordlistScanner) ScanAPIEndpoints(ctx context.Context, target string, 
 		"Prioritize JSON and framework-specific API routes for auth, validation, and schema checks.")
 }
 
+// ScanSeedRoutes probes a caller-supplied list of route paths (for example,
+// endpoints recovered from JavaScript by the SAST pass) instead of brute-forcing
+// the full wordlist. Because these routes were observed directly in the
+// application's own code they are high-signal and few in number, so this pass
+// is substantially faster than a blind wordlist sweep while confirming which of
+// the code-referenced routes are actually reachable.
+//
+// Returns nil when no routes are supplied so callers can fall back to the
+// standard enumeration.
+func (ws *WordlistScanner) ScanSeedRoutes(ctx context.Context, target string, routes []string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) []model.Finding {
+	paths := make([]string, 0, len(routes))
+	seen := map[string]struct{}{}
+	for _, r := range routes {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if !strings.HasPrefix(r, "/") {
+			r = "/" + r
+		}
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		paths = append(paths, r)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	profile, _, baseline := ws.captureEnumerationContext(ctx, target, authProfile, scanScope)
+	discovered, summary := ws.probeMultiple(ctx, target, paths, authProfile, scanScope, wordlistScanKindDirectory, profile, baseline)
+	return buildWordlistFindings("wordlist-code-discovered-routes", "code-discovered route", discovered, summary, target,
+		"Validate these code-referenced routes for authentication, authorization, and input-handling weaknesses.",
+		"Code-referenced routes were probed directly; prioritize any that resolve for deeper manual testing.")
+}
+
+
 func (ws *WordlistScanner) captureEnumerationContext(ctx context.Context, target string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) (frameworkProfile, pathStateFingerprint, pathStateFingerprint) {
 	root := ws.captureURLState(ctx, target, authProfile, scanScope)
 	baseline := ws.capturePathState(ctx, target, fmt.Sprintf("/__auto-bughunter-state-probe-%d__", time.Now().UnixNano()), authProfile, scanScope)

@@ -149,6 +149,7 @@ func (r *Registry) RunAll(ctx context.Context, input AgentInput) ([]AgentOutput,
 		if len(outputs) > 0 {
 			input.Previous = outputs[len(outputs)-1]
 		}
+		input.History = outputs
 		input.AllFindings = append([]model.Finding(nil), cumulativeFindings...)
 
 		Emit(input.Emit, model.ScanEvent{
@@ -335,6 +336,21 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		}
 		if hasAuthIssue {
 			spawned = append(spawned, "auth_bypass")
+		}
+	case "js_sast":
+		// Code-discovered routes warrant a focused wordlist enumeration pass.
+		if strings.TrimSpace(output.Metadata["discovered_routes"]) != "" {
+			spawned = append(spawned, "wordlist")
+		}
+		// Tailor active probes toward the weakness classes the static pass
+		// flagged. When no categories were flagged, nothing extra is spawned
+		// and the standard full-coverage pipeline proceeds unchanged.
+		cats := strings.ToLower(output.Metadata["sast_vuln_categories"])
+		if strings.Contains(cats, "xss") || strings.Contains(cats, "code-injection") || strings.Contains(cats, "input-validation") {
+			spawned = append(spawned, "input_validation", "scanning")
+		}
+		if strings.Contains(cats, "open-redirect") {
+			spawned = append(spawned, "cors_redirect")
 		}
 	case "reconnaissance":
 		// Upload surface discovered during recon.

@@ -29,6 +29,7 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f := &Factory{builders: map[string]AgentBuilder{}}
 
 	f.Register("reconnaissance", func() Agent { return NewReconnaissanceAgent(true) })
+	f.Register("js_sast", func() Agent { return NewJavaScriptSASTAgent(scanService, true) })
 	f.Register("scanning", func() Agent { return NewScanningAgent(scanService, true) })
 	f.Register("input_validation", func() Agent { return NewInputValidationAgent(true) })
 	f.Register("information_disclosure", func() Agent { return NewInformationDisclosureAgent(true) })
