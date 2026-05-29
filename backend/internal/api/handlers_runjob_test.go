@@ -45,7 +45,94 @@ func (r *runJobTestRepo) GetProgramROIOverride(context.Context, string, string) 
 	return nil, nil
 }
 
+func (r *runJobTestRepo) UpsertScanState(context.Context, model.PersistentScanState) error {
+	return nil
+}
+
+func TestRunJobFinalizesWhenEnrichmentBlocksBeyondBudget(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-enrich-block",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "queued",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &runJobTestRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{job.ID: job},
+		},
+	}
+
+	// Block the enrichment goroutine well past the budget while ignoring ctx,
+	// simulating an AI summary / ML step that hangs. The watchdog must abandon
+	// it and still finalize the scan promptly. unblock lets the goroutine exit
+	// after assertions so the test leaks nothing.
+	unblock := make(chan struct{})
+	defer close(unblock)
+	hookEntered := make(chan struct{}, 1)
+
+	s := &Server{
+		repo:              repo,
+		agentRegistry:     agent.NewRegistry(),
+		maxPerTarget:      1,
+		targetSem:         map[string]chan struct{}{},
+		globalSem:         make(chan struct{}, 1),
+		targetLastRun:     map[string]time.Time{},
+		scanTimeout:       time.Minute,
+		postProcessBudget: 50 * time.Millisecond,
+		eventBus:          NewEventBus(),
+		defaultMinROI:     75,
+		cancelFuncs:       map[string]context.CancelFunc{},
+		enrichmentHook: func(_ context.Context, _ string, _ []model.Finding, _ *model.ScanJob) enrichmentResult {
+			select {
+			case hookEntered <- struct{}{}:
+			default:
+			}
+			<-unblock
+			return enrichmentResult{aiSummary: "should be discarded"}
+		},
+	}
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		s.runJob(job.ID, job.Target, model.ScanAuthProfile{}, nil, model.ScanOptions{}, model.ScanScope{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runJob did not finalize within 10s despite the enrichment watchdog budget")
+	}
+	elapsed := time.Since(start)
+	if elapsed > 5*time.Second {
+		t.Fatalf("runJob took %s to finalize; watchdog should bound the enrichment phase near its 50ms budget", elapsed)
+	}
+
+	select {
+	case <-hookEntered:
+	default:
+		t.Fatal("enrichment hook was never entered; test did not exercise the watchdog path")
+	}
+
+	stored, err := repo.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetJob returned error: %v", err)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("expected completed status after enrichment timeout, got %q", stored.Status)
+	}
+	if stored.AISummary == "should be discarded" {
+		t.Fatal("expected partial (empty) AI summary; the abandoned enrichment result must not be applied")
+	}
+	if len(repo.updateStatuses) == 0 || repo.updateStatuses[len(repo.updateStatuses)-1] != "completed" {
+		t.Fatalf("expected final persisted status to be completed, got %v", repo.updateStatuses)
+	}
+}
+
 type panicAttackGraphStore struct{}
+
 
 func (panicAttackGraphStore) SaveAttackGraph(context.Context, string, string, *model.AttackGraphData) error {
 	panic("attack graph store panic")
