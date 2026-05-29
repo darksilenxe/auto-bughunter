@@ -44,11 +44,39 @@ Only a narrow allowlist of source families is accepted:
 - `portswigger`
 - `owasp`
 - `cwe`
+- `hacktricks`
+- `payloadsallthethings`
 
 Only `source-url-only` is accepted for `license`.
 
-The policy is unchanged: keep short curated notes with citations to public
-references, and avoid mirroring article bodies into the runtime corpus.
+The policy is unchanged for curated notes: keep short curated notes with
+citations to public references, and avoid mirroring article bodies into the
+runtime corpus.
+
+### Full-text ingestion (on by default — owner sign-off)
+
+HackTricks and PayloadsAllTheThings entries additionally carry the full text of
+the referenced page in a separate `content` field so the AI can be RAG-augmented
+with the complete technique/payload guidance, not just the short note. The
+repository owner has signed off on mirroring these third-party bodies, so
+full-text ingestion is **on by default**:
+
+- mark the source entry with `"fullText": true` and `"websiteImport": {"enabled": true}`
+- fetch the page text with `generate_corpus.py fetch-web-text`
+- rebuild (full text is mirrored by default; pass `--no-full-text` to opt out for
+  hermetic/offline builds where no network is available)
+
+Source URL, title, and license attribution are always retained on every
+document, including full-text ones, so provenance is never lost. PayloadsAllThe-
+Things is MIT-licensed; HackTricks requires attribution — keep the citation
+metadata intact.
+
+The corpus is baked during the `security-knowledge` image build (see
+`Dockerfile`): the `ALLOW_FULL_TEXT` build arg (exposed as
+`KNOWLEDGE_ALLOW_FULL_TEXT` in `docker-compose.yml`) defaults to `true`, fetching
+and mirroring the full text during the build. Set it to `false` for a hermetic,
+network-free build that regenerates `data/corpus.json` from the curated notes
+only.
 
 ## Maintenance flow
 
@@ -66,9 +94,10 @@ references, and avoid mirroring article bodies into the runtime corpus.
    ```
 
    This satisfies the website-ingestion workflow: it reads allowed websites,
-   extracts plain text, and writes it into JSON for review or future corpus
-   drafting. The runtime corpus still stores only short curated notes.
-3. Rebuild the generated corpus and review report:
+   extracts plain text, and writes it into JSON for review or corpus drafting.
+   The fetched text is mirrored into the runtime corpus by default (step 3).
+3. Rebuild the generated corpus and review report (full text mirrored by
+   default; add `--no-full-text` for a curated-notes-only hermetic build):
 
    ```bash
    cd security-knowledge

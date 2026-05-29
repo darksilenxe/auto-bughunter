@@ -178,8 +178,32 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			}
 
 			startedAt := time.Now().UTC()
-			output, runErr := agent.Run(ctx, input)
+			output, runErr, timedOut := runAgentWithContext(ctx, agent, input)
 			completedAt := time.Now().UTC()
+
+			if timedOut {
+				// The scan context was cancelled (e.g. SCAN_TIMEOUT_SECONDS
+				// elapsed) while this agent was still running. Record the
+				// partial/empty result as a timeout and stop the loop instead
+				// of blocking on the agent indefinitely.
+				if output.AgentName == "" {
+					output.AgentName = agent.Name()
+				}
+				output.Status = "error"
+				output.TimedOut = true
+				if runErr != nil {
+					output.Error = runErr.Error()
+					output.DebugNotes = runErr.Error()
+				} else {
+					output.Error = ctx.Err().Error()
+					output.DebugNotes = fmt.Sprintf("agent %q cancelled: %s", agent.Name(), ctx.Err())
+				}
+				output.StartedAt = startedAt
+				output.CompletedAt = completedAt
+				output.DurationMs = completedAt.Sub(startedAt).Milliseconds()
+				outputs = append(outputs, output)
+				return outputs, combineFindingsWithDedup(allFindings), ctx.Err()
+			}
 
 			if runErr != nil {
 				output.Status = "error"
@@ -313,6 +337,46 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 
 	return outputs, combineFindingsWithDedup(allFindings), nil
 }
+
+// runAgentWithContext runs agent.Run in a watchdog goroutine so the
+// orchestrator honours ctx cancellation (e.g. the scan-wide timeout) even when
+// an individual agent blocks on a slow external/AI call and does not observe
+// ctx itself. It returns the agent output, any run error, and a timedOut flag
+// that is true when ctx fired before the agent returned.
+//
+// When timedOut is true the watchdog goroutine is intentionally left to finish
+// in the background; its result is discarded. This is safe because the scan
+// context is already cancelled, so well-behaved downstream work unwinds, and
+// the orchestrator stops scheduling further agents.
+func runAgentWithContext(ctx context.Context, agent Agent, input AgentInput) (AgentOutput, error, bool) {
+	type agentResult struct {
+		output AgentOutput
+		err    error
+	}
+	done := make(chan agentResult, 1)
+	go func() {
+		out, err := agent.Run(ctx, input)
+		done <- agentResult{output: out, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Give the agent a brief grace period to return its own
+		// context-cancelled result so we can preserve any partial output.
+		select {
+		case res := <-done:
+			return res.output, res.err, true
+		case <-time.After(agentCancelGracePeriod):
+			return AgentOutput{AgentName: agent.Name()}, ctx.Err(), true
+		}
+	case res := <-done:
+		return res.output, res.err, false
+	}
+}
+
+// agentCancelGracePeriod bounds how long the orchestrator waits for a cancelled
+// agent to return its own result before abandoning it and unwinding the scan.
+const agentCancelGracePeriod = 2 * time.Second
 
 func computeActionQuality(output AgentOutput) float64 {
 	score := 0.0

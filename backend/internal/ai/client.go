@@ -32,6 +32,50 @@ type Client struct {
 	// existing deployments that construct Client via field assignment keep working.
 	provider       Provider
 	codingProvider Provider
+
+	// knowledge is an optional retriever that grounds AI decisions (probe
+	// selection, tool/command generation) in curated HackTricks /
+	// PayloadsAllTheThings guidance. When nil, prompts are built without it.
+	knowledge KnowledgeRetriever
+}
+
+// KnowledgeRetriever retrieves curated security knowledge for an in-scan
+// decision point. It is implemented by knowledge.Client and injected via
+// SetKnowledgeRetriever so the ai package takes no dependency on the knowledge
+// package (avoiding an import cycle).
+type KnowledgeRetriever interface {
+	RetrieveForContext(ctx context.Context, stage, query string, categories []string, limit int) *model.SecurityKnowledgeContext
+}
+
+// SetKnowledgeRetriever attaches a knowledge retriever used to ground AI
+// prompts. Safe to call with nil to disable knowledge augmentation.
+func (c *Client) SetKnowledgeRetriever(k KnowledgeRetriever) {
+	if c == nil {
+		return
+	}
+	c.knowledge = k
+}
+
+// knowledgeRetrievalTimeout bounds each in-loop knowledge retrieval so a slow
+// or unreachable knowledge service can never stall the adaptive probe or
+// tool-calling loops (which run synchronously inside a scan).
+const knowledgeRetrievalTimeout = 8 * time.Second
+
+// retrieveKnowledgeGuidance fetches curated guidance for the given stage and
+// returns a prompt-injectable text block, or "" when no retriever is configured
+// or nothing relevant is found. The retrieval is bounded by both the caller's
+// ctx and a short internal timeout.
+func (c *Client) retrieveKnowledgeGuidance(ctx context.Context, stage, query string, categories []string, maxRefs, perRefContent int) string {
+	if c == nil || c.knowledge == nil {
+		return ""
+	}
+	rctx, cancel := context.WithTimeout(ctx, knowledgeRetrievalTimeout)
+	defer cancel()
+	kc := c.knowledge.RetrieveForContext(rctx, stage, query, categories, maxRefs)
+	if kc == nil {
+		return ""
+	}
+	return kc.PromptGuidance(maxRefs, perRefContent)
 }
 
 // NewClient constructs a Client and auto-detects the LLM provider from the
@@ -625,6 +669,11 @@ type ToolCallRequest struct {
 	BuiltInTools      []string          `json:"builtInTools,omitempty"`
 	ImpactGoals       []string          `json:"impactGoals,omitempty"`
 	ImpactPlaybooks   string            `json:"impactPlaybooks,omitempty"`
+	// KnowledgeGuidance carries curated HackTricks / PayloadsAllTheThings
+	// guidance retrieved for this decision point. Populated by PlanToolCall
+	// when a knowledge retriever is configured; surfaced to the model so it can
+	// pick better tools, commands, and arguments.
+	KnowledgeGuidance string `json:"knowledgeGuidance,omitempty"`
 }
 
 // ToolCallDecision is the next bounded action chosen by the AI tool-calling planner.
@@ -665,12 +714,24 @@ func (c *Client) GenerateTool(ctx context.Context, taskDescription string, targe
 		"title, description, evidence, recommendation; use only the Python 3 " +
 		"standard library (urllib, json, sys, re, base64, hashlib, hmac, ssl, " +
 		"socket — but no subprocess, os.system, eval, exec, or raw socket.connect). " +
+		"When a 'knowledgeGuidance' field is present in the request, use its curated " +
+		"techniques and payloads (HackTricks / PayloadsAllTheThings) to inform the detection logic. " +
 		"Output strict JSON only: {\"name\":string,\"code\":string,\"rationale\":string}"
 
 	userPayload := map[string]any{
 		"task":             taskDescription,
 		"target":           target,
 		"context_findings": contextFindings,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"tool-generation",
+		strings.TrimSpace("generate security tool: "+taskDescription),
+		contextFindings,
+		4,
+		1500,
+	); guidance != "" {
+		userPayload["knowledgeGuidance"] = guidance
 	}
 	userJSON, err := json.Marshal(userPayload)
 	if err != nil {
@@ -714,6 +775,21 @@ func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCal
 	}
 	if !c.shouldCallProvider() {
 		return nil
+	}
+
+	// Ground tool/command selection in curated security knowledge when a
+	// retriever is configured and the caller has not already supplied guidance.
+	if strings.TrimSpace(req.KnowledgeGuidance) == "" {
+		if guidance := c.retrieveKnowledgeGuidance(
+			ctx,
+			"tool-call",
+			toolCallKnowledgeQuery(req),
+			toolCallKnowledgeCategories(req),
+			4,
+			1200,
+		); guidance != "" {
+			req.KnowledgeGuidance = guidance
+		}
 	}
 
 	systemPrompt := buildToolCallSystemPrompt(req)
@@ -780,13 +856,21 @@ func buildToolCallSystemPrompt(req ToolCallRequest) string {
 		playbooks = "none provided"
 	}
 
-	return strings.Join([]string{
+	lines := []string{
 		"You are an autonomous bug bounty operator.",
 		"Your overarching theme is IMPACT-FIRST validation, not generic vulnerability counting.",
 		"Prioritize exploitability, account takeover, auth bypass, sensitive data access, payment abuse, tenant breakout, meaningful escalation, or other bug-bounty-relevant impact.",
 		"Current scan goals: " + goals + ".",
 		"Reusable impact playbooks: " + playbooks + ".",
-		"Choose exactly one next action using this strict JSON schema: " + toolCallDecisionSchema + ".",
+	}
+	if g := strings.TrimSpace(req.KnowledgeGuidance); g != "" {
+		lines = append(lines,
+			"Curated security knowledge for this decision (HackTricks / PayloadsAllTheThings) — use it to pick the most effective tool, command, and arguments:",
+			g,
+		)
+	}
+	lines = append(lines,
+		"Choose exactly one next action using this strict JSON schema: "+toolCallDecisionSchema+".",
 		"Rules:",
 		"(1) Prefer the smallest next action that increases confidence in real-world impact.",
 		"(2) For run_command, choose only from allowedBinaries and include concrete args.",
@@ -794,7 +878,42 @@ func buildToolCallSystemPrompt(req ToolCallRequest) string {
 		"(4) For generate_tool, request a focused sandboxed probe task tied to a concrete impact hypothesis.",
 		"(5) If recent results show low value or the evidence is already sufficient, return stop.",
 		"(6) Never emit markdown or extra text.",
-	}, " ")
+	)
+	return strings.Join(lines, " ")
+}
+
+// toolCallKnowledgeCategories derives vulnerability categories from the
+// tool-call request (findings + hacktricks topics) to scope knowledge retrieval.
+func toolCallKnowledgeCategories(req ToolCallRequest) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	add := func(c string) {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" {
+			return
+		}
+		if _, ok := seen[c]; ok {
+			return
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	for _, f := range req.Findings {
+		if v, ok := f["category"].(string); ok {
+			add(v)
+		}
+	}
+	for _, t := range req.HackTricksTopics {
+		add(t)
+	}
+	return out
+}
+
+// toolCallKnowledgeQuery builds a compact free-text query for knowledge
+// retrieval at a tool-call decision point.
+func toolCallKnowledgeQuery(req ToolCallRequest) string {
+	cats := toolCallKnowledgeCategories(req)
+	return strings.TrimSpace("tool and command selection target=" + req.Target + " categories=" + strings.Join(cats, ", "))
 }
 
 // AdaptedCommand is a single concrete command that the coding LLM has adapted

@@ -1,6 +1,7 @@
 // Package hacktricks provides a curated catalog of HackTricks-inspired
 // pen testing techniques, each expressed as a set of concrete command
-// templates.  The templates use {{TARGET}}, {{HOST}}, {{PATH}}, and {{PARAM}}
+// templates.  The templates use {{TARGET}}, {{HOST}}, {{PATH}}, {{PARAM}}, and
+// {{WORDLIST}}
 // placeholders that the HackTricksAgent fills in — either through simple string
 // substitution or by asking the coding LLM to adapt them to the specific
 // finding context before execution.
@@ -9,7 +10,41 @@
 // allow-list.  No external dependencies are introduced by this package.
 package hacktricks
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// DefaultDirectoryWordlist resolves the directory/content brute-force wordlist
+// path used by gobuster/ffuf templates. Resolution order:
+//  1. GOBUSTER_WORDLIST env override (explicit operator choice);
+//  2. a directory-list inside a vendored SecLists checkout (SECLISTS_DIR or the
+//     conventional /usr/share/seclists, /wordlists/seclists locations);
+//  3. the historical /usr/share/wordlists/dirb/common.txt fallback.
+func DefaultDirectoryWordlist() string {
+	if v := strings.TrimSpace(os.Getenv("GOBUSTER_WORDLIST")); v != "" {
+		return v
+	}
+	roots := make([]string, 0, 3)
+	if d := strings.TrimSpace(os.Getenv("SECLISTS_DIR")); d != "" {
+		roots = append(roots, d)
+	}
+	roots = append(roots, "/usr/share/seclists", "/wordlists/seclists")
+	candidates := []string{
+		"Discovery/Web-Content/directory-list-2.3-medium.txt",
+		"Discovery/Web-Content/common.txt",
+	}
+	for _, root := range roots {
+		for _, rel := range candidates {
+			p := filepath.Join(root, filepath.FromSlash(rel))
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				return p
+			}
+		}
+	}
+	return "/usr/share/wordlists/dirb/common.txt"
+}
 
 // CommandTemplate is a single tool invocation pattern.
 type CommandTemplate struct {
@@ -54,6 +89,7 @@ func Substitute(args []string, target, host, path, param string) []string {
 		"{{HOST}}", host,
 		"{{PATH}}", path,
 		"{{PARAM}}", param,
+		"{{WORDLIST}}", DefaultDirectoryWordlist(),
 	)
 	for i, a := range args {
 		out[i] = replacer.Replace(a)
@@ -366,7 +402,7 @@ var catalog = []Technique{
 		CommandTemplates: []CommandTemplate{
 			{
 				Binary:       "gobuster",
-				ArgsTemplate: []string{"dir", "-u", "{{TARGET}}", "-w", "/usr/share/wordlists/dirb/common.txt", "-t", "20", "-q", "-H", "Host: {{HOST}}"},
+				ArgsTemplate: []string{"dir", "-u", "{{TARGET}}", "-w", "{{WORDLIST}}", "-t", "20", "-q", "-H", "Host: {{HOST}}"},
 				Description:  "Directory brute-force to find backup/admin paths",
 			},
 			{

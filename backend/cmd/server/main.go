@@ -54,7 +54,12 @@ func main() {
 
 	enableSecLists := getbool("ENABLE_SECLISTS_WORDLISTS", true)
 	enableKiterunner := getbool("ENABLE_KITERUNNER_WORDLISTS", true)
-	wordlist.InitLoader(enableSecLists, enableKiterunner)
+	wordlist.InitLoaderWithConfig(wordlist.LoaderConfig{
+		EnableSecLists:   enableSecLists,
+		EnableKiterunner: enableKiterunner,
+		Profile:          os.Getenv("WORDLIST_PROFILE"),
+		SecListsDir:      os.Getenv("SECLISTS_DIR"),
+	})
 
 	repo, err := storage.NewPostgres(context.Background(), databaseURL)
 	if err != nil {
@@ -166,6 +171,11 @@ func main() {
 		ExternalURL: os.Getenv("KNOWLEDGE_SERVICE_URL"),
 		AuthToken:   os.Getenv("SIDECAR_AUTH_TOKEN"),
 	})
+	// Ground in-scan AI decisions (adaptive probing, tool/command generation)
+	// in the curated HackTricks / PayloadsAllTheThings knowledge corpus.
+	if knowledgeClient != nil {
+		aiClient.SetKnowledgeRetriever(knowledgeClient)
+	}
 	agentLearnerClient := agentlearner.NewClientWithToken(
 		os.Getenv("AGENT_LEARNER_URL"),
 		os.Getenv("SIDECAR_AUTH_TOKEN"),

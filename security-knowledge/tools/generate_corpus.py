@@ -24,6 +24,10 @@ PASSAGE_PREFIX = "Curated note:"
 PASSAGE_MAX_LENGTH = 320
 WEBSITE_TEXT_MAX_LENGTH = 12000
 LOW_CONFIDENCE_MIN_WORDS = 120
+# Maximum length of full-text body stored on a corpus document. Full-text
+# ingestion is ON by default (owner sign-off; disable with --no-full-text) and
+# only ever applies to entries explicitly flagged with "fullText": true.
+FULL_TEXT_MAX_LENGTH = WEBSITE_TEXT_MAX_LENGTH
 
 
 class CorpusGenerationError(Exception):
@@ -218,7 +222,7 @@ def fetch_website_texts(source_path: Path, output_path: Path, timeout: int = 20)
     return output
 
 
-def build_corpus(source_path: Path, output_path: Path, review_path: Path, website_text_path: Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def build_corpus(source_path: Path, output_path: Path, review_path: Path, website_text_path: Path | None = None, allow_full_text: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     payload = load_sources(source_path)
     allowlists = payload.get("allowlists") or {}
     allowed_source_types = set(allowlists.get("sourceTypes") or [])
@@ -313,6 +317,40 @@ def build_corpus(source_path: Path, output_path: Path, review_path: Path, websit
                         }
                     )
 
+            # Full-text ingestion is ON by default (the repository owner has
+            # signed off on mirroring HackTricks / PayloadsAllTheThings bodies
+            # into the corpus) and applies to entries flagged "fullText": true.
+            # It can be disabled for hermetic/offline builds with --no-full-text.
+            # The fetched body is stored in a separate "content" field; the short
+            # curated "passage" is always retained, and source URL / license
+            # attribution stay on the document so provenance is never lost.
+            wants_full_text = bool(raw_entry.get("fullText"))
+            if allow_full_text and wants_full_text:
+                if website_text and website_text.get("text") and not website_text.get("error"):
+                    body = str(website_text["text"])[:FULL_TEXT_MAX_LENGTH]
+                    entry["content"] = body
+                    entry["contentSource"] = "website-import"
+                    entry["contentRetrievedAt"] = website_text.get("fetchedAt", "")
+                    entry["contentHashSha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                else:
+                    review_exceptions.append(
+                        {
+                            "level": "warning",
+                            "id": entry["id"],
+                            "type": "full-text-missing",
+                            "message": "fullText requested but no website text available; run fetch-web-text first",
+                        }
+                    )
+            elif wants_full_text and not allow_full_text:
+                review_exceptions.append(
+                    {
+                        "level": "info",
+                        "id": entry["id"],
+                        "type": "full-text-skipped",
+                        "message": "fullText entry stored as curated note only; full-text ingestion disabled via --no-full-text",
+                    }
+                )
+
             seen_ids.add(entry["id"])
             corpus.append(entry)
             accepted_fingerprints.append((entry["id"], fingerprint, entry))
@@ -357,6 +395,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     build_parser.add_argument("--output", type=Path, default=DEFAULT_CORPUS_PATH)
     build_parser.add_argument("--review-output", type=Path, default=DEFAULT_REVIEW_PATH)
     build_parser.add_argument("--website-text", type=Path, default=DEFAULT_WEBSITE_TEXT_PATH)
+    build_parser.add_argument(
+        "--allow-full-text",
+        dest="allow_full_text",
+        action="store_true",
+        default=True,
+        help=(
+            "Mirror fetched full-text bodies into the corpus 'content' field for "
+            "entries flagged \"fullText\": true. ON by default (owner sign-off). "
+            "Source URL and license attribution are always retained."
+        ),
+    )
+    build_parser.add_argument(
+        "--no-full-text",
+        dest="allow_full_text",
+        action="store_false",
+        help=(
+            "Disable full-text ingestion for hermetic/offline builds; fullText "
+            "entries are stored as curated notes only (no network fetch mirrored)."
+        ),
+    )
 
     return parser.parse_args(argv)
 
@@ -373,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output.resolve(),
             args.review_output.resolve(),
             website_text if website_text.exists() else None,
+            allow_full_text=args.allow_full_text,
         )
         return 0
     raise AssertionError(f"unexpected command: {args.command}")

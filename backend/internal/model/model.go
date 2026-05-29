@@ -866,6 +866,7 @@ type KnowledgeReference struct {
 	VulnerabilityClass string  `json:"vulnerabilityClass,omitempty"`
 	Technique          string  `json:"technique,omitempty"`
 	Passage            string  `json:"passage,omitempty"`
+	Content            string  `json:"content,omitempty"`
 	Score              float64 `json:"score,omitempty"`
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -338,4 +339,58 @@ func TestRegistryFactoryFallback(t *testing.T) {
 	if a := r.Get("not_a_real_agent"); a != nil {
 		t.Fatalf("expected nil for unknown agent")
 	}
+}
+
+// blockingAgent ignores ctx and blocks until unblock is closed, simulating an
+// agent stuck on a slow external/AI call.
+type blockingAgent struct {
+name    string
+unblock chan struct{}
+started chan struct{}
+}
+
+func (a *blockingAgent) Name() string  { return a.name }
+func (a *blockingAgent) Enabled() bool { return true }
+func (a *blockingAgent) Run(_ context.Context, _ AgentInput) (AgentOutput, error) {
+if a.started != nil {
+close(a.started)
+}
+<-a.unblock
+return AgentOutput{AgentName: a.name}, nil
+}
+
+func TestOrchestratorHonoursContextWhenAgentBlocks(t *testing.T) {
+unblock := make(chan struct{})
+started := make(chan struct{})
+defer close(unblock)
+factory := newTestFactory(map[string]Agent{
+"stuck": &blockingAgent{name: "stuck", unblock: unblock, started: started},
+})
+planner := NewStaticPlanner([]string{"stuck"})
+orch := NewOrchestrator(planner, factory, 3)
+
+ctx, cancel := context.WithCancel(context.Background())
+done := make(chan struct{})
+var outputs []AgentOutput
+var err error
+go func() {
+outputs, _, err = orch.Run(ctx, AgentInput{Target: "https://example.com"})
+close(done)
+}()
+
+<-started
+cancel()
+
+select {
+case <-done:
+case <-time.After(5 * time.Second):
+t.Fatal("orchestrator did not return after context cancellation while agent was blocked")
+}
+
+if !errors.Is(err, context.Canceled) {
+t.Fatalf("expected context.Canceled, got %v", err)
+}
+if len(outputs) != 1 || !outputs[0].TimedOut {
+t.Fatalf("expected one timed-out output, got %+v", outputs)
+}
 }

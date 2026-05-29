@@ -95,6 +95,48 @@ func (c *Client) RetrieveForJob(ctx context.Context, stage string, job *model.Sc
 		reqBody.AttackPaths = append(reqBody.AttackPaths, job.Dashboard.TopAttackPaths...)
 	}
 
+	return c.doRetrieve(ctx, reqBody)
+}
+
+// RetrieveForContext retrieves curated security knowledge for an arbitrary
+// in-scan decision point (e.g. adaptive probing or tool/command generation),
+// keyed by a free-text query and a set of vulnerability categories rather than
+// a completed job's findings. Returns nil when the service is unconfigured,
+// unreachable, or has no relevant references.
+func (c *Client) RetrieveForContext(ctx context.Context, stage, query string, categories []string, limit int) *model.SecurityKnowledgeContext {
+	if c == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	reqBody := retrieveRequest{
+		Query:    strings.TrimSpace(query),
+		Stage:    strings.TrimSpace(stage),
+		Findings: make([]findingInput, 0, len(categories)),
+		Limit:    limit,
+	}
+	seen := map[string]struct{}{}
+	for _, cat := range categories {
+		cat = strings.TrimSpace(cat)
+		if cat == "" {
+			continue
+		}
+		key := strings.ToLower(cat)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		reqBody.Findings = append(reqBody.Findings, findingInput{Category: cat})
+	}
+	if reqBody.Query == "" && len(reqBody.Findings) == 0 {
+		return nil
+	}
+	return c.doRetrieve(ctx, reqBody)
+}
+
+// doRetrieve performs the POST /v1/retrieve call and decodes the response.
+func (c *Client) doRetrieve(ctx context.Context, reqBody retrieveRequest) *model.SecurityKnowledgeContext {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil

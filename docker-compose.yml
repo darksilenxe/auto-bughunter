@@ -79,6 +79,11 @@ services:
   security-knowledge:
     build:
       context: ./security-knowledge
+      args:
+        # Set to "true" to fetch and mirror full-text bodies for entries flagged
+        # "fullText": true (HackTricks / PayloadsAllTheThings) during the image
+        # build. Requires build-time network access; off by default.
+        ALLOW_FULL_TEXT: ${KNOWLEDGE_ALLOW_FULL_TEXT:-true}
     environment:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       KNOWLEDGE_CORPUS_PATH: /app/data/corpus.json

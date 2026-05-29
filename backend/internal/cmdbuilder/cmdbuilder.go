@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/hacktricks"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -620,7 +621,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 		host := extractHost(target)
 		cmds = append(cmds, CommandSpec{
 			Binary:      "ffuf",
-			Args:        []string{"-u", target + "/FUZZ", "-w", "/usr/share/wordlists/dirb/common.txt", "-t", "20", "-mc", "200,204,301,302,307,401,403", "-H", "Host: " + host, "-s"},
+			Args:        []string{"-u", target + "/FUZZ", "-w", hacktricks.DefaultDirectoryWordlist(), "-t", "20", "-mc", "200,204,301,302,307,401,403", "-H", "Host: " + host, "-s"},
 			Rationale:   "Forms discovered; fuzzing for additional endpoints with ffuf",
 			GeneratedBy: agentName,
 			Timeout:     90 * time.Second,
@@ -632,7 +633,7 @@ func (g *Generator) Generate(agentName, target string, findings []model.Finding)
 		host := extractHost(target)
 		cmds = append(cmds, CommandSpec{
 			Binary:      "gobuster",
-			Args:        []string{"dir", "-u", target, "-w", "/usr/share/wordlists/dirb/common.txt", "-t", "20", "-q", "-H", "Host: " + host},
+			Args:        []string{"dir", "-u", target, "-w", hacktricks.DefaultDirectoryWordlist(), "-t", "20", "-q", "-H", "Host: " + host},
 			Rationale:   "Admin panel indicators found; running gobuster dir scan for hidden admin paths",
 			GeneratedBy: agentName,
 			Timeout:     2 * time.Minute,

@@ -137,9 +137,23 @@ func (c *Client) DecideNextProbe(
 			"\n" +
 			"If stepBudgetRemaining is 0, or you have confirmed high-value findings and the remaining surface " +
 			"appears clean, set action='stop' and explain why in stopReason.\n" +
+			"When a 'knowledgeGuidance' field is present, prefer the techniques and payloads it describes " +
+			"(curated from HackTricks / PayloadsAllTheThings) when they fit the observed evidence.\n" +
 			"\n" +
 			"Reply with strict JSON only:\n" +
 			`{"action":"probe"|"stop","category":string,"endpoint":string,"paramName":string,"payload":string,"rationale":string,"stopReason":string}`,
+	}
+
+	// Ground the decision in curated security knowledge when available.
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"adaptive-probe",
+		probeKnowledgeQuery(target, allFindings, probeHistory),
+		probeKnowledgeCategories(allFindings, probeHistory),
+		5,
+		1200,
+	); guidance != "" {
+		payload["knowledgeGuidance"] = guidance
 	}
 
 	userJSON, err := json.Marshal(payload)
@@ -404,4 +418,37 @@ func truncateObs(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// probeKnowledgeCategories collects the distinct vulnerability categories
+// present in the confirmed findings and probe history so the knowledge query is
+// scoped to the techniques currently in play.
+func probeKnowledgeCategories(findings []model.Finding, history []model.ProbeResult) []string {
+seen := map[string]struct{}{}
+out := make([]string, 0, 8)
+add := func(c string) {
+c = strings.ToLower(strings.TrimSpace(c))
+if c == "" {
+return
+}
+if _, ok := seen[c]; ok {
+return
+}
+seen[c] = struct{}{}
+out = append(out, c)
+}
+for _, f := range findings {
+add(f.Category)
+}
+for _, p := range history {
+add(p.Category)
+}
+return out
+}
+
+// probeKnowledgeQuery builds a compact free-text query describing the current
+// probing context for knowledge retrieval.
+func probeKnowledgeQuery(target string, findings []model.Finding, history []model.ProbeResult) string {
+cats := probeKnowledgeCategories(findings, history)
+return strings.TrimSpace("adaptive web probe target=" + target + " categories=" + strings.Join(cats, ", "))
 }
