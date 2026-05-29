@@ -164,7 +164,14 @@ p.peak = p.current
 }
 p.mu.Unlock()
 
-time.Sleep(p.hold)
+select {
+case <-time.After(p.hold):
+case <-ctx.Done():
+	p.mu.Lock()
+	p.current--
+	p.mu.Unlock()
+	return "", ctx.Err()
+}
 
 p.mu.Lock()
 p.current--
@@ -217,5 +224,53 @@ ctx, cancel := context.WithCancel(context.Background())
 cancel()
 if _, err := c.acquire(ctx); err == nil {
 t.Fatal("expected acquire to fail on cancelled context, got nil error")
+}
+}
+
+// TestAIRequestTimeoutEnvVar verifies that AI_REQUEST_TIMEOUT_SECONDS is read
+// by aiRequestTimeout and that NewClient uses the result.
+func TestAIRequestTimeoutEnvVar(t *testing.T) {
+t.Setenv("AI_REQUEST_TIMEOUT_SECONDS", "77")
+if got := aiRequestTimeout(); got != 77*time.Second {
+t.Fatalf("aiRequestTimeout() = %v, want 77s", got)
+}
+}
+
+func TestAIRequestTimeoutDefault(t *testing.T) {
+t.Setenv("AI_REQUEST_TIMEOUT_SECONDS", "")
+if got := aiRequestTimeout(); got != defaultAIRequestTimeoutSeconds*time.Second {
+t.Fatalf("aiRequestTimeout() = %v, want %v", got, defaultAIRequestTimeoutSeconds*time.Second)
+}
+}
+
+// TestCompleteWithHangingProviderTimesOut verifies that completeWith returns an
+// error (and releases its semaphore slot) when the provider blocks longer than
+// AI_REQUEST_TIMEOUT_SECONDS instead of hanging the caller indefinitely.
+func TestCompleteWithHangingProviderTimesOut(t *testing.T) {
+// Set a short timeout so the test completes quickly.
+t.Setenv("AI_REQUEST_TIMEOUT_SECONDS", "1")
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS", "1")
+
+// Provider that blocks until its context is cancelled.
+prov := &countingProvider{hold: 10 * time.Second}
+c := &Client{Model: "test-model", provider: prov}
+
+start := time.Now()
+_, err := c.primaryComplete(context.Background(), []Message{{Role: "user", Content: "hi"}}, 0, false)
+elapsed := time.Since(start)
+
+if err == nil {
+t.Fatal("expected an error from a hanging provider, got nil")
+}
+// Should have returned within ~2 s (1 s timeout + headroom); definitely not 10 s.
+if elapsed > 5*time.Second {
+t.Fatalf("primaryComplete took %v; expected it to return within 5 s after timeout", elapsed)
+}
+
+// The semaphore slot must have been released: a subsequent call must succeed.
+prov2 := &countingProvider{hold: 0}
+c2 := &Client{Model: "test-model", provider: prov2}
+if _, err2 := c2.primaryComplete(context.Background(), []Message{{Role: "user", Content: "hi"}}, 0, false); err2 != nil {
+t.Fatalf("follow-up call failed: %v", err2)
 }
 }

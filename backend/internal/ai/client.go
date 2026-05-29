@@ -58,6 +58,12 @@ type Client struct {
 // many AI-backed agents that run during a scan.
 const defaultMaxConcurrentAIRequests = 2
 
+// defaultAIRequestTimeoutSeconds is the per-request timeout used when
+// AI_REQUEST_TIMEOUT_SECONDS is unset or invalid. 120 s accommodates local
+// Ollama inference on CPU-only or memory-constrained Docker containers, which
+// routinely exceeds the previous hardcoded 20 s limit.
+const defaultAIRequestTimeoutSeconds = 120
+
 // aiConcurrencyLimit resolves the maximum number of concurrent LLM requests from
 // AI_MAX_CONCURRENT_REQUESTS, falling back to defaultMaxConcurrentAIRequests.
 func aiConcurrencyLimit() int {
@@ -67,6 +73,20 @@ func aiConcurrencyLimit() int {
 		}
 	}
 	return defaultMaxConcurrentAIRequests
+}
+
+// aiRequestTimeout resolves the per-request HTTP timeout for outbound LLM calls
+// from AI_REQUEST_TIMEOUT_SECONDS, falling back to defaultAIRequestTimeoutSeconds.
+// The timeout is applied both as http.Client.Timeout (transport-level deadline)
+// and as a context deadline wrapping each provider call so that a hanging AI
+// service can never hold a concurrency semaphore slot past the configured limit.
+func aiRequestTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("AI_REQUEST_TIMEOUT_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return defaultAIRequestTimeoutSeconds * time.Second
 }
 
 // acquire blocks until a concurrency slot is free (or ctx is cancelled) and
@@ -136,7 +156,7 @@ func NewClient(baseURL, apiKey, model string) *Client {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	httpClient := &http.Client{Timeout: 20 * time.Second}
+	httpClient := &http.Client{Timeout: aiRequestTimeout()}
 	providerName := DetectProvider(baseURL, apiKey)
 	prov := NewProvider(providerName, baseURL, apiKey, httpClient)
 	return &Client{
@@ -192,8 +212,14 @@ func (c *Client) completeWith(ctx context.Context, p Provider, model string, mes
 		return "", err
 	}
 	defer release()
+	// Apply a per-request deadline so a hanging AI service cannot hold the
+	// semaphore slot indefinitely. The deadline is the tighter of the caller's
+	// ctx and AI_REQUEST_TIMEOUT_SECONDS; if the caller already carries a
+	// shorter deadline we honour it unchanged.
+	reqCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout())
+	defer cancel()
 	t0 := time.Now()
-	text, err := p.Complete(ctx, model, messages, temperature, jsonMode)
+	text, err := p.Complete(reqCtx, model, messages, temperature, jsonMode)
 	metrics.AICall("provider_complete", time.Since(t0).Seconds(), err != nil)
 	if err != nil {
 		return "", err
@@ -259,6 +285,11 @@ func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model stri
 		return "", err
 	}
 	defer release()
+	// Apply a per-request deadline matching AI_REQUEST_TIMEOUT_SECONDS so a
+	// hanging AI backend cannot pin this semaphore slot indefinitely.
+	reqCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout())
+	defer cancel()
+	req, err = req.Clone(reqCtx), nil
 	t0 := time.Now()
 	resp, err := c.HTTP.Do(req)
 	metrics.AICall("legacy_complete", time.Since(t0).Seconds(), err != nil)
