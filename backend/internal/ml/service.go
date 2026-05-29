@@ -533,6 +533,10 @@ func optionsMap(o model.ScanOptions) map[string]bool {
 		"gau":          o.UseGauIntegration,
 		"arjun":        o.UseArjunIntegration,
 		"commix":       o.UseCommixIntegration,
+		"linkfinder":   o.UseLinkFinderIntegration,
+		"retire":       o.UseRetireJSIntegration,
+		"trufflehog":   o.UseTruffleHogIntegration,
+		"uncover":      o.UseUncoverIntegration,
 		"vulnx":        o.UseVulnxIntegration,
 	}
 }

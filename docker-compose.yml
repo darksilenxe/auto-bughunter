@@ -350,6 +350,14 @@ services:
         condition: service_started
       commix:
         condition: service_started
+      linkfinder:
+        condition: service_started
+      retire:
+        condition: service_started
+      trufflehog:
+        condition: service_started
+      uncover:
+        condition: service_started
       xssmap:
         condition: service_started
       metasploit:
@@ -405,7 +413,7 @@ services:
     command:
       - --disable-gpu
       - --proxy-server=http://backend:8081
-      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,xssmap,metasploit,kiterunner,tool-updater,zap
+      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap
     restart: unless-stopped
     healthcheck:
       # Probe the DevTools port via socat (wget/curl are not in this image).
@@ -514,6 +522,42 @@ services:
   commix:
     build:
       context: ./sidecars/commix
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # LinkFinder — endpoint discovery from JavaScript (Python). Fetches the
+  # page/JS and regex-parses it; non-destructive.
+  linkfinder:
+    build:
+      context: ./sidecars/linkfinder
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # retire.js — vulnerable JavaScript library detection (Node). Scans the JS
+  # bundles the backend downloads into the shared_tmp volume (read-only).
+  retire:
+    build:
+      context: ./sidecars/retire
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - shared_tmp:/tmp/auto-bughunter-shared:ro
+    restart: unless-stopped
+
+  # TruffleHog — secret detection. Scans the JS bundles the backend downloads
+  # into the shared_tmp volume (read-only). Non-destructive.
+  trufflehog:
+    build:
+      context: ./sidecars/trufflehog
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - shared_tmp:/tmp/auto-bughunter-shared:ro
+    restart: unless-stopped
+
+  # Uncover — exposed-host discovery (Go). Queries third-party search engines
+  # (Shodan, Censys, Fofa, …); supply API keys via environment variables.
+  uncover:
+    build:
+      context: ./sidecars/uncover
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 

@@ -83,6 +83,15 @@ COPY scripts/shims/wpscan            /usr/local/bin/wpscan
 COPY scripts/shims/gau               /usr/local/bin/gau
 COPY scripts/shims/arjun             /usr/local/bin/arjun
 COPY scripts/shims/commix            /usr/local/bin/commix
+# JavaScript-focused tools: LinkFinder (endpoint extraction), retire.js
+# (vulnerable JS library detection) and TruffleHog (secret detection) each run
+# in their own sidecar. retire.js and TruffleHog read downloaded JS bundles
+# from the shared tmp volume at $SHARED_TMP_DIR. Uncover queries third-party
+# search engines for exposed hosts.
+COPY scripts/shims/linkfinder        /usr/local/bin/linkfinder
+COPY scripts/shims/retire            /usr/local/bin/retire
+COPY scripts/shims/trufflehog        /usr/local/bin/trufflehog
+COPY scripts/shims/uncover           /usr/local/bin/uncover
 # LLM-assisted XSS scanner — runs in the `xssmap` sidecar (Python +
 # Playwright + an Ollama client that reuses the local `ollama` service).
 COPY scripts/shims/xssmap            /usr/local/bin/xssmap
@@ -109,6 +118,10 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/gau \
              /usr/local/bin/arjun \
              /usr/local/bin/commix \
+             /usr/local/bin/linkfinder \
+             /usr/local/bin/retire \
+             /usr/local/bin/trufflehog \
+             /usr/local/bin/uncover \
              /usr/local/bin/xssmap
 
 # Default chromedp wiring — the `chromium` sidecar exposes the DevTools

@@ -24,11 +24,11 @@ import (
 )
 
 type Service struct {
-	httpClient    *http.Client
-	cfg           Config
-	oast          *oast.Service
-	proxyStore    proxy.Store
-	scannerProxy  ProxyConfig
+	httpClient     *http.Client
+	cfg            Config
+	oast           *oast.Service
+	proxyStore     proxy.Store
+	scannerProxy   ProxyConfig
 	proxyTransport http.RoundTripper
 	// bundledProxyPort is the port the in-process intercepting proxy
 	// listens on (PROXY_PORT). Used to decide whether RecordingTransport
@@ -111,6 +111,10 @@ type Config struct {
 	EnableGau         bool
 	EnableArjun       bool
 	EnableCommix      bool
+	EnableLinkFinder  bool
+	EnableRetireJS    bool
+	EnableTruffleHog  bool
+	EnableUncover     bool
 	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
@@ -131,6 +135,10 @@ type Config struct {
 	GauBinary         string
 	ArjunBinary       string
 	CommixBinary      string
+	LinkFinderBinary  string
+	RetireJSBinary    string
+	TruffleHogBinary  string
+	UncoverBinary     string
 
 	IntegrationTimeout time.Duration
 	DefaultMaxRetries  int
@@ -223,6 +231,18 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.CommixBinary) == "" {
 		cfg.CommixBinary = "commix"
+	}
+	if strings.TrimSpace(cfg.LinkFinderBinary) == "" {
+		cfg.LinkFinderBinary = "linkfinder"
+	}
+	if strings.TrimSpace(cfg.RetireJSBinary) == "" {
+		cfg.RetireJSBinary = "retire"
+	}
+	if strings.TrimSpace(cfg.TruffleHogBinary) == "" {
+		cfg.TruffleHogBinary = "trufflehog"
+	}
+	if strings.TrimSpace(cfg.UncoverBinary) == "" {
+		cfg.UncoverBinary = "uncover"
 	}
 
 	return &Service{

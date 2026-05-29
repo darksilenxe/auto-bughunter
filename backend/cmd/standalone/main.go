@@ -410,6 +410,10 @@ type scanFlagValues struct {
 	useGau                    bool
 	useArjun                  bool
 	useCommix                 bool
+	useLinkFinder             bool
+	useRetireJS               bool
+	useTruffleHog             bool
+	useUncover                bool
 	useMLTriage               bool
 	useAttackPath             bool
 	useFalsePositiveReview    bool
@@ -457,6 +461,10 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.useGau, "use-gau", false, "enable gau passive URL discovery integration")
 	fs.BoolVar(&values.useArjun, "use-arjun", false, "enable Arjun hidden-parameter discovery integration")
 	fs.BoolVar(&values.useCommix, "use-commix", false, "enable commix OS command injection integration (requires ALLOW_DESTRUCTIVE_CHECKS)")
+	fs.BoolVar(&values.useLinkFinder, "use-linkfinder", false, "enable LinkFinder JavaScript endpoint discovery integration")
+	fs.BoolVar(&values.useRetireJS, "use-retirejs", false, "enable retire.js vulnerable JavaScript library detection integration")
+	fs.BoolVar(&values.useTruffleHog, "use-trufflehog", false, "enable TruffleHog secret detection integration")
+	fs.BoolVar(&values.useUncover, "use-uncover", false, "enable Uncover exposed-host discovery integration")
 	fs.BoolVar(&values.useMLTriage, "use-ml-triage", false, "enable ML triage agent")
 	fs.BoolVar(&values.useAttackPath, "use-attack-paths", false, "enable attack path agent")
 	fs.BoolVar(&values.useFalsePositiveReview, "use-false-positive-review", false, "enable false positive review agent")
@@ -493,6 +501,10 @@ func enableAllGoScanOptions(options *model.ScanOptions) {
 	options.UseGauIntegration = true
 	options.UseArjunIntegration = true
 	options.UseCommixIntegration = true
+	options.UseLinkFinderIntegration = true
+	options.UseRetireJSIntegration = true
+	options.UseTruffleHogIntegration = true
+	options.UseUncoverIntegration = true
 }
 
 func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
@@ -589,6 +601,18 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	}
 	if values.useCommix {
 		req.Options.UseCommixIntegration = true
+	}
+	if values.useLinkFinder {
+		req.Options.UseLinkFinderIntegration = true
+	}
+	if values.useRetireJS {
+		req.Options.UseRetireJSIntegration = true
+	}
+	if values.useTruffleHog {
+		req.Options.UseTruffleHogIntegration = true
+	}
+	if values.useUncover {
+		req.Options.UseUncoverIntegration = true
 	}
 	if values.useMLTriage {
 		req.Options.UseMLTriageAgent = true
