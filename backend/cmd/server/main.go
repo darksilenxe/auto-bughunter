@@ -171,6 +171,11 @@ func main() {
 		ExternalURL: os.Getenv("KNOWLEDGE_SERVICE_URL"),
 		AuthToken:   os.Getenv("SIDECAR_AUTH_TOKEN"),
 	})
+	// Ground in-scan AI decisions (adaptive probing, tool/command generation)
+	// in the curated HackTricks / PayloadsAllTheThings knowledge corpus.
+	if knowledgeClient != nil {
+		aiClient.SetKnowledgeRetriever(knowledgeClient)
+	}
 	agentLearnerClient := agentlearner.NewClientWithToken(
 		os.Getenv("AGENT_LEARNER_URL"),
 		os.Getenv("SIDECAR_AUTH_TOKEN"),
