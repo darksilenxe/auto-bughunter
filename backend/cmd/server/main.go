@@ -114,6 +114,26 @@ func main() {
 		DefaultMaxRetries:  getint("DEFAULT_MAX_RETRIES", 1),
 		DefaultBackoff:     time.Duration(getint("DEFAULT_BACKOFF_MILLIS", 400)) * time.Millisecond,
 	})
+	// Optional upstream proxy for scanner-initiated HTTP traffic. When
+	// SCANNER_USE_PROXY=true, all probes are routed through SCANNER_PROXY_URL
+	// (default http://127.0.0.1:${PROXY_PORT}, i.e. the bundled MITM proxy).
+	// Set SCANNER_PROXY_URL to point at an external proxy such as Burp/ZAP.
+	scannerProxyCfg := scanner.ProxyConfig{
+		Enabled:            getbool("SCANNER_USE_PROXY", false),
+		URL:                getenv("SCANNER_PROXY_URL", "http://127.0.0.1:"+proxyPort),
+		CAFile:             strings.TrimSpace(os.Getenv("SCANNER_PROXY_CA_FILE")),
+		InsecureSkipVerify: getbool("SCANNER_PROXY_INSECURE_SKIP_VERIFY", false),
+	}
+	if scannerProxyCfg.Enabled {
+		if err := scanService.SetScannerProxy(scannerProxyCfg, proxyPort); err != nil {
+			log.Printf("scanner upstream proxy disabled: %v — scans will use direct connections", err)
+		} else {
+			log.Printf("scanner upstream proxy enabled — outbound probes route via %s", scannerProxyCfg.URL)
+			if !getbool("ENABLE_PROXY", false) && scannerProxyCfg.IsBundledLocal(proxyPort) {
+				log.Printf("WARNING: SCANNER_PROXY_URL=%s targets the bundled proxy port :%s but ENABLE_PROXY=false — outbound requests will fail until ENABLE_PROXY is set", scannerProxyCfg.URL, proxyPort)
+			}
+		}
+	}
 	aiClient := ai.NewClient(
 		os.Getenv("AI_API_BASE"),
 		os.Getenv("AI_API_KEY"),

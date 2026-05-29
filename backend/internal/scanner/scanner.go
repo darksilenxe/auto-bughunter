@@ -23,10 +23,17 @@ import (
 )
 
 type Service struct {
-	httpClient *http.Client
-	cfg        Config
-	oast       *oast.Service
-	proxyStore proxy.Store
+	httpClient    *http.Client
+	cfg           Config
+	oast          *oast.Service
+	proxyStore    proxy.Store
+	scannerProxy  ProxyConfig
+	proxyTransport http.RoundTripper
+	// bundledProxyPort is the port the in-process intercepting proxy
+	// listens on (PROXY_PORT). Used to decide whether RecordingTransport
+	// should be skipped (when scanner traffic already flows through the
+	// bundled proxy) so the same request isn't captured twice.
+	bundledProxyPort string
 }
 
 const supplementalResourceFetchMaxURLs = 8
@@ -49,6 +56,37 @@ func (s *Service) OAST() *oast.Service { return s.oast }
 // by the scanner are recorded and visible in the Network Graph UI. Safe to
 // call with nil to disable recording.
 func (s *Service) SetProxyStore(store proxy.Store) { s.proxyStore = store }
+
+// SetScannerProxy configures an optional upstream HTTP(S) proxy that all
+// scanner-initiated traffic will be routed through. bundledProxyPort is the
+// port the in-process intercepting proxy listens on so we can avoid
+// double-capturing the same request via RecordingTransport when the upstream
+// proxy IS the bundled one. Safe to call with cfg.Enabled=false to disable.
+//
+// Returns the error from buildTransport when the configuration is malformed
+// so the caller can log it; the service falls back to direct connections in
+// that case (matching previous behaviour).
+func (s *Service) SetScannerProxy(cfg ProxyConfig, bundledProxyPort string) error {
+	s.scannerProxy = cfg
+	s.bundledProxyPort = strings.TrimSpace(bundledProxyPort)
+	if !cfg.Enabled {
+		s.proxyTransport = nil
+		s.httpClient = &http.Client{Timeout: 15 * time.Second}
+		return nil
+	}
+	rt, err := buildTransport(cfg)
+	if err != nil {
+		// Disable proxying on error so callers get direct connections
+		// rather than a broken transport.
+		s.scannerProxy = ProxyConfig{}
+		s.proxyTransport = nil
+		s.httpClient = &http.Client{Timeout: 15 * time.Second}
+		return err
+	}
+	s.proxyTransport = rt
+	s.httpClient = &http.Client{Timeout: 15 * time.Second, Transport: rt}
+	return nil
+}
 
 type Config struct {
 	EnableSubfinder   bool
@@ -194,7 +232,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	// Ensure a session exists for the lifetime of this scan.
 	if input.Session == nil {
-		input.Session = NewScanSession()
+		input.Session = NewScanSessionWithTransport(s.proxyTransport)
 	}
 
 	if input.Options.RequestDelayMillis > 0 {
@@ -736,6 +774,39 @@ func filterAnyContains(items []string, keywords []string, max int) []string {
 	return out
 }
 
+// resolveProxyForOptions returns the proxy configuration in effect for the
+// given per-scan options. When ScanOptions overrides the service-level
+// proxy, the second return value is a one-shot transport built from the
+// override (callers must wrap their client with it). It returns nil when
+// the override matches the service-level configuration, so the existing
+// session.client / s.httpClient transport (already proxy-aware) is reused.
+func (s *Service) resolveProxyForOptions(opts model.ScanOptions) (ProxyConfig, http.RoundTripper) {
+	// Compute the desired configuration: per-scan UseProxy/ProxyURL win
+	// over service-level defaults when provided.
+	desired := s.scannerProxy
+	if opts.UseProxy != nil {
+		desired.Enabled = *opts.UseProxy
+	}
+	if strings.TrimSpace(opts.ProxyURL) != "" {
+		desired.URL = strings.TrimSpace(opts.ProxyURL)
+	}
+	// Did anything actually change vs the service default?
+	if desired.Enabled == s.scannerProxy.Enabled &&
+		desired.URL == s.scannerProxy.URL &&
+		desired.CAFile == s.scannerProxy.CAFile &&
+		desired.InsecureSkipVerify == s.scannerProxy.InsecureSkipVerify {
+		return desired, nil
+	}
+	// Build a one-shot override transport. On error we silently fall back
+	// to the service-level transport so a bad per-scan URL can't break the
+	// scan; callers can observe the malformed URL via standard logs.
+	rt, err := buildTransport(desired)
+	if err != nil {
+		return s.scannerProxy, nil
+	}
+	return desired, rt
+}
+
 // doRequestWithSession executes req with retry logic, using the session's
 // HTTP client and token-injection when sess is non-nil. It falls back to
 // s.httpClient when sess is nil, preserving backward compatibility with all
@@ -748,10 +819,24 @@ func (s *Service) doRequestWithSession(ctx context.Context, req *http.Request, o
 	if sess != nil {
 		client = sess.Client()
 	}
+	// Determine the effective scanner-proxy configuration for this request.
+	// Per-scan options may override the service-level defaults.
+	effectiveProxy, perScanTransport := s.resolveProxyForOptions(options)
+	// When a per-scan override changes the upstream proxy, wrap the client
+	// with a one-shot transport so the override is honoured without
+	// mutating the shared session/service client.
+	if perScanTransport != nil {
+		wrapped := *client // shallow copy — shares the cookie Jar
+		wrapped.Transport = perScanTransport
+		client = &wrapped
+	}
 	// Wrap the client with a recording transport when a proxy store is
 	// configured so that all scanner-initiated requests appear in the
-	// Network Graph UI (GET /api/proxy/requests).
-	if s.proxyStore != nil {
+	// Network Graph UI (GET /api/proxy/requests). Skip the wrap when the
+	// effective upstream proxy IS the bundled in-process proxy, because in
+	// that case the same request would be captured twice (once here and
+	// once when the proxy itself records the proxied roundtrip).
+	if s.proxyStore != nil && !effectiveProxy.IsBundledLocal(s.bundledProxyPort) {
 		wrapped := *client // shallow copy — shares the cookie Jar
 		base := wrapped.Transport
 		if base == nil {
