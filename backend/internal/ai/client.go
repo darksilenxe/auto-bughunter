@@ -56,14 +56,22 @@ func (c *Client) SetKnowledgeRetriever(k KnowledgeRetriever) {
 	c.knowledge = k
 }
 
+// knowledgeRetrievalTimeout bounds each in-loop knowledge retrieval so a slow
+// or unreachable knowledge service can never stall the adaptive probe or
+// tool-calling loops (which run synchronously inside a scan).
+const knowledgeRetrievalTimeout = 8 * time.Second
+
 // retrieveKnowledgeGuidance fetches curated guidance for the given stage and
 // returns a prompt-injectable text block, or "" when no retriever is configured
-// or nothing relevant is found. It never blocks longer than the caller's ctx.
+// or nothing relevant is found. The retrieval is bounded by both the caller's
+// ctx and a short internal timeout.
 func (c *Client) retrieveKnowledgeGuidance(ctx context.Context, stage, query string, categories []string, maxRefs, perRefContent int) string {
 	if c == nil || c.knowledge == nil {
 		return ""
 	}
-	kc := c.knowledge.RetrieveForContext(ctx, stage, query, categories, maxRefs)
+	rctx, cancel := context.WithTimeout(ctx, knowledgeRetrievalTimeout)
+	defer cancel()
+	kc := c.knowledge.RetrieveForContext(rctx, stage, query, categories, maxRefs)
 	if kc == nil {
 		return ""
 	}
