@@ -5,6 +5,12 @@ Fixed critical issues preventing screenshots from being captured during headless
 
 ## Issues Fixed
 
+### 0. **No Screenshots When Scanning Through the MITM Proxy**
+- **Status**: ✅ FIXED
+- **Problem**: The headless Chromium sidecar routes all traffic through the bundled proxy (`--proxy-server=http://backend:8081`). When the proxy runs in TLS-intercepting (MITM) mode it re-signs HTTPS with its own dynamically generated CA, which the browser does not trust. Every HTTPS navigation therefore failed the TLS handshake, so pages never loaded and `CaptureScreenshot` silently produced nothing whenever the scanner used the proxy.
+- **Solution**: Added `--ignore-certificate-errors` to the chromium sidecar command in `docker-compose.yml` so the browser proceeds past the intercepted certificate. This is safe here because the sidecar only ever talks to the trusted in-mesh proxy while scanning attacker-supplied targets.
+- **Impact**: Screenshots are captured for HTTPS targets again when `SCANNER_USE_PROXY=true` (or any time the proxy is enabled with a CA).
+
 ### 1. **No Independent Screenshot Timeouts**
 - **Status**: ✅ FIXED
 - **Problem**: Screenshots were bundled with page navigation tasks in a single 35-second timeout window. If screenshot capture took too long or any other task failed, the entire crawl would fail.

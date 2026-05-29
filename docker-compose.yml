@@ -418,6 +418,15 @@ services:
     command:
       - --disable-gpu
       - --proxy-server=http://backend:8081
+      # The bundled proxy intercepts HTTPS CONNECT tunnels ("MITM") and
+      # re-signs them with its own dynamically generated CA, which this
+      # headless browser does not have in its trust store. Without this flag
+      # every HTTPS navigation through the proxy fails the TLS handshake, so
+      # page loads (and therefore screenshots) silently fail whenever the
+      # scanner routes through the proxy. Ignoring certificate errors lets the
+      # browser proceed; acceptable here because this Chromium only ever talks
+      # to the trusted in-mesh proxy while scanning attacker-supplied targets.
+      - --ignore-certificate-errors
       - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap
     restart: unless-stopped
     healthcheck:
