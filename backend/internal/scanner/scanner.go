@@ -108,6 +108,7 @@ type Config struct {
 	EnableSQLMap      bool
 	EnableFFUF        bool
 	EnableGobuster    bool
+	EnableKiterunner  bool
 	EnableGau         bool
 	EnableArjun       bool
 	EnableCommix      bool
@@ -132,6 +133,7 @@ type Config struct {
 	AsnmapBinary      string
 	FFUFBinary        string
 	GobusterBinary    string
+	KiterunnerBinary  string
 	GauBinary         string
 	ArjunBinary       string
 	CommixBinary      string
@@ -222,6 +224,9 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.GobusterBinary) == "" {
 		cfg.GobusterBinary = "gobuster"
+	}
+	if strings.TrimSpace(cfg.KiterunnerBinary) == "" {
+		cfg.KiterunnerBinary = "kr"
 	}
 	if strings.TrimSpace(cfg.GauBinary) == "" {
 		cfg.GauBinary = "gau"

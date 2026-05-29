@@ -530,6 +530,7 @@ func optionsMap(o model.ScanOptions) map[string]bool {
 		"sqlmap":       o.UseSQLMapIntegration,
 		"ffuf":         o.UseFFUFIntegration,
 		"gobuster":     o.UseGobusterIntegration,
+		"kiterunner":   o.UseKiterunnerIntegration,
 		"gau":          o.UseGauIntegration,
 		"arjun":        o.UseArjunIntegration,
 		"commix":       o.UseCommixIntegration,

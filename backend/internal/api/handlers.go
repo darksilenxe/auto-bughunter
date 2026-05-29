@@ -3928,6 +3928,9 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	if disable("gobuster") {
 		options.UseGobusterIntegration = false
 	}
+	if disable("kiterunner") {
+		options.UseKiterunnerIntegration = false
+	}
 	if disable("gau") {
 		options.UseGauIntegration = false
 	}
@@ -4398,6 +4401,7 @@ func collectToolHealth() []toolHealth {
 		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
+		{Name: "kiterunner", Binary: envOrDefault("KITERUNNER_BINARY", "kr"), Category: "content-discovery"},
 		{Name: "gau", Binary: envOrDefault("GAU_BINARY", "gau"), Category: "content-discovery"},
 		{Name: "arjun", Binary: envOrDefault("ARJUN_BINARY", "arjun"), Category: "content-discovery"},
 		{Name: "commix", Binary: envOrDefault("COMMIX_BINARY", "commix"), Category: "vuln-scanning"},
@@ -4468,6 +4472,7 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"kiterunner":   options.UseKiterunnerIntegration,
 		"gau":          options.UseGauIntegration,
 		"arjun":        options.UseArjunIntegration,
 		"commix":       options.UseCommixIntegration,
@@ -4576,6 +4581,7 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"kiterunner":   options.UseKiterunnerIntegration,
 		"gau":          options.UseGauIntegration,
 		"arjun":        options.UseArjunIntegration,
 		"commix":       options.UseCommixIntegration,
@@ -4620,6 +4626,8 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseFFUFIntegration = false
 		case "gobuster":
 			options.UseGobusterIntegration = false
+		case "kiterunner":
+			options.UseKiterunnerIntegration = false
 		case "gau":
 			options.UseGauIntegration = false
 		case "arjun":
