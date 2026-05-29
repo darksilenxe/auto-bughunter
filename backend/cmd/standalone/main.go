@@ -84,6 +84,7 @@ type standaloneRuntimeConfig struct {
 	EnableSQLMap     bool
 	EnableFFUF       bool
 	EnableGobuster   bool
+	EnableKiterunner bool
 	AllowDestructive bool
 }
 
@@ -107,6 +108,7 @@ func defaultStandaloneRuntimeConfig() standaloneRuntimeConfig {
 		EnableSQLMap:     getbool("ENABLE_SQLMAP_INTEGRATION", false),
 		EnableFFUF:       getbool("ENABLE_FFUF_INTEGRATION", false),
 		EnableGobuster:   getbool("ENABLE_GOBUSTER_INTEGRATION", false),
+		EnableKiterunner: getbool("ENABLE_KITERUNNER_INTEGRATION", false),
 		AllowDestructive: getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 	}
 }
@@ -133,6 +135,7 @@ func parseStandaloneRuntimeConfig(args []string) (standaloneRuntimeConfig, error
 		"use-sqlmap":            func(v bool) { cfg.EnableSQLMap = v },
 		"use-ffuf":              func(v bool) { cfg.EnableFFUF = v },
 		"use-gobuster":          func(v bool) { cfg.EnableGobuster = v },
+		"use-kiterunner":        func(v bool) { cfg.EnableKiterunner = v },
 		"all-go-tools": func(v bool) {
 			if v {
 				enableAllGoRuntimeTools(&cfg)
@@ -188,6 +191,7 @@ func enableAllGoRuntimeTools(cfg *standaloneRuntimeConfig) {
 	cfg.EnableSQLMap = true
 	cfg.EnableFFUF = true
 	cfg.EnableGobuster = true
+	cfg.EnableKiterunner = true
 }
 
 func startStandaloneServer(stderr io.Writer, quiet bool, runtimeCfg standaloneRuntimeConfig) (*standaloneServer, func(), error) {
@@ -224,6 +228,7 @@ func startStandaloneServer(stderr io.Writer, quiet bool, runtimeCfg standaloneRu
 		EnableSQLMap:       runtimeCfg.EnableSQLMap,
 		EnableFFUF:         runtimeCfg.EnableFFUF,
 		EnableGobuster:     runtimeCfg.EnableGobuster,
+		EnableKiterunner:   runtimeCfg.EnableKiterunner,
 		AllowDestructive:   runtimeCfg.AllowDestructive,
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),
@@ -241,6 +246,7 @@ func startStandaloneServer(stderr io.Writer, quiet bool, runtimeCfg standaloneRu
 		AsnmapBinary:       getenv("ASNMAP_BINARY", "asnmap"),
 		FFUFBinary:         getenv("FFUF_BINARY", "ffuf"),
 		GobusterBinary:     getenv("GOBUSTER_BINARY", "gobuster"),
+		KiterunnerBinary:   getenv("KITERUNNER_BINARY", "kr"),
 		IntegrationTimeout: time.Duration(getint("INTEGRATION_TIMEOUT_SECONDS", 90)) * time.Second,
 		DefaultMaxRetries:  getint("DEFAULT_MAX_RETRIES", 1),
 		DefaultBackoff:     time.Duration(getint("DEFAULT_BACKOFF_MILLIS", 400)) * time.Millisecond,
@@ -407,6 +413,7 @@ type scanFlagValues struct {
 	useSQLMap                 bool
 	useFFUF                   bool
 	useGobuster               bool
+	useKiterunner             bool
 	useMLTriage               bool
 	useAttackPath             bool
 	useFalsePositiveReview    bool
@@ -451,6 +458,7 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.useSQLMap, "use-sqlmap", false, "enable native Go SQLMap integration")
 	fs.BoolVar(&values.useFFUF, "use-ffuf", false, "enable FFUF integration")
 	fs.BoolVar(&values.useGobuster, "use-gobuster", false, "enable Gobuster integration")
+	fs.BoolVar(&values.useKiterunner, "use-kiterunner", false, "enable Kiterunner integration")
 	fs.BoolVar(&values.useMLTriage, "use-ml-triage", false, "enable ML triage agent")
 	fs.BoolVar(&values.useAttackPath, "use-attack-paths", false, "enable attack path agent")
 	fs.BoolVar(&values.useFalsePositiveReview, "use-false-positive-review", false, "enable false positive review agent")
@@ -484,6 +492,7 @@ func enableAllGoScanOptions(options *model.ScanOptions) {
 	options.UseSQLMapIntegration = true
 	options.UseFFUFIntegration = true
 	options.UseGobusterIntegration = true
+	options.UseKiterunnerIntegration = true
 }
 
 func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
@@ -571,6 +580,9 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	}
 	if values.useGobuster {
 		req.Options.UseGobusterIntegration = true
+	}
+	if values.useKiterunner {
+		req.Options.UseKiterunnerIntegration = true
 	}
 	if values.useMLTriage {
 		req.Options.UseMLTriageAgent = true
@@ -1244,6 +1256,7 @@ Flags:
   -use-sqlmap                    Enable native Go SQLMap integration
   -use-ffuf                      Enable FFUF integration
   -use-gobuster                  Enable Gobuster integration
+  -use-kiterunner                Enable Kiterunner integration
   -use-ml-triage                 Enable ML triage agent
   -use-attack-paths              Enable attack path agent
   -use-false-positive-review     Enable false positive review agent

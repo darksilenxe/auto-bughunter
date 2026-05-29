@@ -108,6 +108,7 @@ type Config struct {
 	EnableSQLMap      bool
 	EnableFFUF        bool
 	EnableGobuster    bool
+	EnableKiterunner  bool
 	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
@@ -125,6 +126,7 @@ type Config struct {
 	AsnmapBinary      string
 	FFUFBinary        string
 	GobusterBinary    string
+	KiterunnerBinary  string
 
 	IntegrationTimeout time.Duration
 	DefaultMaxRetries  int
@@ -208,6 +210,9 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.GobusterBinary) == "" {
 		cfg.GobusterBinary = "gobuster"
+	}
+	if strings.TrimSpace(cfg.KiterunnerBinary) == "" {
+		cfg.KiterunnerBinary = "kr"
 	}
 
 	return &Service{
