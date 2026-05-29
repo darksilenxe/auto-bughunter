@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -98,6 +99,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 
 		decision, err := o.Planner.Plan(ctx, input, outputs)
 		if err != nil {
+			log.Printf("orchestrator: round %d planning failed: %v", round+1, err)
 			return outputs, combineFindingsWithDedup(allFindings), err
 		}
 		if decision.IsDone || len(decision.Agents) == 0 {
@@ -118,6 +120,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			}
 		}
 		if decision.IsDone || len(decision.Agents) == 0 {
+			log.Printf("orchestrator: planner signalled completion after %d round(s); %d agent run(s) total", round, len(outputs))
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
 		filtered := make([]AgentSpec, 0, len(decision.Agents))
@@ -132,6 +135,11 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			continue
 		}
 		decision.Agents = filtered
+		scheduled := make([]string, 0, len(decision.Agents))
+		for _, spec := range decision.Agents {
+			scheduled = append(scheduled, spec.Name)
+		}
+		log.Printf("orchestrator: round %d/%d scheduling %d agent(s): %s", round+1, o.MaxRounds, len(scheduled), strings.Join(scheduled, ", "))
 		beforeCount := len(combineFindingsWithDedup(allFindings))
 		roundFailures := 0
 		roundScoreSum := 0.0
@@ -169,6 +177,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				AgentName: agent.Name(),
 				Message:   fmt.Sprintf("Agent %q started", agent.Name()),
 			})
+			log.Printf("orchestrator: agent %q started", agent.Name())
 
 			input.AllFindings = combineFindingsWithDedup(allFindings)
 			if len(outputs) > 0 {
@@ -201,6 +210,7 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				output.StartedAt = startedAt
 				output.CompletedAt = completedAt
 				output.DurationMs = completedAt.Sub(startedAt).Milliseconds()
+				log.Printf("orchestrator: agent %q timed out after %dms (scan context cancelled): %s", agent.Name(), output.DurationMs, output.Error)
 				outputs = append(outputs, output)
 				return outputs, combineFindingsWithDedup(allFindings), ctx.Err()
 			}
@@ -267,6 +277,11 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 				Message:   fmt.Sprintf("Agent %q completed in %dms with %d finding(s)", output.AgentName, output.DurationMs, len(output.Findings)),
 				Metadata:  output.Metadata,
 			})
+			if output.Status == "error" || output.TimedOut {
+				log.Printf("orchestrator: agent %q finished with status %q in %dms (%d finding(s)): %s", output.AgentName, output.Status, output.DurationMs, len(output.Findings), output.Error)
+			} else {
+				log.Printf("orchestrator: agent %q completed in %dms with %d finding(s)", output.AgentName, output.DurationMs, len(output.Findings))
+			}
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
 			delete(forcePending, output.AgentName)
@@ -320,9 +335,11 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			consecutiveFailureRounds = 0
 		}
 		if o.MaxNoNoveltyRounds > 0 && noNoveltyRounds >= o.MaxNoNoveltyRounds {
+			log.Printf("orchestrator: stopping after %d round(s) — %d consecutive round(s) produced no novel findings", round+1, noNoveltyRounds)
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
 		if o.MaxConsecutiveFailureRounds > 0 && consecutiveFailureRounds >= o.MaxConsecutiveFailureRounds {
+			log.Printf("orchestrator: stopping after %d round(s) — %d consecutive round(s) of agent failures", round+1, consecutiveFailureRounds)
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
 		if o.MinMarginalScore > 0 && roundScore < o.MinMarginalScore {
@@ -331,10 +348,12 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			lowMarginalScoreRounds = 0
 		}
 		if o.MinMarginalScore > 0 && lowMarginalScoreRounds >= 2 {
+			log.Printf("orchestrator: stopping after %d round(s) — marginal score below %.2f for %d consecutive round(s)", round+1, o.MinMarginalScore, lowMarginalScoreRounds)
 			return outputs, combineFindingsWithDedup(allFindings), nil
 		}
 	}
 
+	log.Printf("orchestrator: reached max rounds (%d); pipeline complete with %d agent run(s)", o.MaxRounds, len(outputs))
 	return outputs, combineFindingsWithDedup(allFindings), nil
 }
 
