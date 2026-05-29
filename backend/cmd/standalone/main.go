@@ -407,6 +407,9 @@ type scanFlagValues struct {
 	useSQLMap                 bool
 	useFFUF                   bool
 	useGobuster               bool
+	useGau                    bool
+	useArjun                  bool
+	useCommix                 bool
 	useMLTriage               bool
 	useAttackPath             bool
 	useFalsePositiveReview    bool
@@ -451,6 +454,9 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.useSQLMap, "use-sqlmap", false, "enable native Go SQLMap integration")
 	fs.BoolVar(&values.useFFUF, "use-ffuf", false, "enable FFUF integration")
 	fs.BoolVar(&values.useGobuster, "use-gobuster", false, "enable Gobuster integration")
+	fs.BoolVar(&values.useGau, "use-gau", false, "enable gau passive URL discovery integration")
+	fs.BoolVar(&values.useArjun, "use-arjun", false, "enable Arjun hidden-parameter discovery integration")
+	fs.BoolVar(&values.useCommix, "use-commix", false, "enable commix OS command injection integration (requires ALLOW_DESTRUCTIVE_CHECKS)")
 	fs.BoolVar(&values.useMLTriage, "use-ml-triage", false, "enable ML triage agent")
 	fs.BoolVar(&values.useAttackPath, "use-attack-paths", false, "enable attack path agent")
 	fs.BoolVar(&values.useFalsePositiveReview, "use-false-positive-review", false, "enable false positive review agent")
@@ -484,6 +490,9 @@ func enableAllGoScanOptions(options *model.ScanOptions) {
 	options.UseSQLMapIntegration = true
 	options.UseFFUFIntegration = true
 	options.UseGobusterIntegration = true
+	options.UseGauIntegration = true
+	options.UseArjunIntegration = true
+	options.UseCommixIntegration = true
 }
 
 func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
@@ -571,6 +580,15 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	}
 	if values.useGobuster {
 		req.Options.UseGobusterIntegration = true
+	}
+	if values.useGau {
+		req.Options.UseGauIntegration = true
+	}
+	if values.useArjun {
+		req.Options.UseArjunIntegration = true
+	}
+	if values.useCommix {
+		req.Options.UseCommixIntegration = true
 	}
 	if values.useMLTriage {
 		req.Options.UseMLTriageAgent = true

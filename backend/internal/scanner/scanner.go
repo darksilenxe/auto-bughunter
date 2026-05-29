@@ -108,6 +108,9 @@ type Config struct {
 	EnableSQLMap      bool
 	EnableFFUF        bool
 	EnableGobuster    bool
+	EnableGau         bool
+	EnableArjun       bool
+	EnableCommix      bool
 	AllowDestructive  bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
@@ -125,6 +128,9 @@ type Config struct {
 	AsnmapBinary      string
 	FFUFBinary        string
 	GobusterBinary    string
+	GauBinary         string
+	ArjunBinary       string
+	CommixBinary      string
 
 	IntegrationTimeout time.Duration
 	DefaultMaxRetries  int
@@ -208,6 +214,15 @@ func NewService(cfg Config) *Service {
 	}
 	if strings.TrimSpace(cfg.GobusterBinary) == "" {
 		cfg.GobusterBinary = "gobuster"
+	}
+	if strings.TrimSpace(cfg.GauBinary) == "" {
+		cfg.GauBinary = "gau"
+	}
+	if strings.TrimSpace(cfg.ArjunBinary) == "" {
+		cfg.ArjunBinary = "arjun"
+	}
+	if strings.TrimSpace(cfg.CommixBinary) == "" {
+		cfg.CommixBinary = "commix"
 	}
 
 	return &Service{

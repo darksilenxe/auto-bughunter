@@ -77,6 +77,12 @@ COPY scripts/shims/kr                /usr/local/bin/kr
 COPY scripts/shims/sqlmap            /usr/local/bin/sqlmap
 COPY scripts/shims/nikto             /usr/local/bin/nikto
 COPY scripts/shims/wpscan            /usr/local/bin/wpscan
+# Passive URL discovery (gau) + hidden-parameter discovery (arjun) +
+# OS command-injection (commix) — each runs in its own sidecar. arjun reads
+# the shared tmp volume at $SHARED_TMP_DIR for its JSON output file.
+COPY scripts/shims/gau               /usr/local/bin/gau
+COPY scripts/shims/arjun             /usr/local/bin/arjun
+COPY scripts/shims/commix            /usr/local/bin/commix
 # LLM-assisted XSS scanner — runs in the `xssmap` sidecar (Python +
 # Playwright + an Ollama client that reuses the local `ollama` service).
 COPY scripts/shims/xssmap            /usr/local/bin/xssmap
@@ -100,6 +106,9 @@ RUN chmod +x /usr/local/bin/sidecar-exec \
              /usr/local/bin/sqlmap \
              /usr/local/bin/nikto \
              /usr/local/bin/wpscan \
+             /usr/local/bin/gau \
+             /usr/local/bin/arjun \
+             /usr/local/bin/commix \
              /usr/local/bin/xssmap
 
 # Default chromedp wiring — the `chromium` sidecar exposes the DevTools

@@ -3925,6 +3925,15 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	if disable("gobuster") {
 		options.UseGobusterIntegration = false
 	}
+	if disable("gau") {
+		options.UseGauIntegration = false
+	}
+	if disable("arjun") {
+		options.UseArjunIntegration = false
+	}
+	if disable("commix") {
+		options.UseCommixIntegration = false
+	}
 	if disable("wpscan") {
 		options.UseWPScanIntegration = false
 	}
@@ -4374,6 +4383,9 @@ func collectToolHealth() []toolHealth {
 		{Name: "asnmap", Binary: envOrDefault("ASNMAP_BINARY", "asnmap"), Category: "recon"},
 		{Name: "ffuf", Binary: envOrDefault("FFUF_BINARY", "ffuf"), Category: "content-discovery"},
 		{Name: "gobuster", Binary: envOrDefault("GOBUSTER_BINARY", "gobuster"), Category: "content-discovery"},
+		{Name: "gau", Binary: envOrDefault("GAU_BINARY", "gau"), Category: "content-discovery"},
+		{Name: "arjun", Binary: envOrDefault("ARJUN_BINARY", "arjun"), Category: "content-discovery"},
+		{Name: "commix", Binary: envOrDefault("COMMIX_BINARY", "commix"), Category: "vuln-scanning"},
 		{Name: "vulnx", Binary: envOrDefault("VULNX_BINARY", "vulnx"), Category: "vuln-scanning"},
 	}
 
@@ -4437,6 +4449,9 @@ func buildToolReadinessFindings(options model.ScanOptions) []model.Finding {
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"gau":          options.UseGauIntegration,
+		"arjun":        options.UseArjunIntegration,
+		"commix":       options.UseCommixIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4538,6 +4553,9 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 		"asnmap":       options.UseAsnmapIntegration,
 		"ffuf":         options.UseFFUFIntegration,
 		"gobuster":     options.UseGobusterIntegration,
+		"gau":          options.UseGauIntegration,
+		"arjun":        options.UseArjunIntegration,
+		"commix":       options.UseCommixIntegration,
 		"vulnx":        options.UseVulnxIntegration,
 	}
 	health := collectToolHealth()
@@ -4575,6 +4593,12 @@ func applyHealthAwareExecutionGating(options model.ScanOptions) (model.ScanOptio
 			options.UseFFUFIntegration = false
 		case "gobuster":
 			options.UseGobusterIntegration = false
+		case "gau":
+			options.UseGauIntegration = false
+		case "arjun":
+			options.UseArjunIntegration = false
+		case "commix":
+			options.UseCommixIntegration = false
 		case "vulnx":
 			options.UseVulnxIntegration = false
 		}

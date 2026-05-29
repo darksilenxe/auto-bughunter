@@ -344,6 +344,12 @@ services:
         condition: service_started
       wpscan:
         condition: service_started
+      gau:
+        condition: service_started
+      arjun:
+        condition: service_started
+      commix:
+        condition: service_started
       xssmap:
         condition: service_started
       metasploit:
@@ -399,7 +405,7 @@ services:
     command:
       - --disable-gpu
       - --proxy-server=http://backend:8081
-      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,xssmap,metasploit,kiterunner,tool-updater,zap
+      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,xssmap,metasploit,kiterunner,tool-updater,zap
     restart: unless-stopped
     healthcheck:
       # Probe the DevTools port via socat (wget/curl are not in this image).
@@ -479,6 +485,35 @@ services:
   # WPScan WordPress scanner (Ruby).
   wpscan:
     image: wpscanteam/wpscan:v3.8.28
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # gau (GetAllUrls) — passive historical URL discovery. Built from source.
+  # Non-destructive: queries public archives (Wayback, Common Crawl, …) rather
+  # than the target itself.
+  gau:
+    build:
+      context: ./sidecars/gau
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    restart: unless-stopped
+
+  # Arjun — hidden HTTP parameter discovery (Python). Writes JSON output into
+  # the shared_tmp volume (read-write) at the same path the backend uses, so
+  # the backend can read the results back.
+  arjun:
+    build:
+      context: ./sidecars/arjun
+    entrypoint: ["sh", "-c", "tail -f /dev/null"]
+    volumes:
+      - shared_tmp:/tmp/auto-bughunter-shared
+    restart: unless-stopped
+
+  # commix — OS command-injection detection (Python). Built from source. The
+  # backend only invokes it when ALLOW_DESTRUCTIVE_CHECKS=true because it
+  # actively injects command payloads at the target.
+  commix:
+    build:
+      context: ./sidecars/commix
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     restart: unless-stopped
 

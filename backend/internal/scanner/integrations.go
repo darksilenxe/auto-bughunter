@@ -54,11 +54,12 @@ const integrationPreflightTimeout = 3 * time.Second
 //	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go)
 //	Phase 2 — Port scan:   naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana, ffuf, gobuster
+//	Phase 4 — Crawling:    katana, ffuf, gobuster, gau, arjun
 //	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
 //	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
 //	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
 //	Phase 6c — SQL inject: SQLMap (native Go; error-based, boolean-blind, time-based blind)
+//	Phase 6d — Cmd inject: commix (OS command injection; gated by ALLOW_DESTRUCTIVE_CHECKS)
 //	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), vulnx, zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
@@ -165,6 +166,18 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		emitCmd("gobuster", "dir -u "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
 			return s.runGobuster(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseGauIntegration {
+		emitCmd("gau", hostFromTarget(input.Target))
+		findings = append(findings, s.runInstrumentedTool(ctx, "gau", func() []model.Finding {
+			return s.runGau(ctx, input.Target, input.Scope)
+		})...)
+	}
+	if input.Options.UseArjunIntegration {
+		emitCmd("arjun", "-u "+input.Target)
+		findings = append(findings, s.runInstrumentedTool(ctx, "arjun", func() []model.Finding {
+			return s.runArjun(ctx, input.Target, input.Scope)
 		})...)
 	}
 
@@ -311,6 +324,53 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 			findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
 				return s.runSQLMap(ctx, input.Target, input.AuthProfile)
+			})...)
+		}
+	}
+
+	// Phase 6d — OS command injection scanning (commix).
+	if input.Options.UseCommixIntegration {
+		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("commix", "scanner", "skipped", 0)
+			findings = append(findings, model.Finding{
+				ID:             "commix-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "commix blocked by safety policy",
+				Description:    "commix actively injects OS command payloads against the target. Destructive or high-impact checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active command-injection testing.",
+			})
+		} else {
+			emitCmd("commix", "--url="+input.Target)
+			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				return s.runCommix(ctx, input.Target, input.AuthProfile)
+			})...)
+		}
+	} else if s.cfg.EnableCommix {
+		if !s.cfg.AllowDestructive {
+			metrics.ToolRun("commix", "scanner", "skipped", 0)
+			findings = append(findings, model.Finding{
+				ID:             "commix-auto-blocked-by-safety-policy",
+				Category:       "safety",
+				Severity:       model.SeverityInfo,
+				Title:          "commix auto-run blocked by safety policy",
+				Description:    "commix auto-run was skipped because destructive checks are disabled by default.",
+				Evidence:       "ALLOW_DESTRUCTIVE_CHECKS=false",
+				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
+			})
+		} else {
+			findings = append(findings, model.Finding{
+				ID:             "commix-auto-triggered",
+				Category:       "integration",
+				Severity:       model.SeverityInfo,
+				Title:          "commix auto-triggered",
+				Description:    "commix ran without an explicit per-scan request because ENABLE_COMMIX_INTEGRATION is true in the server configuration.",
+				Evidence:       "target=" + input.Target,
+				Recommendation: "Review the commix findings below for OS command injection vulnerabilities.",
+			})
+			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				return s.runCommix(ctx, input.Target, input.AuthProfile)
 			})...)
 		}
 	}
@@ -2371,6 +2431,391 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 		Sources:        []string{"gobuster"},
 		Confidence:     0.8,
 	}}
+}
+
+// runGau executes gau (GetAllUrls) to passively harvest historical URLs for the
+// target host from open sources (Wayback Machine, Common Crawl, etc.). It is a
+// passive, non-destructive integration: it queries third-party archives rather
+// than the target itself.
+func (s *Service) runGau(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableGau {
+		return []model.Finding{{
+			ID:             "gau-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "gau integration requested but disabled",
+			Description:    "The job requested gau but ENABLE_GAU_INTEGRATION is false.",
+			Evidence:       "ENABLE_GAU_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.GauBinary); err != nil {
+		return []model.Finding{{
+			ID:             "gau-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "gau binary not found",
+			Description:    "gau integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install gau or set GAU_BINARY to the binary path.",
+		}}
+	}
+
+	host := hostFromTarget(target)
+	if host == "" {
+		return []model.Finding{{
+			ID:             "gau-invalid-target",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "gau could not derive a host from the target",
+			Description:    "gau requires a hostname derived from the target URL.",
+			Evidence:       "target=" + target,
+			Recommendation: "Provide a target with a valid hostname.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.GauBinary, "--subs", "--threads", "5", host)
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "gau-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "gau timed out",
+			Description:    "gau did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	urls := parseGauURLs(outb.String(), scanScope)
+	if len(urls) == 0 {
+		return []model.Finding{{
+			ID:             "gau-no-urls",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "gau found no archived URLs",
+			Description:    "gau completed but did not return any in-scope archived URLs for the target host.",
+			Evidence:       "host=" + host,
+			Recommendation: "The target may have little public history; combine with active crawling (katana) for coverage.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "gau-url-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityInfo,
+		Title:          "gau discovered archived URLs",
+		Description:    "gau harvested historical, in-scope URLs from public archives (Wayback Machine, Common Crawl, etc.).",
+		Evidence:       fmt.Sprintf("count=%d; %s", len(urls), strings.Join(limitStrings(urls, 20), ", ")),
+		Recommendation: "Review archived URLs for forgotten endpoints, parameters, and exposed functionality, then probe in-scope candidates.",
+		Sources:        []string{"gau"},
+		Confidence:     0.8,
+	}}
+}
+
+// parseGauURLs parses gau stdout (one URL per line), keeps only in-scope,
+// well-formed http(s) URLs, and returns a sorted, de-duplicated list.
+func parseGauURLs(rawOutput string, scanScope model.ScanScope) []string {
+	lines := strings.Split(rawOutput, "\n")
+	urls := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			continue
+		}
+		if _, err := url.Parse(line); err != nil {
+			continue
+		}
+		if !scope.IsURLInScope(line, scanScope) {
+			continue
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		urls = append(urls, line)
+	}
+	sort.Strings(urls)
+	return urls
+}
+
+// runArjun executes Arjun to discover hidden HTTP query/body parameters on the
+// target endpoint. Arjun sends many requests with candidate parameter names but
+// does not send exploit payloads, so it is treated as non-destructive.
+func (s *Service) runArjun(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+	if !s.cfg.EnableArjun {
+		return []model.Finding{{
+			ID:             "arjun-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun integration requested but disabled",
+			Description:    "The job requested Arjun but ENABLE_ARJUN_INTEGRATION is false.",
+			Evidence:       "ENABLE_ARJUN_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.ArjunBinary); err != nil {
+		return []model.Finding{{
+			ID:             "arjun-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun binary not found",
+			Description:    "Arjun integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install Arjun or set ARJUN_BINARY to the binary path.",
+		}}
+	}
+	if !scope.IsURLInScope(target, scanScope) {
+		return []model.Finding{{
+			ID:             "arjun-out-of-scope",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun target out of scope",
+			Description:    "The target URL is not in scope for parameter discovery.",
+			Evidence:       "target=" + target,
+			Recommendation: "Adjust the scan scope to include the target before running Arjun.",
+		}}
+	}
+
+	// Arjun writes machine-readable results to a JSON file that must live in a
+	// directory shared with the arjun sidecar (SHARED_TMP_DIR), mirroring the
+	// wordlist sharing used by ffuf/gobuster.
+	outDir := os.Getenv("SHARED_TMP_DIR")
+	if outDir != "" {
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return []model.Finding{{
+				ID:             "arjun-output-error",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Arjun output preparation failed",
+				Description:    "Could not prepare a shared output directory for Arjun.",
+				Evidence:       err.Error(),
+				Recommendation: "Ensure SHARED_TMP_DIR is writable by the backend container.",
+			}}
+		}
+	}
+	outFile, err := os.CreateTemp(outDir, "auto-bughunter-arjun-*.json")
+	if err != nil {
+		return []model.Finding{{
+			ID:             "arjun-output-error",
+			Category:       "integration",
+			Severity:       model.SeverityLow,
+			Title:          "Arjun output preparation failed",
+			Description:    "Could not create a temporary output file for Arjun.",
+			Evidence:       err.Error(),
+			Recommendation: "Retry scan or provide runner filesystem permissions for temporary files.",
+		}}
+	}
+	outPath := outFile.Name()
+	outFile.Close()
+	defer os.Remove(outPath)
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ictx, s.cfg.ArjunBinary, "-u", target, "-oJ", outPath, "-t", "10", "-q")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "arjun-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun timed out",
+			Description:    "Arjun did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		data = nil
+	}
+	params := parseArjunParams(data)
+	if len(params) == 0 {
+		return []model.Finding{{
+			ID:             "arjun-no-params",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "Arjun found no hidden parameters",
+			Description:    "Arjun completed but did not discover any hidden parameters on the target endpoint.",
+			Evidence:       "target=" + target,
+			Recommendation: "Try additional endpoints, HTTP methods, or larger parameter wordlists.",
+		}}
+	}
+	return []model.Finding{{
+		ID:             "arjun-parameter-discovery",
+		Category:       "discovery",
+		Severity:       model.SeverityLow,
+		Title:          "Arjun discovered hidden parameters",
+		Description:    "Arjun discovered HTTP parameters that are not linked from the page but are accepted by the endpoint. Hidden parameters frequently expose additional, less-tested input-handling code paths.",
+		Evidence:       fmt.Sprintf("target=%s; params=%s", target, strings.Join(limitStrings(params, 30), ", ")),
+		Recommendation: "Fuzz the discovered parameters for injection, access-control, and business-logic flaws.",
+		Sources:        []string{"arjun"},
+		Confidence:     0.75,
+	}}
+}
+
+// parseArjunParams parses Arjun's JSON output (-oJ). Arjun versions emit either
+// {"<url>": ["p1","p2"]} or {"<url>": {"params": ["p1"], "method": "GET"}}, so
+// both shapes are handled. Returns a sorted, de-duplicated list of parameters.
+func parseArjunParams(data []byte) []string {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil
+	}
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	params := make([]string, 0)
+	add := func(list []string) {
+		for _, p := range list {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			params = append(params, p)
+		}
+	}
+	for _, v := range raw {
+		var list []string
+		if err := json.Unmarshal(v, &list); err == nil {
+			add(list)
+			continue
+		}
+		var obj struct {
+			Params []string `json:"params"`
+		}
+		if err := json.Unmarshal(v, &obj); err == nil {
+			add(obj.Params)
+		}
+	}
+	sort.Strings(params)
+	return params
+}
+
+// runCommix executes commix to detect OS command injection on the target. It is
+// an active, destructive integration and must only run when AllowDestructive is
+// enabled (enforced by the caller in runOptionalIntegrations).
+func (s *Service) runCommix(ctx context.Context, target string, authProfile model.ScanAuthProfile) []model.Finding {
+	if !s.cfg.EnableCommix {
+		return []model.Finding{{
+			ID:             "commix-disabled",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix integration requested but disabled",
+			Description:    "The job requested commix but ENABLE_COMMIX_INTEGRATION is false.",
+			Evidence:       "ENABLE_COMMIX_INTEGRATION=false",
+			Recommendation: "Enable the feature flag in backend environment if this integration is approved.",
+		}}
+	}
+	if _, err := exec.LookPath(s.cfg.CommixBinary); err != nil {
+		return []model.Finding{{
+			ID:             "commix-binary-missing",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix binary not found",
+			Description:    "commix integration is enabled but the binary is not available in PATH.",
+			Evidence:       err.Error(),
+			Recommendation: "Install commix or set COMMIX_BINARY to the binary path.",
+		}}
+	}
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	args := []string{"--url=" + target, "--batch", "--disable-coloring"}
+	if cookie := joinCookieHeader(authProfile.Cookies); cookie != "" {
+		args = append(args, "--cookie="+cookie)
+	}
+	cmd := exec.CommandContext(ictx, s.cfg.CommixBinary, args...)
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+		return []model.Finding{{
+			ID:             "commix-timeout",
+			Category:       "integration",
+			Severity:       model.SeverityInfo,
+			Title:          "commix timed out",
+			Description:    "commix did not complete before the integration timeout.",
+			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
+		}}
+	}
+
+	if commixReportsVulnerable(outb.String()) {
+		return []model.Finding{{
+			ID:             "commix-command-injection",
+			Category:       "command-injection",
+			Severity:       model.SeverityCritical,
+			Title:          "commix detected OS command injection",
+			Description:    "commix reported that the target appears vulnerable to OS command injection, which can allow arbitrary command execution on the host.",
+			Evidence:       "target=" + target,
+			Recommendation: "Treat as critical: validate the injection point manually, then remediate by removing shell invocation or strictly allow-listing and escaping inputs.",
+			Sources:        []string{"commix"},
+			Confidence:     0.85,
+		}}
+	}
+	return []model.Finding{{
+		ID:             "commix-no-injection",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          "commix found no command injection",
+		Description:    "commix completed but did not report an OS command injection vulnerability on the target.",
+		Evidence:       "target=" + target,
+		Recommendation: "Re-run against specific parameterised endpoints or with authenticated profiles for deeper coverage.",
+	}}
+}
+
+// joinCookieHeader renders an auth profile cookie map as a single Cookie
+// header value (name1=value1; name2=value2) with deterministic ordering.
+func joinCookieHeader(cookies map[string]string) string {
+	if len(cookies) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(cookies))
+	for k := range cookies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+cookies[k])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// commixReportsVulnerable scans commix stdout for its vulnerability markers.
+func commixReportsVulnerable(output string) bool {
+	lower := strings.ToLower(output)
+	markers := []string{
+		"is vulnerable",
+		"appears to be injectable",
+		"injectable",
+		"the ('--technique') option",
+		"command injection vulnerability",
+	}
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTemporaryWordlist(entries []string) (string, error) {

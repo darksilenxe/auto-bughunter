@@ -94,6 +94,9 @@ scanner→target traffic is a property of the target, not of this tool.
   - ShuffleDNS
   - Certificate Transparency (crt.sh)
   - Amass (native Go passive discovery)
+  - gau (passive historical URL discovery from Wayback/Common Crawl/…)
+  - Arjun (hidden HTTP parameter discovery)
+  - commix (OS command-injection detection, requires `ALLOW_DESTRUCTIVE_CHECKS=true`)
 - Optional AI-generated executive summary for findings
 - Offline AI reasoner (local analysis when no API available)
 

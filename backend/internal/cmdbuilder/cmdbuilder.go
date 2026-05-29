@@ -81,6 +81,7 @@ var allowedBinaries = map[string]bool{
 	"whatweb":   true,
 	"wafw00f":   true,
 	"arjun":     true,
+	"gau":       true,
 	"dalfox":    true,
 	"gf":        true,
 	"anew":      true,
@@ -213,6 +214,10 @@ var allowedFlagsByBinary = map[string]map[string]bool{
 	"arjun": {
 		"-u": true, "-m": true, "-oJ": true, "-oT": true, "-t": true, "-d": true, "-H": true,
 		"--include": true, "--exclude": true, "--stable": true, "--passive": true,
+	},
+	"gau": {
+		"--subs": true, "--threads": true, "--providers": true, "--blacklist": true,
+		"--from": true, "--to": true, "--fc": true, "--mc": true, "--o": true, "--json": true,
 	},
 	"dalfox": {
 		"--silence": true, "--no-color": true, "--cookie": true, "--header": true, "--method": true,
