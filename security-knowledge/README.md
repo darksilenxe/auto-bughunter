@@ -44,11 +44,37 @@ Only a narrow allowlist of source families is accepted:
 - `portswigger`
 - `owasp`
 - `cwe`
+- `hacktricks`
+- `payloadsallthethings`
 
 Only `source-url-only` is accepted for `license`.
 
-The policy is unchanged: keep short curated notes with citations to public
-references, and avoid mirroring article bodies into the runtime corpus.
+The policy is unchanged for curated notes: keep short curated notes with
+citations to public references, and avoid mirroring article bodies into the
+runtime corpus.
+
+### Full-text ingestion (opt-in, explicit sign-off)
+
+HackTricks and PayloadsAllTheThings entries may additionally carry the full
+text of the referenced page in a separate `content` field so the AI can be
+RAG-augmented with the complete technique/payload guidance, not just the short
+note. This is **off by default** and gated behind an explicit operator
+sign-off because it mirrors third-party bodies:
+
+- mark the source entry with `"fullText": true` and `"websiteImport": {"enabled": true}`
+- fetch the page text with `generate_corpus.py fetch-web-text`
+- rebuild with the `--allow-full-text` flag
+
+Source URL, title, and license attribution are always retained on every
+document, including full-text ones, so provenance is never lost. PayloadsAllThe-
+Things is MIT-licensed; HackTricks requires attribution — keep the citation
+metadata intact.
+
+The corpus is baked during the `security-knowledge` image build (see
+`Dockerfile`): by default it regenerates `data/corpus.json` from the curated
+sources with no network access. Set the `ALLOW_FULL_TEXT=true` build arg (exposed
+as `KNOWLEDGE_ALLOW_FULL_TEXT` in `docker-compose.yml`) to fetch and mirror the
+full text during the build.
 
 ## Maintenance flow
 

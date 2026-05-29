@@ -65,6 +65,7 @@ class KnowledgeReference(BaseModel):
     vulnerabilityClass: str
     technique: str
     passage: str
+    content: str = ""
     score: float
 
 
@@ -88,6 +89,7 @@ class CorpusDocument(BaseModel):
     technique: str
     keywords: List[str] = Field(default_factory=list)
     passage: str
+    content: str = ""
 
 
 def _load_corpus() -> List[CorpusDocument]:
@@ -120,6 +122,7 @@ def _score_document(doc: CorpusDocument, req: RetrieveRequest) -> float:
         doc.vulnerabilityClass,
         doc.technique,
         doc.passage,
+        doc.content,
         " ".join(doc.keywords),
     ])))
 
@@ -168,6 +171,9 @@ def _suggested_actions(references: List[KnowledgeReference]) -> List[str]:
 
 
 CORPUS = _load_corpus()
+# Maximum number of full-text characters returned per reference. Full bodies are
+# stored in the corpus but bounded in responses to keep AI prompt payloads sane.
+RESPONSE_CONTENT_MAX_LENGTH = 4000
 LICENSE_NOTICE = (
     "Curated notes only: this service stores short manually-authored summaries with source URLs. "
     "Confirm third-party content rights before importing article bodies or training data."
@@ -217,6 +223,7 @@ def retrieve(req: RetrieveRequest) -> RetrieveResponse:
                 vulnerabilityClass=doc.vulnerabilityClass,
                 technique=doc.technique,
                 passage=doc.passage,
+                content=doc.content[:RESPONSE_CONTENT_MAX_LENGTH],
                 score=round(score, 2),
             )
         )

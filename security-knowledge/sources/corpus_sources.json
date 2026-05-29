@@ -2,8 +2,16 @@
   "version": 1,
   "phase": "phase-1",
   "allowlists": {
-    "sourceTypes": ["portswigger", "owasp", "cwe", "hacktricks", "payloadsallthethings"],
-    "licenses": ["source-url-only"]
+    "sourceTypes": [
+      "portswigger",
+      "owasp",
+      "cwe",
+      "hacktricks",
+      "payloadsallthethings"
+    ],
+    "licenses": [
+      "source-url-only"
+    ]
   },
   "entries": [
     {
@@ -15,7 +23,12 @@
       "topic": "injection validation and exploitation",
       "vulnerabilityClass": "sql injection",
       "technique": "parameterized queries and query structure validation",
-      "keywords": ["sqli", "database error", "union select", "blind injection"],
+      "keywords": [
+        "sqli",
+        "database error",
+        "union select",
+        "blind injection"
+      ],
       "passage": "Curated note: prioritize parameterized queries, strict server-side validation, and safe error handling when scanner evidence indicates database-driven input reflection or query manipulation.",
       "websiteImport": {
         "enabled": true
@@ -30,7 +43,13 @@
       "topic": "client-side execution and output encoding",
       "vulnerabilityClass": "cross-site scripting",
       "technique": "context-aware output encoding with template hardening",
-      "keywords": ["xss", "dom xss", "reflected", "stored", "csp"],
+      "keywords": [
+        "xss",
+        "dom xss",
+        "reflected",
+        "stored",
+        "csp"
+      ],
       "passage": "Curated note: match the sink context before recommending fixes; combine output encoding, safer templating, and CSP as defense-in-depth rather than relying on CSP alone.",
       "websiteImport": {
         "enabled": true
@@ -45,7 +64,13 @@
       "topic": "authorization weaknesses across roles and workflows",
       "vulnerabilityClass": "broken access control",
       "technique": "server-side authorization checks on every sensitive action",
-      "keywords": ["idor", "bypass", "role", "privilege escalation", "authorization"],
+      "keywords": [
+        "idor",
+        "bypass",
+        "role",
+        "privilege escalation",
+        "authorization"
+      ],
       "passage": "Curated note: when evidence suggests direct object reference or missing role checks, emphasize centralized authorization and workflow-level access verification instead of client-side gating.",
       "websiteImport": {
         "enabled": true
@@ -60,7 +85,13 @@
       "topic": "outbound request handling and internal service exposure",
       "vulnerabilityClass": "server-side request forgery",
       "technique": "allowlist outbound destinations and normalize URLs before fetch",
-      "keywords": ["ssrf", "metadata", "callback", "oast", "internal network"],
+      "keywords": [
+        "ssrf",
+        "metadata",
+        "callback",
+        "oast",
+        "internal network"
+      ],
       "passage": "Curated note: highlight URL canonicalization, destination allowlists, and outbound network segmentation when runtime evidence shows user-controlled fetch behavior or OAST callbacks.",
       "websiteImport": {
         "enabled": true
@@ -75,7 +106,13 @@
       "topic": "api object-level authorization",
       "vulnerabilityClass": "api authorization",
       "technique": "enforce ownership and policy checks per object reference",
-      "keywords": ["api", "bola", "idor", "resource ownership", "object id"],
+      "keywords": [
+        "api",
+        "bola",
+        "idor",
+        "resource ownership",
+        "object id"
+      ],
       "passage": "Curated note: for API findings, map exposed object identifiers to ownership checks and require authorization decisions for every read or write path, including bulk and nested object endpoints.",
       "websiteImport": {
         "enabled": true
@@ -90,7 +127,12 @@
       "topic": "detectability and response quality",
       "vulnerabilityClass": "monitoring gaps",
       "technique": "high-signal security telemetry with alert triage",
-      "keywords": ["logging", "monitoring", "audit trail", "alerting"],
+      "keywords": [
+        "logging",
+        "monitoring",
+        "audit trail",
+        "alerting"
+      ],
       "passage": "Curated note: if the scan reveals drift, auth instability, or suspicious routing changes, recommend durable audit events and actionable monitoring so exploitation attempts are detectable and explainable.",
       "websiteImport": {
         "enabled": true
@@ -105,7 +147,12 @@
       "topic": "input neutralization in rendered content",
       "vulnerabilityClass": "cross-site scripting",
       "technique": "encode untrusted data for the output context",
-      "keywords": ["cwe-79", "encoding", "escaping", "javascript"],
+      "keywords": [
+        "cwe-79",
+        "encoding",
+        "escaping",
+        "javascript"
+      ],
       "passage": "Curated note: use CWE mappings as a stable citation in reports, and align remediation language with the output context that failed rather than generic client-side sanitization.",
       "websiteImport": {
         "enabled": true
@@ -120,7 +167,12 @@
       "topic": "unsafe SQL command construction",
       "vulnerabilityClass": "sql injection",
       "technique": "bind parameters and constrain query builders",
-      "keywords": ["cwe-89", "prepared statements", "orm", "sql injection"],
+      "keywords": [
+        "cwe-89",
+        "prepared statements",
+        "orm",
+        "sql injection"
+      ],
       "passage": "Curated note: prefer remediation language that calls out prepared statements, query builder safety, and reduced database privileges when injection evidence is reproducible.",
       "websiteImport": {
         "enabled": true
@@ -129,17 +181,26 @@
     {
       "id": "hacktricks-xss",
       "title": "HackTricks — XSS (Cross-Site Scripting)",
-      "url": "https://book.hacktricks.xyz/pentesting-web/xss-cross-site-scripting",
+      "url": "https://hacktricks.wiki/en/pentesting-web/xss-cross-site-scripting.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "client-side injection discovery and exploitation",
       "vulnerabilityClass": "cross-site scripting",
       "technique": "context-aware reflected, stored, and dom xss probing with sink analysis",
-      "keywords": ["xss", "reflected", "stored", "dom xss", "dalfox", "sink", "javascript execution"],
+      "keywords": [
+        "xss",
+        "reflected",
+        "stored",
+        "dom xss",
+        "dalfox",
+        "sink",
+        "javascript execution"
+      ],
       "passage": "Curated note: identify the exact reflection sink (HTML, attribute, JS, URL) before crafting a probe; HackTricks catalogs context-specific vectors and filter bypasses to confirm execution rather than mere reflection.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-xss",
@@ -150,26 +211,42 @@
       "topic": "xss payload selection for fuzzing",
       "vulnerabilityClass": "cross-site scripting",
       "technique": "polyglot and filter-bypass payload sets for active xss fuzzing",
-      "keywords": ["xss", "polyglot", "payload", "filter bypass", "waf bypass", "fuzzing"],
+      "keywords": [
+        "xss",
+        "polyglot",
+        "payload",
+        "filter bypass",
+        "waf bypass",
+        "fuzzing"
+      ],
       "passage": "Curated note: when seeding active XSS fuzzing, draw from the PayloadsAllTheThings XSS payload sets (polyglots, attribute breakouts, WAF bypasses) and match the candidate payloads to the detected output context.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-sqli",
       "title": "HackTricks — SQL Injection",
-      "url": "https://book.hacktricks.xyz/pentesting-web/sql-injection",
+      "url": "https://hacktricks.wiki/en/pentesting-web/sql-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "sql injection enumeration and exploitation",
       "vulnerabilityClass": "sql injection",
       "technique": "error-based, union, and blind injection enumeration with sqlmap",
-      "keywords": ["sqli", "union select", "blind", "error based", "sqlmap", "database enumeration"],
+      "keywords": [
+        "sqli",
+        "union select",
+        "blind",
+        "error based",
+        "sqlmap",
+        "database enumeration"
+      ],
       "passage": "Curated note: classify the injection (error/union/boolean/time-based) before exploitation; HackTricks maps each class to enumeration steps and DBMS-specific syntax that sqlmap can automate once a candidate parameter is confirmed.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-sqli",
@@ -180,26 +257,43 @@
       "topic": "sql injection payload selection for fuzzing",
       "vulnerabilityClass": "sql injection",
       "technique": "dbms-specific injection payload sets for active fuzzing",
-      "keywords": ["sqli", "payload", "mysql", "postgres", "mssql", "oracle", "fuzzing"],
+      "keywords": [
+        "sqli",
+        "payload",
+        "mysql",
+        "postgres",
+        "mssql",
+        "oracle",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed injection fuzzing with DBMS-specific payload sets from PayloadsAllTheThings (MySQL, PostgreSQL, MSSQL, Oracle) and tailor the candidate strings to the database fingerprinted during recon.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-ssrf",
       "title": "HackTricks — SSRF (Server-Side Request Forgery)",
-      "url": "https://book.hacktricks.xyz/pentesting-web/ssrf-server-side-request-forgery",
+      "url": "https://hacktricks.wiki/en/pentesting-web/ssrf-server-side-request-forgery.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "outbound request abuse and internal exposure",
       "vulnerabilityClass": "server-side request forgery",
       "technique": "cloud metadata, localhost, and url-parser bypass probing",
-      "keywords": ["ssrf", "metadata", "169.254.169.254", "localhost", "oast", "url bypass"],
+      "keywords": [
+        "ssrf",
+        "metadata",
+        "169.254.169.254",
+        "localhost",
+        "oast",
+        "url bypass"
+      ],
       "passage": "Curated note: probe cloud metadata, loopback, and internal ranges, then test parser confusion and redirect chains; HackTricks details URL-scheme and host-encoding bypasses to defeat naive allowlists when SSRF is suspected.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-ssrf",
@@ -210,26 +304,42 @@
       "topic": "ssrf payload selection for fuzzing",
       "vulnerabilityClass": "server-side request forgery",
       "technique": "host-encoding and scheme bypass payload sets for active ssrf fuzzing",
-      "keywords": ["ssrf", "payload", "bypass", "encoded ip", "scheme", "fuzzing"],
+      "keywords": [
+        "ssrf",
+        "payload",
+        "bypass",
+        "encoded ip",
+        "scheme",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed SSRF fuzzing with PayloadsAllTheThings bypass payloads (decimal/hex IPs, alternate schemes, DNS rebinding hosts) to test allowlist robustness on user-controlled fetch parameters.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-idor",
       "title": "HackTricks — IDOR (Insecure Direct Object Reference)",
-      "url": "https://book.hacktricks.xyz/pentesting-web/idor",
+      "url": "https://hacktricks.wiki/en/pentesting-web/idor.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "object-level authorization testing",
       "vulnerabilityClass": "insecure direct object reference",
       "technique": "object id enumeration and cross-account access verification",
-      "keywords": ["idor", "bola", "object id", "enumeration", "authorization", "privilege"],
+      "keywords": [
+        "idor",
+        "bola",
+        "object id",
+        "enumeration",
+        "authorization",
+        "privilege"
+      ],
       "passage": "Curated note: enumerate sequential, encoded, and predictable identifiers across roles and accounts; HackTricks highlights confirming unauthorized read/write rather than relying on response codes alone when probing for IDOR.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-idor",
@@ -240,26 +350,41 @@
       "topic": "idor methodology and identifier variation",
       "vulnerabilityClass": "insecure direct object reference",
       "technique": "identifier mutation and parameter-pollution test cases",
-      "keywords": ["idor", "parameter pollution", "identifier", "wrapping", "fuzzing"],
+      "keywords": [
+        "idor",
+        "parameter pollution",
+        "identifier",
+        "wrapping",
+        "fuzzing"
+      ],
       "passage": "Curated note: use PayloadsAllTheThings IDOR test cases (id wrapping, parameter pollution, array/JSON variants) to probe object references that recon flagged as user-controlled and authorization-sensitive.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-ssti",
       "title": "HackTricks — Server-Side Template Injection",
-      "url": "https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection",
+      "url": "https://hacktricks.wiki/en/pentesting-web/ssti-server-side-template-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "template engine detection and exploitation",
       "vulnerabilityClass": "server-side template injection",
       "technique": "engine fingerprinting via arithmetic probes then payload escalation",
-      "keywords": ["ssti", "jinja2", "twig", "freemarker", "velocity", "template"],
+      "keywords": [
+        "ssti",
+        "jinja2",
+        "twig",
+        "freemarker",
+        "velocity",
+        "template"
+      ],
       "passage": "Curated note: fingerprint the template engine with arithmetic markers (e.g. {{7*7}}, ${7*7}) before escalating; HackTricks lists engine-specific escalation paths from evaluation to RCE once injection is confirmed.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-ssti",
@@ -270,26 +395,42 @@
       "topic": "ssti payload selection for fuzzing",
       "vulnerabilityClass": "server-side template injection",
       "technique": "per-engine detection and escalation payload sets for active fuzzing",
-      "keywords": ["ssti", "payload", "jinja2", "freemarker", "rce", "fuzzing"],
+      "keywords": [
+        "ssti",
+        "payload",
+        "jinja2",
+        "freemarker",
+        "rce",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed SSTI fuzzing with PayloadsAllTheThings per-engine detection markers and escalation payloads, selecting the set that matches the template engine fingerprinted during probing.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-path-traversal",
       "title": "HackTricks — File Inclusion / Path Traversal",
-      "url": "https://book.hacktricks.xyz/pentesting-web/file-inclusion",
+      "url": "https://hacktricks.wiki/en/pentesting-web/file-inclusion.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "local file disclosure and inclusion",
       "vulnerabilityClass": "path traversal",
       "technique": "traversal sequence and encoding-bypass probing for lfi",
-      "keywords": ["lfi", "path traversal", "etc passwd", "encoding bypass", "wrapper", "directory traversal"],
+      "keywords": [
+        "lfi",
+        "path traversal",
+        "etc passwd",
+        "encoding bypass",
+        "wrapper",
+        "directory traversal"
+      ],
       "passage": "Curated note: test plain, encoded, and nested traversal sequences plus PHP/wrapper tricks; HackTricks documents encoding and truncation bypasses to confirm file disclosure when a parameter influences a filesystem path.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-path-traversal",
@@ -300,26 +441,42 @@
       "topic": "path traversal payload selection for fuzzing",
       "vulnerabilityClass": "path traversal",
       "technique": "encoded and nested traversal payload sets for active fuzzing",
-      "keywords": ["lfi", "path traversal", "payload", "encoded", "nested", "fuzzing"],
+      "keywords": [
+        "lfi",
+        "path traversal",
+        "payload",
+        "encoded",
+        "nested",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed traversal fuzzing with PayloadsAllTheThings sequences (double-encoded, nested ....//, and OS-specific paths) against parameters recon identified as file or path references.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-xxe",
       "title": "HackTricks — XXE (XML External Entity)",
-      "url": "https://book.hacktricks.xyz/pentesting-web/xxe-xee-xml-external-entity",
+      "url": "https://hacktricks.wiki/en/pentesting-web/xxe-xee-xml-external-entity.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "xml parser abuse and data exfiltration",
       "vulnerabilityClass": "xml external entity",
       "technique": "inline and out-of-band entity injection probing",
-      "keywords": ["xxe", "external entity", "doctype", "oob", "file disclosure", "xml"],
+      "keywords": [
+        "xxe",
+        "external entity",
+        "doctype",
+        "oob",
+        "file disclosure",
+        "xml"
+      ],
       "passage": "Curated note: test inline entity reads first, then out-of-band exfiltration when responses are blind; HackTricks covers parameter entities and protocol handlers to confirm XXE on XML-accepting endpoints.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-xxe",
@@ -330,26 +487,42 @@
       "topic": "xxe payload selection for fuzzing",
       "vulnerabilityClass": "xml external entity",
       "technique": "inline, oob, and parameter-entity payload sets for active fuzzing",
-      "keywords": ["xxe", "payload", "oob", "parameter entity", "dtd", "fuzzing"],
+      "keywords": [
+        "xxe",
+        "payload",
+        "oob",
+        "parameter entity",
+        "dtd",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed XXE fuzzing with PayloadsAllTheThings entity payloads (inline read, OOB DTD, parameter entities) for endpoints that parse XML, SVG, or Office/document formats.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-command-injection",
       "title": "HackTricks — Command Injection",
-      "url": "https://book.hacktricks.xyz/pentesting-web/command-injection",
+      "url": "https://hacktricks.wiki/en/pentesting-web/command-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "os command execution via injection",
       "vulnerabilityClass": "os command injection",
       "technique": "separator and timing-oracle probing for command execution",
-      "keywords": ["command injection", "rce", "sleep", "timing", "separator", "shell"],
+      "keywords": [
+        "command injection",
+        "rce",
+        "sleep",
+        "timing",
+        "separator",
+        "shell"
+      ],
       "passage": "Curated note: confirm command injection with timing oracles and out-of-band callbacks before destructive payloads; HackTricks lists shell separators and quoting bypasses for parameters that reach system commands.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-command-injection",
@@ -360,26 +533,42 @@
       "topic": "command injection payload selection for fuzzing",
       "vulnerabilityClass": "os command injection",
       "technique": "separator and bypass payload sets for active fuzzing",
-      "keywords": ["command injection", "payload", "separator", "bypass", "blind", "fuzzing"],
+      "keywords": [
+        "command injection",
+        "payload",
+        "separator",
+        "bypass",
+        "blind",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed command-injection fuzzing with PayloadsAllTheThings separator and filter-bypass payloads, preferring blind timing/OOB variants for parameters that may reach a shell.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-jwt",
       "title": "HackTricks — JWT (JSON Web Tokens)",
-      "url": "https://book.hacktricks.xyz/pentesting-web/hacking-jwt-json-web-tokens",
+      "url": "https://hacktricks.wiki/en/pentesting-web/hacking-jwt-json-web-tokens.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "token forgery and signature abuse",
       "vulnerabilityClass": "json web token",
       "technique": "alg confusion, none algorithm, and weak-secret probing",
-      "keywords": ["jwt", "alg none", "rs256", "hs256", "weak secret", "kid"],
+      "keywords": [
+        "jwt",
+        "alg none",
+        "rs256",
+        "hs256",
+        "weak secret",
+        "kid"
+      ],
       "passage": "Curated note: inspect the JWT header for alg/kid abuse, test the none algorithm and RS256-to-HS256 confusion, and attempt weak-secret cracking; HackTricks details claim tampering once a forgery path is found.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-jwt",
@@ -390,26 +579,41 @@
       "topic": "jwt attack technique reference",
       "vulnerabilityClass": "json web token",
       "technique": "signature-bypass and key-injection test cases",
-      "keywords": ["jwt", "payload", "alg confusion", "jwk", "kid injection", "fuzzing"],
+      "keywords": [
+        "jwt",
+        "payload",
+        "alg confusion",
+        "jwk",
+        "kid injection",
+        "fuzzing"
+      ],
       "passage": "Curated note: use PayloadsAllTheThings JWT test cases (alg none, key confusion, jwk/kid header injection) when a token is present, matching attacks to the signing algorithm observed.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-open-redirect",
       "title": "HackTricks — Open Redirect",
-      "url": "https://book.hacktricks.xyz/pentesting-web/open-redirect",
+      "url": "https://hacktricks.wiki/en/pentesting-web/open-redirect.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "unsafe redirect handling",
       "vulnerabilityClass": "open redirect",
       "technique": "redirect-parameter and url-parser bypass probing",
-      "keywords": ["open redirect", "redirect", "protocol relative", "url bypass", "location"],
+      "keywords": [
+        "open redirect",
+        "redirect",
+        "protocol relative",
+        "url bypass",
+        "location"
+      ],
       "passage": "Curated note: test absolute, protocol-relative, and obfuscated targets in redirect parameters; HackTricks documents parser-confusion bypasses that defeat naive same-host checks when validating open redirect.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-open-redirect",
@@ -420,26 +624,42 @@
       "topic": "open redirect payload selection for fuzzing",
       "vulnerabilityClass": "open redirect",
       "technique": "url-bypass payload sets for active fuzzing",
-      "keywords": ["open redirect", "payload", "bypass", "protocol relative", "whitelist", "fuzzing"],
+      "keywords": [
+        "open redirect",
+        "payload",
+        "bypass",
+        "protocol relative",
+        "whitelist",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed open-redirect fuzzing with PayloadsAllTheThings bypass payloads (//host, @host, encoded variants) for redirect, return, and next parameters discovered during crawling.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-cors",
       "title": "HackTricks — CORS Bypass",
-      "url": "https://book.hacktricks.xyz/pentesting-web/cors-bypass",
+      "url": "https://hacktricks.wiki/en/pentesting-web/cors-bypass.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "cross-origin policy misconfiguration",
       "vulnerabilityClass": "cors misconfiguration",
       "technique": "origin reflection and null-origin trust probing",
-      "keywords": ["cors", "origin", "null origin", "credentials", "acao", "reflection"],
+      "keywords": [
+        "cors",
+        "origin",
+        "null origin",
+        "credentials",
+        "acao",
+        "reflection"
+      ],
       "passage": "Curated note: test arbitrary, null, and subdomain origins while watching Access-Control-Allow-Origin/Credentials; HackTricks details when reflected origins with credentials enable cross-origin data theft.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-cors",
@@ -450,41 +670,63 @@
       "topic": "cors misconfiguration test reference",
       "vulnerabilityClass": "cors misconfiguration",
       "technique": "origin-variation test cases for cors validation",
-      "keywords": ["cors", "payload", "origin", "subdomain", "null", "fuzzing"],
+      "keywords": [
+        "cors",
+        "payload",
+        "origin",
+        "subdomain",
+        "null",
+        "fuzzing"
+      ],
       "passage": "Curated note: use PayloadsAllTheThings CORS origin-variation cases (trusted-suffix, prefix, null, regex bypass) to evaluate ACAO reflection on credentialed cross-origin endpoints.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-auth-bypass",
       "title": "HackTricks — Login / Authentication Bypass",
-      "url": "https://book.hacktricks.xyz/pentesting-web/login-bypass",
+      "url": "https://hacktricks.wiki/en/pentesting-web/login-bypass.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "authentication control bypass",
       "vulnerabilityClass": "authentication bypass",
       "technique": "verb tampering, header override, and credential-logic probing",
-      "keywords": ["auth bypass", "verb tampering", "x-original-url", "x-forwarded-for", "403 bypass"],
+      "keywords": [
+        "auth bypass",
+        "verb tampering",
+        "x-original-url",
+        "x-forwarded-for",
+        "403 bypass"
+      ],
       "passage": "Curated note: combine HTTP verb tampering, override headers, and path normalization tricks to bypass auth or 403 gating; HackTricks catalogs header and routing bypasses to test before assuming access controls hold.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-mass-assignment",
       "title": "HackTricks — Mass Assignment",
-      "url": "https://book.hacktricks.xyz/pentesting-web/mass-assignment",
+      "url": "https://hacktricks.wiki/en/pentesting-web/mass-assignment.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "object binding over-permission",
       "vulnerabilityClass": "mass assignment",
       "technique": "hidden-field injection into create and update bodies",
-      "keywords": ["mass assignment", "autobinding", "role", "isadmin", "privilege escalation"],
+      "keywords": [
+        "mass assignment",
+        "autobinding",
+        "role",
+        "isadmin",
+        "privilege escalation"
+      ],
       "passage": "Curated note: inject privileged fields (role, isAdmin, owner) into create/update payloads and compare resulting state; HackTricks explains how framework auto-binding turns unguarded models into privilege escalation.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-mass-assignment",
@@ -495,26 +737,41 @@
       "topic": "mass assignment field reference",
       "vulnerabilityClass": "mass assignment",
       "technique": "privileged-field name sets for body fuzzing",
-      "keywords": ["mass assignment", "payload", "hidden field", "binding", "fuzzing"],
+      "keywords": [
+        "mass assignment",
+        "payload",
+        "hidden field",
+        "binding",
+        "fuzzing"
+      ],
       "passage": "Curated note: seed mass-assignment fuzzing with PayloadsAllTheThings privileged field names and nesting variants, injected into JSON and form bodies on create/update endpoints.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-request-smuggling",
       "title": "HackTricks — HTTP Request Smuggling",
-      "url": "https://book.hacktricks.xyz/pentesting-web/http-request-smuggling",
+      "url": "https://hacktricks.wiki/en/pentesting-web/http-request-smuggling.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "front-end/back-end desynchronization",
       "vulnerabilityClass": "http request smuggling",
       "technique": "cl.te and te.cl desync probing",
-      "keywords": ["request smuggling", "cl.te", "te.cl", "desync", "transfer-encoding", "content-length"],
+      "keywords": [
+        "request smuggling",
+        "cl.te",
+        "te.cl",
+        "desync",
+        "transfer-encoding",
+        "content-length"
+      ],
       "passage": "Curated note: test CL.TE and TE.CL desync with timing-based detection before exploitation; HackTricks details header obfuscation that bypasses front-end normalization when smuggling is suspected.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "payloadsallthethings-request-smuggling",
@@ -525,41 +782,64 @@
       "topic": "request smuggling technique reference",
       "vulnerabilityClass": "http request smuggling",
       "technique": "header-obfuscation desync test cases",
-      "keywords": ["request smuggling", "payload", "desync", "obfuscation", "chunked", "fuzzing"],
+      "keywords": [
+        "request smuggling",
+        "payload",
+        "desync",
+        "obfuscation",
+        "chunked",
+        "fuzzing"
+      ],
       "passage": "Curated note: use PayloadsAllTheThings request-smuggling cases (header obfuscation, chunk-extension tricks) to probe desync on targets fronted by proxies or load balancers.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-subdomain-takeover",
       "title": "HackTricks — Domain/Subdomain Takeover",
-      "url": "https://book.hacktricks.xyz/pentesting-web/domain-subdomain-takeover",
+      "url": "https://hacktricks.wiki/en/pentesting-web/domain-subdomain-takeover.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "dangling dns and unclaimed service detection",
       "vulnerabilityClass": "subdomain takeover",
       "technique": "dangling cname enumeration and fingerprint matching",
-      "keywords": ["subdomain takeover", "dangling cname", "fingerprint", "unclaimed", "dns"],
+      "keywords": [
+        "subdomain takeover",
+        "dangling cname",
+        "fingerprint",
+        "unclaimed",
+        "dns"
+      ],
       "passage": "Curated note: enumerate subdomains, resolve CNAMEs, and match service fingerprints for unclaimed providers; HackTricks lists provider-specific takeover signatures to confirm a dangling reference is claimable.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     },
     {
       "id": "hacktricks-info-disclosure",
       "title": "HackTricks — Web Vulnerabilities Methodology",
-      "url": "https://book.hacktricks.xyz/pentesting-web/web-vulnerabilities-methodology",
+      "url": "https://hacktricks.wiki/en/pentesting-web/web-vulnerabilities-methodology.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
       "topic": "sensitive path and source exposure discovery",
       "vulnerabilityClass": "information disclosure",
       "technique": "backup, vcs, and config file discovery via content brute-forcing",
-      "keywords": ["information disclosure", "backup", ".git", ".env", "source exposure", "gobuster"],
+      "keywords": [
+        "information disclosure",
+        "backup",
+        ".git",
+        ".env",
+        "source exposure",
+        "gobuster"
+      ],
       "passage": "Curated note: brute-force content for backup, VCS, and config artifacts (.git, .env, *.bak); HackTricks methodology prioritizes exposed source and secrets that convert low findings into high-impact disclosure.",
       "websiteImport": {
-        "enabled": false
-      }
+        "enabled": true
+      },
+      "fullText": true
     }
   ]
 }
