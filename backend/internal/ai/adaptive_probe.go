@@ -170,7 +170,7 @@ func (c *Client) DecideNextProbe(
 		{Role: "user", Content: string(userJSON)},
 	}
 
-	content, err := c.planningComplete(ctx, messages, 0.2, true)
+	content, err := c.fastComplete(ctx, messages, 0.2, true)
 	if err != nil || content == "" {
 		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
 	}

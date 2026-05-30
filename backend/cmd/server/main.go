@@ -45,6 +45,7 @@ func main() {
 	if err := secureurl.ValidateMany(map[string]string{
 		"AI_API_BASE":           os.Getenv("AI_API_BASE"),
 		"AI_CODING_API_BASE":    os.Getenv("AI_CODING_API_BASE"),
+		"AI_FAST_API_BASE":      os.Getenv("AI_FAST_API_BASE"),
 		"KNOWLEDGE_SERVICE_URL": os.Getenv("KNOWLEDGE_SERVICE_URL"),
 		"AGENT_LEARNER_URL":     os.Getenv("AGENT_LEARNER_URL"),
 		"ML_SERVICE_URL":        os.Getenv("ML_SERVICE_URL"),
@@ -168,6 +169,11 @@ func main() {
 		getenv("AI_CODING_API_BASE", ""),
 		getenv("AI_CODING_API_KEY", ""),
 		getenv("AI_CODING_MODEL", "codellama"),
+	)
+	aiClient.ConfigureFastModel(
+		getenv("AI_FAST_API_BASE", ""),
+		getenv("AI_FAST_API_KEY", ""),
+		getenv("AI_FAST_MODEL", ""),
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),

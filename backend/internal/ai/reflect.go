@@ -150,7 +150,7 @@ func (c *Client) Reflect(
 		{Role: "user", Content: string(userJSON)},
 	}
 
-	content, err := c.planningComplete(ctx, messages, 0.3, true)
+	content, err := c.fastComplete(ctx, messages, 0.3, true)
 	if err != nil || content == "" {
 		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
 	}
