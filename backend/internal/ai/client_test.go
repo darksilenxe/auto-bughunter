@@ -214,7 +214,7 @@ t.Setenv("AI_MAX_CONCURRENT_REQUESTS", "1")
 c := &Client{}
 
 // Take the only slot and never release it.
-release, err := c.acquire(context.Background())
+release, err := c.acquire(context.Background(), lanePrimary)
 if err != nil {
 t.Fatalf("first acquire: %v", err)
 }
@@ -222,7 +222,7 @@ defer release()
 
 ctx, cancel := context.WithCancel(context.Background())
 cancel()
-if _, err := c.acquire(ctx); err == nil {
+if _, err := c.acquire(ctx, lanePrimary); err == nil {
 t.Fatal("expected acquire to fail on cancelled context, got nil error")
 }
 }
@@ -243,7 +243,47 @@ t.Fatalf("aiRequestTimeout() = %v, want %v", got, defaultAIRequestTimeoutSeconds
 }
 }
 
-// TestCompleteWithHangingProviderTimesOut verifies that completeWith returns an
+// TestPerLaneSemaphoresAreIsolated verifies that a saturated coding lane does
+// not block calls on the fast lane (and vice versa). This is the central
+// invariant that lets a long-running planner call coexist with high-frequency
+// adaptive-probe / tool-call decisions.
+func TestPerLaneSemaphoresAreIsolated(t *testing.T) {
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS_PRIMARY", "1")
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS_CODING", "1")
+t.Setenv("AI_MAX_CONCURRENT_REQUESTS_FAST", "1")
+
+// Coding provider hangs forever (simulates a slow planner call). Fast
+// provider returns immediately. With a single shared semaphore the fast
+// call would block; with per-lane semaphores it must complete.
+codingProv := &countingProvider{hold: 5 * time.Second}
+fastProv := &countingProvider{hold: 0}
+c := &Client{
+Model:          "primary-model",
+CodingModel:    "coding-model",
+FastModel:      "fast-model",
+provider:       &countingProvider{hold: 0},
+codingProvider: codingProv,
+fastProvider:   fastProv,
+}
+
+// Saturate the coding lane.
+codingDone := make(chan struct{})
+go func() {
+_, _ = c.planningComplete(context.Background(), []Message{{Role: "user", Content: "plan"}}, 0, false)
+close(codingDone)
+}()
+
+// Give the coding goroutine a moment to acquire its lane slot.
+time.Sleep(50 * time.Millisecond)
+
+start := time.Now()
+if _, err := c.fastComplete(context.Background(), []Message{{Role: "user", Content: "fast"}}, 0, false); err != nil {
+t.Fatalf("fastComplete: %v", err)
+}
+if elapsed := time.Since(start); elapsed > time.Second {
+t.Fatalf("fastComplete took %v while coding lane was saturated; per-lane isolation appears broken", elapsed)
+}
+}
 // error (and releases its semaphore slot) when the provider blocks longer than
 // AI_REQUEST_TIMEOUT_SECONDS instead of hanging the caller indefinitely.
 func TestCompleteWithHangingProviderTimesOut(t *testing.T) {

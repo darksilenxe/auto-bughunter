@@ -32,6 +32,7 @@ Provide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporti
 const RECOMMENDED_LOCAL_DEFAULTS = [
   { label: "AI provider", value: "Local Ollama via AI_API_BASE=http://ollama:11434/v1", hint: "No external API key required for the default path." },
   { label: "Coding model", value: "AI_CODING_MODEL=codellama", hint: "Used for planning/orchestration when configured." },
+  { label: "Fast model", value: "AI_FAST_MODEL=llama3.2:3b", hint: "Small/fast Ollama model for adaptive-probe & tool-call decisions on a dedicated concurrency lane." },
   { label: "Tool sidecars", value: "USE_HTTP_TOOL_SERVICES=true", hint: "Avoids Docker socket requirements in the backend container." },
   { label: "Bootstrap auth", value: "Set BOOTSTRAP_ADMIN_API_KEY explicitly", hint: "The frontend no longer relies on a dev default key." },
 ];

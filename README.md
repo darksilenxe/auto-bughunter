@@ -32,7 +32,7 @@ RPC, Chromium DevTools, XSSMap Ollama, etc.). The validator runs in
   hatch for environments where another layer — e.g. a service mesh —
   already provides confidentiality).
 
-The env vars covered today: `AI_API_BASE`, `AI_CODING_API_BASE`,
+The env vars covered today: `AI_API_BASE`, `AI_CODING_API_BASE`, `AI_FAST_API_BASE`,
 `KNOWLEDGE_SERVICE_URL`, `AGENT_LEARNER_URL`, `ML_SERVICE_URL`,
 `NUCLEI_SERVICE_URL`, `ZAP_SERVICE_URL`, `BURP_API_URL`, `MSF_RPC_URL`,
 `CHROME_REMOTE_URL`, `XSSMAP_OLLAMA_URL`.
@@ -138,8 +138,17 @@ AI_CODING_MODEL=codellama
 # Optional overrides (defaults to AI_API_BASE / AI_API_KEY when omitted)
 AI_CODING_API_BASE=
 AI_CODING_API_KEY=
+# Optional small/fast model used for high-frequency low-stakes JSON calls
+# (adaptive-probe step decisions, tool-call planning, reflect, command-template
+# adaptation). Runs on its own concurrency lane so it cannot be starved by
+# long-running planner calls. Defaults below use the bundled Ollama sidecar.
+AI_FAST_MODEL=llama3.2:3b
+AI_FAST_API_BASE=http://ollama:11434/v1
+AI_FAST_API_KEY=
 # Optional second local Ollama model pre-pulled on startup
 OLLAMA_SECONDARY_MODEL=codellama
+# Optional small/fast Ollama model pre-pulled on startup (paired with AI_FAST_MODEL above)
+OLLAMA_FAST_MODEL=llama3.2:3b
 ```
 
 4. Open:
@@ -919,6 +928,7 @@ candidate-minus-baseline improvement.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
 - Set `AI_CODING_MODEL` to route AI orchestration/planning calls to a larger coding-focused model while keeping summaries on `AI_MODEL`.
+- Set `AI_FAST_MODEL` to route high-frequency low-stakes decisions (adaptive-probe step, tool-call planning, reflect, command-template adaptation) to a small/fast model on its own concurrency lane so the planner cannot starve them. With the bundled Ollama sidecar this defaults to `llama3.2:3b` (pre-pulled via `OLLAMA_FAST_MODEL`); point `AI_FAST_API_BASE` / `AI_FAST_API_KEY` elsewhere to use a hosted small model instead. Per-lane caps are tunable via `AI_MAX_CONCURRENT_REQUESTS_PRIMARY`, `AI_MAX_CONCURRENT_REQUESTS_CODING`, and `AI_MAX_CONCURRENT_REQUESTS_FAST` (all fall back to the legacy global `AI_MAX_CONCURRENT_REQUESTS`).
 - ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.

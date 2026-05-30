@@ -27,36 +27,65 @@ type Client struct {
 	CodingBaseURL string
 	CodingAPIKey  string
 	CodingModel   string
-	HTTP          *http.Client
+	// Optional small/fast model for high-frequency low-stakes JSON calls
+	// (adaptive probe step decisions, tool-call planning, reflect,
+	// command-template adaptation). Falls back to coding then primary when
+	// unset so existing deployments behave unchanged.
+	FastBaseURL string
+	FastAPIKey  string
+	FastModel   string
+	HTTP        *http.Client
 
-	// provider and codingProvider are the resolved LLM adapters.  They are
-	// initialised by NewClient and updated by ConfigureCodingModel.  When nil,
-	// the legacy direct-HTTP path (OpenAI-compatible) is used as a fallback so
-	// existing deployments that construct Client via field assignment keep working.
+	// provider, codingProvider and fastProvider are the resolved LLM adapters.
+	// They are initialised by NewClient and updated by ConfigureCodingModel /
+	// ConfigureFastModel. When nil, the legacy direct-HTTP path
+	// (OpenAI-compatible) is used as a fallback so existing deployments that
+	// construct Client via field assignment keep working.
 	provider       Provider
 	codingProvider Provider
+	fastProvider   Provider
 
 	// knowledge is an optional retriever that grounds AI decisions (probe
 	// selection, tool/command generation) in curated HackTricks /
 	// PayloadsAllTheThings guidance. When nil, prompts are built without it.
 	knowledge KnowledgeRetriever
 
-	// sem bounds the number of outbound LLM requests that may be in flight
-	// simultaneously across the whole process. Every AI-backed agent and the
-	// post-scan enrichment phase share a single *Client, so without this gate
-	// many agents (and concurrent scans) fan out requests to the same LLM
-	// backend at once, overloading it and creating a throughput bottleneck.
-	// The semaphore is created lazily by semOnce so Clients constructed via
+	// Per-lane concurrency semaphores. Each LLM "lane" (primary / coding /
+	// fast) gets its own bounded channel so a long-running planner call on
+	// the coding lane cannot starve the high-frequency adaptive-probe and
+	// tool-call decisions that run on the fast lane (and vice versa). The
+	// channels are created lazily on first use so Clients constructed via
 	// direct field assignment (the legacy path) are still limited.
-	semOnce sync.Once
-	sem     chan struct{}
+	semOnce     sync.Once
+	semPrimary  chan struct{}
+	semCoding   chan struct{}
+	semFast     chan struct{}
 }
+
+// aiLane selects which per-lane concurrency semaphore an outbound LLM request
+// is gated by. Each lane corresponds to a logical role (summary/narrative,
+// orchestration planning, high-frequency decisions); the same provider may
+// back multiple lanes when only one model is configured.
+type aiLane int
+
+const (
+	lanePrimary aiLane = iota
+	laneCoding
+	laneFast
+)
 
 // defaultMaxConcurrentAIRequests bounds simultaneous outbound LLM requests when
 // AI_MAX_CONCURRENT_REQUESTS is unset or invalid. A small default keeps a single
 // LLM backend (local Ollama, rate-limited API, etc.) from being saturated by the
 // many AI-backed agents that run during a scan.
 const defaultMaxConcurrentAIRequests = 2
+
+// defaultMaxConcurrentFastRequests bounds simultaneous outbound LLM requests on
+// the "fast" lane (adaptive-probe step decisions, tool-call planning, reflect,
+// command-template adaptation). These calls are short and high-frequency, so
+// the fast lane gets a larger default than the primary/coding lanes to keep the
+// scan responsive without overloading a heavyweight backend.
+const defaultMaxConcurrentFastRequests = 4
 
 // defaultAIRequestTimeoutSeconds is the per-request timeout used when
 // AI_REQUEST_TIMEOUT_SECONDS is unset or invalid. 120 s accommodates local
@@ -66,6 +95,7 @@ const defaultAIRequestTimeoutSeconds = 120
 
 // aiConcurrencyLimit resolves the maximum number of concurrent LLM requests from
 // AI_MAX_CONCURRENT_REQUESTS, falling back to defaultMaxConcurrentAIRequests.
+// Retained for backwards compatibility; new code should prefer aiLaneLimit.
 func aiConcurrencyLimit() int {
 	if v := strings.TrimSpace(os.Getenv("AI_MAX_CONCURRENT_REQUESTS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -73,6 +103,41 @@ func aiConcurrencyLimit() int {
 		}
 	}
 	return defaultMaxConcurrentAIRequests
+}
+
+// aiLaneLimit resolves the per-lane concurrency limit.  Each lane first
+// consults its own env var (AI_MAX_CONCURRENT_REQUESTS_PRIMARY / _CODING /
+// _FAST); if unset it falls back to the global AI_MAX_CONCURRENT_REQUESTS and
+// finally to the per-lane default. Sizing the lanes independently is what
+// stops a long-running planner call on the coding lane from starving the
+// high-frequency decisions on the fast lane (and vice versa).
+func aiLaneLimit(lane aiLane) int {
+	var envName string
+	def := defaultMaxConcurrentAIRequests
+	switch lane {
+	case lanePrimary:
+		envName = "AI_MAX_CONCURRENT_REQUESTS_PRIMARY"
+	case laneCoding:
+		envName = "AI_MAX_CONCURRENT_REQUESTS_CODING"
+	case laneFast:
+		envName = "AI_MAX_CONCURRENT_REQUESTS_FAST"
+		def = defaultMaxConcurrentFastRequests
+	default:
+		envName = "AI_MAX_CONCURRENT_REQUESTS_PRIMARY"
+	}
+	if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	// Fall back to the legacy global control for upgrades that have only set
+	// AI_MAX_CONCURRENT_REQUESTS so far.
+	if v := strings.TrimSpace(os.Getenv("AI_MAX_CONCURRENT_REQUESTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 // aiRequestTimeout resolves the per-request HTTP timeout for outbound LLM calls
@@ -89,20 +154,32 @@ func aiRequestTimeout() time.Duration {
 	return defaultAIRequestTimeoutSeconds * time.Second
 }
 
-// acquire blocks until a concurrency slot is free (or ctx is cancelled) and
-// returns a release func that frees the slot. It is safe to call on a Client
-// built by NewClient or by direct field assignment; the semaphore is created on
-// first use. The returned release func is always non-nil and safe to defer.
-func (c *Client) acquire(ctx context.Context) (func(), error) {
+// acquire blocks until a concurrency slot on the given lane is free (or ctx is
+// cancelled) and returns a release func that frees the slot. It is safe to
+// call on a Client built by NewClient or by direct field assignment; the
+// per-lane semaphores are created on first use. The returned release func is
+// always non-nil and safe to defer.
+func (c *Client) acquire(ctx context.Context, lane aiLane) (func(), error) {
 	if c == nil {
 		return func() {}, nil
 	}
 	c.semOnce.Do(func() {
-		c.sem = make(chan struct{}, aiConcurrencyLimit())
+		c.semPrimary = make(chan struct{}, aiLaneLimit(lanePrimary))
+		c.semCoding = make(chan struct{}, aiLaneLimit(laneCoding))
+		c.semFast = make(chan struct{}, aiLaneLimit(laneFast))
 	})
+	var ch chan struct{}
+	switch lane {
+	case laneCoding:
+		ch = c.semCoding
+	case laneFast:
+		ch = c.semFast
+	default:
+		ch = c.semPrimary
+	}
 	select {
-	case c.sem <- struct{}{}:
-		return func() { <-c.sem }, nil
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
 	case <-ctx.Done():
 		return func() {}, ctx.Err()
 	}
@@ -198,16 +275,53 @@ func (c *Client) ConfigureCodingModel(baseURL, apiKey, model string) {
 	c.codingProvider = NewProvider(providerName, baseURL, apiKey, c.HTTP)
 }
 
-// completeWith delegates an LLM completion to the given provider, stripping
-// any markdown code fence from the response so callers receive clean text.
-func (c *Client) completeWith(ctx context.Context, p Provider, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
+// ConfigureFastModel attaches a small/fast LLM used for high-frequency,
+// low-stakes JSON calls (adaptive-probe step decisions, tool-call planning,
+// reflect, command-template adaptation). Calls on this lane go through a
+// dedicated concurrency semaphore so they cannot be starved by long-running
+// planner calls on the coding lane. When the fast model is unset, those calls
+// fall back to the coding lane and then to the primary lane.
+func (c *Client) ConfigureFastModel(baseURL, apiKey, model string) {
+	if c == nil {
+		return
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		c.FastBaseURL = ""
+		c.FastAPIKey = ""
+		c.FastModel = ""
+		c.fastProvider = nil
+		return
+	}
+
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = c.BaseURL
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		apiKey = c.APIKey
+	}
+
+	c.FastBaseURL = strings.TrimRight(baseURL, "/")
+	c.FastAPIKey = apiKey
+	c.FastModel = model
+
+	providerName := DetectProvider(baseURL, apiKey)
+	c.fastProvider = NewProvider(providerName, baseURL, apiKey, c.HTTP)
+}
+
+// completeWith delegates an LLM completion to the given provider on the given
+// concurrency lane, stripping any markdown code fence from the response so
+// callers receive clean text.
+func (c *Client) completeWith(ctx context.Context, lane aiLane, p Provider, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
 	if p == nil {
 		// Fallback: use the legacy OpenAI-compatible path via c.HTTP directly.
 		// legacyComplete acquires its own concurrency slot, so we must not
 		// acquire here too (that would double-count and could deadlock).
-		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, model, messages, temperature, jsonMode)
+		return c.legacyComplete(ctx, lane, c.BaseURL, c.APIKey, model, messages, temperature, jsonMode)
 	}
-	release, err := c.acquire(ctx)
+	release, err := c.acquire(ctx, lane)
 	if err != nil {
 		return "", err
 	}
@@ -227,17 +341,18 @@ func (c *Client) completeWith(ctx context.Context, p Provider, model string, mes
 	return stripCodeFence(text), nil
 }
 
-// primaryComplete runs a completion using the primary provider/model.
+// primaryComplete runs a completion using the primary provider/model on the
+// primary concurrency lane.
 func (c *Client) primaryComplete(ctx context.Context, messages []Message, temperature float64, jsonMode bool) (string, error) {
 	p := c.provider
 	if p == nil {
-		return c.legacyComplete(ctx, c.BaseURL, c.APIKey, c.Model, messages, temperature, jsonMode)
+		return c.legacyComplete(ctx, lanePrimary, c.BaseURL, c.APIKey, c.Model, messages, temperature, jsonMode)
 	}
-	return c.completeWith(ctx, p, c.Model, messages, temperature, jsonMode)
+	return c.completeWith(ctx, lanePrimary, p, c.Model, messages, temperature, jsonMode)
 }
 
 // planningComplete runs a completion using the coding/planning provider (if
-// configured) or falls back to the primary provider.
+// configured) on the coding lane, or falls back to the primary provider/lane.
 func (c *Client) planningComplete(ctx context.Context, messages []Message, temperature float64, jsonMode bool) (string, error) {
 	if strings.TrimSpace(c.CodingModel) != "" {
 		p := c.codingProvider
@@ -245,17 +360,60 @@ func (c *Client) planningComplete(ctx context.Context, messages []Message, tempe
 			p = c.provider
 		}
 		if p != nil {
-			return c.completeWith(ctx, p, c.CodingModel, messages, temperature, jsonMode)
+			return c.completeWith(ctx, laneCoding, p, c.CodingModel, messages, temperature, jsonMode)
 		}
 		bURL, apiKey, model := c.planningProvider()
-		return c.legacyComplete(ctx, bURL, apiKey, model, messages, temperature, jsonMode)
+		return c.legacyComplete(ctx, laneCoding, bURL, apiKey, model, messages, temperature, jsonMode)
 	}
 	return c.primaryComplete(ctx, messages, temperature, jsonMode)
 }
 
+// fastComplete runs a completion on the dedicated "fast" lane intended for
+// high-frequency, low-stakes JSON calls (adaptive-probe step decisions,
+// tool-call planning, reflect, command-template adaptation). When a fast
+// provider is configured it is used; otherwise the call falls back to the
+// coding provider/lane and finally to the primary provider/lane. Routing
+// through a separate semaphore prevents long-running planner calls from
+// starving these short, frequent decisions (and vice versa).
+func (c *Client) fastComplete(ctx context.Context, messages []Message, temperature float64, jsonMode bool) (string, error) {
+	if strings.TrimSpace(c.FastModel) != "" {
+		p := c.fastProvider
+		if p == nil {
+			if c.codingProvider != nil {
+				p = c.codingProvider
+			} else {
+				p = c.provider
+			}
+		}
+		if p != nil {
+			return c.completeWith(ctx, laneFast, p, c.FastModel, messages, temperature, jsonMode)
+		}
+		bURL, apiKey, model := c.fastProviderConfig()
+		return c.legacyComplete(ctx, laneFast, bURL, apiKey, model, messages, temperature, jsonMode)
+	}
+	// No fast model configured. Reuse the coding lane (or primary lane via
+	// planningComplete's fallback) but still gate it on the fast semaphore so
+	// the planner cannot starve these calls when both share a backend.
+	if strings.TrimSpace(c.CodingModel) != "" {
+		p := c.codingProvider
+		if p == nil {
+			p = c.provider
+		}
+		if p != nil {
+			return c.completeWith(ctx, laneFast, p, c.CodingModel, messages, temperature, jsonMode)
+		}
+		bURL, apiKey, model := c.planningProvider()
+		return c.legacyComplete(ctx, laneFast, bURL, apiKey, model, messages, temperature, jsonMode)
+	}
+	if c.provider != nil {
+		return c.completeWith(ctx, laneFast, c.provider, c.Model, messages, temperature, jsonMode)
+	}
+	return c.legacyComplete(ctx, laneFast, c.BaseURL, c.APIKey, c.Model, messages, temperature, jsonMode)
+}
+
 // legacyComplete is the original direct-HTTP OpenAI-compatible implementation,
 // retained as a fallback for Clients constructed without using NewClient().
-func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
+func (c *Client) legacyComplete(ctx context.Context, lane aiLane, baseURL, apiKey, model string, messages []Message, temperature float64, jsonMode bool) (string, error) {
 	msgs := make([]map[string]string, 0, len(messages))
 	for _, m := range messages {
 		msgs = append(msgs, map[string]string{"role": m.Role, "content": m.Content})
@@ -280,7 +438,7 @@ func (c *Client) legacyComplete(ctx context.Context, baseURL, apiKey, model stri
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	release, err := c.acquire(ctx)
+	release, err := c.acquire(ctx, lane)
 	if err != nil {
 		return "", err
 	}
@@ -719,6 +877,16 @@ func (c *Client) planningProvider() (baseURL, apiKey, model string) {
 	return baseURL, apiKey, model
 }
 
+// fastProviderConfig returns the (baseURL, apiKey, model) tuple to use for
+// fast-lane direct-HTTP calls, falling back to the coding then primary
+// configuration when the fast model is not set up.
+func (c *Client) fastProviderConfig() (baseURL, apiKey, model string) {
+	if strings.TrimSpace(c.FastModel) != "" && shouldCallProviderFor(c.FastBaseURL, c.FastAPIKey) {
+		return c.FastBaseURL, c.FastAPIKey, c.FastModel
+	}
+	return c.planningProvider()
+}
+
 func shouldCallProviderFor(baseURL, apiKey string) bool {
 	// Keep OpenAI default behavior: require an API key.
 	const defaultOpenAIBase = "https://api.openai.com/v1"
@@ -895,7 +1063,7 @@ func (c *Client) PlanToolCall(ctx context.Context, req ToolCallRequest) *ToolCal
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: string(userJSON)},
 	}
-	content, err := c.planningComplete(ctx, messages, 0.1, true)
+	content, err := c.fastComplete(ctx, messages, 0.1, true)
 	if err != nil || content == "" {
 		return nil
 	}
@@ -1072,7 +1240,7 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: string(userJSON)},
 	}
-	content, err := c.planningComplete(ctx, messages, 0.1, true)
+	content, err := c.fastComplete(ctx, messages, 0.1, true)
 	if err != nil || content == "" {
 		return nil
 	}

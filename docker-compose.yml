@@ -239,7 +239,8 @@ services:
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-dolphin-mistral}
       OLLAMA_SECONDARY_MODEL: ${OLLAMA_SECONDARY_MODEL:-codellama}
-    entrypoint: /bin/sh -c "sleep 5 && primary=$${OLLAMA_MODEL:-dolphin-mistral} && secondary=$${OLLAMA_SECONDARY_MODEL:-codellama} && if [ -n \"$$primary\" ]; then ollama pull \"$$primary\"; fi && if [ -n \"$$secondary\" ] && [ \"$$secondary\" != \"$$primary\" ]; then ollama pull \"$$secondary\"; fi"
+      OLLAMA_FAST_MODEL: ${OLLAMA_FAST_MODEL:-llama3.2:3b}
+    entrypoint: /bin/sh -c "sleep 5 && primary=$${OLLAMA_MODEL:-dolphin-mistral} && secondary=$${OLLAMA_SECONDARY_MODEL:-codellama} && fast=$${OLLAMA_FAST_MODEL:-llama3.2:3b} && if [ -n \"$$primary\" ]; then ollama pull \"$$primary\"; fi && if [ -n \"$$secondary\" ] && [ \"$$secondary\" != \"$$primary\" ]; then ollama pull \"$$secondary\"; fi && if [ -n \"$$fast\" ] && [ \"$$fast\" != \"$$primary\" ] && [ \"$$fast\" != \"$$secondary\" ]; then ollama pull \"$$fast\"; fi"
     volumes:
       - ollama_data:/root/.ollama
 
