@@ -13,9 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/metrics"
@@ -27,11 +29,17 @@ import (
 	"auto-bughunter/backend/internal/toolclient"
 	"auto-bughunter/backend/internal/wordlist"
 	"auto-bughunter/backend/internal/wpscan"
+
 	wappalyzer "github.com/projectdiscovery/wappalyzergo"
 )
 
 // integrationState carries context discovered in earlier pipeline phases to later ones.
 type integrationState struct {
+	// mu guards the discovery registry fields below. Integration tools run
+	// sequentially today, but the mutex keeps the accumulation safe if any
+	// future phase parallelises tool execution.
+	mu sync.Mutex
+
 	// DiscoveredHosts holds hostnames found by subfinder. They are used as additional
 	// targets by httpx, naabu, and nuclei in subsequent phases.
 	DiscoveredHosts  []string
@@ -39,6 +47,146 @@ type integrationState struct {
 	TargetsAttempted int
 	TargetsSkipped   int
 	SkippedReasons   map[string]int
+
+	// DiscoveredEndpoints holds in-scope absolute URLs surfaced by content- and
+	// route-discovery tools (ffuf, gobuster, kiterunner, gau, linkfinder,
+	// katana). Deeper validation phases (sqlmap, commix, nuclei, xssmap) reuse
+	// them as additional targets so a path discovered by one tool becomes an
+	// active test target for the next.
+	DiscoveredEndpoints []string
+
+	// DiscoveredParams holds hidden HTTP parameter names surfaced by Arjun and
+	// by ffuf parameter fuzzing. They are appended to validation targets so
+	// injection tools have concrete inputs to exercise.
+	DiscoveredParams []string
+}
+
+// maxValidationTargets caps how many discovered endpoints (plus the base
+// target) are handed to the heavier active-validation tools (sqlmap, commix,
+// nuclei, xssmap). It bounds scan time so a large discovery surface cannot blow
+// the per-scan budget.
+const maxValidationTargets = 6
+
+// maxInjectionParams caps how many discovered parameter names are appended to a
+// single validation URL when building injection points.
+const maxInjectionParams = 8
+
+// addEndpoints records in-scope absolute URLs in the discovery registry,
+// de-duplicating against what is already present. nil-receiver safe.
+func (st *integrationState) addEndpoints(urls ...string) {
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	seen := make(map[string]struct{}, len(st.DiscoveredEndpoints))
+	for _, e := range st.DiscoveredEndpoints {
+		seen[e] = struct{}{}
+	}
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		st.DiscoveredEndpoints = append(st.DiscoveredEndpoints, u)
+	}
+}
+
+// addParams records discovered HTTP parameter names in the registry,
+// de-duplicating against what is already present. nil-receiver safe.
+func (st *integrationState) addParams(names ...string) {
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	seen := make(map[string]struct{}, len(st.DiscoveredParams))
+	for _, p := range st.DiscoveredParams {
+		seen[p] = struct{}{}
+	}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		st.DiscoveredParams = append(st.DiscoveredParams, n)
+	}
+}
+
+// validationTargets returns the base target plus discovered endpoints (deduped
+// and bounded by maxValidationTargets) for tools that crawl/probe a URL on
+// their own (nuclei, xssmap). nil-receiver safe.
+func (st *integrationState) validationTargets(base string) []string {
+	targets := []string{base}
+	seen := map[string]struct{}{base: {}}
+	if st != nil {
+		st.mu.Lock()
+		for _, e := range st.DiscoveredEndpoints {
+			if len(targets) >= maxValidationTargets {
+				break
+			}
+			if _, ok := seen[e]; ok {
+				continue
+			}
+			seen[e] = struct{}{}
+			targets = append(targets, e)
+		}
+		st.mu.Unlock()
+	}
+	return targets
+}
+
+// injectionTargets returns validation targets with discovered parameters
+// attached to any URL that lacks a query string, giving injection tools
+// (sqlmap, commix) concrete inputs to test. nil-receiver safe.
+func (st *integrationState) injectionTargets(base string) []string {
+	targets := st.validationTargets(base)
+	if st == nil {
+		return targets
+	}
+	st.mu.Lock()
+	params := append([]string(nil), st.DiscoveredParams...)
+	st.mu.Unlock()
+	if len(params) == 0 {
+		return targets
+	}
+	params = limitStrings(params, maxInjectionParams)
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, withQueryParams(t, params))
+	}
+	return out
+}
+
+// withQueryParams appends the given parameter names (each set to a benign probe
+// value) to rawURL when it has no existing query string. URLs that already
+// carry query parameters are returned unchanged so their real inputs are
+// preserved as the injection point.
+func withQueryParams(rawURL string, params []string) string {
+	if len(params) == 0 {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	if u.RawQuery != "" {
+		return rawURL
+	}
+	q := u.Query()
+	for _, p := range params {
+		q.Set(p, "1")
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // cooldownAfterNuclei is a brief pause inserted after Nuclei finishes to let
@@ -160,43 +308,43 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 		emitCmd("katana", fmt.Sprintf("-u %s -depth %d", input.Target, katanaDepth))
 		findings = append(findings, s.runInstrumentedTool(ctx, "katana", func() []model.Finding {
-			return s.runKatana(ctx, input.Target, katanaDepth)
+			return s.runKatana(ctx, input.Target, katanaDepth, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseFFUFIntegration {
 		emitCmd("ffuf", "-u "+input.Target+"/FUZZ")
 		findings = append(findings, s.runInstrumentedTool(ctx, "ffuf", func() []model.Finding {
-			return s.runFFUF(ctx, input.Target, input.Scope)
+			return s.runFFUF(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseGobusterIntegration {
 		emitCmd("gobuster", "dir -u "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
-			return s.runGobuster(ctx, input.Target, input.Scope)
+			return s.runGobuster(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseKiterunnerIntegration {
 		emitCmd("kiterunner", "scan "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "kiterunner", func() []model.Finding {
-			return s.runKiterunner(ctx, input.Target, input.Scope)
+			return s.runKiterunner(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseGauIntegration {
 		emitCmd("gau", hostFromTarget(input.Target))
 		findings = append(findings, s.runInstrumentedTool(ctx, "gau", func() []model.Finding {
-			return s.runGau(ctx, input.Target, input.Scope)
+			return s.runGau(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseArjunIntegration {
 		emitCmd("arjun", "-u "+input.Target)
 		findings = append(findings, s.runInstrumentedTool(ctx, "arjun", func() []model.Finding {
-			return s.runArjun(ctx, input.Target, input.Scope)
+			return s.runArjun(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseLinkFinderIntegration {
 		emitCmd("linkfinder", "-i "+input.Target+" -o cli")
 		findings = append(findings, s.runInstrumentedTool(ctx, "linkfinder", func() []model.Finding {
-			return s.runLinkFinder(ctx, input.Target, input.Scope)
+			return s.runLinkFinder(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 
@@ -314,10 +462,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
 			})
 		} else {
-			emitCmd("sqlmap", "-u "+input.Target)
-			findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
-				return s.runSQLMap(ctx, input.Target, input.AuthProfile)
-			})...)
+			for _, vt := range state.injectionTargets(input.Target) {
+				vt := vt
+				emitCmd("sqlmap", "-u "+vt)
+				findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+					return s.runSQLMap(ctx, vt, input.AuthProfile)
+				})...)
+			}
 		}
 	} else if s.cfg.EnableSQLMap {
 		if !s.cfg.AllowDestructive {
@@ -341,9 +492,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the SQLMap findings below for SQL injection vulnerabilities.",
 			})
-			findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
-				return s.runSQLMap(ctx, input.Target, input.AuthProfile)
-			})...)
+			for _, vt := range state.injectionTargets(input.Target) {
+				vt := vt
+				emitCmd("sqlmap", "-u "+vt)
+				findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+					return s.runSQLMap(ctx, vt, input.AuthProfile)
+				})...)
+			}
 		}
 	}
 
@@ -361,10 +516,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active command-injection testing.",
 			})
 		} else {
-			emitCmd("commix", "--url="+input.Target)
-			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
-				return s.runCommix(ctx, input.Target, input.AuthProfile)
-			})...)
+			for _, vt := range state.injectionTargets(input.Target) {
+				vt := vt
+				emitCmd("commix", "--url="+vt)
+				findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+					return s.runCommix(ctx, vt, input.AuthProfile)
+				})...)
+			}
 		}
 	} else if s.cfg.EnableCommix {
 		if !s.cfg.AllowDestructive {
@@ -388,9 +546,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Evidence:       "target=" + input.Target,
 				Recommendation: "Review the commix findings below for OS command injection vulnerabilities.",
 			})
-			findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
-				return s.runCommix(ctx, input.Target, input.AuthProfile)
-			})...)
+			for _, vt := range state.injectionTargets(input.Target) {
+				vt := vt
+				emitCmd("commix", "--url="+vt)
+				findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+					return s.runCommix(ctx, vt, input.AuthProfile)
+				})...)
+			}
 		}
 	}
 
@@ -402,6 +564,19 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		state.TargetsSkipped += skipped
 		if skipped > 0 {
 			state.SkippedReasons["out_of_scope"] += skipped
+		}
+		// Also probe the concrete endpoints discovered during Phase 4 so Nuclei
+		// templates run against the surfaced attack surface, not just hosts.
+		seenNuclei := map[string]struct{}{}
+		for _, t := range targets {
+			seenNuclei[t] = struct{}{}
+		}
+		for _, e := range state.validationTargets(input.Target) {
+			if _, ok := seenNuclei[e]; ok {
+				continue
+			}
+			seenNuclei[e] = struct{}{}
+			targets = append(targets, e)
 		}
 		for _, t := range targets {
 			emitCmd("nuclei", "-u "+t)
@@ -474,10 +649,13 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits active XSS testing.",
 			})
 		} else {
-			emitCmd("xssmap", "scan --url "+input.Target)
-			findings = append(findings, s.runInstrumentedTool(ctx, "xssmap", func() []model.Finding {
-				return s.runXSSMap(ctx, input.Target)
-			})...)
+			for _, vt := range state.injectionTargets(input.Target) {
+				vt := vt
+				emitCmd("xssmap", "scan --url "+vt)
+				findings = append(findings, s.runInstrumentedTool(ctx, "xssmap", func() []model.Finding {
+					return s.runXSSMap(ctx, vt)
+				})...)
+			}
 		}
 	}
 	findings = append(findings, buildIntegrationCoverageFinding(state))
@@ -811,10 +989,58 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 	return buildZAPBaselineFinding(stdout.String(), stderr.String(), exitCode, "")
 }
 
+// zapMarkerCountRe matches a ZAP baseline marker label immediately followed by
+// a numeric count, e.g. "FAIL-NEW: 0" or "WARN-NEW: 4". Per-alert detail lines
+// (e.g. "WARN-NEW: Cross-Domain ... [10017] x 3") are followed by descriptive
+// text rather than a bare number, so they never match this pattern.
+var zapMarkerCountRe = regexp.MustCompile(`(?i)(FAIL-NEW|FAIL-INPROG|WARN-NEW|WARN-INPROG):\s*(\d+)`)
+
+// countZAPBaselineMarkers parses zap-baseline.py output to count actual FAIL and
+// WARN markers. zap-baseline.py prints a summary footer line of the form:
+//
+//	FAIL-NEW: 0  FAIL-INPROG: 0  WARN-NEW: 4  WARN-INPROG: 0  INFO: 0  IGNORE: 0  PASS: 50
+//
+// where each label is followed by a numeric count. Naively counting the
+// substrings "FAIL-"/"WARN-" is wrong because those label headers are always
+// present in the footer (even with zero findings), which caused a false
+// High-severity "fail markers" finding on every run. We instead read the
+// numeric counts from the summary footer. When the footer is missing (e.g.
+// truncated/aborted output) we fall back to counting per-alert marker lines.
+func countZAPBaselineMarkers(outText string) (fails, warns int) {
+	for _, line := range strings.Split(outText, "\n") {
+		upper := strings.ToUpper(line)
+		// The summary footer uniquely lists every marker bucket including PASS.
+		if strings.Contains(upper, "FAIL-NEW:") && strings.Contains(upper, "PASS:") {
+			for _, m := range zapMarkerCountRe.FindAllStringSubmatch(line, -1) {
+				n, err := strconv.Atoi(m[2])
+				if err != nil {
+					continue
+				}
+				switch strings.ToUpper(m[1]) {
+				case "FAIL-NEW", "FAIL-INPROG":
+					fails += n
+				case "WARN-NEW", "WARN-INPROG":
+					warns += n
+				}
+			}
+			return fails, warns
+		}
+	}
+	// Fallback: no summary footer present. Count per-alert marker lines directly.
+	for _, line := range strings.Split(outText, "\n") {
+		trimmed := strings.TrimSpace(strings.ToUpper(line))
+		switch {
+		case strings.HasPrefix(trimmed, "FAIL-NEW:"), strings.HasPrefix(trimmed, "FAIL-INPROG:"):
+			fails++
+		case strings.HasPrefix(trimmed, "WARN-NEW:"), strings.HasPrefix(trimmed, "WARN-INPROG:"):
+			warns++
+		}
+	}
+	return fails, warns
+}
+
 func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuffix string) []model.Finding {
-	upperOut := strings.ToUpper(outText)
-	warns := strings.Count(upperOut, "WARN-")
-	fails := strings.Count(upperOut, "FAIL-")
+	fails, warns := countZAPBaselineMarkers(outText)
 	if exitCode != 0 && warns == 0 && fails == 0 && strings.TrimSpace(outText) == "" {
 		return []model.Finding{{
 			ID:             "zap-baseline-execution-error",
@@ -1878,7 +2104,7 @@ func (e *ctHTTPError) Error() string {
 	return "crt.sh unexpected status: " + strconv.Itoa(e.status)
 }
 
-func (s *Service) runKatana(ctx context.Context, target string, depth int) []model.Finding {
+func (s *Service) runKatana(ctx context.Context, target string, depth int, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableKatana {
 		return []model.Finding{{
 			ID:             "katana-disabled",
@@ -1928,6 +2154,23 @@ func (s *Service) runKatana(ctx context.Context, target string, depth int) []mod
 	}
 
 	endpoints := countNonEmptyLines(stdout.String())
+	// Capture the crawled URLs (one per line in -silent mode) into the shared
+	// discovery registry so downstream validation tools can reuse them.
+	crawled := make([]string, 0, endpoints)
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			continue
+		}
+		if !scope.IsURLInScope(line, scanScope) {
+			continue
+		}
+		crawled = append(crawled, line)
+	}
+	state.addEndpoints(crawled...)
 	severity := model.SeverityInfo
 	title := "Katana found no crawlable endpoints"
 	if endpoints > 0 {
@@ -2302,7 +2545,7 @@ func (s *Service) runSQLMap(ctx context.Context, target string, authProfile mode
 	return result.Findings
 }
 
-func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableFFUF {
 		return []model.Finding{{
 			ID:             "ffuf-disabled",
@@ -2359,8 +2602,26 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 
 	paths := parsePathHits(outb.String(), target, scanScope)
 	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+
+	// Record discovered paths as absolute, in-scope endpoint URLs so the deeper
+	// validation phases (sqlmap, commix, nuclei, xssmap) can reuse them as
+	// additional targets instead of only probing the base URL.
+	baseTrim := strings.TrimRight(target, "/")
+	endpointURLs := make([]string, 0, len(paths))
+	for _, p := range paths {
+		endpointURLs = append(endpointURLs, baseTrim+p)
+	}
+	state.addEndpoints(endpointURLs...)
+
+	// Second pass: fuzz hidden query-string parameters so FFUF covers parameter
+	// inputs, not just paths. Discovered parameter names are recorded so they
+	// become injection points for sqlmap/commix downstream.
+	params := s.ffufFuzzParameters(ctx, target, scanScope)
+	state.addParams(params...)
+
+	findings := make([]model.Finding, 0, 2)
 	if len(paths) == 0 {
-		return []model.Finding{{
+		findings = append(findings, model.Finding{
 			ID:             "ffuf-no-paths",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
@@ -2368,22 +2629,133 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 			Description:    "FFUF completed but did not report in-scope matches from the configured wordlist.",
 			Evidence:       "target=" + target,
 			Recommendation: "Try broader wordlists, different match filters, or authenticated profiles.",
-		}}
+		})
+	} else {
+		findings = append(findings, model.Finding{
+			ID:             "ffuf-path-discovery",
+			Category:       "discovery",
+			Severity:       model.SeverityInfo,
+			Title:          "FFUF discovered candidate paths",
+			Description:    "FFUF discovered in-scope endpoint candidates using directory fuzzing.",
+			Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+			Recommendation: "Review discovered paths for authentication, authorization, and input-validation flaws.",
+			Sources:        []string{"ffuf"},
+			Confidence:     0.8,
+		})
 	}
-	return []model.Finding{{
-		ID:             "ffuf-path-discovery",
-		Category:       "discovery",
-		Severity:       model.SeverityInfo,
-		Title:          "FFUF discovered candidate paths",
-		Description:    "FFUF discovered in-scope endpoint candidates using directory fuzzing.",
-		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
-		Recommendation: "Review discovered paths for authentication, authorization, and input-validation flaws.",
-		Sources:        []string{"ffuf"},
-		Confidence:     0.8,
-	}}
+	if len(params) > 0 {
+		findings = append(findings, model.Finding{
+			ID:             "ffuf-parameter-discovery",
+			Category:       "discovery",
+			Severity:       model.SeverityLow,
+			Title:          "FFUF discovered hidden query parameters",
+			Description:    "FFUF parameter fuzzing surfaced query-string parameters that change the application's response. Hidden parameters frequently expose additional, less-tested input-handling code paths.",
+			Evidence:       fmt.Sprintf("target=%s; params=%s", target, strings.Join(limitStrings(params, 30), ", ")),
+			Recommendation: "Fuzz the discovered parameters for injection, access-control, and business-logic flaws.",
+			Sources:        []string{"ffuf"},
+			Confidence:     0.7,
+		})
+	}
+	return findings
 }
 
-func (s *Service) runGobuster(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+// ffufParamProbeValue is the benign sentinel value assigned to the FUZZ
+// parameter name during FFUF parameter mining.
+const ffufParamProbeValue = "autobughunterprobe"
+
+// commonParameterNames is a compact, built-in wordlist of frequently accepted
+// HTTP parameter names used for FFUF parameter mining. It keeps the second FFUF
+// pass fast and fully offline; broader external wordlists can be layered later.
+var commonParameterNames = []string{
+	"id", "user", "user_id", "userid", "uid", "account", "account_id", "name",
+	"username", "email", "page", "p", "q", "query", "search", "s", "keyword",
+	"sort", "order", "order_by", "dir", "filter", "category", "cat", "type",
+	"action", "do", "cmd", "command", "exec", "func", "function", "method",
+	"file", "filename", "path", "dir", "folder", "url", "uri", "redirect",
+	"return", "return_url", "next", "callback", "continue", "dest", "destination",
+	"ref", "referer", "lang", "language", "locale", "token", "key", "api_key",
+	"apikey", "access_token", "auth", "session", "sid", "code", "debug", "test",
+	"view", "format", "output", "limit", "offset", "start", "count", "size",
+	"price", "amount", "qty", "quantity", "status", "state", "role", "group",
+}
+
+// ffufFuzzParameters runs a second FFUF pass that mines hidden query-string
+// parameters on the target. It assigns a sentinel value to a FUZZed parameter
+// name and relies on FFUF auto-calibration (-ac) to filter baseline responses,
+// so only parameter names that alter the application's behaviour are reported.
+// It returns the discovered parameter names (sorted, de-duplicated).
+func (s *Service) ffufFuzzParameters(ctx context.Context, target string, scanScope model.ScanScope) []string {
+	if !scope.IsURLInScope(target, scanScope) {
+		return nil
+	}
+	wlPath, err := writeTemporaryWordlist(commonParameterNames)
+	if err != nil {
+		return nil
+	}
+	defer os.Remove(wlPath)
+
+	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	defer cancel()
+	fuzzURL := strings.TrimRight(target, "/") + "/?FUZZ=" + ffufParamProbeValue
+	cmd := exec.CommandContext(ictx, s.cfg.FFUFBinary, "-u", fuzzURL, "-w", wlPath, "-ac", "-mc", "all", "-s")
+	var outb bytes.Buffer
+	cmd.Stdout = &outb
+	cmd.Stderr = &outb
+	_ = cmd.Run()
+	if ictx.Err() == context.DeadlineExceeded {
+		return nil
+	}
+	return parseFFUFParamHits(outb.String())
+}
+
+// parseFFUFParamHits parses the silent (-s) FFUF parameter-mining output, where
+// each non-empty line is a matched FUZZ parameter name. It keeps syntactically
+// valid parameter tokens and returns a sorted, de-duplicated list.
+func parseFFUFParamHits(rawOutput string) []string {
+	seen := map[string]struct{}{}
+	params := make([]string, 0)
+	for _, line := range strings.Split(rawOutput, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || name == ffufParamProbeValue {
+			continue
+		}
+		if strings.Fields(name)[0] != name {
+			// Skip banner/log lines that contain spaces.
+			continue
+		}
+		if !isValidParamName(name) {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		params = append(params, name)
+	}
+	sort.Strings(params)
+	return params
+}
+
+// isValidParamName reports whether token looks like an HTTP parameter name
+// (letters, digits, underscore, dash, or dot only) and is of a sane length.
+func isValidParamName(token string) bool {
+	if token == "" || len(token) > 64 {
+		return false
+	}
+	for _, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) runGobuster(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableGobuster {
 		return []model.Finding{{
 			ID:             "gobuster-disabled",
@@ -2440,6 +2812,12 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 
 	paths := parsePathHits(outb.String(), target, scanScope)
 	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	baseTrim := strings.TrimRight(target, "/")
+	gobusterEndpoints := make([]string, 0, len(paths))
+	for _, p := range paths {
+		gobusterEndpoints = append(gobusterEndpoints, baseTrim+p)
+	}
+	state.addEndpoints(gobusterEndpoints...)
 	if len(paths) == 0 {
 		return []model.Finding{{
 			ID:             "gobuster-no-paths",
@@ -2467,7 +2845,7 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 // runKiterunner executes kiterunner (kr) to brute-force API routes against the
 // target using an API-route wordlist. It mirrors the disabled/binary-missing/
 // timeout/no-paths finding contract used by the ffuf and gobuster integrations.
-func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableKiterunner {
 		return []model.Finding{{
 			ID:             "kiterunner-disabled",
@@ -2539,6 +2917,12 @@ func (s *Service) runKiterunner(ctx context.Context, target string, scanScope mo
 
 	paths := parseKiterunnerHits(outb.String(), target, scanScope)
 	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	baseTrim := strings.TrimRight(target, "/")
+	krEndpoints := make([]string, 0, len(paths))
+	for _, p := range paths {
+		krEndpoints = append(krEndpoints, baseTrim+p)
+	}
+	state.addEndpoints(krEndpoints...)
 	if len(paths) == 0 {
 		return []model.Finding{{
 			ID:             "kiterunner-no-paths",
@@ -2665,7 +3049,7 @@ func findKiterunnerWordlistFile(dir string) string {
 // target host from open sources (Wayback Machine, Common Crawl, etc.). It is a
 // passive, non-destructive integration: it queries third-party archives rather
 // than the target itself.
-func (s *Service) runGau(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+func (s *Service) runGau(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableGau {
 		return []model.Finding{{
 			ID:             "gau-disabled",
@@ -2721,6 +3105,7 @@ func (s *Service) runGau(ctx context.Context, target string, scanScope model.Sca
 	}
 
 	urls := parseGauURLs(outb.String(), scanScope)
+	state.addEndpoints(urls...)
 	if len(urls) == 0 {
 		return []model.Finding{{
 			ID:             "gau-no-urls",
@@ -2778,7 +3163,7 @@ func parseGauURLs(rawOutput string, scanScope model.ScanScope) []string {
 // runArjun executes Arjun to discover hidden HTTP query/body parameters on the
 // target endpoint. Arjun sends many requests with candidate parameter names but
 // does not send exploit payloads, so it is treated as non-destructive.
-func (s *Service) runArjun(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+func (s *Service) runArjun(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableArjun {
 		return []model.Finding{{
 			ID:             "arjun-disabled",
@@ -2869,6 +3254,7 @@ func (s *Service) runArjun(ctx context.Context, target string, scanScope model.S
 		data = nil
 	}
 	params := parseArjunParams(data)
+	state.addParams(params...)
 	if len(params) == 0 {
 		return []model.Finding{{
 			ID:             "arjun-no-params",
@@ -3180,7 +3566,7 @@ func (s *Service) runUncover(ctx context.Context, target string, state *integrat
 // runLinkFinder executes LinkFinder to extract endpoints/paths embedded in the
 // target's JavaScript. LinkFinder fetches the page/JS and regex-parses it; it
 // never injects payloads, so it is treated as passive/non-destructive.
-func (s *Service) runLinkFinder(ctx context.Context, target string, scanScope model.ScanScope) []model.Finding {
+func (s *Service) runLinkFinder(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableLinkFinder {
 		return []model.Finding{{
 			ID:             "linkfinder-disabled",
@@ -3234,6 +3620,7 @@ func (s *Service) runLinkFinder(ctx context.Context, target string, scanScope mo
 	}
 
 	endpoints := parseLinkFinderEndpoints(outb.String(), target, scanScope)
+	state.addEndpoints(endpoints...)
 	if len(endpoints) == 0 {
 		return []model.Finding{{
 			ID:             "linkfinder-no-endpoints",

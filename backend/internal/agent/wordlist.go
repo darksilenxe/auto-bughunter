@@ -18,7 +18,7 @@ type WordlistAgent struct {
 
 func NewWordlistAgent(enabled bool) *WordlistAgent {
 	return &WordlistAgent{
-		wordlistScanner: scanner.NewWordlistScanner(5, 0),
+		wordlistScanner: scanner.NewWordlistScanner(20, 0),
 		enabled:         enabled,
 	}
 }

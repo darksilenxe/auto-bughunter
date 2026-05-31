@@ -78,7 +78,7 @@ func TestParseTruffleHogSecrets(t *testing.T) {
 
 func TestRunLinkFinder_DisabledReturnsInfoFinding(t *testing.T) {
 	s := NewService(Config{EnableLinkFinder: false})
-	findings := s.runLinkFinder(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runLinkFinder(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "linkfinder-disabled" {
 		t.Fatalf("expected linkfinder-disabled finding, got %+v", findings)
 	}
@@ -86,7 +86,7 @@ func TestRunLinkFinder_DisabledReturnsInfoFinding(t *testing.T) {
 
 func TestRunLinkFinder_BinaryMissing(t *testing.T) {
 	s := NewService(Config{EnableLinkFinder: true, LinkFinderBinary: "definitely-not-a-real-binary-xyz"})
-	findings := s.runLinkFinder(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runLinkFinder(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "linkfinder-binary-missing" {
 		t.Fatalf("expected linkfinder-binary-missing finding, got %+v", findings)
 	}

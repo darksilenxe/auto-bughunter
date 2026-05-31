@@ -225,25 +225,44 @@ func (ws *WordlistScanner) ScanSubdomains(ctx context.Context, target string, sc
 
 	subs := wordlist.GetCommonSubdomainsWithExternal(ctx)
 	discovered := make([]string, 0)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, ws.maxConcurrency*4) // Subdomains are just DNS, can be higher concurrency
 
 	for _, sub := range subs {
 		select {
 		case <-ctx.Done():
-			return findings
+			goto wait
 		default:
 		}
 
-		testHost := sub + "." + host
-		if !scope.IsHostInScope(testHost, scanScope) {
-			continue
-		}
-		ips, err := net.LookupIP(testHost)
-		if err == nil && len(ips) > 0 {
-			discovered = append(discovered, testHost)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(s string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			testHost := s + "." + host
+			if !scope.IsHostInScope(testHost, scanScope) {
+				return
+			}
+			// Use a shorter timeout for individual DNS lookups to avoid hanging the scan
+			dnsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			ips, err := net.DefaultResolver.LookupIP(dnsCtx, "ip", testHost)
+			cancel()
+			if err == nil && len(ips) > 0 {
+				mu.Lock()
+				discovered = append(discovered, testHost)
+				mu.Unlock()
+			}
+		}(sub)
 	}
 
+wait:
+	wg.Wait()
+
 	if len(discovered) > 0 {
+		sort.Strings(discovered)
 		evidence := strings.Join(discovered, ", ")
 		findings = append(findings, model.Finding{
 			ID:             "wordlist-subdomains",
@@ -304,7 +323,6 @@ func (ws *WordlistScanner) ScanSeedRoutes(ctx context.Context, target string, ro
 		"Validate these code-referenced routes for authentication, authorization, and input-handling weaknesses.",
 		"Code-referenced routes were probed directly; prioritize any that resolve for deeper manual testing.")
 }
-
 
 func (ws *WordlistScanner) captureEnumerationContext(ctx context.Context, target string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) (frameworkProfile, pathStateFingerprint, pathStateFingerprint) {
 	root := ws.captureURLState(ctx, target, authProfile, scanScope)

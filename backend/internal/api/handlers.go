@@ -829,8 +829,19 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	completed := time.Now().UTC()
 
 	job.CompletedAt = &completed
+	// partialTimeout records that the scan-wide deadline (SCAN_TIMEOUT_SECONDS)
+	// elapsed mid-pipeline. Rather than discarding every finding collected so
+	// far and marking the whole scan "failed", we finalize gracefully: the
+	// partial findings (already returned by the orchestrator) are preserved,
+	// post-processing still runs on fresh contexts, and the job completes with
+	// a clear truncation marker. Operator cancellation and genuine errors keep
+	// their existing terminal handling.
+	partialTimeout := false
 	if err != nil {
-		if ctx.Err() == context.Canceled {
+		operatorCancelled := errors.Is(err, context.Canceled) || ctx.Err() == context.Canceled
+		scanTimedOut := errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded
+		switch {
+		case operatorCancelled:
 			job.Status = "cancelled"
 			job.Error = "scan stopped by operator"
 			emit(model.ScanEvent{
@@ -838,7 +849,16 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan cancelled by operator",
 			})
 			s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator")
-		} else {
+			_ = s.repo.UpdateJob(context.Background(), job)
+			return
+		case scanTimedOut:
+			partialTimeout = true
+			s.appendAuditEvent(id, "timeout", fmt.Sprintf("Scan exceeded the %s budget; finalizing with %d partial finding(s)", s.scanTimeout, len(findings)))
+			emit(model.ScanEvent{
+				Type:    model.ScanEventInfo,
+				Message: fmt.Sprintf("Scan timed out after %s — finalizing with %d partial finding(s)", s.scanTimeout, len(findings)),
+			})
+		default:
 			job.Status = "failed"
 			job.Error = err.Error()
 			emit(model.ScanEvent{
@@ -846,9 +866,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan failed: " + err.Error(),
 			})
 			s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
+			_ = s.repo.UpdateJob(context.Background(), job)
+			return
 		}
-		_ = s.repo.UpdateJob(context.Background(), job)
-		return
 	}
 
 	job.Status = "completed"
@@ -872,6 +892,19 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.Findings = redactSensitiveFindings(job.Findings)
 	job.Findings = append(job.Findings, buildToolReadinessFindings(options)...)
 	job.Findings = append(job.Findings, buildIntegrationHealthFinding(outputs)...)
+	if partialTimeout {
+		job.Findings = append(job.Findings, model.Finding{
+			ID:             "scan-partial-timeout",
+			Category:       "operations",
+			Severity:       model.SeverityInfo,
+			Title:          "Scan finalized with partial results after timeout",
+			Description:    fmt.Sprintf("The scan exceeded its %s execution budget (SCAN_TIMEOUT_SECONDS) before every agent completed. Findings collected before the deadline are preserved and reported, but coverage may be incomplete.", s.scanTimeout),
+			Evidence:       fmt.Sprintf("timeout=%s partialFindings=%d", s.scanTimeout, len(findings)),
+			Recommendation: "Increase SCAN_TIMEOUT_SECONDS or narrow the scan scope, then re-run to achieve full coverage.",
+			Confidence:     1.0,
+			Sources:        []string{"operations"},
+		})
+	}
 	job.Findings = s.applySuppressions(target, job.Findings)
 	job.Findings = s.applyAutoSuppressionHeuristics(context.Background(), job.Findings)
 	// Attach Python PoC scripts to findings where a template is available.
@@ -1111,10 +1144,16 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs, job.AgentRuns)
 	}
-	s.appendAuditEvent(id, "completed", "Scan execution completed successfully")
+	completionAudit := "Scan execution completed successfully"
+	completionSuffix := ""
+	if partialTimeout {
+		completionAudit = "Scan finalized with partial results after timeout"
+		completionSuffix = " (partial — timed out)"
+	}
+	s.appendAuditEvent(id, "completed", completionAudit)
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
-		Message: fmt.Sprintf("Scan completed: %d findings", len(job.Findings)),
+		Message: fmt.Sprintf("Scan completed: %d findings%s", len(job.Findings), completionSuffix),
 	})
 	// Retain event history for a short window so late-joining SSE clients can still
 	// replay events, then schedule cleanup to free memory.

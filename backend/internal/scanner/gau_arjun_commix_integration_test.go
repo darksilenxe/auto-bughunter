@@ -82,7 +82,7 @@ func TestJoinCookieHeader(t *testing.T) {
 
 func TestRunGau_DisabledReturnsInfoFinding(t *testing.T) {
 	s := NewService(Config{EnableGau: false})
-	findings := s.runGau(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runGau(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "gau-disabled" {
 		t.Fatalf("expected gau-disabled finding, got %+v", findings)
 	}
@@ -90,7 +90,7 @@ func TestRunGau_DisabledReturnsInfoFinding(t *testing.T) {
 
 func TestRunArjun_DisabledReturnsInfoFinding(t *testing.T) {
 	s := NewService(Config{EnableArjun: false})
-	findings := s.runArjun(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runArjun(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "arjun-disabled" {
 		t.Fatalf("expected arjun-disabled finding, got %+v", findings)
 	}
@@ -106,7 +106,7 @@ func TestRunCommix_DisabledReturnsInfoFinding(t *testing.T) {
 
 func TestRunGau_BinaryMissing(t *testing.T) {
 	s := NewService(Config{EnableGau: true, GauBinary: "definitely-not-a-real-binary-xyz"})
-	findings := s.runGau(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runGau(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "gau-binary-missing" {
 		t.Fatalf("expected gau-binary-missing finding, got %+v", findings)
 	}
@@ -114,7 +114,7 @@ func TestRunGau_BinaryMissing(t *testing.T) {
 
 func TestRunArjun_BinaryMissing(t *testing.T) {
 	s := NewService(Config{EnableArjun: true, ArjunBinary: "definitely-not-a-real-binary-xyz"})
-	findings := s.runArjun(context.Background(), "https://example.com", model.ScanScope{})
+	findings := s.runArjun(context.Background(), "https://example.com", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "arjun-binary-missing" {
 		t.Fatalf("expected arjun-binary-missing finding, got %+v", findings)
 	}

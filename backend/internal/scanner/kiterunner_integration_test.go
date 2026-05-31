@@ -16,7 +16,7 @@ func TestRunKiterunner_Disabled(t *testing.T) {
 		KiterunnerBinary:   "kr",
 		IntegrationTimeout: 10 * time.Second,
 	})
-	findings := svc.runKiterunner(context.Background(), "https://example.com/", model.ScanScope{})
+	findings := svc.runKiterunner(context.Background(), "https://example.com/", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "kiterunner-disabled" {
 		t.Fatalf("expected kiterunner-disabled finding, got %+v", findings)
 	}
@@ -28,7 +28,7 @@ func TestRunKiterunner_BinaryMissing(t *testing.T) {
 		KiterunnerBinary:   "/nonexistent/path/kr-does-not-exist",
 		IntegrationTimeout: 10 * time.Second,
 	})
-	findings := svc.runKiterunner(context.Background(), "https://example.com/", model.ScanScope{})
+	findings := svc.runKiterunner(context.Background(), "https://example.com/", model.ScanScope{}, nil)
 	if len(findings) != 1 || findings[0].ID != "kiterunner-binary-missing" {
 		t.Fatalf("expected kiterunner-binary-missing finding, got %+v", findings)
 	}

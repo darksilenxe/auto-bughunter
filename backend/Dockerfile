@@ -48,81 +48,9 @@ COPY --from=build /out/server /app/server
 # code in the Go scanner keeps finding `nuclei`, `zap-baseline.py`, etc.
 # without any backend code changes. They forward stdin/stdout/stderr/exit
 # code unchanged.
-COPY scripts/shims/sidecar-exec      /usr/local/bin/sidecar-exec
-COPY scripts/shims/nuclei            /usr/local/bin/nuclei
-COPY scripts/shims/zap-baseline.py   /usr/local/bin/zap-baseline.py
-# ProjectDiscovery suite — all served by the shared `projectdiscovery`
-# sidecar (see ../sidecars/projectdiscovery/Dockerfile).
-COPY scripts/shims/subfinder         /usr/local/bin/subfinder
-COPY scripts/shims/httpx             /usr/local/bin/httpx
-COPY scripts/shims/cloudlist         /usr/local/bin/cloudlist
-COPY scripts/shims/naabu             /usr/local/bin/naabu
-COPY scripts/shims/dnsx              /usr/local/bin/dnsx
-COPY scripts/shims/shuffledns        /usr/local/bin/shuffledns
-COPY scripts/shims/katana            /usr/local/bin/katana
-COPY scripts/shims/tlsx              /usr/local/bin/tlsx
-COPY scripts/shims/cdncheck          /usr/local/bin/cdncheck
-COPY scripts/shims/asnmap            /usr/local/bin/asnmap
-COPY scripts/shims/vulnx             /usr/local/bin/vulnx
-# Fuzzing / dirbusting — each in its own sidecar; both rely on the shared
-# tmp volume mounted at $SHARED_TMP_DIR so that the wordlist file the
-# backend writes is visible inside the sidecar at the same path.
-COPY scripts/shims/ffuf              /usr/local/bin/ffuf
-COPY scripts/shims/gobuster          /usr/local/bin/gobuster
-# Kiterunner — `kr` runs in the kiterunner sidecar, which also hosts the
-# Assetnote wordlist cache mounted at /wordlists in this container.
-COPY scripts/shims/kr                /usr/local/bin/kr
-# CMS / web app scanners — keep Python (sqlmap), Perl (nikto) and Ruby
-# (wpscan) runtimes out of this image entirely.
-COPY scripts/shims/sqlmap            /usr/local/bin/sqlmap
-COPY scripts/shims/nikto             /usr/local/bin/nikto
-COPY scripts/shims/wpscan            /usr/local/bin/wpscan
-# Passive URL discovery (gau) + hidden-parameter discovery (arjun) +
-# OS command-injection (commix) — each runs in its own sidecar. arjun reads
-# the shared tmp volume at $SHARED_TMP_DIR for its JSON output file.
-COPY scripts/shims/gau               /usr/local/bin/gau
-COPY scripts/shims/arjun             /usr/local/bin/arjun
-COPY scripts/shims/commix            /usr/local/bin/commix
-# JavaScript-focused tools: LinkFinder (endpoint extraction), retire.js
-# (vulnerable JS library detection) and TruffleHog (secret detection) each run
-# in their own sidecar. retire.js and TruffleHog read downloaded JS bundles
-# from the shared tmp volume at $SHARED_TMP_DIR. Uncover queries third-party
-# search engines for exposed hosts.
-COPY scripts/shims/linkfinder        /usr/local/bin/linkfinder
-COPY scripts/shims/retire            /usr/local/bin/retire
-COPY scripts/shims/trufflehog        /usr/local/bin/trufflehog
-COPY scripts/shims/uncover           /usr/local/bin/uncover
-# LLM-assisted XSS scanner — runs in the `xssmap` sidecar (Python +
-# Playwright + an Ollama client that reuses the local `ollama` service).
-COPY scripts/shims/xssmap            /usr/local/bin/xssmap
-RUN chmod +x /usr/local/bin/sidecar-exec \
-             /usr/local/bin/nuclei \
-             /usr/local/bin/zap-baseline.py \
-             /usr/local/bin/subfinder \
-             /usr/local/bin/httpx \
-             /usr/local/bin/cloudlist \
-             /usr/local/bin/naabu \
-             /usr/local/bin/dnsx \
-             /usr/local/bin/shuffledns \
-             /usr/local/bin/katana \
-             /usr/local/bin/tlsx \
-             /usr/local/bin/cdncheck \
-             /usr/local/bin/asnmap \
-             /usr/local/bin/vulnx \
-             /usr/local/bin/ffuf \
-             /usr/local/bin/gobuster \
-             /usr/local/bin/kr \
-             /usr/local/bin/sqlmap \
-             /usr/local/bin/nikto \
-             /usr/local/bin/wpscan \
-             /usr/local/bin/gau \
-             /usr/local/bin/arjun \
-             /usr/local/bin/commix \
-             /usr/local/bin/linkfinder \
-             /usr/local/bin/retire \
-             /usr/local/bin/trufflehog \
-             /usr/local/bin/uncover \
-             /usr/local/bin/xssmap
+COPY scripts/shims/ /usr/local/bin/
+RUN find /usr/local/bin -type f -exec sed -i 's/\r$//' {} + && \
+    chmod +x /usr/local/bin/*
 
 # Default chromedp wiring — the `chromium` sidecar exposes the DevTools
 # protocol on port 9222. The Go scanner picks this up via CHROME_REMOTE_URL

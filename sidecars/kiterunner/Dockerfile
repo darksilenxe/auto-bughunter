@@ -54,7 +54,7 @@ RUN apk add --no-cache ca-certificates curl jq coreutils
 COPY --from=kr-fetch /out/kr /usr/local/bin/kr
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 
 # Wordlist cache lives on a docker named volume so it survives restarts and
 # is shared (read-only) with the backend.
