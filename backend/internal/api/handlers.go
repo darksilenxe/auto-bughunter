@@ -32,6 +32,7 @@ import (
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/oast"
+	"auto-bughunter/backend/internal/paths"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scanner"
@@ -1728,7 +1729,7 @@ func (s *Server) handleToolsUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimSpace(os.Getenv("TOOL_UPDATES_REPORT_PATH"))
 	if path == "" {
-		path = "/var/lib/auto-bughunter/updates/report.json"
+		path = paths.ToolUpdatesReportPath()
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
