@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"auto-bughunter/backend/internal/paths"
 )
 
 // DefaultDirectoryWordlist resolves the directory/content brute-force wordlist
@@ -151,12 +153,12 @@ var catalog = []Technique{
 		CommandTemplates: []CommandTemplate{
 			{
 				Binary:       "sqlmap",
-				ArgsTemplate: []string{"-u", "{{TARGET}}?{{PARAM}}=1", "--batch", "--level=2", "--risk=1", "--output-dir=/tmp/auto-bughunter/sqlmap"},
+				ArgsTemplate: []string{"-u", "{{TARGET}}?{{PARAM}}=1", "--batch", "--level=2", "--risk=1", "--output-dir=" + paths.SQLMapDir()},
 				Description:  "sqlmap at safe risk/level with default parameter",
 			},
 			{
 				Binary:       "sqlmap",
-				ArgsTemplate: []string{"-u", "{{TARGET}}?{{PARAM}}=1", "--batch", "--dbs", "--output-dir=/tmp/auto-bughunter/sqlmap"},
+				ArgsTemplate: []string{"-u", "{{TARGET}}?{{PARAM}}=1", "--batch", "--dbs", "--output-dir=" + paths.SQLMapDir()},
 				Description:  "sqlmap database enumeration after injection confirmed",
 			},
 		},
@@ -329,7 +331,7 @@ var catalog = []Technique{
 		CommandTemplates: []CommandTemplate{
 			{
 				Binary:       "python3",
-				ArgsTemplate: []string{"/tmp/auto-bughunter/tools/jwt_probe.py", "{{TARGET}}"},
+				ArgsTemplate: []string{filepath.Join(paths.ToolsDir(), "jwt_probe.py"), "{{TARGET}}"},
 				Description:  "JWT algorithm confusion and weak-secret probe",
 			},
 		},

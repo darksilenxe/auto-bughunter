@@ -1,8 +1,11 @@
 package cmdbuilder
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"auto-bughunter/backend/internal/paths"
 )
 
 func TestValidate_RejectsBashBinary(t *testing.T) {
@@ -38,7 +41,7 @@ func TestValidate_RejectsPythonScriptOutsideScratchDir(t *testing.T) {
 func TestValidate_AllowsSafePythonInvocation(t *testing.T) {
 	err := Validate(CommandSpec{
 		Binary: "python3",
-		Args:   []string{"/tmp/auto-bughunter/tools/test_probe.py", "https://example.com"},
+		Args:   []string{filepath.Join(paths.ToolsDir(), "test_probe.py"), "https://example.com"},
 	}, "https://example.com")
 	if err != nil {
 		t.Fatalf("expected safe python invocation to pass validation, got %v", err)

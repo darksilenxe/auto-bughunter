@@ -1,6 +1,6 @@
 // Package toolbuilder lets autonomous agents generate, write, and execute
 // custom Python, Node, Perl, or Bash tools at runtime.  All generated scripts are:
-//   - Written to an isolated /tmp/auto-bughunter/tools/ scratch directory.
+//   - Written to an isolated per-platform scratch directory (see paths.ToolsDir).
 //   - Validated for dangerous patterns before execution.
 //   - Executed under a strict timeout via a context-aware exec.Command.
 //   - Expected to produce JSON-lines findings on stdout (one JSON object per line).
@@ -19,10 +19,10 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/paths"
 )
 
 const (
-	scratchDir     = "/tmp/auto-bughunter/tools"
 	defaultTimeout = 45 * time.Second
 	maxOutputBytes = 1 * 1024 * 1024 // 1 MB
 	// commandWaitDelay bounds how long cmd.Output blocks after the context
@@ -124,6 +124,7 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 		return nil, fmt.Errorf("tool %q rejected: %w", spec.Name, err)
 	}
 
+	scratchDir := paths.ToolsDir()
 	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create tool scratch dir: %w", err)
 	}
