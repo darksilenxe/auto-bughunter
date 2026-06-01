@@ -48,7 +48,9 @@ func (a *ReportingAgent) Run(ctx context.Context, input AgentInput) (AgentOutput
 
 	output.Metadata["summary"] = executiveSummary
 	output.Metadata["impact_goals"] = impact.GoalPrompt(goals)
-	output.Metadata["top_risk_1"] = fmt.Sprintf("%d", topRisks[0])
+	if len(topRisks) > 0 {
+		output.Metadata["top_risk_1"] = fmt.Sprintf("%d", topRisks[0])
+	}
 	if len(topRisks) > 1 {
 		output.Metadata["top_risk_2"] = fmt.Sprintf("%d", topRisks[1])
 	}
