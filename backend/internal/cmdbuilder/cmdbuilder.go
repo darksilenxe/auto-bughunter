@@ -423,6 +423,13 @@ const (
 	defaultTimeout = 60 * time.Second
 	maxTimeout     = 5 * time.Minute
 	maxOutputBytes = 2 * 1024 * 1024 // 2 MB
+	// commandWaitDelay bounds how long cmd.Wait blocks after the context
+	// deadline kills the process. Without it, a tool that spawns a
+	// grandchild which inherits (and keeps open) the stdout/stderr pipe
+	// makes Wait block indefinitely on POSIX systems, so a timed-out
+	// command hangs the whole scan on Linux even though it works on
+	// Windows. WaitDelay forces the pipes closed shortly after the kill.
+	commandWaitDelay = 10 * time.Second
 )
 
 // RunResult holds the output of an executed command.
@@ -490,6 +497,7 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 
 	cmd := exec.CommandContext(cmdCtx, spec.Binary, spec.Args...) //nolint:gosec // binary is allowlisted
 	cmd.Env = safeEnv()
+	cmd.WaitDelay = commandWaitDelay
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
