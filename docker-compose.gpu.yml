@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# Optional GPU passthrough override.
+#
+# The base docker-compose.yml runs the bundled local LLM (`ollama`) on CPU so
+# it works on any machine, including CPU-only laptops and Docker Desktop VMs on
+# Windows/macOS. On a host with a supported GPU you can hand the GPU to Ollama
+# for dramatically faster local inference (planning, summaries, fast-lane
+# decisions) by layering this override on top of the base file.
+#
+# This file changes nothing unless you explicitly include it, so CPU-only users
+# are never affected.
+#
+# Apply it together with the `ollama` profile (and any other overrides):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+#     --profile ollama up --build
+#
+#   # combine with the Kali high-resource override:
+#   docker compose -f docker-compose.yml -f docker-compose.kali.yml \
+#     -f docker-compose.gpu.yml --profile ollama up --build
+#
+# ---------------------------------------------------------------------------
+# Hardware requirements
+# ---------------------------------------------------------------------------
+# NVIDIA (discrete) — the configuration below, the most common case:
+#   * NVIDIA driver installed on the host.
+#   * NVIDIA Container Toolkit installed and the Docker runtime configured
+#     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
+#   * Verify with: `docker run --rm --gpus all ubuntu nvidia-smi`.
+#
+# AMD (discrete, ROCm) — NVIDIA's `devices`/`capabilities: [gpu]` reservation
+#   does NOT apply. Instead replace the `ollama` block below with the ROCm
+#   device-mapping form and use Ollama's ROCm image:
+#
+#     services:
+#       ollama:
+#         image: ollama/ollama:rocm
+#         devices:
+#           - /dev/kfd
+#           - /dev/dri
+#         group_add:
+#           - video
+#
+# Integrated GPUs (Intel iGPU / most laptop-integrated graphics) — Ollama has no
+#   general acceleration path for these; keep running CPU-only (do NOT include
+#   this override). It will not help and may fail to start.
+# ---------------------------------------------------------------------------
+
+services:
+  ollama:
+    # Local LLM inference is by far the most compute-heavy service, so it is the
+    # one that benefits from a GPU. `count: all` exposes every detected GPU; set
+    # an integer (e.g. 1) to pin a specific number.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

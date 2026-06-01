@@ -200,6 +200,30 @@ To validate the impact, run a representative scan before and after and compare
 completion time, how often steps hit `SCAN_TIMEOUT_SECONDS`, and container
 memory pressure (`docker stats`).
 
+### GPU acceleration for the local LLM (optional)
+
+The bundled `ollama` service runs on CPU by default so it works on any machine.
+On a host with a supported GPU you can hand the GPU to Ollama for much faster
+local inference by layering the optional `docker-compose.gpu.yml` override. It
+changes nothing unless you explicitly include it, so CPU-only users stay
+unaffected:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+  --profile ollama up --build
+# combined with the Kali high-resource override:
+docker compose -f docker-compose.yml -f docker-compose.kali.yml \
+  -f docker-compose.gpu.yml --profile ollama up --build
+```
+
+The override ships an **NVIDIA** configuration (requires the NVIDIA driver and
+the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/);
+verify with `docker run --rm --gpus all ubuntu nvidia-smi`). For **AMD/ROCm**
+discrete GPUs, follow the commented ROCm device-mapping snippet at the top of
+`docker-compose.gpu.yml`. **Integrated GPUs** (Intel iGPU / typical
+laptop-integrated graphics) have no Ollama acceleration path — keep running
+CPU-only and do not include this override.
+
 ## Command-line interface
 
 The backend now includes a small operator CLI under
