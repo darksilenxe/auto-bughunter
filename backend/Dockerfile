@@ -30,9 +30,15 @@ RUN go build -o /out/server ./cmd/server
 # ---------------------------------------------------------------------------
 FROM alpine:latest
 
-# Install base dependencies
+# Install base dependencies.
+#   * ca-certificates — outbound HTTPS to sidecars/AI providers/targets.
+#   * python3 — the ToolBuilder/AIToolCalling agents shell out to `python3`
+#     to execute the custom probe scripts they generate at runtime
+#     (see backend/internal/toolbuilder/toolbuilder.go). Without it those
+#     agents fail with "executable file not found".
 RUN apk add --no-cache \
-    ca-certificates
+    ca-certificates \
+    python3
 
 # Optional: Install docker-cli for legacy exec mode (only needed when USE_HTTP_TOOL_SERVICES=false)
 # Uncomment these lines if you need docker compose exec support:

@@ -99,6 +99,7 @@ export default function Dashboard() {
   const [useAttackPath, setUseAttackPath] = useState(true);
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(true);
   const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
+  const [useAIToolCalling, setUseAIToolCalling] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("bugbounty");
   const [aggressiveExploitation, setAggressiveExploitation] = useState(false);
@@ -196,6 +197,7 @@ export default function Dashboard() {
         useAttackPathAgent: useAttackPath,
         useFalsePositiveReview,
         useRemediationPlanner,
+        useAIToolCalling,
         aggressiveExploitation,
         humanPaced: humanPaced || undefined,
         strictReporting: strictReporting || undefined,
@@ -461,6 +463,7 @@ export default function Dashboard() {
                 <label className="check"><input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />Attack path agent</label>
                 <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
                 <label className="check"><input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />Remediation planner</label>
+                <label className="check"><input type="checkbox" checked={useAIToolCalling} onChange={(e) => setUseAIToolCalling(e.target.checked)} />AI tool-calling (build &amp; run custom probes)</label>
                 <label className="check"><input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />Aggressive exploitation</label>
                 <label className="check"><input type="checkbox" checked={humanPaced} onChange={(e) => setHumanPaced(e.target.checked)} />Human-paced (1–2 min between tools)</label>
                 <label className="check"><input type="checkbox" checked={strictReporting} onChange={(e) => setStrictReporting(e.target.checked)} />Strict reporting</label>
