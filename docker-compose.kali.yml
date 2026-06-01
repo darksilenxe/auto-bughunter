@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# Kali / Linux high-resource override.
+#
+# The base docker-compose.yml intentionally declares no CPU/RAM limits so it
+# runs anywhere (including resource-constrained Docker Desktop VMs on Windows
+# and macOS). On a native Linux host such as Kali, Docker can use the host's
+# CPU and RAM directly, so the heavy services (backend, headless Chromium, the
+# bundled Ollama LLM, and the busier tool sidecars) can be given much larger
+# allowances than the conservative implicit defaults a Docker Desktop VM hands
+# out.
+#
+# Apply it on top of the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kali.yml up --build
+#
+# Or, with the local AI runtime:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kali.yml \
+#     --profile ollama up --build
+#
+# Tune the numbers below to match your machine. The `limits` are hard caps and
+# the `reservations` are soft guarantees the scheduler tries to honour. The
+# values target a workstation with roughly 8 CPUs and 16 GB RAM; scale them down
+# if your Kali box has less, or up if it has more.
+#
+# These limits use the Compose Specification `deploy.resources` block, which
+# `docker compose` (v2) honours for single-host runs — no Swarm required.
+# ---------------------------------------------------------------------------
+
+services:
+  backend:
+    # The orchestrator runs every Go agent, the proxy, and the post-scan
+    # enrichment phase, so it benefits most from extra cores and memory.
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 6g
+        reservations:
+          cpus: "1.0"
+          memory: 1g
+
+  chromium:
+    # Headless Chromium renders target pages for screenshots/DOM checks.
+    # /dev/shm is tiny by default in containers, which makes Chromium crash or
+    # fall back to slow disk-backed shared memory; bump it so page loads are
+    # fast and stable.
+    shm_size: "1gb"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          cpus: "0.5"
+          memory: 512m
+
+  ollama:
+    # Local LLM inference is the single most resource-hungry service. Give it
+    # the lion's share of CPU and RAM so summaries/planning don't time out.
+    deploy:
+      resources:
+        limits:
+          cpus: "6.0"
+          memory: 10g
+        reservations:
+          cpus: "2.0"
+          memory: 4g
+
+  db:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  neo4j:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+  ml-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  nuclei-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  zap-service:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
