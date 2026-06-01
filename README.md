@@ -156,6 +156,50 @@ OLLAMA_FAST_MODEL=llama3.2:3b
 - Frontend: http://localhost:3000
 - Backend health: http://localhost:8080/api/health
 
+## Kali / Linux performance tuning
+
+The base `docker-compose.yml` declares **no** explicit CPU/RAM limits so it runs
+anywhere, including the resource-constrained Docker Desktop VM on Windows and
+macOS. On a native Linux host such as Kali, Docker can use the host CPU and RAM
+directly, so you can let the platform work much harder. Two knobs control this:
+
+1. **Container resource allowances** — apply the `docker-compose.kali.yml`
+   override, which adds larger `deploy.resources` limits/reservations (and a
+   bigger `/dev/shm` for headless Chromium) to the heavy services (`backend`,
+   `chromium`, `ollama`, and the busier sidecars):
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.kali.yml up --build
+   # with the bundled local LLM:
+   docker compose -f docker-compose.yml -f docker-compose.kali.yml \
+     --profile ollama up --build
+   ```
+
+   Edit the numbers in `docker-compose.kali.yml` to match your machine — they
+   target roughly an 8-CPU / 16 GB host.
+
+2. **Workload concurrency** — raise the AI and scan parallelism in `.env`. A
+   stronger Linux host can keep more LLM requests and scans in flight:
+
+   ```bash
+   # High-resource preset (8-CPU / 16 GB Kali workstation)
+   AI_MAX_CONCURRENT_REQUESTS=4
+   AI_MAX_CONCURRENT_REQUESTS_PRIMARY=4
+   AI_MAX_CONCURRENT_REQUESTS_CODING=4
+   AI_MAX_CONCURRENT_REQUESTS_FAST=8
+   MAX_CONCURRENT_SCANS_PER_TARGET=2
+   GLOBAL_SCAN_BUDGET=10
+   ```
+
+   **Low-resource fallback** (small Kali VM / laptop): keep the shipped defaults
+   (`AI_MAX_CONCURRENT_REQUESTS=2`, `MAX_CONCURRENT_SCANS_PER_TARGET=1`,
+   `GLOBAL_SCAN_BUDGET=5`), and drop the AI lanes to `1` if a single local Ollama
+   instance is being overloaded.
+
+To validate the impact, run a representative scan before and after and compare
+completion time, how often steps hit `SCAN_TIMEOUT_SECONDS`, and container
+memory pressure (`docker stats`).
+
 ## Command-line interface
 
 The backend now includes a small operator CLI under
