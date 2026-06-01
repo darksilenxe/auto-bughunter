@@ -25,6 +25,12 @@ const (
 	scratchDir     = "/tmp/auto-bughunter/tools"
 	defaultTimeout = 45 * time.Second
 	maxOutputBytes = 1 * 1024 * 1024 // 1 MB
+	// commandWaitDelay bounds how long cmd.Output blocks after the context
+	// deadline kills the generated tool. A script that backgrounds a child
+	// inheriting the stdout pipe would otherwise make Wait block forever on
+	// POSIX systems, hanging the scan on Linux even though it completes on
+	// Windows. WaitDelay forces the pipes closed shortly after the kill.
+	commandWaitDelay = 10 * time.Second
 )
 
 // ToolSpec describes a dynamically generated tool.
@@ -150,6 +156,7 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	args := append([]string{scriptPath, target}, spec.Args...)
 	cmd := exec.CommandContext(cmdCtx, interp, args...) //nolint:gosec // script is validated
 	cmd.Env = safeEnv()
+	cmd.WaitDelay = commandWaitDelay
 
 	stdout, err := cmd.Output()
 	if err != nil && cmdCtx.Err() == context.DeadlineExceeded {
