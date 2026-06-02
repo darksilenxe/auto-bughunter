@@ -7,6 +7,7 @@ name: E2E - Juice Shop Harness
 #
 # Triggers:
 #   * Manual: workflow_dispatch (with a tweakable crawl budget input)
+#   * Push to main (post-merge unrestricted regression run)
 #   * Nightly: 04:17 UTC every day
 #   * Pull request: only when the PR carries the `run-e2e` label (this job is
 #     too heavy to gate every PR on)
@@ -25,6 +26,8 @@ on:
         description: "Minimum total findings required for the scan to pass"
         required: false
         default: "1"
+  push:
+    branches: [main]
   schedule:
     - cron: "17 4 * * *"
   pull_request:
