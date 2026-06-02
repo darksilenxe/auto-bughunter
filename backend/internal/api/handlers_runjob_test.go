@@ -139,7 +139,6 @@ func TestRunJobFinalizesWhenEnrichmentBlocksBeyondBudget(t *testing.T) {
 
 type panicAttackGraphStore struct{}
 
-
 func (panicAttackGraphStore) SaveAttackGraph(context.Context, string, string, *model.AttackGraphData) error {
 	panic("attack graph store panic")
 }
