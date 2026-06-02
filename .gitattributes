@@ -1,0 +1,45 @@
+# Normalize all text files to LF in the repository and on checkout. This keeps
+# the project working across platforms (notably Windows, where Git's default
+# core.autocrlf=true would otherwise rewrite files to CRLF). Shell scripts,
+# entrypoints and Dockerfiles are copied into and executed inside Linux
+# containers, so CRLF line endings would break `docker compose up`.
+* text=auto eol=lf
+
+# Scripts and container files must always use LF, regardless of platform.
+*.sh text eol=lf
+*.bash text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+*.dockerignore text eol=lf
+entrypoint.sh text eol=lf
+
+# Common source and config files (kept LF for cross-platform reproducibility).
+*.go text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.example text eol=lf
+.env.example text eol=lf
+
+# Binary assets must never be line-ending normalized.
+*.webp binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.exe binary
+*.pyc binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
