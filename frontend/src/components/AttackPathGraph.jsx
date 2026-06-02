@@ -177,7 +177,7 @@ export default function AttackPathGraph({ events = [], job = null }) {
     if (downstreamActive) {
       nodeStates.ml_triage = downstreamStates.includes("failed")
         ? "failed"
-        : (job?.status === "running" ? "running" : "complete");
+        : (["running", "finalizing"].includes(String(job?.status || "").toLowerCase()) ? "running" : "complete");
     }
   }
 

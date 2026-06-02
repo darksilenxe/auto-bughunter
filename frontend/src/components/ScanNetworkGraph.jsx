@@ -76,7 +76,7 @@ export default function ScanNetworkGraph({ job = null, expanded = false }) {
     fetchRequests();
 
     let pollId = null;
-    if (job?.status === "running") {
+    if (["running", "finalizing"].includes(String(job?.status || "").toLowerCase())) {
       pollId = setInterval(fetchRequests, 8000);
     }
 
@@ -331,7 +331,7 @@ export default function ScanNetworkGraph({ job = null, expanded = false }) {
         </div>
       </div>
 
-      {job?.status === "running" && (
+      {["running", "finalizing"].includes(String(job?.status || "").toLowerCase()) && (
         <p className="meta" style={{ marginTop: 8, fontSize: "0.72rem" }}>
           Auto-refreshing every 8 s while scan is running.
         </p>

@@ -6,6 +6,7 @@ const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
 export { API_BASE, API_KEY, WORKSPACE_ID };
 
 const ScanContext = createContext(null);
+const ACTIVE_SCAN_STATUSES = new Set(["running", "finalizing"]);
 
 export function ScanProvider({ children }) {
   // ── Active scan state ───────────────────────────────────────────────
@@ -240,6 +241,7 @@ export function ScanProvider({ children }) {
       scanHistory, historyLoading,
       programs, savePrograms,
       startScan, stopScan, loadHistory, loadScan,
+      isScanActive: loading || ACTIVE_SCAN_STATUSES.has(String(job?.status || "").toLowerCase()),
     }}>
       {children}
     </ScanContext.Provider>

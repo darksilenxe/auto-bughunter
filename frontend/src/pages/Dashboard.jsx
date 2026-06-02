@@ -75,7 +75,7 @@ const SCENARIOS = {
 const EMPTY_LOGIN_STEP = { action: "click", selector: "", value: "", waitMillis: 0, optional: false };
 
 export default function Dashboard() {
-  const { startScan, stopScan, job, loading, error, scanId, liveEvents } = useScan();
+  const { startScan, stopScan, job, loading, error, scanId, liveEvents, isScanActive } = useScan();
   const [scenario, setScenario] = useState("bugbounty");
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
@@ -214,7 +214,7 @@ export default function Dashboard() {
   }
 
   const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
-  const isRunning = job?.status === "running" || loading;
+  const isRunning = isScanActive;
   const highlightedGoals = useMemo(() => topGoals(job?.findings || []), [job?.findings]);
 
   return (
@@ -533,7 +533,7 @@ export default function Dashboard() {
 
           <ReasoningPanel events={liveEvents} isRunning={isRunning} />
 
-          {job && job.status !== "running" && (
+          {job && !["running", "finalizing"].includes(String(job.status || "").toLowerCase()) && (
             <>
               <section className="card">
                 <div className="toolbar" style={{ alignItems: "flex-start" }}>

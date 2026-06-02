@@ -129,6 +129,12 @@ func TestRunJobFinalizesWhenEnrichmentBlocksBeyondBudget(t *testing.T) {
 	if len(repo.updateStatuses) == 0 || repo.updateStatuses[len(repo.updateStatuses)-1] != "completed" {
 		t.Fatalf("expected final persisted status to be completed, got %v", repo.updateStatuses)
 	}
+	if len(repo.updateStatuses) < 2 {
+		t.Fatalf("expected running -> finalizing -> completed updates, got %v", repo.updateStatuses)
+	}
+	if repo.updateStatuses[0] != "running" || repo.updateStatuses[len(repo.updateStatuses)-2] != "finalizing" || repo.updateStatuses[len(repo.updateStatuses)-1] != "completed" {
+		t.Fatalf("unexpected update status sequence %v", repo.updateStatuses)
+	}
 }
 
 type panicAttackGraphStore struct{}
