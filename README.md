@@ -178,6 +178,11 @@ directly, so you can let the platform work much harder. Two knobs control this:
    Edit the numbers in `docker-compose.kali.yml` to match your machine — they
    target roughly an 8-CPU / 16 GB host.
 
+   The bundled Neo4j service is intentionally pinned to a `512m` heap plus a
+   `256m` page cache so it still boots cleanly under the Kali override's `1g`
+   memory limit. If you change that limit, keep Neo4j's heap + page cache below
+   the container cap with some headroom for the JVM itself.
+
 2. **Workload concurrency** — raise the AI and scan parallelism in `.env`. A
    stronger Linux host can keep more LLM requests and scans in flight:
 
