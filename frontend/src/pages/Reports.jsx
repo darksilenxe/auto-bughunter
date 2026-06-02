@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
-import { API_BASE, useScan } from "../context/ScanContext";
+import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 import { proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
 export default function Reports() {
@@ -37,9 +37,13 @@ export default function Reports() {
   }
 
   const reportURL = (overrides = {}) => {
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
     const params = new URLSearchParams();
     params.set("format", overrides.format || format);
     params.set("type", overrides.type || reportType);
+    params.set("api_key", apiKey);
+    params.set("workspaceId", workspaceId);
     if (companyName) params.set("companyName", companyName);
     if (classification) params.set("classification", classification);
     if (contact) params.set("contact", contact);
@@ -57,9 +61,11 @@ export default function Reports() {
   const submitTemplateOptions = async () => {
     setOptionsStatus("Generating...");
     try {
+      const apiKey = getAPIKey();
+      const workspaceId = getWorkspaceID();
       const res = await fetch(reportURL(), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "X-Workspace-ID": workspaceId },
         body: JSON.stringify({ companyName, classification, contact, programHandle, logoPath, reportType }),
       });
       if (!res.ok) {
@@ -82,9 +88,11 @@ export default function Reports() {
   };
 
   const copyBugBountySubmission = async (finding) => {
-    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md`;
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&api_key=${encodeURIComponent(apiKey)}&workspaceId=${encodeURIComponent(workspaceId)}`;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
       if (!res.ok) {
         setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error ${res.status}` }));
         return;
@@ -167,7 +175,7 @@ export default function Reports() {
 
           <div className="button-row" style={{ marginTop: 16 }}>
             <a href={reportURL()} download={filenameFor()} className="button-link">Download report</a>
-            <a href={`${API_BASE}/api/report/${scanId}/bugbounty.zip`} download={`bugbounty-${scanId}.zip`} className="button-link">Download bounty bundle</a>
+            <a href={`${API_BASE}/api/report/${scanId}/bugbounty.zip?api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}.zip`} className="button-link">Download bounty bundle</a>
           </div>
           <p className="meta" style={{ marginTop: 12 }}>
             Reports include CVSS/CWE, reproduction steps, impact statements, proof states, and submission-focused evidence.
@@ -209,8 +217,8 @@ export default function Reports() {
                     <td>
                       <div className="button-row">
                         <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>Copy</button>
-                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md`} download={`bugbounty-${scanId}-${finding.id}.md`} className="button-link">.md</a>
-                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf`} download={`bugbounty-${scanId}-${finding.id}.pdf`} className="button-link">.pdf</a>
+                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.md`} className="button-link">.md</a>
+                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.pdf`} className="button-link">.pdf</a>
                         {copyStatus[finding.id] && <span className="meta">{copyStatus[finding.id]}</span>}
                       </div>
                     </td>
