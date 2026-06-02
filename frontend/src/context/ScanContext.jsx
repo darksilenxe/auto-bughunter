@@ -7,6 +7,26 @@ export { API_BASE, API_KEY, WORKSPACE_ID };
 
 const ScanContext = createContext(null);
 const ACTIVE_SCAN_STATUSES = new Set(["running", "finalizing"]);
+const TERMINAL_SCAN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+function normalizeScanStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function mergeJobSnapshot(prev, next) {
+  if (!next) return prev;
+  if (!prev) return next;
+  const prevStatus = normalizeScanStatus(prev.status);
+  const nextStatus = normalizeScanStatus(next.status);
+  if (TERMINAL_SCAN_STATUSES.has(prevStatus) && nextStatus && !TERMINAL_SCAN_STATUSES.has(nextStatus)) {
+    return {
+      ...next,
+      status: prev.status,
+      completedAt: prev.completedAt || next.completedAt,
+    };
+  }
+  return next;
+}
 
 export function ScanProvider({ children }) {
   // ── Active scan state ───────────────────────────────────────────────
@@ -40,6 +60,25 @@ export function ScanProvider({ children }) {
     localStorage.setItem("bb_programs", JSON.stringify(progs));
   }, []);
 
+  const updateJobSnapshot = useCallback((updater) => {
+    setJob((prev) => mergeJobSnapshot(prev, typeof updater === "function" ? updater(prev) : updater));
+  }, []);
+
+  // Ref for the background interval so we can cancel it on unmount.
+  const bgPollRef = useRef(null);
+  // Ref tracking the currently-active poll generation. Incremented whenever
+  // a new scan starts or a historical scan is loaded so any in-flight active
+  // polling loop for a previous scan stops mutating state.
+  const pollGenRef = useRef(0);
+
+  const cancelActivePolling = useCallback(() => {
+    pollGenRef.current += 1;
+    if (bgPollRef.current) {
+      clearInterval(bgPollRef.current);
+      bgPollRef.current = null;
+    }
+  }, []);
+
   // ── Start SSE stream ─────────────────────────────────────────────────
   const startEventStream = useCallback((id) => {
     if (sseRef.current) sseRef.current.close();
@@ -51,13 +90,16 @@ export function ScanProvider({ children }) {
         const evt = JSON.parse(e.data);
         const message = String(evt?.message || "");
         if (/^scan completed:/i.test(message)) {
-          setJob((prev) => ({ ...(prev || {}), status: "completed" }));
+          cancelActivePolling();
+          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "completed" }));
           setLoading(false);
         } else if (/^scan cancelled/i.test(message)) {
-          setJob((prev) => ({ ...(prev || {}), status: "cancelled" }));
+          cancelActivePolling();
+          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "cancelled" }));
           setLoading(false);
         } else if (/^scan failed:/i.test(message)) {
-          setJob((prev) => ({ ...(prev || {}), status: "failed" }));
+          cancelActivePolling();
+          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "failed" }));
           setLoading(false);
         }
         setLiveEvents((prev) => [...prev, evt]);
@@ -71,7 +113,7 @@ export function ScanProvider({ children }) {
     };
     es.onerror = () => es.close();
     sseRef.current = es;
-  }, []);
+  }, [cancelActivePolling, updateJobSnapshot]);
 
   // Close SSE when scan ends
   useEffect(() => {
@@ -93,27 +135,12 @@ export function ScanProvider({ children }) {
       });
       if (!res.ok) return false;
       const data = await res.json();
-      setJob(data);
-      return data.status === "completed" || data.status === "failed" || data.status === "cancelled";
+      updateJobSnapshot(data);
+      return TERMINAL_SCAN_STATUSES.has(normalizeScanStatus(data.status));
     } catch {
       return false;
     }
-  }, []);
-
-  // Ref for the background interval so we can cancel it on unmount.
-  const bgPollRef = useRef(null);
-  // Ref tracking the currently-active poll generation. Incremented whenever
-  // a new scan starts or a historical scan is loaded so any in-flight active
-  // polling loop for a previous scan stops mutating state.
-  const pollGenRef = useRef(0);
-
-  const cancelActivePolling = useCallback(() => {
-    pollGenRef.current += 1;
-    if (bgPollRef.current) {
-      clearInterval(bgPollRef.current);
-      bgPollRef.current = null;
-    }
-  }, []);
+  }, [updateJobSnapshot]);
 
   const pollScan = useCallback(async (id) => {
     // Invalidate any previous poll loop and clear background interval.
@@ -155,7 +182,7 @@ export function ScanProvider({ children }) {
   // Clean up the background interval on unmount.
   useEffect(() => () => {
     cancelActivePolling();
-  }, [cancelActivePolling]);
+  }, [cancelActivePolling, updateJobSnapshot]);
 
   // ── Stop a running scan ───────────────────────────────────────────────
   const stopScan = useCallback(async (id) => {
@@ -222,7 +249,7 @@ export function ScanProvider({ children }) {
       if (!res.ok) return false;
       const data = await res.json();
       setScanId(data.id);
-      setJob(data);
+      updateJobSnapshot(data);
       setLiveEvents([]);
       setScreenshots([]);
       setLoading(false);
