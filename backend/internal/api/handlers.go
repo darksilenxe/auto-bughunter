@@ -1032,6 +1032,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.appendAuditEvent(id, "post-processing", "AI summary/ML enrichment exceeded time budget; scan finalized with partial results")
 	}
 
+	// Bound all remaining post-enrichment DB work (ROI calculation, ticket
+	// sync, state persistence) with a fresh timeout so a slow or contended
+	// database cannot keep the scan stuck in "finalizing" indefinitely.
+	finCtx, finCancel := context.WithTimeout(context.Background(), postProcessTimeout)
+	defer finCancel()
+
 	knowledgeCtx := enrich.knowledgeCtx
 	if knowledgeCtx != nil {
 		s.appendAuditEvent(id, "security-knowledge", fmt.Sprintf("Retrieved %d curated references", len(knowledgeCtx.References)))
@@ -1072,8 +1078,8 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.ModelRecommendations.SecurityKnowledge = knowledgeCtx
 		job.NextActions = mergeActions(job.NextActions, knowledgeCtx.SuggestedActions)
 	}
-	expectedROI, roiBasis := s.estimateExpectedROI(context.Background(), job)
-	minROI := s.effectiveMinROI(context.Background(), job)
+	expectedROI, roiBasis := s.estimateExpectedROI(finCtx, job)
+	minROI := s.effectiveMinROI(finCtx, job)
 	meetsROIGate := expectedROI >= minROI
 	if job.Dashboard == nil {
 		job.Dashboard = &model.DecisionDashboard{}
@@ -1105,7 +1111,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	openTickets := 0
 	resolvedTickets := 0
 	if meetsROIGate {
-		openTickets, resolvedTickets = s.syncAutomationTickets(ticketTarget, job.Findings)
+		openTickets, resolvedTickets = s.syncAutomationTickets(finCtx, ticketTarget, job.Findings)
 	} else {
 		s.appendAuditEvent(id, "ticketing", "Skipped automation ticket updates because ROI gate did not pass")
 	}
@@ -1127,7 +1133,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if persistedState != nil {
 		surfaceSnapshot = persistedState.SurfaceSnapshot
 	}
-	s.persistScanState(target, job.Findings, outputs, options, surfaceSnapshot)
+	s.persistScanState(finCtx, target, job.Findings, outputs, options, surfaceSnapshot)
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	metrics.PostProcessDuration.Observe(time.Since(postProcessStart).Seconds())
@@ -3666,7 +3672,7 @@ func (s *Server) runCampaignScheduler() {
 	}
 }
 
-func (s *Server) syncAutomationTickets(target string, findings []model.Finding) (int, int) {
+func (s *Server) syncAutomationTickets(ctx context.Context, target string, findings []model.Finding) (int, int) {
 	now := time.Now().UTC()
 	currentFingerprints := make([]string, 0)
 	open := 0
@@ -3709,11 +3715,11 @@ func (s *Server) syncAutomationTickets(target string, findings []model.Finding) 
 			LastSeenAt:  now,
 			SLADueAt:    &sla,
 		}
-		if err := s.repo.UpsertAutomationTicket(context.Background(), ticket); err == nil {
+		if err := s.repo.UpsertAutomationTicket(ctx, ticket); err == nil {
 			open++
 		}
 	}
-	resolved, _ := s.repo.ResolveAutomationTicketsMissingFingerprints(context.Background(), target, currentFingerprints, now)
+	resolved, _ := s.repo.ResolveAutomationTicketsMissingFingerprints(ctx, target, currentFingerprints, now)
 	return open, int(resolved)
 }
 
@@ -5059,8 +5065,8 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 	return out
 }
 
-func (s *Server) persistScanState(target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions, surfaceSnapshot *model.SurfaceSnapshot) {
-	prev, _ := s.repo.GetScanState(context.Background(), target)
+func (s *Server) persistScanState(ctx context.Context, target string, findings []model.Finding, outputs []agent.AgentOutput, options model.ScanOptions, surfaceSnapshot *model.SurfaceSnapshot) {
+	prev, _ := s.repo.GetScanState(ctx, target)
 	state := model.PersistentScanState{
 		Target:        target,
 		LastUpdatedAt: time.Now().UTC(),
@@ -5101,9 +5107,9 @@ func (s *Server) persistScanState(target string, findings []model.Finding, outpu
 	}
 	sort.Strings(refs)
 	state.KnownRuntimeEndpoints = limitStrings(mergeActions(state.KnownRuntimeEndpoints, refs), 25)
-	feedback, _ := s.repo.ListFeedback(context.Background(), 1000)
+	feedback, _ := s.repo.ListFeedback(ctx, 1000)
 	state.AutonomyMemory = mergeAutonomyMemory(state.AutonomyMemory, outputs, options.AutonomyMemoryRetentionDays, feedback)
-	_ = s.repo.UpsertScanState(context.Background(), state)
+	_ = s.repo.UpsertScanState(ctx, state)
 }
 
 func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutput, retentionDays int, feedback []model.ReportFeedback) model.AutonomyMemory {
