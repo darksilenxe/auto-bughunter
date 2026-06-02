@@ -6,12 +6,12 @@ import { useScan } from "../context/ScanContext";
 import { summarizeFindings } from "../lib/impact";
 
 export default function AttackGraph() {
-  const { job, loading, liveEvents } = useScan();
+  const { job, loading, liveEvents, isScanActive } = useScan();
   const [activeGraphTab, setActiveGraphTab] = useState("chain");
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
-  const isRunning = job?.status === "running" || loading;
+  const isRunning = isScanActive;
   const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
   const topAttackPaths = job?.dashboard?.topAttackPaths || [];
   const agentRuns = job?.agentRuns || [];

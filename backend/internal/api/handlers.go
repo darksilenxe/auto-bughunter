@@ -872,7 +872,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 
-	job.Status = "completed"
+	job.Status = "finalizing"
+	_ = s.repo.UpdateJob(context.Background(), job)
+	s.appendAuditEvent(id, "finalizing", fmt.Sprintf("Post-processing %d finding(s)", len(findings)))
 	postProcessStart := time.Now()
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
@@ -1129,6 +1131,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	metrics.PostProcessDuration.Observe(time.Since(postProcessStart).Seconds())
+	job.Status = "completed"
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
 	// Teach the neural agent learner from this scan's results so future
