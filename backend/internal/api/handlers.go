@@ -1138,6 +1138,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	completedAt := time.Now().UTC()
 	job.Status = "completed"
 	job.CompletedAt = &completedAt
+	if s.attackGraphDB != nil {
+		finalGraph := attackgraph.Build(job)
+		if err := s.attackGraphDB.SaveAttackGraph(context.Background(), id, target, finalGraph); err == nil {
+			job.AttackGraph = finalGraph
+		}
+	}
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
 	// Teach the neural agent learner from this scan's results so future

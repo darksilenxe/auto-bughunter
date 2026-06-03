@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +148,34 @@ func (panicAttackGraphStore) LoadAttackGraph(context.Context, string) (*model.At
 	return nil, nil
 }
 
+type captureAttackGraphStore struct {
+	mu    sync.Mutex
+	saves []model.AttackGraphData
+}
+
+func (s *captureAttackGraphStore) SaveAttackGraph(_ context.Context, _ string, _ string, graph *model.AttackGraphData) error {
+	if graph == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saves = append(s.saves, *graph)
+	return nil
+}
+
+func (s *captureAttackGraphStore) LoadAttackGraph(context.Context, string) (*model.AttackGraphData, error) {
+	return nil, nil
+}
+
+func (s *captureAttackGraphStore) LastStatus() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.saves) == 0 {
+		return ""
+	}
+	return s.saves[len(s.saves)-1].Status
+}
+
 func TestRunJobMarksScanFailedWhenPostProcessingPanics(t *testing.T) {
 	job := &model.ScanJob{
 		ID:          "scan-1",
@@ -155,6 +184,7 @@ func TestRunJobMarksScanFailedWhenPostProcessingPanics(t *testing.T) {
 		Status:      "queued",
 		StartedAt:   time.Now().UTC(),
 	}
+
 	repo := &runJobTestRepo{
 		reportTestRepo: reportTestRepo{
 			jobs: map[string]*model.ScanJob{job.ID: job},
@@ -194,5 +224,40 @@ func TestRunJobMarksScanFailedWhenPostProcessingPanics(t *testing.T) {
 	}
 	if repo.updateStatuses[0] != "running" || repo.updateStatuses[len(repo.updateStatuses)-1] != "failed" {
 		t.Fatalf("unexpected update status sequence %v", repo.updateStatuses)
+	}
+}
+
+func TestRunJobPersistsFinalAttackGraphStatus(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-graph-final-status",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "queued",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &runJobTestRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{job.ID: job},
+		},
+	}
+	graphStore := &captureAttackGraphStore{}
+	s := &Server{
+		repo:          repo,
+		agentRegistry: agent.NewRegistry(),
+		maxPerTarget:  1,
+		targetSem:     map[string]chan struct{}{},
+		globalSem:     make(chan struct{}, 1),
+		targetLastRun: map[string]time.Time{},
+		scanTimeout:   time.Minute,
+		eventBus:      NewEventBus(),
+		attackGraphDB: graphStore,
+		defaultMinROI: 75,
+		cancelFuncs:   map[string]context.CancelFunc{},
+	}
+
+	s.runJob(job.ID, job.Target, model.ScanAuthProfile{}, nil, model.ScanOptions{}, model.ScanScope{})
+
+	if got := graphStore.LastStatus(); got != "completed" {
+		t.Fatalf("expected final persisted attack graph status completed, got %q", got)
 	}
 }
