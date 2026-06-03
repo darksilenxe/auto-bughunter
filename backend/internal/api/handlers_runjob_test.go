@@ -176,6 +176,49 @@ func (s *captureAttackGraphStore) LastStatus() string {
 	return s.saves[len(s.saves)-1].Status
 }
 
+type blockingUpdateRepo struct {
+	runJobTestRepo
+	mu             sync.Mutex
+	updateAttempts []string
+}
+
+func (r *blockingUpdateRepo) UpdateJob(ctx context.Context, job *model.ScanJob) error {
+	r.mu.Lock()
+	r.updateAttempts = append(r.updateAttempts, job.Status)
+	r.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (r *blockingUpdateRepo) UpdateAttempts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.updateAttempts...)
+}
+
+type blockingAttackGraphStore struct {
+	mu      sync.Mutex
+	attempt int
+}
+
+func (s *blockingAttackGraphStore) SaveAttackGraph(ctx context.Context, _ string, _ string, _ *model.AttackGraphData) error {
+	s.mu.Lock()
+	s.attempt++
+	s.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *blockingAttackGraphStore) LoadAttackGraph(context.Context, string) (*model.AttackGraphData, error) {
+	return nil, nil
+}
+
+func (s *blockingAttackGraphStore) Attempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempt
+}
+
 func TestRunJobMarksScanFailedWhenPostProcessingPanics(t *testing.T) {
 	job := &model.ScanJob{
 		ID:          "scan-1",
@@ -260,4 +303,147 @@ func TestRunJobPersistsFinalAttackGraphStatus(t *testing.T) {
 	if got := graphStore.LastStatus(); got != "completed" {
 		t.Fatalf("expected final persisted attack graph status completed, got %q", got)
 	}
+}
+
+func TestRunJobFinalizesWhenJobPersistenceBlocksBeyondBudget(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-persist-block",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "queued",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &blockingUpdateRepo{
+		runJobTestRepo: runJobTestRepo{
+			reportTestRepo: reportTestRepo{
+				jobs: map[string]*model.ScanJob{job.ID: job},
+			},
+		},
+	}
+	s := &Server{
+		repo:               repo,
+		agentRegistry:      agent.NewRegistry(),
+		maxPerTarget:       1,
+		targetSem:          map[string]chan struct{}{},
+		globalSem:          make(chan struct{}, 1),
+		targetLastRun:      map[string]time.Time{},
+		scanTimeout:        time.Minute,
+		persistenceTimeout: 50 * time.Millisecond,
+		eventBus:           NewEventBus(),
+		defaultMinROI:      75,
+		cancelFuncs:        map[string]context.CancelFunc{},
+	}
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		s.runJob(job.ID, job.Target, model.ScanAuthProfile{}, nil, model.ScanOptions{}, model.ScanScope{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runJob did not finalize within 10s despite bounded SQL persistence")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("runJob took %s to finish; bounded SQL persistence should prevent hangs", elapsed)
+	}
+	attempts := repo.UpdateAttempts()
+	if len(attempts) < 3 {
+		t.Fatalf("expected multiple update attempts despite timeouts, got %v", attempts)
+	}
+	if attempts[0] != "running" || attempts[len(attempts)-2] != "finalizing" || attempts[len(attempts)-1] != "completed" {
+		t.Fatalf("unexpected update attempt sequence %v", attempts)
+	}
+}
+
+func TestRunJobFinalizesWhenAttackGraphPersistenceBlocksBeyondBudget(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-graph-persist-block",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "queued",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &runJobTestRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{job.ID: job},
+		},
+	}
+	graphStore := &blockingAttackGraphStore{}
+	s := &Server{
+		repo:               repo,
+		agentRegistry:      agent.NewRegistry(),
+		maxPerTarget:       1,
+		targetSem:          map[string]chan struct{}{},
+		globalSem:          make(chan struct{}, 1),
+		targetLastRun:      map[string]time.Time{},
+		scanTimeout:        time.Minute,
+		persistenceTimeout: 50 * time.Millisecond,
+		eventBus:           NewEventBus(),
+		attackGraphDB:      graphStore,
+		defaultMinROI:      75,
+		cancelFuncs:        map[string]context.CancelFunc{},
+	}
+
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		s.runJob(job.ID, job.Target, model.ScanAuthProfile{}, nil, model.ScanOptions{}, model.ScanScope{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runJob did not finalize within 10s despite bounded Neo4j persistence")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("runJob took %s to finish; bounded Neo4j persistence should prevent hangs", elapsed)
+	}
+	if attempts := graphStore.Attempts(); attempts < 2 {
+		t.Fatalf("expected attack graph persistence attempts, got %d", attempts)
+	}
+	stored, err := repo.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetJob returned error: %v", err)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("expected completed status after Neo4j timeout, got %q", stored.Status)
+	}
+}
+
+func TestAppendAuditEventUsesBoundedPersistenceTimeout(t *testing.T) {
+	blocked := make(chan struct{}, 1)
+	repo := &auditBlockingRepo{blocked: blocked}
+	s := &Server{
+		repo:               repo,
+		persistenceTimeout: 50 * time.Millisecond,
+	}
+
+	start := time.Now()
+	s.appendAuditEvent("scan-audit", "running", "Scan execution started")
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("appendAuditEvent took %s; expected bounded persistence timeout", elapsed)
+	}
+	select {
+	case <-blocked:
+	default:
+		t.Fatal("expected AppendAuditEvent to be invoked")
+	}
+}
+
+type auditBlockingRepo struct {
+	reportTestRepo
+	blocked chan struct{}
+}
+
+func (r *auditBlockingRepo) AppendAuditEvent(ctx context.Context, _ string, _ model.ScanAuditEvent) error {
+	select {
+	case r.blocked <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
