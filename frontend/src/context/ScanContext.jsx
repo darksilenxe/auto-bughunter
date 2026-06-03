@@ -4,6 +4,12 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
 const API_KEY = localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY || "";
 const WORKSPACE_ID = import.meta.env.VITE_WORKSPACE_ID || "default";
 export { API_BASE, API_KEY, WORKSPACE_ID };
+export function getAPIKey() {
+  return localStorage.getItem("api_key") || import.meta.env.VITE_API_KEY || "";
+}
+export function getWorkspaceID() {
+  return import.meta.env.VITE_WORKSPACE_ID || "default";
+}
 
 const ScanContext = createContext(null);
 const ACTIVE_SCAN_STATUSES = new Set(["running", "finalizing"]);
@@ -81,10 +87,12 @@ export function ScanProvider({ children }) {
 
   // ── Start SSE stream ─────────────────────────────────────────────────
   const startEventStream = useCallback((id) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     if (sseRef.current) sseRef.current.close();
     setLiveEvents([]);
     setScreenshots([]);
-    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?api_key=${encodeURIComponent(API_KEY)}&workspaceId=${encodeURIComponent(WORKSPACE_ID)}`);
+    const es = new EventSource(`${API_BASE}/api/scan/${id}/events?api_key=${encodeURIComponent(apiKey)}&workspaceId=${encodeURIComponent(workspaceID)}`);
     es.onmessage = (e) => {
       try {
         const evt = JSON.parse(e.data);
@@ -129,9 +137,11 @@ export function ScanProvider({ children }) {
   // Fetches a single status snapshot and returns true when the job has
   // reached a terminal state (completed / failed / cancelled).
   const fetchJobStatus = useCallback(async (id) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     try {
-      const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
-        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(workspaceID)}`, {
+        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
       });
       if (!res.ok) return false;
       const data = await res.json();
@@ -186,18 +196,22 @@ export function ScanProvider({ children }) {
 
   // ── Stop a running scan ───────────────────────────────────────────────
   const stopScan = useCallback(async (id) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     const targetId = id || scanId;
     if (!targetId) return;
     try {
       await fetch(`${API_BASE}/api/scan/${encodeURIComponent(targetId)}/stop`, {
         method: "POST",
-        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
       });
     } catch { /* ignore */ }
   }, [scanId]);
 
   // ── Start a scan ──────────────────────────────────────────────────────
   const startScan = useCallback(async (payload) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     setLoading(true);
     setError("");
     setJob(null);
@@ -206,7 +220,7 @@ export function ScanProvider({ children }) {
     try {
       const res = await fetch(`${API_BASE}/api/scan`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -222,10 +236,12 @@ export function ScanProvider({ children }) {
 
   // ── Load scan history ─────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     setHistoryLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/scans?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`, {
-        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      const res = await fetch(`${API_BASE}/api/scans?workspaceId=${encodeURIComponent(workspaceID)}`, {
+        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
       });
       if (res.ok) setScanHistory((await res.json()).scans || []);
     } catch { /* ignore */ }
@@ -237,14 +253,16 @@ export function ScanProvider({ children }) {
   // fetched scan so that Findings, Reports, and Attack Graph all reflect
   // the selected historical engagement.
   const loadScan = useCallback(async (id) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
     if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
     // Cancel any active polling loops so they cannot overwrite the loaded
     // historical scan with a later status from a previous live scan.
     cancelActivePolling();
     try {
       const res = await fetch(
-        `${API_BASE}/api/scan/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(WORKSPACE_ID)}`,
-        { headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID } },
+        `${API_BASE}/api/scan/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceID)}`,
+        { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID } },
       );
       if (!res.ok) return false;
       const data = await res.json();
