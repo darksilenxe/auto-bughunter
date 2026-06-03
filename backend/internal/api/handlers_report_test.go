@@ -40,6 +40,13 @@ type reportTestRepo struct {
 	jobs map[string]*model.ScanJob
 }
 
+type healthStatsRepo struct {
+	reportTestRepo
+	stats sql.DBStats
+}
+
+func (r *healthStatsRepo) ConnectionStats() sql.DBStats { return r.stats }
+
 func (r *reportTestRepo) GetJob(_ context.Context, id string) (*model.ScanJob, error) {
 	job, ok := r.jobs[id]
 	if !ok {
@@ -171,6 +178,46 @@ func (r *reportTestRepo) SaveScanAnnotation(context.Context, model.ScanAnnotatio
 }
 func (r *reportTestRepo) ListScanAnnotations(_ context.Context, _ string) ([]model.ScanAnnotation, error) {
 	return nil, nil
+}
+
+func TestHandleHealthIncludesDatabaseStatsWhenAvailable(t *testing.T) {
+	s := &Server{
+		repo: &healthStatsRepo{
+			reportTestRepo: reportTestRepo{jobs: map[string]*model.ScanJob{}},
+			stats: sql.DBStats{
+				MaxOpenConnections: 32,
+				OpenConnections:    5,
+				InUse:              2,
+				Idle:               3,
+				WaitCount:          7,
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleHealth(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected ok status, got %#v", body["status"])
+	}
+	database, ok := body["database"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected database stats in response, got %#v", body["database"])
+	}
+	if got := int(database["maxOpenConnections"].(float64)); got != 32 {
+		t.Fatalf("expected maxOpenConnections=32, got %d", got)
+	}
+	if got := int(database["waitCount"].(float64)); got != 7 {
+		t.Fatalf("expected waitCount=7, got %d", got)
+	}
 }
 
 func newReportServer(t *testing.T, jobs map[string]*model.ScanJob) *Server {

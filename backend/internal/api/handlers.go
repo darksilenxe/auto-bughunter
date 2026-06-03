@@ -175,9 +175,28 @@ func (s *Server) persistJob(job *model.ScanJob) error {
 	if job == nil {
 		return nil
 	}
-	ctx, cancel := s.persistenceContext()
-	defer cancel()
-	return s.repo.UpdateJob(ctx, job)
+	backoff := 25 * time.Millisecond
+	if s.persistenceTimeout > 0 && s.persistenceTimeout/4 > 0 && s.persistenceTimeout/4 < backoff {
+		backoff = s.persistenceTimeout / 4
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := s.persistenceContext()
+		err := s.repo.UpdateJob(ctx, job)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) {
+			break
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * backoff)
+		}
+	}
+	log.Printf("api: scan %s persistence failed for status %q: %v", job.ID, job.Status, lastErr)
+	return lastErr
 }
 
 func (s *Server) persistAssets(scanID string, assets []model.ScanAsset) error {
@@ -505,7 +524,18 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	resp := map[string]any{"status": "ok"}
+	if statsProvider, ok := s.repo.(interface{ ConnectionStats() sql.DBStats }); ok {
+		stats := statsProvider.ConnectionStats()
+		resp["database"] = map[string]int{
+			"openConnections":    stats.OpenConnections,
+			"inUse":              stats.InUse,
+			"idle":               stats.Idle,
+			"maxOpenConnections": stats.MaxOpenConnections,
+			"waitCount":          int(stats.WaitCount),
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {

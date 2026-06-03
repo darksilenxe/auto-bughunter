@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"auto-bughunter/backend/internal/model"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -24,13 +26,30 @@ import (
 type Postgres struct {
 	db             *sql.DB
 	proxyRetention time.Duration
+	opTimeout      time.Duration
+	retryCount     int
+	retryBackoff   time.Duration
 }
+
+const (
+	defaultDBMaxOpenConns    = 32
+	defaultDBMaxIdleConns    = 8
+	defaultDBConnMaxLifetime = 10 * time.Minute
+	defaultDBConnMaxIdleTime = 2 * time.Minute
+	defaultDBOpTimeout       = 10 * time.Second
+	defaultDBRetryCount      = 2
+	defaultDBRetryBackoff    = 200 * time.Millisecond
+)
 
 func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
+	db.SetMaxOpenConns(intFromEnv("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns))
+	db.SetMaxIdleConns(intFromEnv("DB_MAX_IDLE_CONNS", defaultDBMaxIdleConns))
+	db.SetConnMaxLifetime(durationFromEnv("DB_CONN_MAX_LIFETIME", defaultDBConnMaxLifetime))
+	db.SetConnMaxIdleTime(durationFromEnv("DB_CONN_MAX_IDLE_TIME", defaultDBConnMaxIdleTime))
 
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -39,7 +58,13 @@ func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 
-	repo := &Postgres{db: db, proxyRetention: proxyRetentionFromEnv()}
+	repo := &Postgres{
+		db:             db,
+		proxyRetention: proxyRetentionFromEnv(),
+		opTimeout:      durationFromEnv("DB_OPERATION_TIMEOUT", defaultDBOpTimeout),
+		retryCount:     intFromEnv("DB_TRANSIENT_RETRY_COUNT", defaultDBRetryCount),
+		retryBackoff:   durationFromEnv("DB_TRANSIENT_RETRY_BACKOFF", defaultDBRetryBackoff),
+	}
 	if err := repo.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -54,6 +79,127 @@ func (p *Postgres) Close() error {
 	return p.db.Close()
 }
 
+func (p *Postgres) operationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if _, ok := parent.Deadline(); ok {
+		return parent, func() {}
+	}
+	timeout := p.opTimeout
+	if timeout <= 0 {
+		timeout = defaultDBOpTimeout
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func (p *Postgres) shouldRetry(parent context.Context, err error, attempt int) bool {
+	if err == nil || attempt >= p.retryCount {
+		return false
+	}
+	if parent != nil && parent.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "40001", "40P01", "55P03", "53300", "57P01", "08000", "08003", "08006", "08001":
+			return true
+		}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return false
+}
+
+func (p *Postgres) retryDelay(attempt int) time.Duration {
+	backoff := p.retryBackoff
+	if backoff <= 0 {
+		backoff = defaultDBRetryBackoff
+	}
+	if attempt <= 0 {
+		return backoff
+	}
+	return time.Duration(attempt+1) * backoff
+}
+
+func (p *Postgres) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	var lastErr error
+	for attempt := 0; attempt <= p.retryCount; attempt++ {
+		opCtx, cancel := p.operationContext(ctx)
+		res, err := p.db.ExecContext(opCtx, query, args...)
+		cancel()
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !p.shouldRetry(ctx, err, attempt) {
+			return nil, err
+		}
+		time.Sleep(p.retryDelay(attempt))
+	}
+	return nil, lastErr
+}
+
+type rowsWithCancel struct {
+	*sql.Rows
+	cancel context.CancelFunc
+}
+
+func (r *rowsWithCancel) Close() error {
+	defer r.cancel()
+	return r.Rows.Close()
+}
+
+func (r *rowsWithCancel) Err() error {
+	defer r.cancel()
+	return r.Rows.Err()
+}
+
+func (p *Postgres) queryContext(ctx context.Context, query string, args ...any) (*rowsWithCancel, error) {
+	var lastErr error
+	for attempt := 0; attempt <= p.retryCount; attempt++ {
+		opCtx, cancel := p.operationContext(ctx)
+		rows, err := p.db.QueryContext(opCtx, query, args...)
+		if err == nil {
+			return &rowsWithCancel{Rows: rows, cancel: cancel}, nil
+		}
+		cancel()
+		lastErr = err
+		if !p.shouldRetry(ctx, err, attempt) {
+			return nil, err
+		}
+		time.Sleep(p.retryDelay(attempt))
+	}
+	return nil, lastErr
+}
+
+type rowWithCancel struct {
+	row    *sql.Row
+	cancel context.CancelFunc
+}
+
+func (r *rowWithCancel) Scan(dest ...any) error {
+	defer r.cancel()
+	return r.row.Scan(dest...)
+}
+
+func (p *Postgres) queryRowContext(ctx context.Context, query string, args ...any) scanner {
+	opCtx, cancel := p.operationContext(ctx)
+	return &rowWithCancel{
+		row:    p.db.QueryRowContext(opCtx, query, args...),
+		cancel: cancel,
+	}
+}
+
 func proxyRetentionFromEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("PROXY_RETENTION_HOURS"))
 	if v == "" {
@@ -64,6 +210,37 @@ func proxyRetentionFromEnv() time.Duration {
 		return 7 * 24 * time.Hour
 	}
 	return time.Duration(hours) * time.Hour
+}
+
+func intFromEnv(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+func durationFromEnv(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+func (p *Postgres) ConnectionStats() sql.DBStats {
+	if p == nil || p.db == nil {
+		return sql.DBStats{}
+	}
+	return p.db.Stats()
 }
 
 func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
@@ -108,7 +285,7 @@ func (p *Postgres) CreateJob(ctx context.Context, job *model.ScanJob) error {
 		return err
 	}
 
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO scans (
 			id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		)
@@ -162,7 +339,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 		return err
 	}
 
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE scans
 		SET status = $2,
 			completed_at = $3,
@@ -200,7 +377,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 }
 
 func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE id = $1
@@ -294,7 +471,7 @@ func (p *Postgres) GetJob(ctx context.Context, id string) (*model.ScanJob, error
 }
 
 func (p *Postgres) migrate(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scans (
 			id TEXT PRIMARY KEY,
 			target TEXT NOT NULL,
@@ -324,46 +501,46 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scans table: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.scope column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS agent_runs JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS agent_runs JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.agent_runs column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS asset_links JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS asset_links JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.asset_links column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS dashboard JSONB NULL`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS dashboard JSONB NULL`); err != nil {
 		return fmt.Errorf("migrate scans.dashboard column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS next_actions JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS next_actions JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.next_actions column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS automated_report TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS automated_report TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate scans.automated_report column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS model_recommendations JSONB NULL`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS model_recommendations JSONB NULL`); err != nil {
 		return fmt.Errorf("migrate scans.model_recommendations column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate scans.program_name column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_policy_version TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS program_policy_version TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate scans.program_policy_version column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS disallowed_test_types JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS disallowed_test_types JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate scans.disallowed_test_types column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS workspace_id TEXT NOT NULL DEFAULT 'default'`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS workspace_id TEXT NOT NULL DEFAULT 'default'`); err != nil {
 		return fmt.Errorf("migrate scans.workspace_id column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS requested_by TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS requested_by TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate scans.requested_by column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS policy_pack TEXT NOT NULL DEFAULT 'internal'`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE scans ADD COLUMN IF NOT EXISTS policy_pack TEXT NOT NULL DEFAULT 'internal'`); err != nil {
 		return fmt.Errorf("migrate scans.policy_pack column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `
+	if _, err := p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_assets (
 			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
 			asset_type TEXT NOT NULL,
@@ -375,7 +552,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("migrate scan_assets table: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `
+	if _, err := p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_events (
 			id BIGSERIAL PRIMARY KEY,
 			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -387,7 +564,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 		return fmt.Errorf("migrate scan_events table: %w", err)
 	}
 
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS proxy_requests (
 			id TEXT PRIMARY KEY,
 			captured_at TIMESTAMPTZ NOT NULL,
@@ -404,7 +581,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate proxy_requests table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS report_feedback (
 			id TEXT PRIMARY KEY,
 			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -421,7 +598,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate report_feedback table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS finding_verifications (
 			id TEXT PRIMARY KEY,
 			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -437,13 +614,13 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	// Additive migration: add owner column for finding lifecycle ownership
 	// transitions. Older deployments may not have this column.
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		ALTER TABLE finding_verifications ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT ''
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate finding_verifications.owner column: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS suppression_rules (
 			id TEXT PRIMARY KEY,
 			target TEXT NOT NULL DEFAULT '',
@@ -459,7 +636,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate suppression_rules table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_states (
 			target TEXT PRIMARY KEY,
 			last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -473,14 +650,14 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	}
 	// Backward-compatible migration for deployments where scan_states already
 	// exists from older versions without autonomy_memory.
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		ALTER TABLE scan_states
 		ADD COLUMN IF NOT EXISTS autonomy_memory JSONB NOT NULL DEFAULT '{}'::jsonb
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate scan_states.autonomy_memory column: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_idempotency (
 			idempotency_key TEXT NOT NULL,
 			target TEXT NOT NULL,
@@ -492,7 +669,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scan_idempotency table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_tickets (
 			id TEXT PRIMARY KEY,
 			target TEXT NOT NULL,
@@ -511,7 +688,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_tickets table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS api_keys (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
@@ -528,7 +705,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate api_keys table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_campaigns (
 			id TEXT PRIMARY KEY,
 			target TEXT NOT NULL,
@@ -568,64 +745,64 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_campaigns table: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_type TEXT NOT NULL DEFAULT 'interval'`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_type TEXT NOT NULL DEFAULT 'interval'`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.schedule_type column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_value TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS schedule_value TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.schedule_value column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_window TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_window TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.run_window column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS blackout_windows JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS blackout_windows JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.blackout_windows column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.retry_count column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.max_attempts column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ NULL`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ NULL`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.next_retry_at column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.last_error column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS dead_letter BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS dead_letter BOOLEAN NOT NULL DEFAULT FALSE`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.dead_letter column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ NULL`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ NULL`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.lease_until column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS program_name TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.program_name column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS policy_pack TEXT NOT NULL DEFAULT 'internal'`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS policy_pack TEXT NOT NULL DEFAULT 'internal'`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.policy_pack column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 1`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 1`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.policy_version column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS queue_state TEXT NOT NULL DEFAULT 'queued'`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS queue_state TEXT NOT NULL DEFAULT 'queued'`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.queue_state column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NULL`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NULL`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.heartbeat_at column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_idempotency_key TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS run_idempotency_key TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.run_idempotency_key column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_approval JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_approval JSONB NOT NULL DEFAULT '{}'::jsonb`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.authorization_approval column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_evidence JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_evidence JSONB NOT NULL DEFAULT '[]'::jsonb`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.authorization_evidence column: %w", err)
 	}
-	if _, err := p.db.ExecContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_digest TEXT NOT NULL DEFAULT ''`); err != nil {
+	if _, err := p.execContext(ctx, `ALTER TABLE automation_campaigns ADD COLUMN IF NOT EXISTS authorization_digest TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("migrate automation_campaigns.authorization_digest column: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_program_roi_overrides (
 			workspace_id TEXT NOT NULL,
 			program_name TEXT NOT NULL,
@@ -637,7 +814,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_program_roi_overrides table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_policy_packs (
 			workspace_id TEXT NOT NULL,
 			name TEXT NOT NULL,
@@ -662,11 +839,11 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_policy_packs table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `ALTER TABLE automation_policy_packs ADD COLUMN IF NOT EXISTS governance_profile JSONB NOT NULL DEFAULT '{}'::jsonb`)
+	_, err = p.execContext(ctx, `ALTER TABLE automation_policy_packs ADD COLUMN IF NOT EXISTS governance_profile JSONB NOT NULL DEFAULT '{}'::jsonb`)
 	if err != nil {
 		return fmt.Errorf("migrate automation_policy_packs.governance_profile column: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS automation_policy_audit (
 			id TEXT PRIMARY KEY,
 			workspace_id TEXT NOT NULL,
@@ -682,7 +859,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate automation_policy_audit table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS scan_annotations (
 			id TEXT PRIMARY KEY,
 			scan_id TEXT NOT NULL,
@@ -695,17 +872,62 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate scan_annotations table: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_scan_annotations_scan_id ON scan_annotations(scan_id)
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate scan_annotations index: %w", err)
 	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_scans_completed_lookup
+		ON scans (completed_at DESC NULLS LAST, started_at DESC)
+		WHERE status = 'completed'
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scans completed lookup index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_scans_target_completed_lookup
+		ON scans (target, completed_at DESC NULLS LAST, started_at DESC)
+		WHERE status = 'completed'
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scans target completed lookup index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_scan_events_scan_id_timestamp
+		ON scan_events (scan_id, timestamp DESC)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_events scan_id/timestamp index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_report_feedback_created_at
+		ON report_feedback (created_at DESC)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate report_feedback created_at index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_finding_verifications_scan_id_finding_id_created_at
+		ON finding_verifications (scan_id, finding_id, created_at DESC)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate finding_verifications lookup index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_automation_campaigns_due
+		ON automation_campaigns ((COALESCE(next_retry_at, next_run_at)), lease_until)
+		WHERE active = TRUE AND dead_letter = FALSE AND queue_state <> 'running'
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate automation_campaigns due index: %w", err)
+	}
 	return nil
 }
 
 func (p *Postgres) GetLatestCompletedJobByTarget(ctx context.Context, target, excludeID string) (*model.ScanJob, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE target = $1 AND status = 'completed' AND id <> $2
@@ -798,7 +1020,7 @@ func (p *Postgres) ListCompletedJobs(ctx context.Context, limit int) ([]*model.S
 	if limit > 1000 {
 		limit = 1000
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, target, workspace_id, requested_by, policy_pack, status, started_at, completed_at, findings, ai_summary, model_recommendations, error, auth_profile_summary, options, scope, agent_runs, asset_links, dashboard, next_actions, automated_report, program_name, program_policy_version, disallowed_test_types
 		FROM scans
 		WHERE status = 'completed'
@@ -893,7 +1115,7 @@ func (p *Postgres) SaveAssets(ctx context.Context, scanID string, assets []model
 	if strings.TrimSpace(scanID) == "" {
 		return errors.New("scanID is required")
 	}
-	if _, err := p.db.ExecContext(ctx, `DELETE FROM scan_assets WHERE scan_id = $1`, scanID); err != nil {
+	if _, err := p.execContext(ctx, `DELETE FROM scan_assets WHERE scan_id = $1`, scanID); err != nil {
 		return fmt.Errorf("clear scan assets: %w", err)
 	}
 	if len(assets) == 0 {
@@ -904,7 +1126,7 @@ func (p *Postgres) SaveAssets(ctx context.Context, scanID string, assets []model
 		if discoveredAt.IsZero() {
 			discoveredAt = time.Now().UTC()
 		}
-		_, err := p.db.ExecContext(ctx, `
+		_, err := p.execContext(ctx, `
 			INSERT INTO scan_assets (scan_id, asset_type, asset_key, asset_value, discovered_at)
 			VALUES ($1,$2,$3,$4,$5)
 			ON CONFLICT (scan_id, asset_type, asset_key)
@@ -918,7 +1140,7 @@ func (p *Postgres) SaveAssets(ctx context.Context, scanID string, assets []model
 }
 
 func (p *Postgres) GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT asset_type, asset_key, asset_value, discovered_at
 		FROM scan_assets
 		WHERE scan_id = $1
@@ -947,7 +1169,7 @@ func (p *Postgres) AppendAuditEvent(ctx context.Context, scanID string, event mo
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO scan_events (scan_id, stage, message, timestamp)
 		VALUES ($1,$2,$3,$4)
 	`, scanID, strings.TrimSpace(event.Stage), strings.TrimSpace(event.Message), ts)
@@ -958,7 +1180,7 @@ func (p *Postgres) AppendAuditEvent(ctx context.Context, scanID string, event mo
 }
 
 func (p *Postgres) ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT stage, message, timestamp
 		FROM scan_events
 		WHERE scan_id = $1
@@ -992,7 +1214,7 @@ func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest
 
 	if p.proxyRetention > 0 {
 		cutoff := time.Now().UTC().Add(-p.proxyRetention)
-		_, _ = p.db.ExecContext(ctx, `DELETE FROM proxy_requests WHERE captured_at < $1`, cutoff)
+		_, _ = p.execContext(ctx, `DELETE FROM proxy_requests WHERE captured_at < $1`, cutoff)
 	}
 
 	reqHeadersJSON, err := json.Marshal(sanitized.RequestHeaders)
@@ -1003,7 +1225,7 @@ func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest
 	if err != nil {
 		return err
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO proxy_requests
 			(id, captured_at, method, url, request_headers, request_body, response_status, response_headers, response_body, notes)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -1019,7 +1241,7 @@ func (p *Postgres) SaveProxyRequest(ctx context.Context, req *model.ProxyRequest
 
 // ListProxyRequests returns all captured proxy requests ordered by capture time descending.
 func (p *Postgres) ListProxyRequests(ctx context.Context) ([]*model.ProxyRequest, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, captured_at, method, url, request_headers, request_body,
 		       response_status, response_headers, response_body, notes
 		FROM proxy_requests
@@ -1043,7 +1265,7 @@ func (p *Postgres) ListProxyRequests(ctx context.Context) ([]*model.ProxyRequest
 
 // GetProxyRequest returns a single proxy request by ID.
 func (p *Postgres) GetProxyRequest(ctx context.Context, id string) (*model.ProxyRequest, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT id, captured_at, method, url, request_headers, request_body,
 		       response_status, response_headers, response_body, notes
 		FROM proxy_requests
@@ -1058,7 +1280,7 @@ func (p *Postgres) GetProxyRequest(ctx context.Context, id string) (*model.Proxy
 
 // ClearProxyRequests deletes all captured proxy requests.
 func (p *Postgres) ClearProxyRequests(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, `DELETE FROM proxy_requests`)
+	_, err := p.execContext(ctx, `DELETE FROM proxy_requests`)
 	if err != nil {
 		return fmt.Errorf("clear proxy_requests: %w", err)
 	}
@@ -1107,7 +1329,7 @@ func (p *Postgres) SaveFeedback(ctx context.Context, feedback model.ReportFeedba
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO report_feedback (
 			id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
 		)
@@ -1123,7 +1345,7 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
 		FROM report_feedback
 		ORDER BY created_at DESC
@@ -1145,7 +1367,7 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 }
 
 func (p *Postgres) SaveFindingVerification(ctx context.Context, verification model.FindingVerification) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO finding_verifications (id, scan_id, finding_id, status, notes, verified_by, owner, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	`, verification.ID, verification.ScanID, verification.FindingID, verification.Status, verification.Notes, verification.VerifiedBy, verification.Owner, verification.CreatedAt)
@@ -1156,7 +1378,7 @@ func (p *Postgres) SaveFindingVerification(ctx context.Context, verification mod
 }
 
 func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID string) (map[string]model.FindingVerification, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT DISTINCT ON (finding_id) id, scan_id, finding_id, status, notes, verified_by, owner, created_at
 		FROM finding_verifications
 		WHERE scan_id = $1
@@ -1178,7 +1400,7 @@ func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID str
 }
 
 func (p *Postgres) SaveSuppressionRule(ctx context.Context, rule model.SuppressionRule) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO suppression_rules (id, target, finding_id, category, title, reason, created_by, created_at, expires_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 	`, rule.ID, rule.Target, rule.FindingID, rule.Category, rule.Title, rule.Reason, rule.CreatedBy, rule.CreatedAt, rule.ExpiresAt)
@@ -1189,7 +1411,7 @@ func (p *Postgres) SaveSuppressionRule(ctx context.Context, rule model.Suppressi
 }
 
 func (p *Postgres) ListActiveSuppressionRules(ctx context.Context, target string, now time.Time) ([]model.SuppressionRule, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, target, finding_id, category, title, reason, created_by, created_at, expires_at
 		FROM suppression_rules
 		WHERE (target = '' OR target = $1) AND (expires_at IS NULL OR expires_at > $2)
@@ -1211,7 +1433,7 @@ func (p *Postgres) ListActiveSuppressionRules(ctx context.Context, target string
 }
 
 func (p *Postgres) GetScanState(ctx context.Context, target string) (*model.PersistentScanState, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT target, last_updated_at, session_instability, known_runtime_endpoints, autonomy_memory
 		FROM scan_states
 		WHERE target = $1
@@ -1243,7 +1465,7 @@ func (p *Postgres) UpsertScanState(ctx context.Context, state model.PersistentSc
 	if err != nil {
 		return err
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO scan_states (target, last_updated_at, session_instability, known_runtime_endpoints, autonomy_memory)
 		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (target) DO UPDATE
@@ -1259,7 +1481,7 @@ func (p *Postgres) UpsertScanState(ctx context.Context, state model.PersistentSc
 }
 
 func (p *Postgres) SaveIdempotencyRecord(ctx context.Context, key, target, scanID string, createdAt time.Time) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO scan_idempotency (idempotency_key, target, scan_id, created_at)
 		VALUES ($1,$2,$3,$4)
 		ON CONFLICT (idempotency_key, target)
@@ -1272,7 +1494,7 @@ func (p *Postgres) SaveIdempotencyRecord(ctx context.Context, key, target, scanI
 }
 
 func (p *Postgres) GetRecentJobByIdempotencyKey(ctx context.Context, key, target string, since time.Time) (*model.ScanJob, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT s.id
 		FROM scan_idempotency si
 		INNER JOIN scans s ON s.id = si.scan_id
@@ -1290,7 +1512,7 @@ func (p *Postgres) GetRecentJobByIdempotencyKey(ctx context.Context, key, target
 }
 
 func (p *Postgres) UpsertAutomationTicket(ctx context.Context, ticket model.AutomationTicket) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO automation_tickets (
 			id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
 		)
@@ -1312,7 +1534,7 @@ func (p *Postgres) UpsertAutomationTicket(ctx context.Context, ticket model.Auto
 
 func (p *Postgres) ResolveAutomationTicketsMissingFingerprints(ctx context.Context, target string, fingerprints []string, resolvedAt time.Time) (int64, error) {
 	if len(fingerprints) == 0 {
-		res, err := p.db.ExecContext(ctx, `
+		res, err := p.execContext(ctx, `
 			UPDATE automation_tickets
 			SET status = 'resolved',
 				resolved_at = $2
@@ -1325,7 +1547,7 @@ func (p *Postgres) ResolveAutomationTicketsMissingFingerprints(ctx context.Conte
 		rows, _ := res.RowsAffected()
 		return rows, nil
 	}
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE automation_tickets
 		SET status = 'resolved',
 			resolved_at = $3
@@ -1345,11 +1567,11 @@ func (p *Postgres) ListOpenAutomationTickets(ctx context.Context, target string,
 		limit = 100
 	}
 	var (
-		rows *sql.Rows
+		rows *rowsWithCancel
 		err  error
 	)
 	if strings.TrimSpace(target) == "" {
-		rows, err = p.db.QueryContext(ctx, `
+		rows, err = p.queryContext(ctx, `
 			SELECT id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
 			FROM automation_tickets
 			WHERE status <> 'resolved'
@@ -1357,7 +1579,7 @@ func (p *Postgres) ListOpenAutomationTickets(ctx context.Context, target string,
 			LIMIT $1
 		`, limit)
 	} else {
-		rows, err = p.db.QueryContext(ctx, `
+		rows, err = p.queryContext(ctx, `
 			SELECT id, target, fingerprint, title, severity, status, owner, sla_due_at, first_seen_at, last_seen_at, resolved_at
 			FROM automation_tickets
 			WHERE status <> 'resolved' AND target = $1
@@ -1441,7 +1663,7 @@ func (p *Postgres) UpsertAutomationCampaign(ctx context.Context, campaign model.
 	if policyVersion <= 0 {
 		policyVersion = 1
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO automation_campaigns (
 			id, target, workspace_id, requested_by, policy_pack, policy_version, authorization_approval, authorization_evidence, authorization_digest, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
 		)
@@ -1504,7 +1726,7 @@ func (p *Postgres) ListAutomationCampaigns(ctx context.Context, workspaceID stri
 	}
 	query += ` ORDER BY updated_at DESC LIMIT $2`
 	args = append(args, limit)
-	rows, err := p.db.QueryContext(ctx, query, args...)
+	rows, err := p.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list automation campaigns: %w", err)
 	}
@@ -1547,7 +1769,7 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, target, workspace_id, requested_by, policy_pack, policy_version, authorization_approval, authorization_evidence, authorization_digest, name, program_name, interval_min, schedule_type, schedule_value, run_window, blackout_windows, next_run_at, last_run_at, retry_count, max_attempts, next_retry_at, last_error, dead_letter, queue_state, lease_until, heartbeat_at, run_idempotency_key, active, auth_profile, options, scope, created_at, updated_at
 		FROM automation_campaigns
 		WHERE active = TRUE
@@ -1598,7 +1820,7 @@ func (p *Postgres) ListDueAutomationCampaigns(ctx context.Context, now time.Time
 }
 
 func (p *Postgres) UpdateAutomationCampaignRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		UPDATE automation_campaigns
 		SET last_run_at = $2,
 			next_run_at = $3,
@@ -1619,7 +1841,7 @@ func (p *Postgres) UpdateAutomationCampaignRun(ctx context.Context, id string, l
 }
 
 func (p *Postgres) DeleteAutomationCampaign(ctx context.Context, id, workspaceID string) error {
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		DELETE FROM automation_campaigns
 		WHERE id = $1 AND workspace_id = $2
 	`, strings.TrimSpace(id), strings.TrimSpace(workspaceID))
@@ -1630,7 +1852,7 @@ func (p *Postgres) DeleteAutomationCampaign(ctx context.Context, id, workspaceID
 }
 
 func (p *Postgres) TryLeaseAutomationCampaign(ctx context.Context, id string, leaseUntil time.Time) (bool, error) {
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE automation_campaigns
 		SET lease_until = $2,
 			queue_state = 'running',
@@ -1649,7 +1871,7 @@ func (p *Postgres) TryLeaseAutomationCampaign(ctx context.Context, id string, le
 
 func (p *Postgres) MarkAutomationCampaignDispatchFailure(ctx context.Context, id, lastError string, now time.Time, backoff time.Duration) error {
 	nextRetry := now.Add(backoff)
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		UPDATE automation_campaigns
 		SET retry_count = retry_count + 1,
 			next_retry_at = $2,
@@ -1668,7 +1890,7 @@ func (p *Postgres) MarkAutomationCampaignDispatchFailure(ctx context.Context, id
 }
 
 func (p *Postgres) HeartbeatAutomationCampaignLease(ctx context.Context, id string, heartbeatAt, leaseUntil time.Time) (bool, error) {
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE automation_campaigns
 		SET heartbeat_at = $2,
 			lease_until = $3,
@@ -1690,7 +1912,7 @@ func (p *Postgres) ReclaimStaleAutomationCampaignLeases(ctx context.Context, sta
 	if limit <= 0 {
 		limit = 100
 	}
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		WITH stale AS (
 			SELECT id
 			FROM automation_campaigns
@@ -1728,7 +1950,7 @@ func (p *Postgres) UpdateAutomationCampaignQueueState(ctx context.Context, id, q
 	if heartbeatAt != nil && !heartbeatAt.IsZero() {
 		hb = *heartbeatAt
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		UPDATE automation_campaigns
 		SET queue_state = $2,
 			run_idempotency_key = $3,
@@ -1751,7 +1973,7 @@ func (p *Postgres) GetProgramROIOverride(ctx context.Context, workspaceID, progr
 	if programName == "" {
 		return nil, nil
 	}
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT workspace_id, program_name, min_expected_roi_usd, updated_at
 		FROM automation_program_roi_overrides
 		WHERE workspace_id = $1 AND lower(program_name) = lower($2)
@@ -1778,7 +2000,7 @@ func (p *Postgres) UpsertProgramROIOverride(ctx context.Context, item model.Prog
 	if item.UpdatedAt.IsZero() {
 		item.UpdatedAt = time.Now().UTC()
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO automation_program_roi_overrides (workspace_id, program_name, min_expected_roi_usd, updated_at)
 		VALUES ($1,$2,$3,$4)
 		ON CONFLICT (workspace_id, program_name) DO UPDATE
@@ -1799,7 +2021,7 @@ func (p *Postgres) ListProgramROIOverrides(ctx context.Context, workspaceID stri
 	if workspaceID == "" {
 		workspaceID = "default"
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT workspace_id, program_name, min_expected_roi_usd, updated_at
 		FROM automation_program_roi_overrides
 		WHERE workspace_id = $1
@@ -1830,7 +2052,7 @@ func (p *Postgres) GetAutomationPolicyPack(ctx context.Context, workspaceID, nam
 	if name == "" {
 		return nil, nil
 	}
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT workspace_id, name, strategy_version, canary_percent, automation_mode, min_expected_roi_usd,
 			max_automation_concurrency, max_per_target_concurrency, max_exploit_attempts,
 			daily_scan_limit, daily_runtime_limit_minutes, daily_probe_limit,
@@ -1916,7 +2138,7 @@ func (p *Postgres) UpsertAutomationPolicyPack(ctx context.Context, item model.Au
 	if err != nil {
 		return fmt.Errorf("marshal governance profile: %w", err)
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO automation_policy_packs (
 			workspace_id, name, strategy_version, canary_percent, automation_mode, min_expected_roi_usd,
 			max_automation_concurrency, max_per_target_concurrency, max_exploit_attempts,
@@ -1955,7 +2177,7 @@ func (p *Postgres) ListAutomationPolicyPacks(ctx context.Context, workspaceID st
 	if workspaceID == "" {
 		workspaceID = "default"
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT workspace_id, name, strategy_version, canary_percent, automation_mode, min_expected_roi_usd,
 			max_automation_concurrency, max_per_target_concurrency, max_exploit_attempts,
 			daily_scan_limit, daily_runtime_limit_minutes, daily_probe_limit,
@@ -2019,7 +2241,7 @@ func (p *Postgres) AppendAutomationPolicyAudit(ctx context.Context, event model.
 	if strategyVersion <= 0 {
 		strategyVersion = 1
 	}
-	_, err := p.db.ExecContext(ctx, `
+	_, err := p.execContext(ctx, `
 		INSERT INTO automation_policy_audit (
 			id, workspace_id, policy_pack, strategy_version, action, changed_by, changed_at, before_json, after_json
 		)
@@ -2058,7 +2280,7 @@ func (p *Postgres) ListAutomationPolicyAudit(ctx context.Context, workspaceID, p
 		query += ` LIMIT $3`
 		args = append(args, limit)
 	}
-	rows, err := p.db.QueryContext(ctx, query, args...)
+	rows, err := p.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list automation policy audit: %w", err)
 	}
@@ -2084,7 +2306,7 @@ func (p *Postgres) GetWorkspaceDailyUsage(ctx context.Context, workspaceID strin
 	var usage model.WorkspaceDailyUsage
 	usage.WorkspaceID = workspaceID
 	usage.Day = start
-	err := p.db.QueryRowContext(ctx, `
+	err := p.queryRowContext(ctx, `
 		SELECT
 			COUNT(*) AS scan_count,
 			COALESCE(ROUND(SUM(
@@ -2136,7 +2358,7 @@ func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, r
 	if err != nil {
 		return nil, "", err
 	}
-	_, err = p.db.ExecContext(ctx, `
+	_, err = p.execContext(ctx, `
 		INSERT INTO api_keys (id, workspace_id, name, role, key_hash, key_prefix, active, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,TRUE,$7)
 	`, rec.ID, rec.WorkspaceID, rec.Name, string(rec.Role), hashed, rec.KeyPrefix, rec.CreatedAt)
@@ -2148,7 +2370,7 @@ func (p *Postgres) CreateAPIKey(ctx context.Context, workspaceID, name string, r
 
 func (p *Postgres) ListAPIKeys(ctx context.Context, workspaceID string) ([]model.APIKeyRecord, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
 		FROM api_keys
 		WHERE workspace_id = $1
@@ -2181,7 +2403,7 @@ func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRe
 		return nil, "", err
 	}
 	now := time.Now().UTC()
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE api_keys
 		SET key_hash = $2, key_prefix = $3, rotated_at = $4, revoked_at = NULL, active = TRUE
 		WHERE id = $1
@@ -2201,7 +2423,7 @@ func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRe
 }
 
 func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
-	res, err := p.db.ExecContext(ctx, `
+	res, err := p.execContext(ctx, `
 		UPDATE api_keys
 		SET active = FALSE, revoked_at = NOW()
 		WHERE id = $1
@@ -2216,7 +2438,7 @@ func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
 }
 
 func (p *Postgres) AuthenticateAPIKey(ctx context.Context, rawKey string) (*model.APIKeyRecord, error) {
-	rows, err := p.db.QueryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active, key_hash
 		FROM api_keys
 		WHERE active = TRUE
@@ -2241,7 +2463,7 @@ func (p *Postgres) AuthenticateAPIKey(ctx context.Context, rawKey string) (*mode
 }
 
 func (p *Postgres) getAPIKeyByID(ctx context.Context, id string) (*model.APIKeyRecord, error) {
-	row := p.db.QueryRowContext(ctx, `
+	row := p.queryRowContext(ctx, `
 		SELECT id, workspace_id, name, role, key_prefix, created_at, rotated_at, revoked_at, active
 		FROM api_keys WHERE id = $1
 	`, strings.TrimSpace(id))
@@ -2295,7 +2517,7 @@ func redactHeaders(headers map[string]string) map[string]string {
 
 // SaveScanAnnotation persists a single operator scan annotation.
 func (p *Postgres) SaveScanAnnotation(ctx context.Context, annotation model.ScanAnnotation) error {
-	_, err := p.db.ExecContext(ctx,
+	_, err := p.execContext(ctx,
 		`INSERT INTO scan_annotations (id, scan_id, workspace_id, author, text, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -2312,7 +2534,7 @@ func (p *Postgres) SaveScanAnnotation(ctx context.Context, annotation model.Scan
 // ListScanAnnotations returns all annotations for the given scan ID, ordered
 // oldest first.
 func (p *Postgres) ListScanAnnotations(ctx context.Context, scanID string) ([]model.ScanAnnotation, error) {
-	rows, err := p.db.QueryContext(ctx,
+	rows, err := p.queryContext(ctx,
 		`SELECT id, scan_id, workspace_id, author, text, created_at
 		 FROM scan_annotations
 		 WHERE scan_id = $1
