@@ -222,12 +222,18 @@ export function ScanProvider({ children }) {
     const targetId = id || scanId;
     if (!targetId) return;
     try {
-      await fetch(`${API_BASE}/api/scan/${encodeURIComponent(targetId)}/stop`, {
+      const res = await fetch(`${API_BASE}/api/scan/${encodeURIComponent(targetId)}/stop`, {
         method: "POST",
         headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
       });
+      if (res.ok) {
+        // Optimistically mark as cancelled so the UI reflects the request
+        // immediately, even if the backend is still in the finalizing phase.
+        setJob((prev) => prev ? { ...prev, status: "cancelled" } : prev);
+        cancelActivePolling();
+      }
     } catch { /* ignore */ }
-  }, [scanId]);
+  }, [scanId, cancelActivePolling]);
 
   // ── Start a scan ──────────────────────────────────────────────────────
   const startScan = useCallback(async (payload) => {

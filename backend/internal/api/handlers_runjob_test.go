@@ -508,6 +508,7 @@ func TestAppendAuditEventUsesBoundedPersistenceTimeout(t *testing.T) {
 	}
 }
 
+
 type auditBlockingRepo struct {
 	reportTestRepo
 	blocked chan struct{}
@@ -520,4 +521,86 @@ func (r *auditBlockingRepo) AppendAuditEvent(ctx context.Context, _ string, _ mo
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// TestRunJobHonoursOperatorCancelDuringFinalizing verifies that when the
+// operator calls stopScan while runJob is in the "finalizing" (post-processing)
+// phase, the scan is ultimately marked "cancelled" rather than "completed".
+func TestRunJobHonoursOperatorCancelDuringFinalizing(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-cancel-finalizing",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "queued",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &runJobTestRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{job.ID: job},
+		},
+	}
+
+	// hookEntered is signalled when the enrichment hook starts; the test then
+	// cancels the scan context to simulate operator stop-during-finalizing.
+	hookEntered := make(chan struct{})
+	unblock := make(chan struct{})
+
+	s := &Server{
+		repo:              repo,
+		agentRegistry:     agent.NewRegistry(),
+		maxPerTarget:      1,
+		targetSem:         map[string]chan struct{}{},
+		globalSem:         make(chan struct{}, 1),
+		targetLastRun:     map[string]time.Time{},
+		scanTimeout:       time.Minute,
+		postProcessBudget: 10 * time.Second,
+		eventBus:          NewEventBus(),
+		defaultMinROI:     75,
+		cancelFuncs:       map[string]context.CancelFunc{},
+		enrichmentHook: func(_ context.Context, _ string, _ []model.Finding, _ *model.ScanJob) enrichmentResult {
+			close(hookEntered)
+			<-unblock
+			return enrichmentResult{}
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.runJob(job.ID, job.Target, model.ScanAuthProfile{}, nil, model.ScanOptions{}, model.ScanScope{})
+		close(done)
+	}()
+
+	// Wait until enrichment has started, then cancel via the registered func.
+	select {
+	case <-hookEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("enrichment hook was never entered")
+	}
+	s.cancelMu.Lock()
+	cancelFn, ok := s.cancelFuncs[job.ID]
+	s.cancelMu.Unlock()
+	if !ok {
+		t.Fatal("no cancel func registered for scan")
+	}
+	cancelFn()
+	// Unblock the hook so runJob can proceed to check ctx.Err().
+	close(unblock)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runJob did not finish within 10s after operator cancel")
+	}
+
+	stored, err := repo.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if stored.Status != "cancelled" {
+		t.Fatalf("expected cancelled status after operator stop during finalizing, got %q", stored.Status)
+	}
+	// The final persisted status must be "cancelled".
+	if last := repo.updateStatuses[len(repo.updateStatuses)-1]; last != "cancelled" {
+		t.Fatalf("expected last persisted status to be cancelled, got %q (all: %v)", last, repo.updateStatuses)
+	}
 }

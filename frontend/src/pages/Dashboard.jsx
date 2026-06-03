@@ -216,7 +216,7 @@ export default function Dashboard() {
   const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
   const isRunning = isScanActive;
   const normalizedJobStatus = String(job?.status || "").toLowerCase();
-  const canStopScan = Boolean(scanId) && (loading || normalizedJobStatus === "queued" || normalizedJobStatus === "running");
+  const canStopScan = Boolean(scanId) && (loading || normalizedJobStatus === "queued" || normalizedJobStatus === "running" || normalizedJobStatus === "finalizing");
   const completionLabel = useMemo(() => {
     if (!job?.completedAt || !["completed", "failed", "cancelled"].includes(normalizedJobStatus)) return "";
     const prefix = normalizedJobStatus === "completed" ? "Completed" : normalizedJobStatus === "failed" ? "Failed" : "Stopped";

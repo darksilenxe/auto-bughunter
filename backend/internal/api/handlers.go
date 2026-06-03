@@ -711,7 +711,7 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
-	if job.Status != "running" && job.Status != "queued" {
+	if job.Status != "running" && job.Status != "queued" && job.Status != "finalizing" {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "scan is not running"})
 		return
 	}
@@ -1113,6 +1113,22 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	case <-postCtx.Done():
 		log.Printf("api: scan %s post-processing enrichment exceeded budget %s; finalizing with partial AI/ML results: %v", id, budget, postCtx.Err())
 		s.appendAuditEvent(id, "post-processing", "AI summary/ML enrichment exceeded time budget; scan finalized with partial results")
+	}
+
+	// If the operator cancelled the scan while it was in the finalizing phase,
+	// honour that request now that enrichment has settled (completed or timed out).
+	if errors.Is(ctx.Err(), context.Canceled) {
+		now := time.Now().UTC()
+		job.Status = "cancelled"
+		job.Error = "scan stopped by operator"
+		job.CompletedAt = &now
+		emit(model.ScanEvent{
+			Type:    model.ScanEventInfo,
+			Message: "Scan cancelled by operator",
+		})
+		s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator during post-processing")
+		_ = s.persistJob(job)
+		return
 	}
 
 	// Bound all remaining post-enrichment DB work (ROI calculation, ticket
