@@ -827,9 +827,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}()
 
 	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
-	completed := time.Now().UTC()
-
-	job.CompletedAt = &completed
+	executionFinishedAt := time.Now().UTC()
 	// partialTimeout records that the scan-wide deadline (SCAN_TIMEOUT_SECONDS)
 	// elapsed mid-pipeline. Rather than discarding every finding collected so
 	// far and marking the whole scan "failed", we finalize gracefully: the
@@ -1137,7 +1135,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
 	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
 	metrics.PostProcessDuration.Observe(time.Since(postProcessStart).Seconds())
+	completedAt := time.Now().UTC()
 	job.Status = "completed"
+	job.CompletedAt = &completedAt
 	_ = s.repo.UpdateJob(context.Background(), job)
 	s.notifyFindings(job)
 	// Teach the neural agent learner from this scan's results so future
@@ -1149,9 +1149,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 			agentSeq = append(agentSeq, run.AgentName)
 		}
 		var scanDurationMs int64
-		if job.CompletedAt != nil {
-			scanDurationMs = job.CompletedAt.Sub(job.StartedAt).Milliseconds()
-		}
+		scanDurationMs = executionFinishedAt.Sub(job.StartedAt).Milliseconds()
 		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs, job.AgentRuns)
 	}
 	completionAudit := "Scan execution completed successfully"
