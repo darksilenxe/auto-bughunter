@@ -5561,6 +5561,9 @@ func buildAgentTelemetry(outputs []agent.AgentOutput) []model.AgentRunTelemetry 
 func enrichFindings(findings []model.Finding) []model.Finding {
 	dedup := map[string]model.Finding{}
 	for _, f := range findings {
+		if strings.TrimSpace(f.ID) == "" {
+			f.ID = syntheticFindingID(f)
+		}
 		if len(f.Sources) == 0 {
 			f.Sources = []string{defaultSourceForCategory(f.Category)}
 		}
@@ -5602,6 +5605,9 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 		if severityRank(f.Severity) > severityRank(existing.Severity) {
 			existing.Severity = f.Severity
 		}
+		if strings.TrimSpace(existing.ID) == "" && strings.TrimSpace(f.ID) != "" {
+			existing.ID = f.ID
+		}
 		existing.Sources = mergeActions(existing.Sources, f.Sources)
 		if strings.TrimSpace(existing.Evidence) == "" {
 			existing.Evidence = f.Evidence
@@ -5619,6 +5625,21 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 		return out[i].Title < out[j].Title
 	})
 	return out
+}
+
+func syntheticFindingID(f model.Finding) string {
+	seed := strings.TrimSpace(strings.ToLower(
+		strings.Join([]string{
+			strings.TrimSpace(f.Category),
+			strings.TrimSpace(f.Title),
+			strings.TrimSpace(f.AffectedURL),
+			strings.TrimSpace(f.AffectedParameter),
+		}, "|"),
+	))
+	if seed == "" || seed == "|||" {
+		seed = "finding"
+	}
+	return "finding-" + uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed)).String()
 }
 
 func severityRank(sev model.Severity) int {
