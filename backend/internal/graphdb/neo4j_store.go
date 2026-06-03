@@ -75,11 +75,13 @@ func (s *Neo4jStore) SaveAttackGraph(ctx context.Context, scanID, target string,
 		_, runErr := tx.Run(ctx, `
 MERGE (s:AttackScan {id: $scanId})
 SET s.target = $target,
+    s.status = $status,
     s.graph = $graph,
     s.updatedAt = datetime()
 `, map[string]any{
 			"scanId": scanID,
 			"target": target,
+			"status": strings.TrimSpace(graph.Status),
 			"graph":  string(raw),
 		})
 		return nil, runErr

@@ -383,6 +383,7 @@ type APIKeyRecord struct {
 
 type AttackGraphData struct {
 	Source string            `json:"source,omitempty"`
+	Status string            `json:"status,omitempty"`
 	Nodes  []AttackGraphNode `json:"nodes,omitempty"`
 	Edges  []AttackGraphEdge `json:"edges,omitempty"`
 }

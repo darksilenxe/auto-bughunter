@@ -19,6 +19,7 @@ func Build(job *model.ScanJob) *model.AttackGraphData {
 
 	graph := &model.AttackGraphData{
 		Source: "backend",
+		Status: strings.ToLower(strings.TrimSpace(job.Status)),
 		Nodes:  []model.AttackGraphNode{},
 		Edges:  []model.AttackGraphEdge{},
 	}
