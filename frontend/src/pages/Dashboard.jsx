@@ -215,6 +215,13 @@ export default function Dashboard() {
 
   const findingsSummary = useMemo(() => summarizeFindings(job?.findings || []), [job?.findings]);
   const isRunning = isScanActive;
+  const normalizedJobStatus = String(job?.status || "").toLowerCase();
+  const canStopScan = Boolean(scanId) && (loading || normalizedJobStatus === "queued" || normalizedJobStatus === "running");
+  const completionLabel = useMemo(() => {
+    if (!job?.completedAt || !["completed", "failed", "cancelled"].includes(normalizedJobStatus)) return "";
+    const prefix = normalizedJobStatus === "completed" ? "Completed" : normalizedJobStatus === "failed" ? "Failed" : "Stopped";
+    return `${prefix} ${new Date(job.completedAt).toLocaleString()}`;
+  }, [job?.completedAt, normalizedJobStatus]);
   const highlightedGoals = useMemo(() => topGoals(job?.findings || []), [job?.findings]);
 
   return (
@@ -234,6 +241,7 @@ export default function Dashboard() {
             <span className={`status-badge ${job?.status === "completed" ? "success" : isRunning ? "" : "warning"}`}>
               {job?.status || (isRunning ? "running" : "ready")}
             </span>
+            {completionLabel && <span className="chip chip--muted">{completionLabel}</span>}
             <span className="chip">AI tool loop</span>
             <span className="chip chip--goal">Impact goals active</span>
           </div>
@@ -480,7 +488,7 @@ export default function Dashboard() {
 
             <div className="button-row">
               <button disabled={loading}>{loading ? "Scanning…" : "Start scan"}</button>
-              {loading && scanId && <button type="button" className="button-danger" onClick={() => stopScan(scanId)}>Stop scan</button>}
+              {canStopScan && <button type="button" className="button-danger" onClick={() => stopScan(scanId)}>Stop scan</button>}
             </div>
           </form>
 
