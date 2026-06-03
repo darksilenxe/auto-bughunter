@@ -77,6 +77,7 @@ type Server struct {
 	gateMedBlock               int
 	scanTimeout                time.Duration
 	postProcessBudget          time.Duration
+	persistenceTimeout         time.Duration
 	enrichmentHook             func(ctx context.Context, target string, findings []model.Finding, jobSnapshot *model.ScanJob) enrichmentResult
 	eventBus                   *EventBus
 	oast                       *oast.Service
@@ -119,6 +120,7 @@ const (
 	// http.Client.Timeout; this top-level budget prevents a total hang when
 	// multiple services are slow or unreachable.
 	postProcessTimeout = 2 * time.Minute
+	persistenceTimeout = 10 * time.Second
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -142,6 +144,56 @@ func (s *Server) SetProxyServer(p *proxy.Server) {
 
 // SetAttackGraphStore attaches an optional graph database-backed attack graph store.
 func (s *Server) SetAttackGraphStore(store AttackGraphStore) { s.attackGraphDB = store }
+
+func (s *Server) persistenceContext() (context.Context, context.CancelFunc) {
+	timeout := s.persistenceTimeout
+	if timeout <= 0 {
+		timeout = persistenceTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
+func (s *Server) loadJobForRun(id string) (*model.ScanJob, error) {
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.repo.GetJob(ctx, id)
+}
+
+func (s *Server) loadLatestCompletedJob(target, excludeID string) (*model.ScanJob, error) {
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.repo.GetLatestCompletedJobByTarget(ctx, target, excludeID)
+}
+
+func (s *Server) loadScanState(target string) (*model.PersistentScanState, error) {
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.repo.GetScanState(ctx, target)
+}
+
+func (s *Server) persistJob(job *model.ScanJob) error {
+	if job == nil {
+		return nil
+	}
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.repo.UpdateJob(ctx, job)
+}
+
+func (s *Server) persistAssets(scanID string, assets []model.ScanAsset) error {
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.repo.SaveAssets(ctx, scanID, assets)
+}
+
+func (s *Server) persistAttackGraph(scanID, target string, graph *model.AttackGraphData) error {
+	if s.attackGraphDB == nil {
+		return nil
+	}
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	return s.attackGraphDB.SaveAttackGraph(ctx, scanID, target, graph)
+}
 
 // SetVectorMemory attaches an episodic vector memory store.  Nil is safe and
 // disables the feature.
@@ -283,6 +335,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		gateMedBlock:               maxInt(0, intFromEnv("POLICY_GATE_MEDIUM_BLOCK", 3)),
 		scanTimeout:                scanTimeout,
 		postProcessBudget:          postProcessTimeout,
+		persistenceTimeout:         persistenceTimeout,
 		eventBus:                   NewEventBus(),
 		apiRateLimiter:             newAPIRateLimiter(),
 		defaultMinROI:              maxFloat(0, floatFromEnv("AUTOMATION_MIN_EXPECTED_ROI_USD", 75)),
@@ -750,7 +803,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		Message: "Scan job started",
 	})
 
-	job, err := s.repo.GetJob(context.Background(), id)
+	job, err := s.loadJobForRun(id)
 	if err != nil || job == nil {
 		return
 	}
@@ -767,8 +820,8 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.appendAuditEvent(id, "cancelled", "Scan was cancelled while queued; runJob skipped execution")
 		return
 	}
-	previousJob, _ := s.repo.GetLatestCompletedJobByTarget(context.Background(), target, id)
-	persistedState, _ := s.repo.GetScanState(context.Background(), target)
+	previousJob, _ := s.loadLatestCompletedJob(target, id)
+	persistedState, _ := s.loadScanState(target)
 	if persistedState != nil && len(persistedState.KnownRuntimeEndpoints) > 0 {
 		options.SeedRuntimeEndpoints = mergeActions(options.SeedRuntimeEndpoints, persistedState.KnownRuntimeEndpoints)
 		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
@@ -790,7 +843,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 
 	job.Status = "running"
-	_ = s.repo.UpdateJob(context.Background(), job)
+	_ = s.persistJob(job)
 	s.appendAuditEvent(id, "running", "Scan execution started")
 
 	metrics.ScansTotal.Inc()
@@ -822,7 +875,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan failed: " + job.Error,
 			})
 			s.appendAuditEvent(id, "failed", "Scan execution panicked: "+job.Error)
-			_ = s.repo.UpdateJob(context.Background(), job)
+			_ = s.persistJob(job)
 		}
 	}()
 
@@ -848,7 +901,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan cancelled by operator",
 			})
 			s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator")
-			_ = s.repo.UpdateJob(context.Background(), job)
+			_ = s.persistJob(job)
 			return
 		case scanTimedOut:
 			partialTimeout = true
@@ -865,13 +918,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Message: "Scan failed: " + err.Error(),
 			})
 			s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
-			_ = s.repo.UpdateJob(context.Background(), job)
+			_ = s.persistJob(job)
 			return
 		}
 	}
 
 	job.Status = "finalizing"
-	_ = s.repo.UpdateJob(context.Background(), job)
+	_ = s.persistJob(job)
 	s.appendAuditEvent(id, "finalizing", fmt.Sprintf("Post-processing %d finding(s)", len(findings)))
 	postProcessStart := time.Now()
 	emit(model.ScanEvent{
@@ -932,7 +985,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.appendAuditEvent(id, "monitoring", "Monitoring delta finding generated from previous completed scan")
 	}
 	assets := extractAssets(target, job.Findings)
-	if err := s.repo.SaveAssets(context.Background(), id, assets); err == nil {
+	if err := s.persistAssets(id, assets); err == nil {
 		job.Assets = assets
 		s.appendAuditEvent(id, "inventory", fmt.Sprintf("Persisted %d inventory assets", len(assets)))
 		if previousJob != nil {
@@ -968,9 +1021,11 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 	if s.attackGraphDB != nil {
 		graph := attackgraph.Build(job)
-		if err := s.attackGraphDB.SaveAttackGraph(context.Background(), id, target, graph); err == nil {
+		if err := s.persistAttackGraph(id, target, graph); err == nil {
 			job.AttackGraph = graph
 			s.appendAuditEvent(id, "attack-graph", fmt.Sprintf("Persisted attack graph nodes=%d edges=%d", len(graph.Nodes), len(graph.Edges)))
+		} else {
+			log.Printf("api: scan %s intermediate attack graph persistence failed: %v", id, err)
 		}
 	}
 	job.Dashboard = buildDecisionDashboard(job)
@@ -1140,11 +1195,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.CompletedAt = &completedAt
 	if s.attackGraphDB != nil {
 		finalGraph := attackgraph.Build(job)
-		if err := s.attackGraphDB.SaveAttackGraph(context.Background(), id, target, finalGraph); err == nil {
+		if err := s.persistAttackGraph(id, target, finalGraph); err == nil {
 			job.AttackGraph = finalGraph
+		} else {
+			log.Printf("api: scan %s final attack graph persistence failed: %v", id, err)
 		}
 	}
-	_ = s.repo.UpdateJob(context.Background(), job)
+	_ = s.persistJob(job)
 	s.notifyFindings(job)
 	// Teach the neural agent learner from this scan's results so future
 	// scans benefit from accumulated knowledge about which agent sequences
@@ -5422,7 +5479,9 @@ func (s *Server) appendAuditEvent(scanID, stage, message string) {
 	if strings.TrimSpace(scanID) == "" {
 		return
 	}
-	_ = s.repo.AppendAuditEvent(context.Background(), scanID, model.ScanAuditEvent{
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	_ = s.repo.AppendAuditEvent(ctx, scanID, model.ScanAuditEvent{
 		Stage:     stage,
 		Message:   message,
 		Timestamp: time.Now().UTC(),
