@@ -44,6 +44,7 @@ export function ScanProvider({ children }) {
   // ── Live events (SSE) ───────────────────────────────────────────────
   const [liveEvents, setLiveEvents] = useState([]);
   const sseRef = useRef(null);
+  const terminalSyncRef = useRef("");
 
   // ── Screenshots captured during scan ────────────────────────────────
   const [screenshots, setScreenshots] = useState([]); // [{url, b64, agentName}]
@@ -85,6 +86,37 @@ export function ScanProvider({ children }) {
     }
   }, []);
 
+  const fetchScanSnapshot = useCallback(async (id) => {
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
+    const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(workspaceID)}`, {
+      headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  }, []);
+
+  const syncTerminalSnapshot = useCallback(async (id, fallbackStatus) => {
+    const syncKey = `${id}:${fallbackStatus}`;
+    if (terminalSyncRef.current === syncKey) {
+      setLoading(false);
+      return;
+    }
+    terminalSyncRef.current = syncKey;
+    cancelActivePolling();
+    try {
+      const data = await fetchScanSnapshot(id);
+      if (data) {
+        updateJobSnapshot(data);
+      } else {
+        updateJobSnapshot((prev) => ({ ...(prev || {}), id, status: fallbackStatus }));
+      }
+    } catch {
+      updateJobSnapshot((prev) => ({ ...(prev || {}), id, status: fallbackStatus }));
+    }
+    setLoading(false);
+  }, [cancelActivePolling, fetchScanSnapshot, updateJobSnapshot]);
+
   // ── Start SSE stream ─────────────────────────────────────────────────
   const startEventStream = useCallback((id) => {
     const apiKey = getAPIKey();
@@ -98,17 +130,11 @@ export function ScanProvider({ children }) {
         const evt = JSON.parse(e.data);
         const message = String(evt?.message || "");
         if (/^scan completed:/i.test(message)) {
-          cancelActivePolling();
-          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "completed" }));
-          setLoading(false);
+          void syncTerminalSnapshot(id, "completed");
         } else if (/^scan cancelled/i.test(message)) {
-          cancelActivePolling();
-          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "cancelled" }));
-          setLoading(false);
+          void syncTerminalSnapshot(id, "cancelled");
         } else if (/^scan failed:/i.test(message)) {
-          cancelActivePolling();
-          updateJobSnapshot((prev) => ({ ...(prev || {}), status: "failed" }));
-          setLoading(false);
+          void syncTerminalSnapshot(id, "failed");
         }
         setLiveEvents((prev) => [...prev, evt]);
         if (evt.type === "screenshot" && evt.screenshot) {
@@ -121,7 +147,7 @@ export function ScanProvider({ children }) {
     };
     es.onerror = () => es.close();
     sseRef.current = es;
-  }, [cancelActivePolling, updateJobSnapshot]);
+  }, [syncTerminalSnapshot]);
 
   // Close SSE when scan ends
   useEffect(() => {
@@ -137,20 +163,15 @@ export function ScanProvider({ children }) {
   // Fetches a single status snapshot and returns true when the job has
   // reached a terminal state (completed / failed / cancelled).
   const fetchJobStatus = useCallback(async (id) => {
-    const apiKey = getAPIKey();
-    const workspaceID = getWorkspaceID();
     try {
-      const res = await fetch(`${API_BASE}/api/scan/${id}?workspaceId=${encodeURIComponent(workspaceID)}`, {
-        headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
+      const data = await fetchScanSnapshot(id);
+      if (!data) return false;
       updateJobSnapshot(data);
       return TERMINAL_SCAN_STATUSES.has(normalizeScanStatus(data.status));
     } catch {
       return false;
     }
-  }, [updateJobSnapshot]);
+  }, [fetchScanSnapshot, updateJobSnapshot]);
 
   const pollScan = useCallback(async (id) => {
     // Invalidate any previous poll loop and clear background interval.
@@ -217,6 +238,7 @@ export function ScanProvider({ children }) {
     setJob(null);
     setLiveEvents([]);
     setScreenshots([]);
+    terminalSyncRef.current = "";
     try {
       const res = await fetch(`${API_BASE}/api/scan`, {
         method: "POST",
@@ -256,6 +278,7 @@ export function ScanProvider({ children }) {
     const apiKey = getAPIKey();
     const workspaceID = getWorkspaceID();
     if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    terminalSyncRef.current = "";
     // Cancel any active polling loops so they cannot overwrite the loaded
     // historical scan with a later status from a previous live scan.
     cancelActivePolling();
