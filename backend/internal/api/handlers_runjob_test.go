@@ -196,6 +196,48 @@ func (r *blockingUpdateRepo) UpdateAttempts() []string {
 	return append([]string(nil), r.updateAttempts...)
 }
 
+func collapseConsecutive(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := []string{values[0]}
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+type flakyUpdateRepo struct {
+	runJobTestRepo
+	mu          sync.Mutex
+	attempts    int
+	failures    int
+	lastContext context.Context
+}
+
+func (r *flakyUpdateRepo) UpdateJob(ctx context.Context, job *model.ScanJob) error {
+	r.mu.Lock()
+	r.attempts++
+	r.lastContext = ctx
+	remainingFailures := r.failures
+	if r.failures > 0 {
+		r.failures--
+	}
+	r.mu.Unlock()
+	if remainingFailures > 0 {
+		return context.DeadlineExceeded
+	}
+	return r.runJobTestRepo.UpdateJob(ctx, job)
+}
+
+func (r *flakyUpdateRepo) Attempts() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.attempts
+}
+
 type blockingAttackGraphStore struct {
 	mu      sync.Mutex
 	attempt int
@@ -305,6 +347,38 @@ func TestRunJobPersistsFinalAttackGraphStatus(t *testing.T) {
 	}
 }
 
+func TestPersistJobRetriesTransientFailures(t *testing.T) {
+	job := &model.ScanJob{
+		ID:          "scan-persist-retry",
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Status:      "completed",
+		StartedAt:   time.Now().UTC(),
+	}
+	repo := &flakyUpdateRepo{
+		runJobTestRepo: runJobTestRepo{
+			reportTestRepo: reportTestRepo{
+				jobs: map[string]*model.ScanJob{job.ID: job},
+			},
+		},
+		failures: 2,
+	}
+	s := &Server{
+		repo:               repo,
+		persistenceTimeout: 50 * time.Millisecond,
+	}
+
+	if err := s.persistJob(job); err != nil {
+		t.Fatalf("persistJob returned error: %v", err)
+	}
+	if attempts := repo.Attempts(); attempts != 3 {
+		t.Fatalf("expected 3 update attempts, got %d", attempts)
+	}
+	if len(repo.updateStatuses) != 1 || repo.updateStatuses[0] != "completed" {
+		t.Fatalf("expected final successful persisted status, got %v", repo.updateStatuses)
+	}
+}
+
 func TestRunJobFinalizesWhenJobPersistenceBlocksBeyondBudget(t *testing.T) {
 	job := &model.ScanJob{
 		ID:          "scan-persist-block",
@@ -353,7 +427,7 @@ func TestRunJobFinalizesWhenJobPersistenceBlocksBeyondBudget(t *testing.T) {
 	if len(attempts) < 3 {
 		t.Fatalf("expected multiple update attempts despite timeouts, got %v", attempts)
 	}
-	if attempts[0] != "running" || attempts[len(attempts)-2] != "finalizing" || attempts[len(attempts)-1] != "completed" {
+	if collapsed := collapseConsecutive(attempts); len(collapsed) != 3 || collapsed[0] != "running" || collapsed[1] != "finalizing" || collapsed[2] != "completed" {
 		t.Fatalf("unexpected update attempt sequence %v", attempts)
 	}
 }
