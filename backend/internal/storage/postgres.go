@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -29,6 +30,20 @@ type Postgres struct {
 	opTimeout      time.Duration
 	retryCount     int
 	retryBackoff   time.Duration
+}
+
+// sanitizeText strips null bytes from strings destined for Postgres TEXT columns.
+// Postgres rejects embedded null characters (U+0000) in text values.
+func sanitizeText(s string) string {
+	return strings.ReplaceAll(s, "\x00", "")
+}
+
+// sanitizeJSON removes \u0000 escape sequences from marshaled JSON before it is
+// stored in Postgres JSONB columns.  Go's json.Marshal encodes null bytes as
+// the six-character sequence \u0000 which Postgres JSONB rejects with SQLSTATE
+// 22P05 ("unsupported Unicode escape sequence").
+func sanitizeJSON(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte(`\u0000`), nil)
 }
 
 const (
@@ -339,6 +354,16 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 		return err
 	}
 
+	// Sanitize AI-generated content: null bytes cause Postgres to reject
+	// JSONB values (SQLSTATE 22P05) and TEXT columns silently corrupt data.
+	findingsJSON = sanitizeJSON(findingsJSON)
+	agentRunsJSON = sanitizeJSON(agentRunsJSON)
+	dashboardJSON = sanitizeJSON(dashboardJSON)
+	modelRecommendationsJSON = sanitizeJSON(modelRecommendationsJSON)
+	aiSummary := sanitizeText(job.AISummary)
+	automatedReport := sanitizeText(job.AutomatedReport)
+	jobError := sanitizeText(job.Error)
+
 	res, err := p.execContext(ctx, `
 		UPDATE scans
 		SET status = $2,
@@ -362,7 +387,7 @@ func (p *Postgres) UpdateJob(ctx context.Context, job *model.ScanJob) error {
 			requested_by = $20,
 			policy_pack = $21
 		WHERE id = $1
-	`, job.ID, job.Status, job.CompletedAt, findingsJSON, job.AISummary, modelRecommendationsJSON, job.Error, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, job.AutomatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON, job.WorkspaceID, job.RequestedBy, job.PolicyPack)
+	`, job.ID, job.Status, job.CompletedAt, findingsJSON, aiSummary, modelRecommendationsJSON, jobError, summaryJSON, optionsJSON, scopeJSON, agentRunsJSON, assetLinksJSON, dashboardJSON, nextActionsJSON, automatedReport, job.ProgramName, job.ProgramPolicyVersion, disallowedTestsJSON, job.WorkspaceID, job.RequestedBy, job.PolicyPack)
 	if err != nil {
 		return fmt.Errorf("update scan: %w", err)
 	}
