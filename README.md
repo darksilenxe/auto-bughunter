@@ -121,10 +121,10 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Optional local AI runtime + UI:
+Optional local LLM runtime + UI:
 
 ```bash
-docker compose --profile ai up --build
+docker compose --profile ollama up --build
 ```
 
 Then set in `.env`:
