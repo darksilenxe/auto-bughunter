@@ -314,24 +314,24 @@ export default function Settings() {
     } catch {
       // noop
     }
+  }
 
-    async function loadAutomationMetrics() {
-      setAutomationMetricsError("");
-      try {
-        const res = await fetch(`${API_BASE}/api/automation/metrics`, {
-          headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setAutomationMetrics(null);
-          setAutomationMetricsError(data.error || "Failed to load automation metrics.");
-          return;
-        }
-        setAutomationMetrics(data);
-      } catch (err) {
+  async function loadAutomationMetrics() {
+    setAutomationMetricsError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/automation/metrics`, {
+        headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+      });
+      const data = await res.json();
+      if (!res.ok) {
         setAutomationMetrics(null);
-        setAutomationMetricsError(err.message || "Failed to load automation metrics.");
+        setAutomationMetricsError(data.error || "Failed to load automation metrics.");
+        return;
       }
+      setAutomationMetrics(data);
+    } catch (err) {
+      setAutomationMetrics(null);
+      setAutomationMetricsError(err.message || "Failed to load automation metrics.");
     }
   }
 
