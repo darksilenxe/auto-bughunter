@@ -1,5 +1,53 @@
 package model
 
+import "time"
+
+// ProbeRecord is the persisted form of a ProbeResult. It is stored in the
+// probe_records table so that probe-level negative evidence (no_signal,
+// near_miss) becomes first-class training data alongside finding-level labels.
+//
+// PayloadHash is SHA-256 of the raw payload. The raw string is intentionally
+// not stored to avoid persisting injection strings that may trigger WAF rules
+// or audit alerts on the database tier.
+type ProbeRecord struct {
+	// ID is a deterministic identifier: SHA-256 of (scan_id|category|endpoint|param|payload).
+	ID string `json:"id"`
+
+	// ScanID links the record to the parent scan job.
+	ScanID string `json:"scanId"`
+
+	// Category is the vulnerability class (e.g. "xss", "sqli").
+	Category string `json:"category"`
+
+	// Endpoint is the target URL that received the probe.
+	Endpoint string `json:"endpoint"`
+
+	// ParamName is the HTTP parameter that received the payload (may be empty
+	// for header-level or path-level probes).
+	ParamName string `json:"paramName,omitempty"`
+
+	// PayloadHash is the SHA-256 hex digest of the raw payload.
+	PayloadHash string `json:"payloadHash"`
+
+	// Outcome classifies what the probe observed.
+	Outcome ProbeOutcome `json:"outcome"`
+
+	// StatusCode is the HTTP status code returned by the server.
+	StatusCode int `json:"statusCode"`
+
+	// Observation is the plain-English observation from the probe.
+	Observation string `json:"observation"`
+
+	// Confirmed is true when the probe produced a verified finding.
+	Confirmed bool `json:"confirmed"`
+
+	// FindingID is non-empty when Confirmed is true.
+	FindingID string `json:"findingId,omitempty"`
+
+	// CreatedAt is when the probe was executed.
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 // ProbeOutcome classifies what a scanner hypothesis probe observed at the
 // HTTP level. It is set even when no vulnerability is confirmed so the AI
 // can distinguish between "the target is not vulnerable" and "the probe was

@@ -24,6 +24,9 @@ type Repository interface {
 	GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error)
 	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
 	ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error)
+	// ListProbeRecordsByCategory is used in Stage 4 to fold probe-level negative
+	// evidence into the ML training dataset.
+	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
 }
 
 type ProxyStore interface {

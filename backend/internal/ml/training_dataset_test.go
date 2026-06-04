@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -27,6 +28,10 @@ func (r *datasetTestRepo) ListAuditEvents(_ context.Context, _ string) ([]model.
 
 func (r *datasetTestRepo) ListFeedback(_ context.Context, _ int) ([]model.ReportFeedback, error) {
 	return r.feedback, nil
+}
+
+func (r *datasetTestRepo) ListProbeRecordsByCategory(_ context.Context, _ string, _ time.Time, _ int) ([]model.ProbeRecord, error) {
+	return nil, nil
 }
 
 func TestBuildTrainingDatasetIncludesSanitizedFeedback(t *testing.T) {

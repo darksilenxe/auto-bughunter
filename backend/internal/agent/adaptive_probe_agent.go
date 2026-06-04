@@ -187,6 +187,9 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		)
 		stepsExecuted++
 
+		// Persist the probe outcome for ML training (fire-and-forget).
+		recordProbeAsync(input.ProbeRecorder, input.ScanID, pr)
+
 		// Track outcome counters for metadata.
 		switch pr.Outcome {
 		case model.ProbeWAFBlocked:

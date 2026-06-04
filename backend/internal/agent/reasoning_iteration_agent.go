@@ -197,6 +197,9 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 			coverage.RecordTried(h.Category, endpoint, h.ParamName, h.PayloadHint)
 			roundProbeResults = append(roundProbeResults, pr)
 
+			// Persist the probe outcome for ML training (fire-and-forget).
+			recordProbeAsync(input.ProbeRecorder, input.ScanID, pr)
+
 			if pr.Finding == nil {
 				continue
 			}

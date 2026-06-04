@@ -291,6 +291,17 @@ type Repository interface {
 	SaveScanAnnotation(ctx context.Context, annotation model.ScanAnnotation) error
 	// ListScanAnnotations returns all annotations for a scan, oldest first.
 	ListScanAnnotations(ctx context.Context, scanID string) ([]model.ScanAnnotation, error)
+	// SaveProbeRecord persists the outcome of a single hypothesis probe for
+	// ML training and negative-evidence collection.
+	SaveProbeRecord(ctx context.Context, scanID string, pr model.ProbeResult) error
+	// ListProbeRecords returns all probe records for the given scan.
+	ListProbeRecords(ctx context.Context, scanID string) ([]model.ProbeRecord, error)
+	// ListProbeRecordsByOutcome returns probe records matching the given outcome
+	// created at or after since, newest-first, up to limit rows.
+	ListProbeRecordsByOutcome(ctx context.Context, outcome model.ProbeOutcome, since time.Time, limit int) ([]model.ProbeRecord, error)
+	// ListProbeRecordsByCategory returns probe records for the given vulnerability
+	// category created at or after since, newest-first, up to limit rows.
+	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
 }
 
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
@@ -909,7 +920,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}()
 
-	outputs, findings, err := s.runWithAuthProfiles(ctx, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
+	outputs, findings, err := s.runWithAuthProfiles(ctx, id, target, authProfile, roleProfiles, options, scanScope, persistedState, emit)
 	executionFinishedAt := time.Now().UTC()
 	// partialTimeout records that the scan-wide deadline (SCAN_TIMEOUT_SECONDS)
 	// elapsed mid-pipeline. Rather than discarding every finding collected so
@@ -4221,7 +4232,7 @@ func enforceDisallowedTests(options model.ScanOptions, disallowed []string, prog
 	return options
 }
 
-func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, persistedState *model.PersistentScanState, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
+func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, persistedState *model.PersistentScanState, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
 	autonomyMemory := model.AutonomyMemory{}
 	if persistedState != nil {
 		autonomyMemory = persistedState.AutonomyMemory
@@ -4258,11 +4269,13 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, target string, authPro
 
 	input := agent.AgentInput{
 		Target:         target,
+		ScanID:         scanID,
 		AuthProfile:    authProfile,
 		Options:        options,
 		Scope:          scanScope,
 		AutonomyMemory: autonomyMemory,
 		Emit:           emit,
+		ProbeRecorder:  s.repo,
 	}
 	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
