@@ -82,6 +82,7 @@ type pathStateFingerprint struct {
 	bodyText      string
 	title         string
 	location      string
+	requestPath   string
 	accessible    bool
 	hasSPAMarkers bool
 	hasLoginWall  bool
@@ -609,6 +610,11 @@ func classifyWordlistResponse(kind wordlistScanKind, target, path string, baseli
 		result.Reason = "matches baseline fallback"
 		return result, false
 	}
+	if isReflectedFallbackResponse(candidate, baseline) {
+		result.ResponseClass = responseClassSoft404
+		result.Reason = "reflects requested path in fallback template"
+		return result, false
+	}
 	if candidate.hasAPIError && looksLikeAPIPath(kind, path, profile) {
 		result.ResponseClass = responseClassAPIErrorEnvelope
 		result.Score = 4
@@ -711,6 +717,85 @@ func samePathState(left, right pathStateFingerprint) bool {
 		left.location == right.location
 }
 
+func isReflectedFallbackResponse(candidate, baseline pathStateFingerprint) bool {
+	if candidate.status < 200 || candidate.status >= 300 || baseline.status < 200 || baseline.status >= 300 {
+		return false
+	}
+	if candidate.contentType != baseline.contentType {
+		return false
+	}
+	if !reflectsRequestPath(candidate) || !reflectsRequestPath(baseline) {
+		return false
+	}
+	return strippedPathState(candidate) == strippedPathState(baseline)
+}
+
+func reflectsRequestPath(state pathStateFingerprint) bool {
+	if state.requestPath == "" {
+		return false
+	}
+	path := strings.ToLower(strings.TrimSpace(state.requestPath))
+	if path == "" || path == "/" {
+		return false
+	}
+	text := strings.ToLower(strings.Join([]string{state.bodyText, state.title, state.location}, " "))
+	if strings.Contains(text, path) {
+		return true
+	}
+	trimmed := strings.Trim(path, "/")
+	if len(trimmed) >= 4 && strings.Contains(text, trimmed) {
+		return true
+	}
+	for _, segment := range strings.Split(trimmed, "/") {
+		segment = strings.TrimSpace(segment)
+		if len(segment) < 4 {
+			continue
+		}
+		if strings.Contains(text, segment) {
+			return true
+		}
+	}
+	return false
+}
+
+func strippedPathState(state pathStateFingerprint) string {
+	return strings.Join([]string{
+		state.contentType,
+		stripReflectedPathTokens(state.title, state.requestPath),
+		stripReflectedPathTokens(state.bodySample, state.requestPath),
+		stripReflectedPathTokens(state.location, state.requestPath),
+	}, "|")
+}
+
+func stripReflectedPathTokens(text, requestPath string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	requestPath = strings.ToLower(strings.TrimSpace(requestPath))
+	if text == "" || requestPath == "" {
+		return normalizePathStateText(text)
+	}
+	replacements := []string{requestPath}
+	if unescaped, err := url.PathUnescape(requestPath); err == nil {
+		replacements = append(replacements, strings.ToLower(strings.TrimSpace(unescaped)))
+	}
+	trimmed := strings.Trim(requestPath, "/")
+	if trimmed != "" {
+		replacements = append(replacements, trimmed)
+		for _, segment := range strings.Split(trimmed, "/") {
+			segment = strings.TrimSpace(segment)
+			if len(segment) >= 4 {
+				replacements = append(replacements, segment)
+			}
+		}
+	}
+	for _, replacement := range uniqueStrings(replacements) {
+		if replacement == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, replacement, "#")
+	}
+	return normalizePathStateText(text)
+}
+
 func (ws *WordlistScanner) capturePathState(ctx context.Context, target, path string, authProfile model.ScanAuthProfile, scanScope model.ScanScope) pathStateFingerprint {
 	return capturePathStateWithClient(ctx, ws.httpClient, target, path, authProfile, scanScope, ws.timeoutPerCheck)
 }
@@ -785,6 +870,7 @@ func captureURLStateWithClient(ctx context.Context, client *http.Client, rawURL 
 		bodyText:      bodyText,
 		title:         normalizePathStateText(title),
 		location:      normalizePathStateText(location),
+		requestPath:   normalizePathStateText(parsed.Path),
 		accessible:    resp.StatusCode >= 200 && resp.StatusCode < 400,
 		hasSPAMarkers: hasSPAMarkers(bodyText),
 		hasLoginWall:  hasLoginWall(bodyText),

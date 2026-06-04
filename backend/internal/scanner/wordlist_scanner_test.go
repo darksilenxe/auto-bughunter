@@ -67,6 +67,36 @@ func TestProbeMultipleSuppressesCustomBrandedFallback(t *testing.T) {
 	}
 }
 
+func TestProbeMultipleSuppressesReflectedFallbackResponses(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte(`<html><head><title>Home</title></head><body>Welcome</body></html>`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><head><title>Route ` + r.URL.Path + `</title></head><body>Generic route shell for ` + r.URL.Path + `</body></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	ws := newWordlistTestScanner(srv.Client())
+	scanScope := scope.Normalize(srv.URL, model.ScanScope{})
+	profile, _, baseline := ws.captureEnumerationContext(context.Background(), srv.URL, model.ScanAuthProfile{}, scanScope)
+	results, summary := ws.probeMultiple(context.Background(), srv.URL, []string{"/admin", "/debug"}, model.ScanAuthProfile{}, scanScope, wordlistScanKindDirectory, profile, baseline)
+	if len(results) != 0 {
+		t.Fatalf("expected no discoveries, got %+v", results)
+	}
+	if summary.SuppressedCount != 2 {
+		t.Fatalf("expected 2 suppressed reflected fallbacks, got %d (%v)", summary.SuppressedCount, summary.Suppressed)
+	}
+	if joined := strings.Join(summary.Suppressed, " "); !strings.Contains(joined, "reflects requested path in fallback template") {
+		t.Fatalf("expected reflected fallback suppression reason, got %q", joined)
+	}
+}
+
 func TestProbeMultipleKeepsLoginWallDiscoveries(t *testing.T) {
 	t.Parallel()
 
@@ -142,6 +172,39 @@ func TestProbeMultipleKeepsAPIErrorEnvelopeDiscoveries(t *testing.T) {
 	}
 	if summary.SuppressedCount != 1 {
 		t.Fatalf("expected one suppressed API fallback, got %d", summary.SuppressedCount)
+	}
+}
+
+func TestProbeMultipleKeepsDistinctReflectedRouteDiscoveries(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte(`<html><head><title>Home</title></head><body>Welcome</body></html>`))
+		case "/admin":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><head><title>Console /admin</title></head><body>Admin console for /admin</body></html>`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<html><head><title>Route ` + r.URL.Path + `</title></head><body>Generic route shell for ` + r.URL.Path + `</body></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	ws := newWordlistTestScanner(srv.Client())
+	scanScope := scope.Normalize(srv.URL, model.ScanScope{})
+	profile, _, baseline := ws.captureEnumerationContext(context.Background(), srv.URL, model.ScanAuthProfile{}, scanScope)
+	results, summary := ws.probeMultiple(context.Background(), srv.URL, []string{"/admin", "/debug"}, model.ScanAuthProfile{}, scanScope, wordlistScanKindDirectory, profile, baseline)
+	if len(results) != 1 {
+		t.Fatalf("expected one discovery, got %+v", results)
+	}
+	if results[0].Path != "/admin" || results[0].ResponseClass != responseClassTrueContent {
+		t.Fatalf("expected true-content discovery for /admin, got %+v", results[0])
+	}
+	if summary.SuppressedCount != 1 {
+		t.Fatalf("expected one suppressed reflected fallback, got %d (%v)", summary.SuppressedCount, summary.Suppressed)
 	}
 }
 
