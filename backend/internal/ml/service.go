@@ -948,6 +948,12 @@ type ScoredFinding struct {
 	Exploitability string
 }
 
+type FalsePositiveAssessment struct {
+	Score     float64
+	Threshold float64
+	Candidate bool
+}
+
 // ScoreFindings scores findings by risk; falls back to deterministic scoring.
 func (s *Service) ScoreFindings(findings []model.Finding) []ScoredFinding {
 	if len(findings) == 0 {
@@ -1010,21 +1016,33 @@ func (s *Service) BuildRemediationPlan(findings []model.Finding, limit int) []st
 func (s *Service) FindPotentialFalsePositives(findings []model.Finding) []ScoredFinding {
 	out := make([]ScoredFinding, 0)
 	for _, f := range findings {
-		fpScore := falsePositiveSignalScore(f)
-		if fpScore < falsePositiveThreshold(f.Severity) {
+		assessment := s.AssessFalsePositiveCandidate(f)
+		if !assessment.Candidate {
 			continue
 		}
 		enriched := f
 		annotateProofPolicy(&enriched)
 		out = append(out, ScoredFinding{
 			Finding:        enriched,
-			Score:          round2(clamp(fpScore, 0, 1)),
-			Confidence:     round2(clamp(0.35+fpScore*0.55, 0.35, 0.97)),
+			Score:          round2(clamp(assessment.Score, 0, 1)),
+			Confidence:     round2(clamp(0.35+assessment.Score*0.55, 0.35, 0.97)),
 			Exploitability: "unlikely",
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out
+}
+
+// AssessFalsePositiveCandidate computes whether a finding should be queued for
+// manual false-positive review in shadow mode.
+func (s *Service) AssessFalsePositiveCandidate(f model.Finding) FalsePositiveAssessment {
+	score := falsePositiveSignalScore(f)
+	threshold := falsePositiveThresholdForFinding(f)
+	return FalsePositiveAssessment{
+		Score:     score,
+		Threshold: threshold,
+		Candidate: score >= threshold,
+	}
 }
 
 func calibratedFindingConfidence(f model.Finding) float64 {
@@ -1102,7 +1120,27 @@ func annotateProofPolicy(f *model.Finding) {
 	}
 }
 
-func falsePositiveThreshold(sev model.Severity) float64 {
+var categoryFalsePositiveThresholds = map[string]float64{
+	"information_disclosure": 0.48,
+	"headers":                0.5,
+	"misconfiguration":       0.52,
+	"open_redirect":          0.56,
+	"csrf":                   0.58,
+	"xss":                    0.6,
+	"idor":                   0.64,
+	"sqli":                   0.68,
+	"ssrf":                   0.7,
+}
+
+func falsePositiveThresholdForFinding(f model.Finding) float64 {
+	category := strings.ToLower(strings.TrimSpace(f.Category))
+	if threshold, ok := categoryFalsePositiveThresholds[category]; ok {
+		return threshold
+	}
+	return falsePositiveThresholdBySeverity(f.Severity)
+}
+
+func falsePositiveThresholdBySeverity(sev model.Severity) float64 {
 	switch sev {
 	case model.SeverityCritical, model.SeverityHigh:
 		return 0.72

@@ -426,6 +426,23 @@ type FindingVerification struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
+// ShadowDecision captures "what the ML triage model would have decided" at the
+// moment an operator verifies a finding. It is used for shadow-mode evaluation
+// so model decision quality can be measured without changing operator control.
+type ShadowDecision struct {
+	ID             string    `json:"id"`
+	ScanID         string    `json:"scanId"`
+	FindingID      string    `json:"findingId"`
+	Category       string    `json:"category,omitempty"`
+	Severity       Severity  `json:"severity,omitempty"`
+	ModelDecision  string    `json:"modelDecision"`
+	ModelScore     float64   `json:"modelScore"`
+	ModelThreshold float64   `json:"modelThreshold"`
+	OperatorStatus string    `json:"operatorStatus"`
+	Aligned        bool      `json:"aligned"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
 // FindingLifecycleStates lists the canonical lifecycle state machine for
 // findings. Transitions are validated by api.isAllowedFindingTransition.
 //
@@ -696,6 +713,11 @@ type AutomationMetrics struct {
 	// ground-truth measurement used to track strict-mode false-positive
 	// reduction.
 	FalsePositiveRate           float64            `json:"falsePositiveRate"`
+	FalsePositiveRateByCategory map[string]float64 `json:"falsePositiveRateByCategory,omitempty"`
+	VerifiedFindingsByCategory  map[string]int     `json:"verifiedFindingsByCategory,omitempty"`
+	ShadowAlignmentRate         float64            `json:"shadowAlignmentRate,omitempty"`
+	ShadowAlignmentByCategory   map[string]float64 `json:"shadowAlignmentByCategory,omitempty"`
+	ShadowSamples               int                `json:"shadowSamples,omitempty"`
 	VerifiedFindingsSampled     int                `json:"verifiedFindingsSampled,omitempty"`
 	StrictReportingSuppressed   int                `json:"strictReportingSuppressed,omitempty"`
 	StrictReportingScansSampled int                `json:"strictReportingScansSampled,omitempty"`
