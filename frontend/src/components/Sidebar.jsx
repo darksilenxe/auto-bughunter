@@ -8,6 +8,7 @@ const NAV = [
   { path: "/reports", label: "Submission Center", icon: "⬢" },
   { path: "/scans", label: "Engagement History", icon: "◫" },
   { path: "/proxy", label: "Proxy Suite", icon: "⌁" },
+  { path: "/agent-activity", label: "Agent Activity", icon: "⌗" },
   { path: "/references", label: "Knowledge Base", icon: "☰" },
   { path: "/settings", label: "Environment", icon: "⚙" },
 ];

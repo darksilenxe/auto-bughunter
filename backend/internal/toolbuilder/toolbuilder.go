@@ -8,6 +8,7 @@ package toolbuilder
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -159,16 +160,37 @@ func (b *Builder) Build(ctx context.Context, spec ToolSpec, target string, emit 
 	cmd.Env = safeEnv()
 	cmd.WaitDelay = commandWaitDelay
 
-	stdout, err := cmd.Output()
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err = cmd.Run()
 	if err != nil && cmdCtx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("tool %q timed out", spec.Name)
 	}
 
+	stdout := outBuf.String()
 	if len(stdout) > maxOutputBytes {
 		stdout = stdout[:maxOutputBytes]
 	}
 
-	return parseFindings(string(stdout), spec.Name)
+	stderr := errBuf.String()
+	if len(stderr) > maxOutputBytes {
+		stderr = stderr[:maxOutputBytes]
+	}
+
+	if emit != nil {
+		cmdStr := fmt.Sprintf("%s %s %s", interp, scriptPath, target)
+		emit(model.ScanEvent{
+			Type:      model.ScanEventCommandResult,
+			AgentName: spec.GeneratedBy,
+			Command:   cmdStr,
+			Output:    stdout + "\n" + stderr,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
+	return parseFindings(stdout, spec.Name)
 }
 
 // parseFindings scans stdout line by line and deserialises JSON-lines findings.

@@ -10,6 +10,7 @@ import Scans from "./pages/Scans";
 import Settings from "./pages/Settings";
 import Proxy from "./pages/Proxy";
 import References from "./pages/References";
+import AgentActivity from "./pages/AgentActivity";
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/proxy"        element={<Proxy />} />
             <Route path="/references"   element={<References />} />
             <Route path="/settings"     element={<Settings />} />
+            <Route path="/agent-activity" element={<AgentActivity />} />
           </Routes>
         </ErrorBoundary>
       </main>

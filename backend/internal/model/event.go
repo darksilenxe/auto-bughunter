@@ -11,6 +11,7 @@ const (
 	ScanEventAgentSpawned  ScanEventType = "agent_spawned"
 	ScanEventFinding       ScanEventType = "finding"
 	ScanEventCommand       ScanEventType = "command"
+	ScanEventCommandResult ScanEventType = "command_result"
 	ScanEventScreenshot    ScanEventType = "screenshot"
 	ScanEventInfo          ScanEventType = "info"
 	// ScanEventReasoningLoop is emitted by the ReasoningIterationAgent after
@@ -31,6 +32,8 @@ type ScanEvent struct {
 	Message string `json:"message,omitempty"`
 	// Command holds the shell/tool invocation string for command events.
 	Command string `json:"command,omitempty"`
+	// Output holds the command stdout/stderr for command result events.
+	Output string `json:"output,omitempty"`
 	// FindingTitle is the finding title for finding events.
 	FindingTitle string `json:"findingTitle,omitempty"`
 	// Severity is the finding severity for finding events.
