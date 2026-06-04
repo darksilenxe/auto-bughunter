@@ -320,7 +320,7 @@ export default function Findings() {
 
                     {(finding.reproductionSteps?.length > 0 || finding.poc) && (
                       <div className="two-column-grid">
-                        <div className="surface">
+                        <div className="surface" style={{ overflowY: "auto", maxHeight: "300px" }}>
                           <strong>Reproduction steps</strong>
                           {finding.reproductionSteps?.length ? (
                             <ol className="bullet-list" style={{ marginTop: 10 }}>
@@ -330,7 +330,7 @@ export default function Findings() {
                             <p className="meta" style={{ marginTop: 8 }}>No reproduction steps recorded.</p>
                           )}
                         </div>
-                        <div className="surface">
+                        <div className="surface" style={{ overflowY: "auto", maxHeight: "300px" }}>
                           <strong>Proof of concept</strong>
                           {finding.poc ? <pre className="summary" style={{ marginTop: 10 }}>{finding.poc}</pre> : <p className="meta" style={{ marginTop: 8 }}>No PoC payload recorded.</p>}
                         </div>
