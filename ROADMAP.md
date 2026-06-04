@@ -41,6 +41,7 @@ This roadmap now focuses on finishing the remaining productization and enterpris
 - First-party work-management integrations beyond generic webhooks.
 - Executive decision intelligence reporting and compliance evidence ownership flow.
 - Public benchmark suite + CI regression gates + release scorecards as a continuous moat.
+- Intercept proxy plugin platform groundwork, rollout, and governance (free plugin store + performance transparency + container/API contracts).
 
 ---
 
@@ -119,6 +120,8 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - [x] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
 - [x] Add duplicate detection against prior submissions/scans with similarity thresholds.
 - [x] Close payout-feedback loop into prioritization scoring by program profile.
+- [ ] Define intercept-proxy plugin SDK contracts (hook surface + API schema + manifest format) and publish creator docs.
+- [ ] Add compatibility harness for plugin API versions and baseline no-plugin regression checks.
 
 ---
 
@@ -146,6 +149,16 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
    - First-success wizard tied to Juice Shop harness.
 9. Continuous evaluation moat
    - Public benchmark suite, CI regression gates for detection/planner/reporting, release scorecards, living capability matrix.
+10. Intercept Proxy Plugin Platform (Free Plugin Store)
+    - In-product catalog for install/enable/disable/update/remove with free-by-default listing policy (no paid plugins in store).
+11. Plugin runtime isolation and policy controls
+    - Request/response/passive/UI hook points with per-plugin isolation, timeouts, resource quotas, failure containment, and workspace/admin allow-deny controls.
+12. API-first plugin contract for creators
+    - Plugins run in Docker containers, expose a declared API, and ship a manifest that defines host↔plugin API endpoints, capabilities, permissions, risk class, and performance-cost metadata.
+13. Performance transparency
+    - Per-plugin Low/Medium/High performance-cost labels, pre-install warnings for Medium/High, and runtime indicators when plugin overhead increases latency/resource use.
+14. Third-party publishing governance
+    - Security review + signing workflow before listing and version compatibility matrix for backend/frontend/plugin API.
 
 ### Acceptance criteria
 
@@ -154,6 +167,11 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
 - SLOs are defined, measured, and reported for scan queueing/orchestration.
 - Regression gates block releases on quality/safety drift.
 - Release scorecards are published and comparable across releases.
+- Users can install, update, and remove free proxy plugins entirely in-product.
+- Every plugin displays performance impact metadata before enablement.
+- Medium/High cost plugins always present explicit warning flows and can be blocked by policy.
+- Plugin creators are required to provide Dockerized plugin services with exposed APIs and manifest-declared contracts.
+- Core proxy capture/replay/passive behavior remains stable and within SLO targets when plugins are disabled.
 
 ### Remaining implementation checklist
 
@@ -166,6 +184,13 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
 - [ ] Define and publish orchestration/queueing SLOs with alerting.
 - [ ] Add guided onboarding + first-success wizard tied to Juice Shop harness.
 - [ ] Publish benchmark suite, CI regression gates, release scorecards, and capability matrix.
+- [ ] Implement plugin catalog APIs/UI for free install/enable/disable/update/remove lifecycle.
+- [ ] Ship proxy plugin runtime hooks (request/response/passive/UI) with container boundary and failure isolation.
+- [ ] Enforce plugin execution contract: Dockerized runtime + exposed API + manifest-declared host/plugin API mapping.
+- [ ] Implement permission prompts and capability sandboxing (network/storage/hook scopes) with admin allow/deny policy packs.
+- [ ] Add performance-cost labels (Low/Medium/High), Medium/High pre-install warnings, and runtime overhead indicators.
+- [ ] Add plugin signing/review flow and compatibility matrix enforcement across backend/frontend/plugin API versions.
+- [ ] Add plugin API compatibility tests, no-plugin regression gate, and per-tier plugin performance benchmark thresholds.
 
 ---
 
