@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"regexp"
 	"sort"
 	"strings"
@@ -27,13 +29,17 @@ type PassiveFinding struct {
 // Deduplication key: host + ":" + findingID — the same missing-CSP finding is
 // reported once per host, not once per request.
 type PassiveScanStore struct {
-	mu    sync.RWMutex
-	items map[string]PassiveFinding // key = host + ":" + findingID
+	mu       sync.RWMutex
+	items    map[string]PassiveFinding // key = host + ":" + findingID
+	spaHosts map[string]*spaHostState
 }
 
 // NewPassiveScanStore constructs an empty PassiveScanStore.
 func NewPassiveScanStore() *PassiveScanStore {
-	return &PassiveScanStore{items: map[string]PassiveFinding{}}
+	return &PassiveScanStore{
+		items:    map[string]PassiveFinding{},
+		spaHosts: map[string]*spaHostState{},
+	}
 }
 
 // Analyze runs passive checks against a captured proxy request and stores any
@@ -45,10 +51,14 @@ func (ps *PassiveScanStore) Analyze(pr *model.ProxyRequest) {
 	}
 	host := passiveHostFrom(pr.URL)
 	findings := runPassiveChecks(pr)
+	ps.mu.Lock()
+	if spaFinding := ps.analyzeLikelySPALocked(host, pr); spaFinding != nil {
+		findings = append(findings, *spaFinding)
+	}
 	if len(findings) == 0 {
+		ps.mu.Unlock()
 		return
 	}
-	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	for _, f := range findings {
 		key := host + ":" + f.ID
@@ -60,6 +70,169 @@ func (ps *PassiveScanStore) Analyze(pr *model.ProxyRequest) {
 			}
 		}
 	}
+}
+
+type spaHostState struct {
+	seenPaths  map[string]struct{}
+	shellCount map[string]int
+	markerHits int
+	bundleHits int
+	detected   bool
+}
+
+const (
+	minSPASamplePaths = 3
+	minSPAShellHits   = 3
+)
+
+var (
+	rePassiveHTMLTag = regexp.MustCompile(`(?i)</?([a-z0-9-]+)[^>]*>`)
+	reSPABundlePath  = regexp.MustCompile(`(?i)(?:/assets/|/static/|/_next/|/_nuxt/|chunk|bundle|runtime)[^"' >]+\.js`)
+	spaHintTokens    = []string{
+		`id="root"`,
+		`id='root'`,
+		`id="__next"`,
+		`data-reactroot`,
+		`__nuxt`,
+		`data-v-app`,
+		`__vite`,
+		`single page app`,
+		`/_next/`,
+		`/_nuxt/`,
+	}
+)
+
+func (ps *PassiveScanStore) analyzeLikelySPALocked(host string, pr *model.ProxyRequest) *model.Finding {
+	if host == "" || pr == nil || pr.ResponseStatus < 200 || pr.ResponseStatus >= 300 {
+		return nil
+	}
+	if !isLikelyHTMLDocument(pr.ResponseHeaders, pr.ResponseBody) {
+		return nil
+	}
+	path := passivePathFrom(pr.URL)
+	if !isLikelyDocumentRoute(path) {
+		return nil
+	}
+	state := ps.spaHosts[host]
+	if state == nil {
+		state = &spaHostState{
+			seenPaths:  map[string]struct{}{},
+			shellCount: map[string]int{},
+		}
+		ps.spaHosts[host] = state
+	}
+	if state.detected {
+		return nil
+	}
+	if _, exists := state.seenPaths[path]; exists {
+		return nil
+	}
+	state.seenPaths[path] = struct{}{}
+	fingerprint := spaShellFingerprint(pr.ResponseBody)
+	state.shellCount[fingerprint]++
+	bodyLower := strings.ToLower(pr.ResponseBody)
+	if hasSPAHints(bodyLower) {
+		state.markerHits++
+	}
+	if reSPABundlePath.MatchString(bodyLower) {
+		state.bundleHits++
+	}
+	if len(state.seenPaths) < minSPASamplePaths || state.shellCount[fingerprint] < minSPAShellHits {
+		return nil
+	}
+	if state.markerHits < 2 && state.bundleHits < 2 {
+		return nil
+	}
+	state.detected = true
+	confidence := 0.7
+	if state.markerHits >= 3 || state.bundleHits >= 3 {
+		confidence = 0.85
+	}
+	return &model.Finding{
+		ID:             "proxy-site-likely-spa",
+		Category:       "fingerprint",
+		Severity:       model.SeverityInfo,
+		Title:          "Likely single-page application detected",
+		Description:    "Captured proxy responses suggest this host serves a repeated HTML app-shell across multiple routes, which is typical SPA behavior.",
+		Evidence:       fmt.Sprintf("Host %s returned matching HTML shell fingerprints across %d distinct document routes (markers=%d, bundles=%d).", host, state.shellCount[fingerprint], state.markerHits, state.bundleHits),
+		Recommendation: "Use intercepted API/XHR traffic and route-aware testing because many paths may return the same SPA shell rather than unique server-rendered pages.",
+		AffectedURL:    pr.URL,
+		Confidence:     confidence,
+	}
+}
+
+func isLikelyHTMLDocument(headers map[string]string, body string) bool {
+	contentType := strings.ToLower(strings.TrimSpace(headerValue(headers, "Content-Type")))
+	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/xhtml+xml") {
+		return true
+	}
+	bodyPrefix := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(bodyPrefix, "<!doctype html") || strings.HasPrefix(bodyPrefix, "<html")
+}
+
+func headerValue(headers map[string]string, key string) string {
+	for k, v := range headers {
+		if strings.EqualFold(strings.TrimSpace(k), key) {
+			return v
+		}
+	}
+	return ""
+}
+
+func passivePathFrom(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "/"
+	}
+	p := strings.TrimSpace(u.EscapedPath())
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
+func isLikelyDocumentRoute(requestPath string) bool {
+	if requestPath == "" || requestPath == "/" {
+		return true
+	}
+	ext := strings.ToLower(pathpkg.Ext(requestPath))
+	return ext == "" || ext == ".html" || ext == ".htm"
+}
+
+func spaShellFingerprint(body string) string {
+	matches := rePassiveHTMLTag.FindAllStringSubmatch(strings.ToLower(body), 300)
+	if len(matches) == 0 {
+		return "no-tags"
+	}
+	var b strings.Builder
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		b.WriteString(m[1])
+		b.WriteByte('|')
+	}
+	return b.String()
+}
+
+func hasSPAHints(lowerBody string) bool {
+	for _, token := range spaHintTokens {
+		if strings.Contains(lowerBody, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// Clear removes all stored passive findings.
+func (ps *PassiveScanStore) Clear() {
+	if ps == nil {
+		return
+	}
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	ps.items = map[string]PassiveFinding{}
+	ps.spaHosts = map[string]*spaHostState{}
 }
 
 // List returns all passive findings sorted newest-first. Returns a non-nil
@@ -80,15 +253,6 @@ func (ps *PassiveScanStore) List() []PassiveFinding {
 	return out
 }
 
-// Clear removes all stored passive findings.
-func (ps *PassiveScanStore) Clear() {
-	if ps == nil {
-		return
-	}
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	ps.items = map[string]PassiveFinding{}
-}
 
 // runPassiveChecks runs all passive analysis routines against a captured
 // request and returns any findings.
