@@ -117,24 +117,6 @@ func TestScoreFindingsUsesCalibratedConfidenceSignals(t *testing.T) {
 		},
 	}
 
-	func TestFalsePositiveThresholdForFindingPrefersCategoryPolicy(t *testing.T) {
-		highInfoDisclosure := model.Finding{
-			Category: "information_disclosure",
-			Severity: model.SeverityHigh,
-		}
-		if got := falsePositiveThresholdForFinding(highInfoDisclosure); got != 0.48 {
-			t.Fatalf("expected category threshold override 0.48, got %.2f", got)
-		}
-
-		highUnknown := model.Finding{
-			Category: "custom_category",
-			Severity: model.SeverityHigh,
-		}
-		if got := falsePositiveThresholdForFinding(highUnknown); got != 0.72 {
-			t.Fatalf("expected severity fallback threshold 0.72, got %.2f", got)
-		}
-	}
-
 	scored := svc.ScoreFindings(findings)
 	if len(scored) != 2 {
 		t.Fatalf("expected 2 scored findings, got %d", len(scored))
@@ -151,5 +133,23 @@ func TestScoreFindingsUsesCalibratedConfidenceSignals(t *testing.T) {
 	}
 	if strongConf <= weakConf {
 		t.Fatalf("expected verified finding confidence to exceed weak-signal confidence (verified=%.2f weak=%.2f)", strongConf, weakConf)
+	}
+}
+
+func TestFalsePositiveThresholdForFindingPrefersCategoryPolicy(t *testing.T) {
+	highInfoDisclosure := model.Finding{
+		Category: "information_disclosure",
+		Severity: model.SeverityHigh,
+	}
+	if got := falsePositiveThresholdForFinding(highInfoDisclosure); got != 0.48 {
+		t.Fatalf("expected category threshold override 0.48, got %.2f", got)
+	}
+
+	highUnknown := model.Finding{
+		Category: "custom_category",
+		Severity: model.SeverityHigh,
+	}
+	if got := falsePositiveThresholdForFinding(highUnknown); got != 0.72 {
+		t.Fatalf("expected severity fallback threshold 0.72, got %.2f", got)
 	}
 }

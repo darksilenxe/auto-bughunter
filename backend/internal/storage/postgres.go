@@ -2757,71 +2757,71 @@ func scanProbeRecordRows(rows *rowsWithCancel) ([]model.ProbeRecord, error) {
 		); err != nil {
 			return nil, fmt.Errorf("scan probe record row: %w", err)
 		}
-
-		func (p *Postgres) SaveShadowDecision(ctx context.Context, decision model.ShadowDecision) error {
-			if strings.TrimSpace(decision.ScanID) == "" || strings.TrimSpace(decision.FindingID) == "" {
-				return errors.New("shadow decision: scanID and findingID are required")
-			}
-			if strings.TrimSpace(decision.ID) == "" {
-				decision.ID = uuid.NewString()
-			}
-			if decision.CreatedAt.IsZero() {
-				decision.CreatedAt = time.Now().UTC()
-			}
-			_, err := p.execContext(ctx, `
-				INSERT INTO shadow_decisions
-					(id, scan_id, finding_id, category, severity, model_decision, model_score, model_threshold, operator_status, aligned, created_at)
-				VALUES
-					($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-			`, decision.ID,
-				decision.ScanID,
-				decision.FindingID,
-				strings.ToLower(strings.TrimSpace(decision.Category)),
-				string(decision.Severity),
-				strings.TrimSpace(decision.ModelDecision),
-				decision.ModelScore,
-				decision.ModelThreshold,
-				strings.TrimSpace(decision.OperatorStatus),
-				decision.Aligned,
-				decision.CreatedAt,
-			)
-			if err != nil {
-				return fmt.Errorf("insert shadow decision: %w", err)
-			}
-			return nil
-		}
-
-		func (p *Postgres) ListShadowDecisions(ctx context.Context, since time.Time, limit int) ([]model.ShadowDecision, error) {
-			if limit <= 0 {
-				limit = 1000
-			}
-			rows, err := p.queryContext(ctx, `
-				SELECT id, scan_id, finding_id, category, severity, model_decision, model_score, model_threshold, operator_status, aligned, created_at
-				FROM shadow_decisions
-				WHERE created_at >= $1
-				ORDER BY created_at DESC
-				LIMIT $2
-			`, since, limit)
-			if err != nil {
-				return nil, fmt.Errorf("list shadow decisions: %w", err)
-			}
-			defer rows.Close()
-			out := make([]model.ShadowDecision, 0)
-			for rows.Next() {
-				var d model.ShadowDecision
-				var severity string
-				if err := rows.Scan(
-					&d.ID, &d.ScanID, &d.FindingID, &d.Category, &severity, &d.ModelDecision, &d.ModelScore, &d.ModelThreshold, &d.OperatorStatus, &d.Aligned, &d.CreatedAt,
-				); err != nil {
-					return nil, fmt.Errorf("scan shadow decision row: %w", err)
-				}
-				d.Severity = model.Severity(severity)
-				out = append(out, d)
-			}
-			return out, rows.Err()
-		}
 		r.Outcome = model.ProbeOutcome(outcome)
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) SaveShadowDecision(ctx context.Context, decision model.ShadowDecision) error {
+	if strings.TrimSpace(decision.ScanID) == "" || strings.TrimSpace(decision.FindingID) == "" {
+		return errors.New("shadow decision: scanID and findingID are required")
+	}
+	if strings.TrimSpace(decision.ID) == "" {
+		decision.ID = uuid.NewString()
+	}
+	if decision.CreatedAt.IsZero() {
+		decision.CreatedAt = time.Now().UTC()
+	}
+	_, err := p.execContext(ctx, `
+		INSERT INTO shadow_decisions
+			(id, scan_id, finding_id, category, severity, model_decision, model_score, model_threshold, operator_status, aligned, created_at)
+		VALUES
+			($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, decision.ID,
+		decision.ScanID,
+		decision.FindingID,
+		strings.ToLower(strings.TrimSpace(decision.Category)),
+		string(decision.Severity),
+		strings.TrimSpace(decision.ModelDecision),
+		decision.ModelScore,
+		decision.ModelThreshold,
+		strings.TrimSpace(decision.OperatorStatus),
+		decision.Aligned,
+		decision.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert shadow decision: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) ListShadowDecisions(ctx context.Context, since time.Time, limit int) ([]model.ShadowDecision, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := p.queryContext(ctx, `
+		SELECT id, scan_id, finding_id, category, severity, model_decision, model_score, model_threshold, operator_status, aligned, created_at
+		FROM shadow_decisions
+		WHERE created_at >= $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list shadow decisions: %w", err)
+	}
+	defer rows.Close()
+	out := make([]model.ShadowDecision, 0)
+	for rows.Next() {
+		var d model.ShadowDecision
+		var severity string
+		if err := rows.Scan(
+			&d.ID, &d.ScanID, &d.FindingID, &d.Category, &severity, &d.ModelDecision, &d.ModelScore, &d.ModelThreshold, &d.OperatorStatus, &d.Aligned, &d.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan shadow decision row: %w", err)
+		}
+		d.Severity = model.Severity(severity)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }
