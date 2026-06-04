@@ -528,6 +528,16 @@ func RunWithPolicy(ctx context.Context, spec CommandSpec, target string, policy 
 		result.Error = err
 	}
 
+	if emit != nil {
+		emit(model.ScanEvent{
+			Type:      model.ScanEventCommandResult,
+			AgentName: spec.GeneratedBy,
+			Command:   spec.String(),
+			Output:    result.Stdout + "\n" + result.Stderr,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
 	return result
 }
 
