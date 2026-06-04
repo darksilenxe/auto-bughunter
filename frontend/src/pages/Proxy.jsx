@@ -1055,9 +1055,15 @@ function htmlEncode(value) {
 }
 
 function htmlDecode(value) {
-  const textarea = document.createElement("textarea");
-  textarea.innerHTML = value;
-  return textarea.value;
+  return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (entity, token) => {
+    if (token[0] === "#") {
+      const isHex = token[1]?.toLowerCase() === "x";
+      const raw = isHex ? token.slice(2) : token.slice(1);
+      const codePoint = Number.parseInt(raw, isHex ? 16 : 10);
+      return Number.isNaN(codePoint) ? entity : String.fromCodePoint(codePoint);
+    }
+    return HTML_ENTITY_MAP[token] ?? entity;
+  });
 }
 
 function base64EncodeUnicode(value) {
@@ -1105,6 +1111,15 @@ function formatJSON(value) {
 function minifyJSON(value) {
   return JSON.stringify(JSON.parse(value));
 }
+
+const HTML_ENTITY_MAP = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: "\u00A0",
+  quot: '"',
+};
 
 function formatTime(iso) {
   if (!iso) return "";
