@@ -37,6 +37,7 @@ type MemoryStore struct {
 	policyAudit         []model.AutomationPolicyAuditEvent
 	apiKeys             map[string]memoryAPIKey
 	annotations         map[string][]model.ScanAnnotation
+	shadowDecisions     []model.ShadowDecision
 }
 
 type memoryIdempotencyRecord struct {
@@ -68,6 +69,7 @@ func NewMemoryStore() *MemoryStore {
 		policyAudit:         []model.AutomationPolicyAuditEvent{},
 		apiKeys:             map[string]memoryAPIKey{},
 		annotations:         map[string][]model.ScanAnnotation{},
+		shadowDecisions:     []model.ShadowDecision{},
 	}
 }
 
@@ -1085,6 +1087,38 @@ func (s *MemoryStore) ListProbeRecordsByOutcome(_ context.Context, _ model.Probe
 // ListProbeRecordsByCategory returns an empty slice; the in-memory store does not retain probe records.
 func (s *MemoryStore) ListProbeRecordsByCategory(_ context.Context, _ string, _ time.Time, _ int) ([]model.ProbeRecord, error) {
 	return nil, nil
+}
+
+func (s *MemoryStore) SaveShadowDecision(ctx context.Context, decision model.ShadowDecision) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shadowDecisions = append(s.shadowDecisions, cloneValue(decision))
+	return nil
+}
+
+func (s *MemoryStore) ListShadowDecisions(ctx context.Context, since time.Time, limit int) ([]model.ShadowDecision, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]model.ShadowDecision, 0, len(s.shadowDecisions))
+	for _, item := range s.shadowDecisions {
+		if !item.CreatedAt.Before(since) {
+			out = append(out, cloneValue(item))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (s *MemoryStore) withRelatedLocked(job model.ScanJob) model.ScanJob {

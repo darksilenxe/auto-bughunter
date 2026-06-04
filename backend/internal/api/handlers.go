@@ -304,6 +304,14 @@ type Repository interface {
 	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
 }
 
+type shadowDecisionWriter interface {
+	SaveShadowDecision(ctx context.Context, decision model.ShadowDecision) error
+}
+
+type shadowDecisionReader interface {
+	ListShadowDecisions(ctx context.Context, since time.Time, limit int) ([]model.ShadowDecision, error)
+}
+
 func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.Service, knowledgeSvc *knowledge.Client, agentLearner *agentlearner.Client, repo Repository, proxyStore proxy.Store, maxPerTarget, globalBudget int, agentCfg AgentConfig, scanTimeout time.Duration) *Server {
 	reg := agent.NewRegistry()
 	factory := agent.NewFactory(scanService, mlService)
@@ -1716,7 +1724,8 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status must be one of: verified, rejected, suppressed, accepted, remediated"})
 		return
 	}
-	if job, err := s.repo.GetJob(r.Context(), req.ScanID); err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+	job, err := s.repo.GetJob(r.Context(), req.ScanID)
+	if err != nil || job == nil || !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
 		return
 	}
@@ -1747,7 +1756,49 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
 		return
 	}
+	s.persistShadowDecision(r.Context(), job, req)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": req.ID, "status": req.Status, "owner": req.Owner, "previousStatus": priorStatus})
+}
+
+func (s *Server) persistShadowDecision(ctx context.Context, job *model.ScanJob, verification model.FindingVerification) {
+	writer, ok := s.repo.(shadowDecisionWriter)
+	if !ok || s.mlService == nil || job == nil {
+		return
+	}
+	finding, found := findingByID(job.Findings, verification.FindingID)
+	if !found {
+		return
+	}
+	assessment := s.mlService.AssessFalsePositiveCandidate(finding)
+	operatorReject := verification.Status == "rejected" || verification.Status == "suppressed"
+	decision := "keep"
+	if assessment.Candidate {
+		decision = "review_candidate"
+	}
+	shadow := model.ShadowDecision{
+		ID:             uuid.NewString(),
+		ScanID:         verification.ScanID,
+		FindingID:      verification.FindingID,
+		Category:       strings.ToLower(strings.TrimSpace(finding.Category)),
+		Severity:       finding.Severity,
+		ModelDecision:  decision,
+		ModelScore:     roundTo2(assessment.Score),
+		ModelThreshold: roundTo2(assessment.Threshold),
+		OperatorStatus: verification.Status,
+		Aligned:        (assessment.Candidate && operatorReject) || (!assessment.Candidate && !operatorReject),
+		CreatedAt:      verification.CreatedAt,
+	}
+	_ = writer.SaveShadowDecision(ctx, shadow)
+}
+
+func findingByID(findings []model.Finding, id string) (model.Finding, bool) {
+	id = strings.TrimSpace(id)
+	for _, finding := range findings {
+		if strings.TrimSpace(finding.ID) == id {
+			return finding, true
+		}
+	}
+	return model.Finding{}, false
 }
 
 // findingLifecycleAliases normalizes legacy/alias status values onto the
@@ -2872,6 +2923,8 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	totalRuns := 0
 	verifiedSampled := 0
 	rejectedCount := 0
+	verifiedByCategory := map[string]int{}
+	rejectedByCategory := map[string]int{}
 	strictScans := 0
 	strictSuppressed := 0
 	for _, job := range jobs {
@@ -2898,18 +2951,68 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 				strictSuppressed += suppressed
 			}
 		}
+		findingCategory := map[string]string{}
+		for _, finding := range job.Findings {
+			key := strings.TrimSpace(finding.ID)
+			if key == "" {
+				continue
+			}
+			findingCategory[key] = strings.ToLower(strings.TrimSpace(finding.Category))
+		}
 		if verifications, err := s.repo.GetLatestFindingVerifications(r.Context(), job.ID); err == nil {
 			for _, v := range verifications {
+				cat := strings.TrimSpace(findingCategory[strings.TrimSpace(v.FindingID)])
 				switch findingLifecycleAliases(v.Status) {
 				case "verified", "rejected", "suppressed", "accepted", "remediated":
 					verifiedSampled++
+					if cat != "" {
+						verifiedByCategory[cat]++
+					}
 				}
 				switch findingLifecycleAliases(v.Status) {
 				case "rejected", "suppressed":
 					rejectedCount++
+					if cat != "" {
+						rejectedByCategory[cat]++
+					}
 				}
 			}
 		}
+	}
+	falsePositiveByCategory := map[string]float64{}
+	for cat, total := range verifiedByCategory {
+		if total <= 0 {
+			continue
+		}
+		falsePositiveByCategory[cat] = roundTo2(float64(rejectedByCategory[cat]) / float64(total))
+	}
+	shadowAlignmentByCategory := map[string]float64{}
+	shadowSamplesByCategory := map[string]int{}
+	shadowAlignedByCategory := map[string]int{}
+	shadowSamples := 0
+	shadowAligned := 0
+	if reader, ok := s.repo.(shadowDecisionReader); ok {
+		if shadowRows, err := reader.ListShadowDecisions(r.Context(), now.Add(-90*24*time.Hour), 10000); err == nil {
+			for _, row := range shadowRows {
+				shadowSamples++
+				if row.Aligned {
+					shadowAligned++
+				}
+				cat := strings.ToLower(strings.TrimSpace(row.Category))
+				if cat != "" {
+					shadowSamplesByCategory[cat]++
+					if row.Aligned {
+						shadowAlignedByCategory[cat]++
+					}
+				}
+			}
+		}
+	}
+	for cat, total := range shadowSamplesByCategory {
+		if total <= 0 {
+			continue
+		}
+		shadowAlignmentByCategory[cat] = roundTo2(float64(shadowAlignedByCategory[cat]) / float64(total))
 	}
 	if packs, err := s.repo.ListAutomationPolicyPacks(r.Context(), workspaceID, 200); err == nil {
 		for _, pack := range packs {
@@ -2978,6 +3081,16 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			}
 			return roundTo2(float64(rejectedCount) / float64(verifiedSampled))
 		}(),
+		FalsePositiveRateByCategory: falsePositiveByCategory,
+		VerifiedFindingsByCategory:  verifiedByCategory,
+		ShadowAlignmentRate: func() float64 {
+			if shadowSamples == 0 {
+				return 0
+			}
+			return roundTo2(float64(shadowAligned) / float64(shadowSamples))
+		}(),
+		ShadowAlignmentByCategory: shadowAlignmentByCategory,
+		ShadowSamples:             shadowSamples,
 		VerifiedFindingsSampled:     verifiedSampled,
 		StrictReportingSuppressed:   strictSuppressed,
 		StrictReportingScansSampled: strictScans,
