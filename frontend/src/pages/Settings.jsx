@@ -13,8 +13,8 @@ const EMPTY_PROGRAM = {
 };
 
 const DEFAULT_AI_CONFIG = {
-  summaryModel: "phi3:mini",
-  triageModel: "phi3:mini",
+  summaryModel: "dolphin-mistral",
+  triageModel: "dolphin-mistral",
   plannerModel: "codellama",
   temperature: "0.2",
   plannerTemperature: "0.1",
