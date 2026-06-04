@@ -7,6 +7,7 @@ const TABS = [
   { id: "passive", label: "Passive findings" },
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
+  { id: "decoder", label: "Decoder" },
   { id: "configure", label: "Configure browser" },
 ];
 
@@ -34,6 +35,9 @@ export default function Proxy() {
   const [intruderMarker, setIntruderMarker] = useState("§");
   const [intruderPayloads, setIntruderPayloads] = useState("");
   const [intruderResults, setIntruderResults] = useState([]);
+  const [decoderInput, setDecoderInput] = useState("");
+  const [decoderOutput, setDecoderOutput] = useState("");
+  const [decoderError, setDecoderError] = useState("");
 
   useEffect(() => {
     loadRequests();
@@ -170,6 +174,32 @@ export default function Proxy() {
     }
   }
 
+  function runDecoder(action) {
+    setDecoderError("");
+    try {
+      setDecoderOutput(applyDecoderAction(action, decoderInput));
+    } catch (err) {
+      setDecoderError(err.message || "Transform failed.");
+    }
+  }
+
+  function copyDecoderOutputToInput() {
+    setDecoderInput(decoderOutput);
+    setDecoderError("");
+  }
+
+  function swapDecoderBuffers() {
+    setDecoderInput(decoderOutput);
+    setDecoderOutput(decoderInput);
+    setDecoderError("");
+  }
+
+  function clearDecoderBuffers() {
+    setDecoderInput("");
+    setDecoderOutput("");
+    setDecoderError("");
+  }
+
   const historySummary = useMemo(() => summarizeHistory(requests), [requests]);
 
   return (
@@ -289,6 +319,20 @@ export default function Proxy() {
           onRun={runIntruder}
           busy={busy}
           results={intruderResults}
+        />
+      )}
+
+      {tab === "decoder" && (
+        <DecoderTab
+          input={decoderInput}
+          output={decoderOutput}
+          error={decoderError}
+          setInput={setDecoderInput}
+          setOutput={setDecoderOutput}
+          onTransform={runDecoder}
+          onCopyOutputToInput={copyDecoderOutputToInput}
+          onSwap={swapDecoderBuffers}
+          onClear={clearDecoderBuffers}
         />
       )}
 
@@ -520,6 +564,98 @@ function IntruderTab({ selected, marker, setMarker, payloads, setPayloads, heade
           </div>
         </section>
       )}
+    </>
+  );
+}
+
+function DecoderTab({ input, output, error, setInput, setOutput, onTransform, onCopyOutputToInput, onSwap, onClear }) {
+  return (
+    <>
+      <section className="card">
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h2>Decoder</h2>
+            <p className="meta">Convert payloads between common formats, chain transforms, and move results back into the input buffer like a lightweight Burp-style decoder.</p>
+          </div>
+          <div className="button-row">
+            <button type="button" className="button-secondary" onClick={onCopyOutputToInput} disabled={!output}>Use output as input</button>
+            <button type="button" className="button-secondary" onClick={onSwap} disabled={!input && !output}>Swap buffers</button>
+            <button type="button" className="button-secondary" onClick={onClear} disabled={!input && !output}>Clear</button>
+          </div>
+        </div>
+
+        <div className="three-column-grid" style={{ marginTop: 16 }}>
+          <article className="meta-block">
+            <b>URL</b>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => onTransform("url-encode")}>Encode</button>
+              <button type="button" className="button-secondary" onClick={() => onTransform("url-decode")}>Decode</button>
+            </div>
+          </article>
+          <article className="meta-block">
+            <b>HTML</b>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => onTransform("html-encode")}>Encode</button>
+              <button type="button" className="button-secondary" onClick={() => onTransform("html-decode")}>Decode</button>
+            </div>
+          </article>
+          <article className="meta-block">
+            <b>Base64</b>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => onTransform("base64-encode")}>Encode</button>
+              <button type="button" className="button-secondary" onClick={() => onTransform("base64-decode")}>Decode</button>
+            </div>
+          </article>
+          <article className="meta-block">
+            <b>Hex</b>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => onTransform("hex-encode")}>Encode</button>
+              <button type="button" className="button-secondary" onClick={() => onTransform("hex-decode")}>Decode</button>
+            </div>
+          </article>
+          <article className="meta-block">
+            <b>Text shaping</b>
+            <div className="button-row">
+              <button type="button" className="button-secondary" onClick={() => onTransform("json-format")}>Format JSON</button>
+              <button type="button" className="button-secondary" onClick={() => onTransform("json-minify")}>Minify JSON</button>
+            </div>
+          </article>
+        </div>
+
+        {error && <p className="error" style={{ marginTop: 16, marginBottom: 0 }}>{error}</p>}
+      </section>
+
+      <div className="two-column-grid">
+        <section className="card">
+          <div className="toolbar" style={{ marginBottom: 12 }}>
+            <h2 style={{ marginBottom: 0 }}>Input</h2>
+            <span className="chip chip--muted">{input.length} chars</span>
+          </div>
+          <textarea
+            rows={18}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            spellCheck={false}
+            placeholder="Paste URL-encoded, base64, HTML, hex, or JSON content here."
+            style={{ fontFamily: "monospace", fontSize: "0.84rem" }}
+          />
+        </section>
+
+        <section className="card">
+          <div className="toolbar" style={{ marginBottom: 12 }}>
+            <h2 style={{ marginBottom: 0 }}>Output</h2>
+            <span className="chip chip--muted">{output.length} chars</span>
+          </div>
+          <textarea
+            rows={18}
+            value={output}
+            onChange={(e) => setOutput(e.target.value)}
+            spellCheck={false}
+            placeholder="Transform results appear here."
+            style={{ fontFamily: "monospace", fontSize: "0.84rem" }}
+          />
+        </section>
+      </div>
     </>
   );
 }
@@ -881,6 +1017,109 @@ function summarizeHistory(requests) {
     return summary;
   }, { success: 0, serverErrors: 0 });
 }
+
+function applyDecoderAction(action, value) {
+  switch (action) {
+    case "url-encode":
+      return encodeURIComponent(value);
+    case "url-decode":
+      return decodeURIComponent(value);
+    case "html-encode":
+      return htmlEncode(value);
+    case "html-decode":
+      return htmlDecode(value);
+    case "base64-encode":
+      return base64EncodeUnicode(value);
+    case "base64-decode":
+      return base64DecodeUnicode(value);
+    case "hex-encode":
+      return hexEncode(value);
+    case "hex-decode":
+      return hexDecode(value);
+    case "json-format":
+      return formatJSON(value);
+    case "json-minify":
+      return minifyJSON(value);
+    default:
+      return value;
+  }
+}
+
+function htmlEncode(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function htmlDecode(value) {
+  return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (entity, token) => {
+    if (token[0] === "#") {
+      const isHex = token[1]?.toLowerCase() === "x";
+      const raw = isHex ? token.slice(2) : token.slice(1);
+      const codePoint = Number.parseInt(raw, isHex ? 16 : 10);
+      return Number.isNaN(codePoint) ? entity : String.fromCodePoint(codePoint);
+    }
+    return HTML_ENTITY_MAP[token] ?? entity;
+  });
+}
+
+function base64EncodeUnicode(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64DecodeUnicode(value) {
+  const normalized = normalizeBase64(value);
+  const binary = atob(normalized);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function normalizeBase64(value) {
+  const compact = value.replace(/\s+/g, "").replaceAll("-", "+").replaceAll("_", "/");
+  if (!compact) return "";
+  const padding = compact.length % 4;
+  return padding === 0 ? compact : compact.padEnd(compact.length + (4 - padding), "=");
+}
+
+function hexEncode(value) {
+  return Array.from(new TextEncoder().encode(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hexDecode(value) {
+  const compact = value.replace(/\s+/g, "");
+  if (!compact) return "";
+  if (compact.length % 2 !== 0) {
+    throw new Error("Hex input must contain an even number of characters.");
+  }
+  if (!/^[0-9a-fA-F]+$/.test(compact)) {
+    throw new Error("Hex input may only contain 0-9 and A-F characters.");
+  }
+  const bytes = new Uint8Array(compact.match(/.{2}/g).map((pair) => Number.parseInt(pair, 16)));
+  return new TextDecoder().decode(bytes);
+}
+
+function formatJSON(value) {
+  return JSON.stringify(JSON.parse(value), null, 2);
+}
+
+function minifyJSON(value) {
+  return JSON.stringify(JSON.parse(value));
+}
+
+const HTML_ENTITY_MAP = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: "\u00A0",
+  quot: '"',
+};
 
 function formatTime(iso) {
   if (!iso) return "";
