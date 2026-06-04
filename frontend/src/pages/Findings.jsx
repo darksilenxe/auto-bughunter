@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { API_BASE, API_KEY, WORKSPACE_ID, useScan } from "../context/ScanContext";
+import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 import { impactGoalMeta, proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
 const HACKTRICKS_URLS = {
@@ -51,6 +51,10 @@ export default function Findings() {
   const [proofFilter, setProofFilter] = useState("all");
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
   const [lifecycleStatus, setLifecycleStatus] = useState({});
+  // Tracks the locally-applied lifecycle state per finding so buttons
+  // update immediately after a successful transition without needing a
+  // full scan re-fetch.
+  const [localLifecycle, setLocalLifecycle] = useState({});
 
   async function transitionFinding(findingId, nextStatus, currentStatus) {
     if (!job?.id) return;
@@ -66,12 +70,14 @@ export default function Findings() {
 
     setLifecycleStatus((prev) => ({ ...prev, [findingId]: "Updating…" }));
     try {
+      const apiKey = getAPIKey();
+      const workspaceID = getWorkspaceID();
       const res = await fetch(`${API_BASE}/api/finding-verification`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": API_KEY,
-          "X-Workspace-ID": WORKSPACE_ID,
+          "X-API-Key": apiKey,
+          "X-Workspace-ID": workspaceID,
         },
         body: JSON.stringify({
           scanId: job.id,
@@ -85,6 +91,7 @@ export default function Findings() {
         setLifecycleStatus((prev) => ({ ...prev, [findingId]: data.error || `Failed (${res.status})` }));
         return;
       }
+      setLocalLifecycle((prev) => ({ ...prev, [findingId]: data.status }));
       setLifecycleStatus((prev) => ({
         ...prev,
         [findingId]: `${currentStatus || "new"} → ${data.status}${data.owner ? ` (owner: ${data.owner})` : ""}`,
@@ -225,7 +232,7 @@ export default function Findings() {
         ) : (
           <ul className="findings">
             {filteredFindings.map((finding, idx) => {
-              const currentLifecycle = finding.exploitability?.verifiedStatus || "new";
+              const currentLifecycle = localLifecycle[finding.id] || finding.exploitability?.verifiedStatus || "new";
               const transitions = LIFECYCLE_TRANSITIONS[currentLifecycle] || [];
 
               return (
