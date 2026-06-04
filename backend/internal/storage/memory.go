@@ -1067,6 +1067,26 @@ func (s *MemoryStore) ListScanAnnotations(ctx context.Context, scanID string) ([
 	return out, nil
 }
 
+// SaveProbeRecord persists a probe outcome in memory (no-op retention policy).
+func (s *MemoryStore) SaveProbeRecord(_ context.Context, _ string, _ model.ProbeResult) error {
+	return nil
+}
+
+// ListProbeRecords returns an empty slice; the in-memory store does not retain probe records.
+func (s *MemoryStore) ListProbeRecords(_ context.Context, _ string) ([]model.ProbeRecord, error) {
+	return nil, nil
+}
+
+// ListProbeRecordsByOutcome returns an empty slice; the in-memory store does not retain probe records.
+func (s *MemoryStore) ListProbeRecordsByOutcome(_ context.Context, _ model.ProbeOutcome, _ time.Time, _ int) ([]model.ProbeRecord, error) {
+	return nil, nil
+}
+
+// ListProbeRecordsByCategory returns an empty slice; the in-memory store does not retain probe records.
+func (s *MemoryStore) ListProbeRecordsByCategory(_ context.Context, _ string, _ time.Time, _ int) ([]model.ProbeRecord, error) {
+	return nil, nil
+}
+
 func (s *MemoryStore) withRelatedLocked(job model.ScanJob) model.ScanJob {
 	out := cloneValue(job)
 	out.Assets = cloneValue(s.assetsByScanID[job.ID])

@@ -179,6 +179,18 @@ func (r *reportTestRepo) SaveScanAnnotation(context.Context, model.ScanAnnotatio
 func (r *reportTestRepo) ListScanAnnotations(_ context.Context, _ string) ([]model.ScanAnnotation, error) {
 	return nil, nil
 }
+func (r *reportTestRepo) SaveProbeRecord(context.Context, string, model.ProbeResult) error {
+	panic("not used")
+}
+func (r *reportTestRepo) ListProbeRecords(context.Context, string) ([]model.ProbeRecord, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListProbeRecordsByOutcome(context.Context, model.ProbeOutcome, time.Time, int) ([]model.ProbeRecord, error) {
+	panic("not used")
+}
+func (r *reportTestRepo) ListProbeRecordsByCategory(context.Context, string, time.Time, int) ([]model.ProbeRecord, error) {
+	panic("not used")
+}
 
 func TestHandleHealthIncludesDatabaseStatsWhenAvailable(t *testing.T) {
 	s := &Server{

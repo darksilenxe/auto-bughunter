@@ -28,11 +28,32 @@ func Emit(e Emitter, evt model.ScanEvent) {
 	}
 }
 
+// ProbeRecorder is a narrow interface for persisting individual hypothesis
+// probe outcomes. It is satisfied by *storage.Postgres and any test double.
+type ProbeRecorder interface {
+	SaveProbeRecord(ctx context.Context, scanID string, pr model.ProbeResult) error
+}
+
+// recordProbeAsync persists a probe result in a background goroutine so that
+// storage latency never blocks the scan loop. Errors are silently discarded
+// because probe records are best-effort supplemental training data.
+func recordProbeAsync(recorder ProbeRecorder, scanID string, pr model.ProbeResult) {
+	if recorder == nil || strings.TrimSpace(scanID) == "" {
+		return
+	}
+	go func() {
+		_ = recorder.SaveProbeRecord(context.Background(), scanID, pr)
+	}()
+}
+
 type AgentInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
 	Options     model.ScanOptions
 	Scope       model.ScanScope
+	// ScanID is the parent scan job identifier. It is used by agents that
+	// persist per-probe evidence to the probe_records table.
+	ScanID string
 	// AutonomyMemory persists target/workspace execution learnings that can
 	// guide scheduling decisions in future runs.
 	AutonomyMemory model.AutonomyMemory
@@ -42,6 +63,12 @@ type AgentInput struct {
 	// Emit is an optional callback for publishing live scan events to the event bus.
 	// Agents should use the package-level Emit helper to call it safely.
 	Emit Emitter
+	// ProbeRecorder is an optional callback for persisting individual probe
+	// outcomes. When non-nil, agents that execute hypothesis probes call it
+	// after each probe so that no_signal and near_miss evidence becomes
+	// first-class ML training data alongside finding-level feedback.
+	// Calls are fire-and-forget; a nil recorder is silently ignored.
+	ProbeRecorder ProbeRecorder
 }
 
 type AgentOutput struct {

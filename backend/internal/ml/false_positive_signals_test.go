@@ -61,6 +61,31 @@ func TestFindPotentialFalsePositivesIgnoresValidatedFindings(t *testing.T) {
 	}
 }
 
+func TestFindPotentialFalsePositivesAnnotatesProofPolicyGaps(t *testing.T) {
+	svc := &Service{}
+	findings := []model.Finding{
+		{
+			ID:          "f-sqli-weak",
+			Category:    "sqli",
+			Severity:    model.SeverityInfo,
+			Title:       "Possible SQL injection",
+			Description: "May indicate SQL issue with limited proof.",
+			Confidence:  0.2,
+		},
+	}
+	out := svc.FindPotentialFalsePositives(findings)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(out))
+	}
+	fields := out[0].Finding.EvidenceFields
+	if fields["proofPolicyCategory"] != "sqli" {
+		t.Fatalf("expected proof policy category to be sqli, got %q", fields["proofPolicyCategory"])
+	}
+	if fields["proofPolicyMissing"] == "" {
+		t.Fatalf("expected proof policy missing obligations to be recorded")
+	}
+}
+
 func TestScoreFindingsUsesCalibratedConfidenceSignals(t *testing.T) {
 	svc := &Service{}
 	findings := []model.Finding{

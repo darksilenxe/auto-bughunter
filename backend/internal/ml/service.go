@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/proofpolicy"
 	"auto-bughunter/backend/internal/sidecartls"
 )
 
@@ -24,6 +25,9 @@ type Repository interface {
 	GetAssetsByScanID(ctx context.Context, scanID string) ([]model.ScanAsset, error)
 	ListAuditEvents(ctx context.Context, scanID string) ([]model.ScanAuditEvent, error)
 	ListFeedback(ctx context.Context, limit int) ([]model.ReportFeedback, error)
+	// ListProbeRecordsByCategory is used in Stage 4 to fold probe-level negative
+	// evidence into the ML training dataset.
+	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
 }
 
 type ProxyStore interface {
@@ -76,10 +80,18 @@ type EngagementRecord struct {
 	AuditTrail      []SanitizedEvent         `json:"auditTrail"`
 	ProxySignals    []ProxySignal            `json:"proxySignals"`
 	Feedback        []FeedbackOutcome        `json:"feedback,omitempty"`
+	ProbeNegatives  []ProbeNegativeSignal    `json:"probeNegatives,omitempty"`
 	Dashboard       *model.DecisionDashboard `json:"dashboard,omitempty"`
 	NextActions     []string                 `json:"nextActions,omitempty"`
 	AutomatedReport string                   `json:"automatedReport,omitempty"`
 	Labels          EngagementLabels         `json:"labels"`
+}
+
+type ProbeNegativeSignal struct {
+	Category string             `json:"category"`
+	Outcome  model.ProbeOutcome `json:"outcome"`
+	Count    int                `json:"count"`
+	LastSeen time.Time          `json:"lastSeen"`
 }
 
 type SanitizedFinding struct {
@@ -501,6 +513,7 @@ func (s *Service) buildRecord(ctx context.Context, repo Repository, job *model.S
 		AuditTrail:      sanitizeEvents(events),
 		ProxySignals:    proxySignals,
 		Feedback:        sanitizeFeedback(feedback),
+		ProbeNegatives:  s.collectProbeNegatives(ctx, repo, job),
 		Dashboard:       job.Dashboard,
 		NextActions:     sanitizeStrings(job.NextActions),
 		AutomatedReport: sanitizeText(job.AutomatedReport),
@@ -632,6 +645,80 @@ func buildLabels(findings []SanitizedFinding) EngagementLabels {
 		PrioritizationScore: prioritization,
 		ResolvedFindings:    resolved,
 		EngagementSuccess:   success,
+	}
+}
+
+func (s *Service) collectProbeNegatives(ctx context.Context, repo Repository, job *model.ScanJob) []ProbeNegativeSignal {
+	if repo == nil || job == nil || len(job.Findings) == 0 {
+		return nil
+	}
+
+	categorySet := map[string]struct{}{}
+	for _, f := range job.Findings {
+		cat := strings.TrimSpace(strings.ToLower(f.Category))
+		if cat == "" {
+			continue
+		}
+		categorySet[cat] = struct{}{}
+	}
+	if len(categorySet) == 0 {
+		return nil
+	}
+
+	type agg struct {
+		count    int
+		lastSeen time.Time
+	}
+	stats := map[string]map[model.ProbeOutcome]agg{}
+	since := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	for cat := range categorySet {
+		records, err := repo.ListProbeRecordsByCategory(ctx, cat, since, 500)
+		if err != nil || len(records) == 0 {
+			continue
+		}
+		for _, rec := range records {
+			if rec.Confirmed || !isNegativeProbeOutcome(rec.Outcome) {
+				continue
+			}
+			if _, ok := stats[cat]; !ok {
+				stats[cat] = map[model.ProbeOutcome]agg{}
+			}
+			cur := stats[cat][rec.Outcome]
+			cur.count++
+			if rec.CreatedAt.After(cur.lastSeen) {
+				cur.lastSeen = rec.CreatedAt
+			}
+			stats[cat][rec.Outcome] = cur
+		}
+	}
+
+	out := make([]ProbeNegativeSignal, 0)
+	for cat, byOutcome := range stats {
+		for outcome, bucket := range byOutcome {
+			out = append(out, ProbeNegativeSignal{
+				Category: cat,
+				Outcome:  outcome,
+				Count:    bucket.count,
+				LastSeen: bucket.lastSeen,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Category == out[j].Category {
+			return out[i].Outcome < out[j].Outcome
+		}
+		return out[i].Category < out[j].Category
+	})
+	return out
+}
+
+func isNegativeProbeOutcome(outcome model.ProbeOutcome) bool {
+	switch outcome {
+	case model.ProbeNoSignal, model.ProbeNearMiss, model.ProbeWAFBlocked, model.ProbeServerError, model.ProbeError:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -927,8 +1014,10 @@ func (s *Service) FindPotentialFalsePositives(findings []model.Finding) []Scored
 		if fpScore < falsePositiveThreshold(f.Severity) {
 			continue
 		}
+		enriched := f
+		annotateProofPolicy(&enriched)
 		out = append(out, ScoredFinding{
-			Finding:        f,
+			Finding:        enriched,
 			Score:          round2(clamp(fpScore, 0, 1)),
 			Confidence:     round2(clamp(0.35+fpScore*0.55, 0.35, 0.97)),
 			Exploitability: "unlikely",
@@ -975,9 +1064,42 @@ func falsePositiveSignalScore(f model.Finding) float64 {
 	if weakEvidenceSignal(f) {
 		score += 0.18
 	}
+	score += proofPolicyPenalty(f)
 
 	score -= validationStrengthSignal(f) * 0.7
 	return clamp(score, 0, 1)
+}
+
+func proofPolicyPenalty(f model.Finding) float64 {
+	result := proofpolicy.EvaluateFinding(f)
+	if len(result.Required) == 0 {
+		return 0
+	}
+	if len(result.Missing) == 0 {
+		return -0.1
+	}
+	return min(0.36, float64(len(result.Missing))*0.12)
+}
+
+func annotateProofPolicy(f *model.Finding) {
+	if f == nil {
+		return
+	}
+	result := proofpolicy.EvaluateFinding(*f)
+	if len(result.Required) == 0 {
+		return
+	}
+	if f.EvidenceFields == nil {
+		f.EvidenceFields = map[string]string{}
+	}
+	f.EvidenceFields["proofPolicyCategory"] = result.Category
+	f.EvidenceFields["proofPolicyCoverage"] = fmt.Sprintf("%.2f", result.Coverage)
+	if len(result.Missing) > 0 {
+		f.EvidenceFields["proofPolicyMissing"] = strings.Join(result.Missing, " | ")
+	}
+	if len(result.Satisfied) > 0 {
+		f.EvidenceFields["proofPolicySatisfied"] = strings.Join(result.Satisfied, " | ")
+	}
 }
 
 func falsePositiveThreshold(sev model.Severity) float64 {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -947,6 +948,45 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate automation_campaigns due index: %w", err)
+	}
+	// probe_records: persists the full outcome of every hypothesis probe so that
+	// no_signal / near_miss evidence becomes first-class ML training data.
+	_, err = p.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS probe_records (
+			id TEXT PRIMARY KEY,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			category TEXT NOT NULL DEFAULT '',
+			endpoint TEXT NOT NULL DEFAULT '',
+			param_name TEXT NOT NULL DEFAULT '',
+			payload_hash TEXT NOT NULL DEFAULT '',
+			outcome TEXT NOT NULL,
+			status_code INTEGER NOT NULL DEFAULT 0,
+			observation TEXT NOT NULL DEFAULT '',
+			confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+			finding_id TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate probe_records table: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_probe_records_scan_id ON probe_records(scan_id)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate probe_records scan_id index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_probe_records_category_outcome ON probe_records(category, outcome)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate probe_records category/outcome index: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_probe_records_created_at ON probe_records(created_at DESC)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate probe_records created_at index: %w", err)
 	}
 	return nil
 }
@@ -2583,6 +2623,132 @@ func (p *Postgres) ListScanAnnotations(ctx context.Context, scanID string) ([]mo
 }
 
 var sensitiveKV = regexp.MustCompile(`(?i)(password|passwd|token|secret|api[_-]?key|authorization)\s*[:=]\s*([^\s&;]+)`)
+
+// SaveProbeRecord persists the outcome of a single hypothesis probe. The raw
+// payload is never stored; only its SHA-256 digest is written so that
+// injection strings cannot be reconstructed from the database.
+func (p *Postgres) SaveProbeRecord(ctx context.Context, scanID string, pr model.ProbeResult) error {
+	if strings.TrimSpace(scanID) == "" {
+		return errors.New("probe record: scanID is required")
+	}
+	payloadHash := probePayloadHash(pr.Payload)
+	// Deterministic ID from the composite probe identity so that accidental
+	// duplicate writes are idempotent (ON CONFLICT DO NOTHING).
+	id := probeDeterministicID(scanID, pr.Category, pr.Endpoint, pr.ParamName, pr.Payload)
+	findingID := ""
+	if pr.Finding != nil {
+		findingID = pr.Finding.ID
+	}
+	_, err := p.execContext(ctx, `
+		INSERT INTO probe_records
+			(id, scan_id, category, endpoint, param_name, payload_hash,
+			 outcome, status_code, observation, confirmed, finding_id, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (id) DO NOTHING
+	`,
+		id, scanID,
+		strings.TrimSpace(pr.Category),
+		strings.TrimSpace(pr.Endpoint),
+		strings.TrimSpace(pr.ParamName),
+		payloadHash,
+		string(pr.Outcome),
+		pr.StatusCode,
+		pr.Observation,
+		pr.Confirmed,
+		findingID,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert probe record: %w", err)
+	}
+	return nil
+}
+
+// ListProbeRecords returns all probe records for a given scan in insertion order.
+func (p *Postgres) ListProbeRecords(ctx context.Context, scanID string) ([]model.ProbeRecord, error) {
+	rows, err := p.queryContext(ctx, `
+		SELECT id, scan_id, category, endpoint, param_name, payload_hash,
+		       outcome, status_code, observation, confirmed, finding_id, created_at
+		FROM probe_records
+		WHERE scan_id = $1
+		ORDER BY created_at ASC
+	`, scanID)
+	if err != nil {
+		return nil, fmt.Errorf("list probe records: %w", err)
+	}
+	defer rows.Close()
+	return scanProbeRecordRows(rows)
+}
+
+// ListProbeRecordsByOutcome returns up to limit probe records with the given
+// outcome created at or after since, ordered newest-first.
+func (p *Postgres) ListProbeRecordsByOutcome(ctx context.Context, outcome model.ProbeOutcome, since time.Time, limit int) ([]model.ProbeRecord, error) {
+	rows, err := p.queryContext(ctx, `
+		SELECT id, scan_id, category, endpoint, param_name, payload_hash,
+		       outcome, status_code, observation, confirmed, finding_id, created_at
+		FROM probe_records
+		WHERE outcome = $1 AND created_at >= $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, string(outcome), since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list probe records by outcome: %w", err)
+	}
+	defer rows.Close()
+	return scanProbeRecordRows(rows)
+}
+
+// ListProbeRecordsByCategory returns up to limit probe records for the given
+// vulnerability category created at or after since, ordered newest-first.
+func (p *Postgres) ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error) {
+	rows, err := p.queryContext(ctx, `
+		SELECT id, scan_id, category, endpoint, param_name, payload_hash,
+		       outcome, status_code, observation, confirmed, finding_id, created_at
+		FROM probe_records
+		WHERE category = $1 AND created_at >= $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, strings.ToLower(strings.TrimSpace(category)), since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list probe records by category: %w", err)
+	}
+	defer rows.Close()
+	return scanProbeRecordRows(rows)
+}
+
+func scanProbeRecordRows(rows *rowsWithCancel) ([]model.ProbeRecord, error) {
+	out := make([]model.ProbeRecord, 0)
+	for rows.Next() {
+		var r model.ProbeRecord
+		var outcome string
+		if err := rows.Scan(
+			&r.ID, &r.ScanID, &r.Category, &r.Endpoint, &r.ParamName, &r.PayloadHash,
+			&outcome, &r.StatusCode, &r.Observation, &r.Confirmed, &r.FindingID, &r.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan probe record row: %w", err)
+		}
+		r.Outcome = model.ProbeOutcome(outcome)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// probePayloadHash returns the hex-encoded SHA-256 digest of the raw payload.
+func probePayloadHash(payload string) string {
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+// probeDeterministicID produces a stable, collision-resistant ID for a probe
+// so that duplicate inserts are safely idempotent.
+func probeDeterministicID(scanID, category, endpoint, paramName, payload string) string {
+	h := sha256.New()
+	for _, part := range []string{scanID, category, endpoint, paramName, payload} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return "probe-" + hex.EncodeToString(h.Sum(nil)[:16])
+}
 
 func redactText(value string) string {
 	value = sensitiveKV.ReplaceAllString(value, "$1=[redacted]")

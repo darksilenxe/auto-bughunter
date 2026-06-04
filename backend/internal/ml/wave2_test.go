@@ -25,6 +25,9 @@ func (f *fakeRepo) ListAuditEvents(_ context.Context, _ string) ([]model.ScanAud
 func (f *fakeRepo) ListFeedback(_ context.Context, _ int) ([]model.ReportFeedback, error) {
 	return f.feedback, nil
 }
+func (f *fakeRepo) ListProbeRecordsByCategory(_ context.Context, _ string, _ time.Time, _ int) ([]model.ProbeRecord, error) {
+	return nil, nil
+}
 
 func TestPrioritizeFindingsExposesRationale(t *testing.T) {
 	out := prioritizeFindings([]model.Finding{{
