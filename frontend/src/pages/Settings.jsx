@@ -82,11 +82,14 @@ export default function Settings() {
   });
   const [policyStatus, setPolicyStatus] = useState("");
   const [policyDefaults, setPolicyDefaults] = useState([]);
+  const [automationMetrics, setAutomationMetrics] = useState(null);
+  const [automationMetricsError, setAutomationMetricsError] = useState("");
 
   useEffect(() => {
     loadPolicyPacks();
     loadPolicyAudit();
     loadPolicyDefaults();
+    loadAutomationMetrics();
     loadEnvironmentHealth();
   }, []);
 
@@ -310,6 +313,25 @@ export default function Settings() {
       if (res.ok) setPolicyDefaults(Array.isArray(data) ? data : []);
     } catch {
       // noop
+    }
+
+    async function loadAutomationMetrics() {
+      setAutomationMetricsError("");
+      try {
+        const res = await fetch(`${API_BASE}/api/automation/metrics`, {
+          headers: { "X-API-Key": API_KEY, "X-Workspace-ID": WORKSPACE_ID },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setAutomationMetrics(null);
+          setAutomationMetricsError(data.error || "Failed to load automation metrics.");
+          return;
+        }
+        setAutomationMetrics(data);
+      } catch (err) {
+        setAutomationMetrics(null);
+        setAutomationMetricsError(err.message || "Failed to load automation metrics.");
+      }
     }
   }
 
@@ -667,6 +689,44 @@ export default function Settings() {
         <section className="card">
           <h2>Automation policy governance</h2>
           <p className="meta">Manage automation budgets, rollout strategies, and audit visibility for each workspace policy pack.</p>
+          <div className="metrics-grid" style={{ marginTop: 14 }}>
+            <article className="stat-card">
+              <span className="stat-card__label">False-positive rate</span>
+              <div className="stat-card__value">{((automationMetrics?.falsePositiveRate || 0) * 100).toFixed(0)}%</div>
+              <div className="stat-card__hint">Across {automationMetrics?.verifiedFindingsSampled || 0} verified findings.</div>
+            </article>
+            <article className="stat-card">
+              <span className="stat-card__label">Shadow alignment</span>
+              <div className="stat-card__value">{((automationMetrics?.shadowAlignmentRate || 0) * 100).toFixed(0)}%</div>
+              <div className="stat-card__hint">Across {automationMetrics?.shadowSamples || 0} shadow decisions.</div>
+            </article>
+            <article className="stat-card">
+              <span className="stat-card__label">Strict reporting suppress</span>
+              <div className="stat-card__value">{((automationMetrics?.strictReportingSuppressRate || 0) * 100).toFixed(0)}%</div>
+              <div className="stat-card__hint">{automationMetrics?.strictReportingSuppressed || 0} findings suppressed.</div>
+            </article>
+            <article className="stat-card">
+              <span className="stat-card__label">Queue lag</span>
+              <div className="stat-card__value">{Number(automationMetrics?.queueLagSeconds || 0).toFixed(1)}s</div>
+              <div className="stat-card__hint">Max {Number(automationMetrics?.maxQueueLagSeconds || 0).toFixed(1)}s</div>
+            </article>
+          </div>
+          <div className="button-row" style={{ marginTop: 12 }}>
+            <button type="button" className="button-secondary" onClick={loadAutomationMetrics}>Refresh automation metrics</button>
+          </div>
+          {automationMetricsError && <p className="error" style={{ marginTop: 10 }}>{automationMetricsError}</p>}
+          {automationMetrics && (
+            <details style={{ marginTop: 10 }}>
+              <summary>Per-category false-positive and shadow alignment</summary>
+              <pre className="summary" style={{ marginTop: 10 }}>
+                {JSON.stringify({
+                  falsePositiveRateByCategory: automationMetrics.falsePositiveRateByCategory || {},
+                  shadowAlignmentByCategory: automationMetrics.shadowAlignmentByCategory || {},
+                  verifiedFindingsByCategory: automationMetrics.verifiedFindingsByCategory || {},
+                }, null, 2)}
+              </pre>
+            </details>
+          )}
           <form onSubmit={savePolicyPack}>
             <div className="form-grid">
               <label>Pack name<input value={policyForm.name} onChange={(e) => setPolicyForm((prev) => ({ ...prev, name: e.target.value }))} /></label>
