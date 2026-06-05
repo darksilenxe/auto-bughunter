@@ -40,6 +40,7 @@ export function ScanProvider({ children }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [scanStartedAt, setScanStartedAt] = useState(null);
 
   // ── Live events (SSE) ───────────────────────────────────────────────
   const [liveEvents, setLiveEvents] = useState([]);
@@ -244,6 +245,7 @@ export function ScanProvider({ children }) {
     setJob(null);
     setLiveEvents([]);
     setScreenshots([]);
+    setScanStartedAt(Date.now());
     terminalSyncRef.current = "";
     try {
       const res = await fetch(`${API_BASE}/api/scan`, {
@@ -343,6 +345,7 @@ export function ScanProvider({ children }) {
       liveEvents, screenshots,
       scanHistory, historyLoading,
       programs, savePrograms,
+      scanStartedAt,
       startScan, stopScan, loadHistory, loadScan,
       isScanActive: loading || ACTIVE_SCAN_STATUSES.has(String(job?.status || "").toLowerCase()),
     }}>
