@@ -98,6 +98,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Health endpoint is exempt from authentication so infrastructure
+		// probes (docker compose healthchecks, CI wait_for loops, load-balancer
+		// probes) work without needing an API key.
+		if r.URL.Path == "/api/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		rawKey := extractAPIKey(r)
 		if rawKey == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing API key"})

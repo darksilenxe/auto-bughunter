@@ -91,18 +91,23 @@ jobs:
       - name: Bring up stack (no Ollama, no frontend)
         run: |
           set -euo pipefail
-          # Only start the services needed to run a scan:
-          #   db, ml-service, agents, backend, juice-shop
-          # Ollama is gated behind the `ollama` profile; the frontend isn't
-          # required for the API-driven harness.
-          docker compose \
-            -f docker-compose.yml \
-            -f testing/juice-shop/docker-compose.juiceshop.yml \
-            up --build -d db ml-service agents backend juice-shop
-          docker compose \
-            -f docker-compose.yml \
-            -f testing/juice-shop/docker-compose.juiceshop.yml \
-            ps
+          COMPOSE_ARGS="-f docker-compose.yml -f testing/juice-shop/docker-compose.juiceshop.yml"
+          # Stage 1: start the essential supporting services and wait for their
+          # healthchecks (db: pg_isready; juice-shop: node HTTP probe).
+          # This also starts tls-init (one-shot cert generator) which ml-service
+          # and agents depend on.
+          docker compose $COMPOSE_ARGS \
+            up --build --wait -d \
+            db ml-service agents juice-shop
+          # Stage 2: start the backend WITHOUT following its full depends_on
+          # chain.  The base compose file lists ~25 heavy sidecars (neo4j,
+          # chromium, nuclei-service, zap-service …) that the CI stack does not
+          # need.  --no-deps tells Compose to start only the backend container;
+          # the env overlay already sets NEO4J_URI=, CHROME_REMOTE_URL= and
+          # KNOWLEDGE_SERVICE_URL= so the backend skips those code paths safely.
+          docker compose $COMPOSE_ARGS \
+            up --build -d --no-deps backend
+          docker compose $COMPOSE_ARGS ps
 
       - name: Run authorized scan
         run: |
