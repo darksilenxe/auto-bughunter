@@ -10,6 +10,7 @@
 #
 # Optional environment overrides:
 #   API_BASE         Backend API base URL (default: http://localhost:8080)
+#   API_KEY          Backend API key (default: auto-bughunter-juice-shop-test-key)
 #   TARGET_URL       Target URL to scan (default: http://juice-shop:3000)
 #   POLL_TIMEOUT     Max seconds to wait for completion (default: 1200)
 #   POLL_INTERVAL    Seconds between status polls (default: 10)
@@ -19,6 +20,7 @@
 set -euo pipefail
 
 API_BASE="${API_BASE:-http://localhost:8080}"
+API_KEY="${API_KEY:-auto-bughunter-juice-shop-test-key}"
 TARGET_URL="${TARGET_URL:-http://juice-shop:3000}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-1200}"
 POLL_INTERVAL="${POLL_INTERVAL:-10}"
@@ -73,6 +75,7 @@ JSON
 
 echo "[*] submitting scan against ${TARGET_URL}"
 create_resp="$(curl -fsS -X POST -H 'Content-Type: application/json' \
+  -H "X-API-Key: ${API_KEY}" \
   --data "$BODY" "${API_BASE}/api/scan")"
 echo "$create_resp" | jq . > "${OUTPUT_DIR}/scan-create.json"
 
@@ -87,12 +90,12 @@ echo "[+] scan id: ${scan_id}"
 deadline=$((SECONDS + POLL_TIMEOUT))
 status="queued"
 while (( SECONDS < deadline )); do
-  job="$(curl -fsS "${API_BASE}/api/scan/${scan_id}" || true)"
+  job="$(curl -fsS -H "X-API-Key: ${API_KEY}" "${API_BASE}/api/scan/${scan_id}" || true)"
   if [[ -n "$job" ]]; then
     status="$(echo "$job" | jq -r '.status // empty')"
     echo "[*] $(date -u +%H:%M:%S) status=${status}"
     case "$status" in
-      completed|failed|error|canceled)
+      completed|failed|error|cancelled|canceled)
         echo "$job" | jq . > "${OUTPUT_DIR}/scan-${scan_id}.json"
         break
         ;;
@@ -115,7 +118,8 @@ jq -r '
 ' "${OUTPUT_DIR}/scan-${scan_id}.json" || true
 
 echo "[*] downloading Markdown report"
-curl -fsS "${API_BASE}/api/report/${scan_id}?format=md&type=pentest" \
+curl -fsS -H "X-API-Key: ${API_KEY}" \
+  "${API_BASE}/api/report/${scan_id}?format=md&type=pentest" \
   -o "${OUTPUT_DIR}/report-${scan_id}.md" \
   && echo "[+] report saved: ${OUTPUT_DIR}/report-${scan_id}.md" \
   || echo "[!] failed to fetch markdown report"
