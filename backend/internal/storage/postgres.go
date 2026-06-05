@@ -1018,6 +1018,25 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate shadow_decisions scan/finding index: %w", err)
 	}
+
+	_, err = p.execContext(ctx, `
+		CREATE TABLE IF NOT EXISTS scan_agent_events (
+			id BIGSERIAL PRIMARY KEY,
+			scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+			event JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_agent_events table: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_scan_agent_events_scan_id_created_at ON scan_agent_events(scan_id, created_at ASC)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate scan_agent_events index: %w", err)
+	}
+
 	return nil
 }
 
@@ -2846,4 +2865,49 @@ func probeDeterministicID(scanID, category, endpoint, paramName, payload string)
 func redactText(value string) string {
 	value = sensitiveKV.ReplaceAllString(value, "$1=[redacted]")
 	return strings.ReplaceAll(value, "Bearer ", "Bearer [redacted]")
+}
+
+func (p *Postgres) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
+eventJSON, err := json.Marshal(event)
+if err != nil {
+return fmt.Errorf("marshal agent event: %w", err)
+}
+_, err = p.execContext(ctx, `
+INSERT INTO scan_agent_events (scan_id, event, created_at)
+VALUES ($1, $2, $3)
+`, scanID, eventJSON, event.Timestamp)
+if err != nil {
+return fmt.Errorf("insert agent event: %w", err)
+}
+return nil
+}
+
+func (p *Postgres) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
+rows, err := p.queryContext(ctx, `
+SELECT event
+FROM scan_agent_events
+WHERE scan_id = $1
+ORDER BY id ASC
+`, scanID)
+if err != nil {
+return nil, fmt.Errorf("query agent events: %w", err)
+}
+defer rows.Close()
+
+var events []model.ScanEvent
+for rows.Next() {
+var eventJSON []byte
+if err := rows.Scan(&eventJSON); err != nil {
+return nil, fmt.Errorf("scan agent event: %w", err)
+}
+var event model.ScanEvent
+if err := json.Unmarshal(eventJSON, &event); err != nil {
+return nil, fmt.Errorf("unmarshal agent event: %w", err)
+}
+events = append(events, event)
+}
+if err := rows.Err(); err != nil {
+return nil, fmt.Errorf("rows err: %w", err)
+}
+return events, nil
 }

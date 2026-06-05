@@ -214,56 +214,60 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
 
-	emitCmd := func(tool, args string) {
-		if input.Emit != nil {
-			input.Emit(model.ScanEvent{
-				Type:    model.ScanEventCommand,
-				Command: tool + " " + args,
-				Message: fmt.Sprintf("Running integration tool: %s", tool),
-			})
-		}
-	}
+runTool := func(tool, args string, fn func() []model.Finding) []model.Finding {
+if input.Emit != nil {
+input.Emit(model.ScanEvent{
+Type:      model.ScanEventCommand,
+AgentName: "scanner",
+Command:   tool + " " + args,
+Message:   fmt.Sprintf("Running integration tool: %s", tool),
+})
+}
+res := s.runInstrumentedTool(ctx, tool, fn)
+if input.Emit != nil {
+input.Emit(model.ScanEvent{
+Type:      model.ScanEventCommandResult,
+AgentName: "scanner",
+Command:   tool + " " + args,
+Output:    fmt.Sprintf("[%s completed execution]", tool),
+})
+}
+return res
+}
 
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseCloudlistIntegration {
-		emitCmd("cloudlist", "-silent -host -id "+hostFromTarget(input.Target))
-		findings = append(findings, s.runInstrumentedTool(ctx, "cloudlist", func() []model.Finding {
+		findings = append(findings, runTool("cloudlist", "-silent -host -id "+hostFromTarget(input.Target), func() []model.Finding {
 			return s.runCloudlist(ctx, input.Target)
 		})...)
 	}
 	if input.Options.UseSubfinderIntegration {
-		emitCmd("subfinder", "-d "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "subfinder", func() []model.Finding {
+		findings = append(findings, runTool("subfinder", "-d "+input.Target, func() []model.Finding {
 			return s.runSubfinder(ctx, input.Target, state)
 		})...)
 	}
 	if input.Options.UseDnsxIntegration {
-		emitCmd("dnsx", "-d "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "dnsx", func() []model.Finding {
+		findings = append(findings, runTool("dnsx", "-d "+input.Target, func() []model.Finding {
 			return s.runDnsx(ctx, input.Target)
 		})...)
 	}
 	if input.Options.UseShuffleDNSIntegration {
-		emitCmd("shuffledns", "-d "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "shuffledns", func() []model.Finding {
+		findings = append(findings, runTool("shuffledns", "-d "+input.Target, func() []model.Finding {
 			return s.runShuffleDNS(ctx, input.Target, state, input.Scope)
 		})...)
 	}
 	if input.Options.UseCertTransparency {
-		emitCmd("cert-transparency", input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "cert-transparency", func() []model.Finding {
+		findings = append(findings, runTool("cert-transparency", input.Target, func() []model.Finding {
 			return s.runCertificateTransparency(ctx, input.Target, state, input.Scope)
 		})...)
 	}
 	if input.Options.UseAmassIntegration {
-		emitCmd("amass", "enum -d "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "amass", func() []model.Finding {
+		findings = append(findings, runTool("amass", "enum -d "+input.Target, func() []model.Finding {
 			return s.runAmassNative(ctx, input.Target, state, input.Scope)
 		})...)
 	}
 	if input.Options.UseUncoverIntegration {
-		emitCmd("uncover", "-q "+hostFromTarget(input.Target))
-		findings = append(findings, s.runInstrumentedTool(ctx, "uncover", func() []model.Finding {
+		findings = append(findings, runTool("uncover", "-q "+hostFromTarget(input.Target), func() []model.Finding {
 			return s.runUncover(ctx, input.Target, state, input.Scope)
 		})...)
 	}
@@ -277,8 +281,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			state.SkippedReasons["out_of_scope"] += skipped
 		}
 		for _, t := range targets {
-			emitCmd("naabu", "-host "+t)
-			findings = append(findings, s.runInstrumentedTool(ctx, "naabu", func() []model.Finding {
+			findings = append(findings, runTool("naabu", "-host "+t, func() []model.Finding {
 				return s.runNaabu(ctx, t)
 			})...)
 		}
@@ -293,8 +296,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			state.SkippedReasons["out_of_scope"] += skipped
 		}
 		for _, t := range targets {
-			emitCmd("httpx", "-u "+t)
-			findings = append(findings, s.runInstrumentedTool(ctx, "httpx", func() []model.Finding {
+			findings = append(findings, runTool("httpx", "-u "+t, func() []model.Finding {
 				return s.runHttpx(ctx, t)
 			})...)
 		}
@@ -306,64 +308,54 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		if len(state.DiscoveredHosts) >= 8 {
 			katanaDepth = 3
 		}
-		emitCmd("katana", fmt.Sprintf("-u %s -depth %d", input.Target, katanaDepth))
-		findings = append(findings, s.runInstrumentedTool(ctx, "katana", func() []model.Finding {
+		findings = append(findings, runTool("katana", fmt.Sprintf("-u %s -depth %d", input.Target, katanaDepth), func() []model.Finding {
 			return s.runKatana(ctx, input.Target, katanaDepth, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseFFUFIntegration {
-		emitCmd("ffuf", "-u "+input.Target+"/FUZZ")
-		findings = append(findings, s.runInstrumentedTool(ctx, "ffuf", func() []model.Finding {
+		findings = append(findings, runTool("ffuf", "-u "+input.Target+"/FUZZ", func() []model.Finding {
 			return s.runFFUF(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseGobusterIntegration {
-		emitCmd("gobuster", "dir -u "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "gobuster", func() []model.Finding {
+		findings = append(findings, runTool("gobuster", "dir -u "+input.Target, func() []model.Finding {
 			return s.runGobuster(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseKiterunnerIntegration {
-		emitCmd("kiterunner", "scan "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "kiterunner", func() []model.Finding {
+		findings = append(findings, runTool("kiterunner", "scan "+input.Target, func() []model.Finding {
 			return s.runKiterunner(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseGauIntegration {
-		emitCmd("gau", hostFromTarget(input.Target))
-		findings = append(findings, s.runInstrumentedTool(ctx, "gau", func() []model.Finding {
+		findings = append(findings, runTool("gau", hostFromTarget(input.Target), func() []model.Finding {
 			return s.runGau(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseArjunIntegration {
-		emitCmd("arjun", "-u "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "arjun", func() []model.Finding {
+		findings = append(findings, runTool("arjun", "-u "+input.Target, func() []model.Finding {
 			return s.runArjun(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 	if input.Options.UseLinkFinderIntegration {
-		emitCmd("linkfinder", "-i "+input.Target+" -o cli")
-		findings = append(findings, s.runInstrumentedTool(ctx, "linkfinder", func() []model.Finding {
+		findings = append(findings, runTool("linkfinder", "-i "+input.Target+" -o cli", func() []model.Finding {
 			return s.runLinkFinder(ctx, input.Target, input.Scope, state)
 		})...)
 	}
 
 	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {
-		emitCmd("tlsx", "-u "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "tlsx", func() []model.Finding {
+		findings = append(findings, runTool("tlsx", "-u "+input.Target, func() []model.Finding {
 			return s.runTlsx(ctx, input.Target)
 		})...)
 	}
 	if input.Options.UseCdncheckIntegration {
-		emitCmd("cdncheck", "-i "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "cdncheck", func() []model.Finding {
+		findings = append(findings, runTool("cdncheck", "-i "+input.Target, func() []model.Finding {
 			return s.runCdncheck(ctx, input.Target)
 		})...)
 	}
 	if input.Options.UseAsnmapIntegration {
-		emitCmd("asnmap", "-i "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "asnmap", func() []model.Finding {
+		findings = append(findings, runTool("asnmap", "-i "+input.Target, func() []model.Finding {
 			return s.runAsnmap(ctx, input.Target)
 		})...)
 	}
@@ -373,8 +365,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 	// • explicit opt-in: UseWPScanIntegration=true → runWPScan (reports "not WordPress" if non-WP)
 	// • auto-trigger:    EnableWPScan=true in config → probe silently; only run if WP detected
 	if input.Options.UseWPScanIntegration {
-		emitCmd("wpscan", "--url "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "wpscan", func() []model.Finding {
+		findings = append(findings, runTool("wpscan", "--url "+input.Target, func() []model.Finding {
 			return s.runWPScan(ctx, input.Target, input.AuthProfile)
 		})...)
 	} else if s.cfg.EnableWPScan {
@@ -415,8 +406,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 				Recommendation: "Enable ALLOW_DESTRUCTIVE_CHECKS=true only when the program scope explicitly permits this testing.",
 			})
 		} else {
-			emitCmd("nikto", "-h "+input.Target)
-			findings = append(findings, s.runInstrumentedTool(ctx, "nikto", func() []model.Finding {
+			findings = append(findings, runTool("nikto", "-h "+input.Target, func() []model.Finding {
 				return s.runNikto(ctx, input.Target, input.AuthProfile)
 			})...)
 		}
@@ -464,8 +454,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		} else {
 			for _, vt := range state.injectionTargets(input.Target) {
 				vt := vt
-				emitCmd("sqlmap", "-u "+vt)
-				findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+				findings = append(findings, runTool("sqlmap", "-u "+vt, func() []model.Finding {
 					return s.runSQLMap(ctx, vt, input.AuthProfile)
 				})...)
 			}
@@ -494,8 +483,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 			for _, vt := range state.injectionTargets(input.Target) {
 				vt := vt
-				emitCmd("sqlmap", "-u "+vt)
-				findings = append(findings, s.runInstrumentedTool(ctx, "sqlmap", func() []model.Finding {
+				findings = append(findings, runTool("sqlmap", "-u "+vt, func() []model.Finding {
 					return s.runSQLMap(ctx, vt, input.AuthProfile)
 				})...)
 			}
@@ -518,8 +506,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		} else {
 			for _, vt := range state.injectionTargets(input.Target) {
 				vt := vt
-				emitCmd("commix", "--url="+vt)
-				findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				findings = append(findings, runTool("commix", "--url="+vt, func() []model.Finding {
 					return s.runCommix(ctx, vt, input.AuthProfile)
 				})...)
 			}
@@ -548,8 +535,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			})
 			for _, vt := range state.injectionTargets(input.Target) {
 				vt := vt
-				emitCmd("commix", "--url="+vt)
-				findings = append(findings, s.runInstrumentedTool(ctx, "commix", func() []model.Finding {
+				findings = append(findings, runTool("commix", "--url="+vt, func() []model.Finding {
 					return s.runCommix(ctx, vt, input.AuthProfile)
 				})...)
 			}
@@ -579,8 +565,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 			targets = append(targets, e)
 		}
 		for _, t := range targets {
-			emitCmd("nuclei", "-u "+t)
-			findings = append(findings, s.runInstrumentedTool(ctx, "nuclei", func() []model.Finding {
+			findings = append(findings, runTool("nuclei", "-u "+t, func() []model.Finding {
 				return s.runNuclei(ctx, t)
 			})...)
 		}
@@ -613,26 +598,22 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		}
 	}
 	if input.Options.UseVulnxIntegration {
-		emitCmd("vulnx", "search --limit 20 --silent "+hostFromTarget(input.Target))
-		findings = append(findings, s.runInstrumentedTool(ctx, "vulnx", func() []model.Finding {
+		findings = append(findings, runTool("vulnx", "search --limit 20 --silent "+hostFromTarget(input.Target), func() []model.Finding {
 			return s.runVulnx(ctx, input.Target)
 		})...)
 	}
 	if input.Options.UseRetireJSIntegration {
-		emitCmd("retire", "--path <downloaded-js> --outputformat json")
-		findings = append(findings, s.runInstrumentedTool(ctx, "retire", func() []model.Finding {
+		findings = append(findings, runTool("retire", "--path <downloaded-js> --outputformat json", func() []model.Finding {
 			return s.runRetireJS(ctx, input)
 		})...)
 	}
 	if input.Options.UseTruffleHogIntegration {
-		emitCmd("trufflehog", "filesystem <downloaded-js> --json")
-		findings = append(findings, s.runInstrumentedTool(ctx, "trufflehog", func() []model.Finding {
+		findings = append(findings, runTool("trufflehog", "filesystem <downloaded-js> --json", func() []model.Finding {
 			return s.runTruffleHog(ctx, input)
 		})...)
 	}
 	if input.Options.UseZAPBaselineIntegration {
-		emitCmd("zap-baseline.py", "-t "+input.Target)
-		findings = append(findings, s.runInstrumentedTool(ctx, "zap-baseline", func() []model.Finding {
+		findings = append(findings, runTool("zap-baseline.py", "-t "+input.Target, func() []model.Finding {
 			return s.runZAPBaseline(ctx, input.Target)
 		})...)
 	}
@@ -651,8 +632,7 @@ func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) [
 		} else {
 			for _, vt := range state.injectionTargets(input.Target) {
 				vt := vt
-				emitCmd("xssmap", "scan --url "+vt)
-				findings = append(findings, s.runInstrumentedTool(ctx, "xssmap", func() []model.Finding {
+				findings = append(findings, runTool("xssmap", "scan --url "+vt, func() []model.Finding {
 					return s.runXSSMap(ctx, vt)
 				})...)
 			}

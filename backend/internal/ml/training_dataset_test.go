@@ -123,3 +123,6 @@ func TestBuildTrainingDatasetIncludesProbeNegatives(t *testing.T) {
 		t.Fatalf("unexpected second bucket: %+v", neg[1])
 	}
 }
+
+func (r *datasetTestRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error { return nil }
+func (r *datasetTestRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) { return nil, nil }

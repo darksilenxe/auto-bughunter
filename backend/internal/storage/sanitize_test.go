@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -93,3 +94,6 @@ func TestUpdateJobSanitizesNullBytesInAISummary(t *testing.T) {
 
 // captureUpdateRepo is a minimal in-memory repo for sanitization tests.
 type captureUpdateRepo struct{}
+
+func (r *captureUpdateRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error { return nil }
+func (r *captureUpdateRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) { return nil, nil }
