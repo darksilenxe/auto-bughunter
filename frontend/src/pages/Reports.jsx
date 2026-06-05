@@ -4,6 +4,14 @@ import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 import { proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
 
+const SUBMISSION_CHECKS = [
+  { id: "poc", label: "Proof of concept (PoC) payload is present" },
+  { id: "steps", label: "Reproduction steps are included" },
+  { id: "cvss", label: "CVSS score is recorded" },
+  { id: "remediation", label: "Remediation / fix guidance is provided" },
+  { id: "scope", label: "Affected URL is within program scope" },
+];
+
 export default function Reports() {
   const { job, scanId, screenshots } = useScan();
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
@@ -17,9 +25,16 @@ export default function Reports() {
   const [logoPath, setLogoPath] = useState("");
   const [optionsStatus, setOptionsStatus] = useState("");
   const [copyStatus, setCopyStatus] = useState({});
+  const [checklist, setChecklist] = useState({});
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
+  const highMedFindings = useMemo(
+    () => findings.filter((f) => f.severity === "high" || f.severity === "medium"),
+    [findings]
+  );
 
   if (!job) {
     return (
@@ -29,6 +44,7 @@ export default function Reports() {
           <p>Generate polished pentest and bug bounty reports after a scan completes.</p>
         </header>
         <section className="card empty-state">
+          <div style={{ fontSize: "2rem", marginBottom: 10 }}>📋</div>
           No scan data available. Run an engagement from the dashboard first, or{" "}
           <Link to="/scans">load a past scan from Engagement History</Link>.
         </section>
@@ -106,6 +122,38 @@ export default function Reports() {
     }
   };
 
+  const copyFindingMarkdown = async (finding) => {
+    const lines = [
+      `## ${finding.title}`,
+      `**Severity:** ${(finding.severity || "info").toUpperCase()}${finding.cvss ? `  |  **CVSS:** ${Number(finding.cvss).toFixed(1)}` : ""}`,
+      `**Affected URL:** ${finding.affectedUrl || "n/a"}`,
+      `**Category:** ${finding.category || "n/a"}`,
+      "",
+      `### Description`,
+      finding.description || finding.impact || "No description provided.",
+      "",
+      `### Proof of Concept`,
+      finding.poc || "No PoC recorded.",
+      "",
+      `### Reproduction Steps`,
+      ...(finding.reproductionSteps?.length
+        ? finding.reproductionSteps.map((s, i) => `${i + 1}. ${s}`)
+        : ["No reproduction steps recorded."]),
+      "",
+      `### Remediation`,
+      finding.recommendation || "No remediation guidance captured.",
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopyStatus((prev) => ({ ...prev, [finding.id + "_md"]: "Copied!" }));
+      setTimeout(() => setCopyStatus((prev) => ({ ...prev, [finding.id + "_md"]: "" })), 2000);
+    } catch {
+      setCopyStatus((prev) => ({ ...prev, [finding.id + "_md"]: "Failed" }));
+    }
+  };
+
+  const allChecked = SUBMISSION_CHECKS.every((c) => checklist[c.id]);
+
   return (
     <div className="page page--wide">
       <section className="hero-panel">
@@ -142,6 +190,41 @@ export default function Reports() {
         </div>
       </section>
 
+      {/* Submission checklist */}
+      {highMedFindings.length > 0 && (
+        <section className="card">
+          <div className="toolbar">
+            <div>
+              <h2>Submission checklist</h2>
+              <p className="meta">Verify common requirements are met for high and medium severity findings before generating a report.</p>
+            </div>
+            <button type="button" className="button-ghost" onClick={() => setShowChecklist((v) => !v)}>
+              {showChecklist ? "Hide" : "Show"} checklist
+            </button>
+          </div>
+          {showChecklist && (
+            <div style={{ marginTop: 14 }}>
+              {SUBMISSION_CHECKS.map((check) => (
+                <label key={check.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!checklist[check.id]}
+                    onChange={(e) => setChecklist((prev) => ({ ...prev, [check.id]: e.target.checked }))}
+                  />
+                  <span style={{ color: checklist[check.id] ? "#47d7ac" : undefined }}>{check.label}</span>
+                </label>
+              ))}
+              {!allChecked && (
+                <p className="meta" style={{ color: "#ffad66", marginTop: 6 }}>
+                  {SUBMISSION_CHECKS.filter((c) => !checklist[c.id]).length} item(s) unchecked — verify before submitting.
+                </p>
+              )}
+              {allChecked && <p className="meta" style={{ color: "#47d7ac", marginTop: 6 }}>✔ All checklist items confirmed.</p>}
+            </div>
+          )}
+        </section>
+      )}
+
       {job.status === "completed" && scanId && (
         <section className="card">
           <div className="toolbar" style={{ alignItems: "flex-start" }}>
@@ -157,7 +240,7 @@ export default function Reports() {
           <div className="form-grid" style={{ marginTop: 14 }}>
             <label>
               Format
-              <select value={format} onChange={(e) => setFormat(e.target.value)}>
+              <select value={format} onChange={(e) => { setFormat(e.target.value); setShowPreview(false); }}>
                 <option value="pdf">PDF</option>
                 <option value="md">Markdown</option>
                 <option value="html">HTML</option>
@@ -176,7 +259,25 @@ export default function Reports() {
           <div className="button-row" style={{ marginTop: 16 }}>
             <a href={reportURL()} download={filenameFor()} className="button-link">Download report</a>
             <a href={`${API_BASE}/api/report/${scanId}/bugbounty.zip?api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}.zip`} className="button-link">Download bounty bundle</a>
+            {format === "html" && (
+              <button type="button" className="button-secondary" onClick={() => setShowPreview((v) => !v)}>
+                {showPreview ? "Hide preview" : "Preview HTML"}
+              </button>
+            )}
           </div>
+
+          {format === "html" && showPreview && (
+            <div style={{ marginTop: 16 }}>
+              <p className="meta" style={{ marginBottom: 8 }}>Inline HTML preview (scrollable):</p>
+              <iframe
+                src={reportURL()}
+                title="HTML report preview"
+                style={{ width: "100%", height: 600, border: "1px solid var(--border)", borderRadius: 10, background: "#fff" }}
+                sandbox="allow-same-origin"
+              />
+            </div>
+          )}
+
           <p className="meta" style={{ marginTop: 12 }}>
             Reports include CVSS/CWE, reproduction steps, impact statements, proof states, and submission-focused evidence.
           </p>
@@ -216,10 +317,14 @@ export default function Reports() {
                     <td>{(Number(finding.bountyScore || 0) * 100).toFixed(0)}%</td>
                     <td>
                       <div className="button-row">
-                        <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>Copy</button>
+                        <button type="button" className="button-secondary" title="Copy pre-formatted Markdown" onClick={() => copyFindingMarkdown(finding)}>
+                          {copyStatus[finding.id + "_md"] || "📋 Copy MD"}
+                        </button>
+                        <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>
+                          {copyStatus[finding.id] || "Copy via API"}
+                        </button>
                         <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.md`} className="button-link">.md</a>
                         <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.pdf`} className="button-link">.pdf</a>
-                        {copyStatus[finding.id] && <span className="meta">{copyStatus[finding.id]}</span>}
                       </div>
                     </td>
                   </tr>

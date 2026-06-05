@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import BurpImport from "../components/BurpImport";
 import LiveFeed from "../components/LiveFeed";
 import ReasoningPanel from "../components/ReasoningPanel";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
+import { useToast } from "../components/Toast";
 import { useScan } from "../context/ScanContext";
 import { DEFAULT_IMPACT_GOALS, IMPACT_GOALS, impactGoalMeta, summarizeFindings, topGoals } from "../lib/impact";
 
@@ -75,7 +76,8 @@ const SCENARIOS = {
 const EMPTY_LOGIN_STEP = { action: "click", selector: "", value: "", waitMillis: 0, optional: false };
 
 export default function Dashboard() {
-  const { startScan, stopScan, job, loading, error, scanId, liveEvents, isScanActive } = useScan();
+  const { startScan, stopScan, job, loading, error, scanId, liveEvents, isScanActive, scanStartedAt } = useScan();
+  const { toast } = useToast();
   const [scenario, setScenario] = useState("bugbounty");
   const [target, setTarget] = useState("");
   const [headersJson, setHeadersJson] = useState("");
@@ -108,6 +110,118 @@ export default function Dashboard() {
   const [minReportConfidence, setMinReportConfidence] = useState("");
   const [loginSteps, setLoginSteps] = useState([]);
   const [impactGoals, setImpactGoals] = useState(DEFAULT_IMPACT_GOALS);
+
+  // Named scan profiles
+  const [profiles, setProfiles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("scan_profiles") || "[]"); } catch { return []; }
+  });
+  const [profileName, setProfileName] = useState("");
+  const [showProfilePanel, setShowProfilePanel] = useState(false);
+
+  // Cancel confirmation strip
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+
+  // Live scan duration timer
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (isScanActive && scanStartedAt) {
+      timerRef.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - scanStartedAt) / 1000));
+      }, 1000);
+    } else {
+      clearInterval(timerRef.current);
+      if (!isScanActive) setElapsed(0);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [isScanActive, scanStartedAt]);
+
+  // Probe velocity: probes in last 60 s derived from reasoning_loop events
+  const probeVelocity = useMemo(() => {
+    if (!liveEvents.length) return 0;
+    const cutoff = Date.now() - 60000;
+    return liveEvents.filter(
+      (e) => e.type === "reasoning_loop" && e.metadata?.status === "probing" && new Date(e.timestamp).getTime() > cutoff
+    ).length;
+  }, [liveEvents]);
+
+  function formatElapsed(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return [h, m, s].map((v) => String(v).padStart(2, "0")).join(":");
+  }
+
+  function buildCurrentConfig() {
+    return {
+      target, workspaceId, policyPack,
+      headersJson, customHeaderName, customHeaderValue,
+      cookiesJson, userAgent, loginUrl, username, password,
+      basicAuthUsername, basicAuthPassword,
+      includeHosts, excludeHosts, excludePaths, programRules,
+      useNuclei, useZap, useXSSMap, useMLTriage, useAttackPath,
+      useFalsePositiveReview, useRemediationPlanner, useAIToolCalling,
+      aggressiveExploitation, humanPaced, strictReporting, minReportConfidence,
+      loginSteps, impactGoals,
+    };
+  }
+
+  function applyConfig(cfg) {
+    if (cfg.target !== undefined) setTarget(cfg.target);
+    if (cfg.workspaceId !== undefined) setWorkspaceId(cfg.workspaceId);
+    if (cfg.policyPack !== undefined) setPolicyPack(cfg.policyPack);
+    if (cfg.headersJson !== undefined) setHeadersJson(cfg.headersJson);
+    if (cfg.customHeaderName !== undefined) setCustomHeaderName(cfg.customHeaderName);
+    if (cfg.customHeaderValue !== undefined) setCustomHeaderValue(cfg.customHeaderValue);
+    if (cfg.cookiesJson !== undefined) setCookiesJson(cfg.cookiesJson);
+    if (cfg.userAgent !== undefined) setUserAgent(cfg.userAgent);
+    if (cfg.loginUrl !== undefined) setLoginUrl(cfg.loginUrl);
+    if (cfg.username !== undefined) setUsername(cfg.username);
+    if (cfg.password !== undefined) setPassword(cfg.password);
+    if (cfg.basicAuthUsername !== undefined) setBasicAuthUsername(cfg.basicAuthUsername);
+    if (cfg.basicAuthPassword !== undefined) setBasicAuthPassword(cfg.basicAuthPassword);
+    if (cfg.includeHosts !== undefined) setIncludeHosts(cfg.includeHosts);
+    if (cfg.excludeHosts !== undefined) setExcludeHosts(cfg.excludeHosts);
+    if (cfg.excludePaths !== undefined) setExcludePaths(cfg.excludePaths);
+    if (cfg.programRules !== undefined) setProgramRules(cfg.programRules);
+    if (cfg.useNuclei !== undefined) setUseNuclei(cfg.useNuclei);
+    if (cfg.useZap !== undefined) setUseZap(cfg.useZap);
+    if (cfg.useXSSMap !== undefined) setUseXSSMap(cfg.useXSSMap);
+    if (cfg.useMLTriage !== undefined) setUseMLTriage(cfg.useMLTriage);
+    if (cfg.useAttackPath !== undefined) setUseAttackPath(cfg.useAttackPath);
+    if (cfg.useFalsePositiveReview !== undefined) setUseFalsePositiveReview(cfg.useFalsePositiveReview);
+    if (cfg.useRemediationPlanner !== undefined) setUseRemediationPlanner(cfg.useRemediationPlanner);
+    if (cfg.useAIToolCalling !== undefined) setUseAIToolCalling(cfg.useAIToolCalling);
+    if (cfg.aggressiveExploitation !== undefined) setAggressiveExploitation(cfg.aggressiveExploitation);
+    if (cfg.humanPaced !== undefined) setHumanPaced(cfg.humanPaced);
+    if (cfg.strictReporting !== undefined) setStrictReporting(cfg.strictReporting);
+    if (cfg.minReportConfidence !== undefined) setMinReportConfidence(cfg.minReportConfidence);
+    if (Array.isArray(cfg.loginSteps)) setLoginSteps(cfg.loginSteps.map((s) => ({ ...s })));
+    if (Array.isArray(cfg.impactGoals)) setImpactGoals(cfg.impactGoals);
+  }
+
+  function saveProfile() {
+    const name = profileName.trim();
+    if (!name) return;
+    const updated = [...profiles.filter((p) => p.name !== name), { name, config: buildCurrentConfig() }];
+    setProfiles(updated);
+    localStorage.setItem("scan_profiles", JSON.stringify(updated));
+    setProfileName("");
+    toast(`Profile "${name}" saved`, { type: "success" });
+  }
+
+  function loadProfile(name) {
+    const p = profiles.find((pr) => pr.name === name);
+    if (p) { applyConfig(p.config); toast(`Profile "${name}" loaded`, { type: "info" }); }
+  }
+
+  function deleteProfile(name) {
+    const updated = profiles.filter((p) => p.name !== name);
+    setProfiles(updated);
+    localStorage.setItem("scan_profiles", JSON.stringify(updated));
+    toast(`Profile "${name}" deleted`, { type: "info" });
+  }
 
   function applyScenario(key) {
     const preset = SCENARIOS[key];
@@ -268,6 +382,18 @@ export default function Dashboard() {
             <div className="stat-card__value">{findingsSummary.chains}</div>
             <div className="stat-card__hint">Chained paths that end in reviewer-friendly business outcomes.</div>
           </article>
+          {isScanActive && (
+            <article className="stat-card">
+              <span className="stat-card__label">Scan duration</span>
+              <div className="stat-card__value" style={{ color: "var(--accent)", fontFamily: "monospace", fontSize: "1.6rem" }}>{formatElapsed(elapsed)}</div>
+              <div className="stat-card__hint">Elapsed wall-clock time since scan started.</div>
+            </article>
+          )}
+          <article className="stat-card">
+            <span className="stat-card__label">Probe velocity</span>
+            <div className="stat-card__value">{probeVelocity}</div>
+            <div className="stat-card__hint">Reasoning-loop probing steps in the last 60 seconds.</div>
+          </article>
         </div>
       </section>
 
@@ -289,10 +415,43 @@ export default function Dashboard() {
                   {preset.label}
                 </button>
               ))}
+              <button
+                type="button"
+                className={`filter-chip ${showProfilePanel ? "is-active" : ""}`}
+                onClick={() => setShowProfilePanel((p) => !p)}
+              >
+                ◈ Profiles {profiles.length > 0 ? `(${profiles.length})` : ""}
+              </button>
             </div>
           </div>
 
-          {scenario && (
+          {showProfilePanel && (
+            <div className="surface" style={{ marginBottom: 14 }}>
+              <strong>Named scan profiles</strong>
+              <p className="meta" style={{ marginTop: 4 }}>Save the current config as a reusable profile, or load a saved one.</p>
+              {profiles.length > 0 && (
+                <div className="filter-row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+                  {profiles.map((p) => (
+                    <div key={p.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <button type="button" className="filter-chip is-active" onClick={() => loadProfile(p.name)}>{p.name}</button>
+                      <button type="button" className="button-ghost" style={{ padding: "0.2rem 0.5rem", fontSize: "0.74rem" }} onClick={() => deleteProfile(p.name)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label>
+                  Profile name
+                  <input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="my-target-prod" />
+                </label>
+              </div>
+              <div className="button-row" style={{ marginTop: 10 }}>
+                <button type="button" className="button-secondary" onClick={saveProfile} disabled={!profileName.trim()}>Save current config</button>
+              </div>
+            </div>
+          )}
+
+          {scenario && !showProfilePanel && (
             <div className="surface" style={{ marginBottom: 14 }}>
               <strong>{SCENARIOS[scenario].label}</strong>
               <p className="meta" style={{ marginTop: 6 }}>{SCENARIOS[scenario].description}</p>
@@ -488,8 +647,17 @@ export default function Dashboard() {
 
             <div className="button-row">
               <button disabled={loading}>{loading ? "Scanning…" : "Start scan"}</button>
-              {canStopScan && <button type="button" className="button-danger" onClick={() => stopScan(scanId)}>Stop scan</button>}
+              {canStopScan && !showCancelConfirm && (
+                <button type="button" className="button-danger" onClick={() => setShowCancelConfirm(true)}>Stop scan</button>
+              )}
             </div>
+            {canStopScan && showCancelConfirm && (
+              <div className="cancel-confirm-strip">
+                <span>⚠ Stop the running scan?</span>
+                <button type="button" className="button-danger" onClick={() => { stopScan(scanId); setShowCancelConfirm(false); }}>Yes, stop it</button>
+                <button type="button" className="button-secondary" onClick={() => setShowCancelConfirm(false)}>Keep running</button>
+              </div>
+            )}
           </form>
 
           {error && <p className="error" style={{ marginTop: 12 }}>{error}</p>}
