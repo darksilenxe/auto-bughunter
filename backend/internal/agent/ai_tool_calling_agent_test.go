@@ -111,6 +111,8 @@ func TestAIToolCallingAgent_StopsWhenImpactAlreadyDemonstrated(t *testing.T) {
 	}
 	agent := NewAIToolCallingAgent(caller, true)
 
+	// High severity with SubmissionReady proof state and ≥2 proof artifacts should
+	// trigger the stop-early condition so no tool calls are planned.
 	out, err := agent.Run(context.Background(), AgentInput{
 		Target: "http://example.com",
 		Options: model.ScanOptions{
@@ -118,11 +120,15 @@ func TestAIToolCallingAgent_StopsWhenImpactAlreadyDemonstrated(t *testing.T) {
 		},
 		AllFindings: []model.Finding{
 			{
-				ID:          "impact-1",
-				Title:       "Account takeover already proven",
-				Severity:    model.SeverityHigh,
-				Impact:      "Account takeover demonstrated end-to-end.",
-				ProofState:  model.ProofStateImpactDemonstrated,
+				ID:         "impact-1",
+				Title:      "Account takeover already proven",
+				Severity:   model.SeverityHigh,
+				Impact:     "Account takeover demonstrated end-to-end.",
+				ProofState: model.ProofStateSubmissionReady,
+				ProofArtifacts: []model.ProofArtifact{
+					{Type: "script", Label: "repro.sh"},
+					{Type: "screenshot", Label: "proof.png"},
+				},
 				BountyScore: 0.93,
 			},
 		},

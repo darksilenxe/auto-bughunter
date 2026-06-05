@@ -8,6 +8,7 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/openhack"
+	"auto-bughunter/backend/internal/proofpolicy"
 )
 
 // OpenHackTriageAgent runs the OpenHack finding-triage prompt over the
@@ -171,10 +172,27 @@ func applyTriageDecision(f *model.Finding, d ai.OpenHackTriageDecision) bool {
 		// Triage confidence is a downward gate — never inflate confidence.
 		f.Confidence = d.Confidence
 	}
+
+	// Severity downgrade protection: AI may not reduce a Critical or High
+	// finding's severity unless the proof policy confirms that at least one
+	// mandatory proof field is not satisfied. This prevents vague or
+	// insufficiently evidenced AI reasoning from silently suppressing the most
+	// important findings.
 	if sev := model.Severity(d.FinalSeverity); sev != "" {
-		// Adopt the triage severity in both directions because triage is
-		// explicitly responsible for the final severity rating.
-		f.Severity = sev
+		origSev := f.Severity
+		isDowngrade := (origSev == model.SeverityCritical && sev != model.SeverityCritical) ||
+			(origSev == model.SeverityHigh && sev != model.SeverityHigh && sev != model.SeverityCritical)
+		if isDowngrade {
+			pp := proofpolicy.EvaluateFinding(*f)
+			if len(pp.Required) > 0 && len(pp.Missing) == 0 {
+				// All required proof fields are satisfied; block the downgrade.
+				f.EvidenceFields["openhackTriageSeverityDowngradeBlocked"] = "true"
+			} else {
+				f.Severity = sev
+			}
+		} else {
+			f.Severity = sev
+		}
 	}
 
 	switch d.Decision {

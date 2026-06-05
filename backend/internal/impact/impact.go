@@ -240,6 +240,17 @@ func ShouldStopForDemonstratedImpact(findings []model.Finding, goals []model.Imp
 	for _, f := range findings {
 		enriched := EnrichFinding(f, goals)
 		if enriched.ProofState == model.ProofStateImpactDemonstrated || enriched.ProofState == model.ProofStateSubmissionReady {
+			// For Critical/High findings drive toward SubmissionReady depth before
+			// stopping, so the scanner collects maximum evidence before halting.
+			// Only stop when we have SubmissionReady quality proof with at least
+			// two artifacts — a single confirmed probe is not enough.
+			if enriched.Severity == model.SeverityCritical || enriched.Severity == model.SeverityHigh {
+				if enriched.ProofState == model.ProofStateSubmissionReady && len(enriched.ProofArtifacts) >= 2 {
+					return true, fmt.Sprintf("high/critical impact demonstrated at submission-ready depth by %q (%s, bounty %.2f)", enriched.Title, enriched.ProofState, enriched.BountyScore)
+				}
+				continue // don't stop early — keep probing to reach SubmissionReady
+			}
+			// For Medium/Low findings the existing bounty/impact thresholds apply.
 			if enriched.BountyScore >= 0.80 || enriched.ImpactScore >= 0.85 {
 				return true, fmt.Sprintf("impact already demonstrated by %q (%s, bounty %.2f)", enriched.Title, enriched.ProofState, enriched.BountyScore)
 			}

@@ -323,7 +323,7 @@ func unblockForHighPayoutFindings(blocked map[string]bool, findings []model.Find
 		"sensitive_data_exposure": {"information_disclosure", "scanning"},
 	}
 	for _, f := range findings {
-		isHighPayout := f.BountyScore >= 0.75 || f.Severity == model.SeverityCritical
+		isHighPayout := f.BountyScore >= 0.75 || f.Severity == model.SeverityCritical || f.Severity == model.SeverityHigh
 		if !isHighPayout {
 			continue
 		}

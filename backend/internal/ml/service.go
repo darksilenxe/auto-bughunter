@@ -1082,10 +1082,50 @@ func falsePositiveSignalScore(f model.Finding) float64 {
 	if weakEvidenceSignal(f) {
 		score += 0.18
 	}
+	// Blind vulnerability classes (blind SQLi, blind SSRF, blind XXE) where
+	// in-band response analysis is not sufficient need an out-of-band signal to
+	// be treated as reliable. Without an OOB signal, push the score up so the
+	// finding surfaces as a candidate for human review rather than being quietly
+	// accepted or promoted automatically.
+	if isBlindClass(f) && !hasOOBSignal(f) {
+		score += 0.18
+	}
 	score += proofPolicyPenalty(f)
 
 	score -= validationStrengthSignal(f) * 0.7
 	return clamp(score, 0, 1)
+}
+
+// isBlindClass returns true for vulnerability categories where in-band response
+// evidence alone is not sufficient to confirm the finding.
+func isBlindClass(f model.Finding) bool {
+	cat := strings.ToLower(strings.TrimSpace(f.Category))
+	switch cat {
+	case "sqli", "sql injection", "blind sqli", "blind sql injection",
+		"ssrf", "blind ssrf",
+		"xxe", "xml external entity":
+		return true
+	}
+	return false
+}
+
+// hasOOBSignal returns true when the finding carries any out-of-band
+// confirmation evidence in its EvidenceFields, Evidence text, or Description.
+func hasOOBSignal(f model.Finding) bool {
+	if oob := strings.TrimSpace(f.EvidenceFields["oobInteraction"]); oob != "" {
+		return true
+	}
+	if ms := strings.TrimSpace(f.EvidenceFields["timingDifferentialMs"]); ms != "" {
+		return true
+	}
+	combined := strings.ToLower(f.Evidence + " " + f.Description)
+	oobKeywords := []string{"callback", "out-of-band", "interactsh", "dns interaction", "outbound", "oob"}
+	for _, kw := range oobKeywords {
+		if strings.Contains(combined, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func proofPolicyPenalty(f model.Finding) float64 {
@@ -1094,9 +1134,23 @@ func proofPolicyPenalty(f model.Finding) float64 {
 		return 0
 	}
 	if len(result.Missing) == 0 {
-		return -0.1
+		// All required proof fields satisfied.
+		// For High/Critical findings with full coverage apply a stronger protective
+		// bonus so that well-evidenced severe findings are not mistakenly flagged as
+		// false-positive candidates based on surface signals alone.
+		if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
+			return -0.20
+		}
+		return -0.10
 	}
-	return min(0.36, float64(len(result.Missing))*0.12)
+	base := min(0.36, float64(len(result.Missing))*0.12)
+	// For High/Critical findings that fall below the minimum coverage threshold,
+	// apply an additional penalty to surface them for human review before any
+	// automated triage decision is made.
+	if result.BelowMinCoverage && (f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical) {
+		base = min(0.48, base+0.12)
+	}
+	return base
 }
 
 func annotateProofPolicy(f *model.Finding) {
