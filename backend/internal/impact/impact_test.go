@@ -50,21 +50,67 @@ func TestEnrichFindingAssignsScoresProofStateAndGoals(t *testing.T) {
 }
 
 func TestShouldStopForDemonstratedImpact(t *testing.T) {
-	findings := []model.Finding{
-		{
-			ID:          "impact-1",
-			Title:       "Account takeover via password reset poisoning",
-			Severity:    model.SeverityHigh,
-			Impact:      "Account takeover against any user who follows a poisoned reset link.",
-			ProofState:  model.ProofStateImpactDemonstrated,
-			BountyScore: 0.91,
-		},
-	}
-	stop, reason := ShouldStopForDemonstratedImpact(findings, nil)
-	if !stop {
-		t.Fatal("expected stop for demonstrated impact")
-	}
-	if reason == "" {
-		t.Fatal("expected non-empty stop reason")
-	}
+	// High severity with only ImpactDemonstrated should NOT stop; it must reach
+	// SubmissionReady with at least 2 proof artifacts to trigger the stop.
+	t.Run("high_impact_demonstrated_no_stop", func(t *testing.T) {
+		findings := []model.Finding{
+			{
+				ID:          "impact-1",
+				Title:       "Account takeover via password reset poisoning",
+				Severity:    model.SeverityHigh,
+				Impact:      "Account takeover against any user who follows a poisoned reset link.",
+				ProofState:  model.ProofStateImpactDemonstrated,
+				BountyScore: 0.91,
+			},
+		}
+		stop, _ := ShouldStopForDemonstratedImpact(findings, nil)
+		if stop {
+			t.Fatal("High+ImpactDemonstrated should not stop; SubmissionReady+2 artifacts required")
+		}
+	})
+
+	// High severity with SubmissionReady AND at least 2 proof artifacts should stop.
+	t.Run("high_submission_ready_stops", func(t *testing.T) {
+		findings := []model.Finding{
+			{
+				ID:             "impact-2",
+				Title:          "Account takeover via password reset poisoning",
+				Severity:       model.SeverityHigh,
+				Impact:         "Account takeover against any user who follows a poisoned reset link.",
+				ProofState:     model.ProofStateSubmissionReady,
+				BountyScore:    0.91,
+				ProofArtifacts: []model.ProofArtifact{
+					{Type: "script", Label: "curl-repro.sh", Value: "curl -X POST ..."},
+					{Type: "screenshot", Label: "screenshot.png", Value: "base64data"},
+				},
+			},
+		}
+		stop, reason := ShouldStopForDemonstratedImpact(findings, nil)
+		if !stop {
+			t.Fatal("High+SubmissionReady+2 artifacts should trigger stop")
+		}
+		if reason == "" {
+			t.Fatal("expected non-empty stop reason")
+		}
+	})
+
+	// Medium severity with BountyScore >= 0.80 should still stop via legacy path.
+	t.Run("medium_bounty_score_stops", func(t *testing.T) {
+		findings := []model.Finding{
+			{
+				ID:          "impact-3",
+				Title:       "IDOR on profile picture",
+				Severity:    model.SeverityMedium,
+				ProofState:  model.ProofStateImpactDemonstrated,
+				BountyScore: 0.82,
+			},
+		}
+		stop, reason := ShouldStopForDemonstratedImpact(findings, nil)
+		if !stop {
+			t.Fatal("Medium+BountyScore>=0.80 should trigger stop")
+		}
+		if reason == "" {
+			t.Fatal("expected non-empty stop reason")
+		}
+	})
 }

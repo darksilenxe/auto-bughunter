@@ -101,6 +101,18 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	stepsNearMiss := 0
 	stopReason := ""
 
+	// confirmedCounts tracks how many distinct probes have confirmed a finding
+	// for each (category, endpoint) pair. High/Critical findings are capped at
+	// Medium severity on the first confirmation; a second independent probe
+	// restores the original severity via EvidenceFields["originalSeverity"].
+	type confirmedKey struct{ cat, ep string }
+	confirmedCounts := map[confirmedKey]int{}
+
+	// baselineByEndpoint caches a benign GET response per endpoint so that
+	// confirmed findings can be annotated with a response-vs-baseline differential
+	// signal, strengthening the evidence that the probe caused a real change.
+	baselineByEndpoint := map[string]scanner.BaselineResponse{}
+
 	for step := 1; step <= a.StepBudget; step++ {
 		select {
 		case <-ctx.Done():
@@ -176,6 +188,16 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		})
 
 		// ── Execute the probe ─────────────────────────────────────────────
+		// Capture a baseline response for this endpoint on first visit so we
+		// can annotate confirmed findings with a differential signal.
+		if _, seen := baselineByEndpoint[decision.Endpoint]; !seen {
+			baselineByEndpoint[decision.Endpoint] = a.scanService.CaptureBaseline(
+				ctx,
+				decision.Endpoint,
+				input.AuthProfile,
+				input.Options,
+			)
+		}
 		pr := a.scanService.ProbeHypothesis(
 			ctx,
 			decision.Category,
@@ -235,6 +257,38 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			}
 			pr.Finding.EvidenceFields["adaptiveStep"] = itoa(step)
 			pr.Finding.EvidenceFields["aiRationale"] = decision.Rationale
+
+			// Annotate with response differential vs baseline when available.
+			if bl, ok := baselineByEndpoint[decision.Endpoint]; ok && bl.StatusCode > 0 {
+				pr.Finding.EvidenceFields["baselineStatusCode"] = itoa(bl.StatusCode)
+				if bl.StatusCode != pr.StatusCode {
+					pr.Finding.EvidenceFields["responseStatusDiff"] = itoa(bl.StatusCode) + "->" + itoa(pr.StatusCode)
+				}
+			}
+
+			// Multi-probe consensus: track confirmation count per category+endpoint.
+			// High/Critical findings are capped at Medium on the first probe
+			// confirmation to prevent a single observation from escalating severity.
+			// The originalSeverity field preserves the scanner's assessed severity so
+			// a second independent confirmation can restore it.
+			ck := confirmedKey{strings.ToLower(pr.Category), pr.Endpoint}
+			confirmedCounts[ck]++
+			count := confirmedCounts[ck]
+			pr.Finding.EvidenceFields["probeConsensusCount"] = itoa(count)
+
+			if count == 1 {
+				if pr.Finding.Severity == model.SeverityCritical || pr.Finding.Severity == model.SeverityHigh {
+					pr.Finding.EvidenceFields["originalSeverity"] = string(pr.Finding.Severity)
+					pr.Finding.EvidenceFields["pendingConsensusConfirmation"] = "true"
+					pr.Finding.Severity = model.SeverityMedium
+				}
+			} else if count >= 2 {
+				// Restore severity capped by the single-probe consensus rule.
+				if orig := strings.TrimSpace(pr.Finding.EvidenceFields["originalSeverity"]); orig != "" {
+					pr.Finding.Severity = model.Severity(orig)
+				}
+				delete(pr.Finding.EvidenceFields, "pendingConsensusConfirmation")
+			}
 
 			output.Findings = append(output.Findings, *pr.Finding)
 			allFindings = append(allFindings, *pr.Finding)

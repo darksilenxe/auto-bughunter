@@ -160,6 +160,46 @@ func (s *Service) ProbeHypothesis(
 	return base
 }
 
+// BaselineResponse holds the response characteristics of a benign GET request
+// to an endpoint before any probes are issued. It is used by AdaptiveProbeAgent
+// to detect meaningful response differentials that strengthen confirmed findings.
+type BaselineResponse struct {
+	StatusCode int
+	BodyLength int
+}
+
+// CaptureBaseline issues a benign GET request to endpoint with no attack
+// payload and returns the status code and body length. The result is used to
+// compare against probe responses, so that a finding confirmed on an endpoint
+// whose status/body length differs significantly from the baseline has stronger
+// evidence of an actual differential rather than a consistently anomalous
+// endpoint. Returns a zero value on any error.
+func (s *Service) CaptureBaseline(
+	ctx context.Context,
+	endpoint string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) BaselineResponse {
+	if err := safety.ValidateOutboundURL(endpoint); err != nil {
+		return BaselineResponse{}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return BaselineResponse{}
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return BaselineResponse{}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+	return BaselineResponse{
+		StatusCode: resp.StatusCode,
+		BodyLength: len(b),
+	}
+}
+
 // issueProbeRequest builds and executes the appropriate HTTP request for the
 // given category and returns (statusCode, bodyExcerpt, probeURL, error).
 // It captures the response even for non-200 status codes so that WAF and
