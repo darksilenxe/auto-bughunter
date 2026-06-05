@@ -286,6 +286,8 @@ type Repository interface {
 	UpsertAutomationPolicyPack(ctx context.Context, item model.AutomationPolicyPack) error
 	ListAutomationPolicyPacks(ctx context.Context, workspaceID string, limit int) ([]model.AutomationPolicyPack, error)
 	AppendAutomationPolicyAudit(ctx context.Context, event model.AutomationPolicyAuditEvent) error
+	SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error
+	ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error)
 	ListAutomationPolicyAudit(ctx context.Context, workspaceID, policyPack string, limit int) ([]model.AutomationPolicyAuditEvent, error)
 	// SaveScanAnnotation persists a mid-scan operator observation.
 	SaveScanAnnotation(ctx context.Context, annotation model.ScanAnnotation) error
@@ -468,6 +470,10 @@ func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(r.URL.Path, "/annotations") {
 		s.handleListScanAnnotations(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, "/activity") {
+		s.handleGetScanActivity(w, r)
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/stop") {
@@ -846,7 +852,26 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	release := s.acquireTargetSlot(target, options)
 	defer release()
 
-	emit := s.eventBus.EmitterFor(id)
+	rawEmit := s.eventBus.EmitterFor(id)
+	emit := func(event model.ScanEvent) {
+		if event.Type == model.ScanEventAgentStart ||
+			event.Type == model.ScanEventAgentComplete ||
+			event.Type == model.ScanEventAgentSpawned ||
+			event.Type == model.ScanEventInfo ||
+			event.Type == model.ScanEventReasoningLoop ||
+			event.Type == model.ScanEventCommand ||
+			event.Type == model.ScanEventCommandResult ||
+			event.Type == model.ScanEventFinding ||
+			event.Type == model.ScanEventScreenshot {
+			go func(e model.ScanEvent) {
+				if err := s.repo.SaveAgentEvent(context.Background(), id, e); err != nil {
+					log.Printf("failed to save agent event for scan %s: %v", id, err)
+				}
+			}(event)
+		}
+		rawEmit(event)
+	}
+
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
 		Message: "Scan job started",
@@ -6432,4 +6457,31 @@ func encodeMemoryText(text string) []float32 {
 		out[i] = float32(v / norm)
 	}
 	return out
+}
+
+func (s *Server) handleGetScanActivity(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodGet {
+writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+return
+}
+// Extract ID from URL path, e.g., /api/scan/{id}/activity
+parts := strings.Split(r.URL.Path, "/")
+if len(parts) < 4 {
+writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+return
+}
+id := parts[3]
+
+events, err := s.repo.ListAgentEvents(r.Context(), id)
+if err != nil {
+log.Printf("failed to list agent events for %s: %v", id, err)
+writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list agent events"})
+return
+}
+
+if events == nil {
+events = []model.ScanEvent{}
+}
+
+writeJSON(w, http.StatusOK, events)
 }

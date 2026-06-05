@@ -297,8 +297,37 @@ export function ScanProvider({ children }) {
       const data = await res.json();
       setScanId(data.id);
       updateJobSnapshot(data);
-      setLiveEvents([]);
-      setScreenshots([]);
+      
+      try {
+        const activityRes = await fetch(
+          `${API_BASE}/api/scan/${encodeURIComponent(id)}/activity?workspaceId=${encodeURIComponent(workspaceID)}`,
+          { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID } },
+        );
+        if (activityRes.ok) {
+          const events = await activityRes.json();
+          setLiveEvents(events || []);
+          
+          const loadedScreenshots = [];
+          (events || []).forEach(evt => {
+            if (evt.type === "screenshot" && evt.screenshot) {
+              loadedScreenshots.push({
+                b64: evt.screenshot,
+                message: evt.message || "",
+                agentName: evt.agentName || "scanner"
+              });
+            }
+          });
+          setScreenshots(loadedScreenshots);
+        } else {
+          setLiveEvents([]);
+          setScreenshots([]);
+        }
+      } catch (err) {
+        console.error("[ScanContext] loadScan activity fetch failed:", err);
+        setLiveEvents([]);
+        setScreenshots([]);
+      }
+
       setLoading(false);
       setError("");
       return true;

@@ -88,3 +88,6 @@ func TestPrioritizeFindingsAppliesPayoutBoost(t *testing.T) {
 		t.Errorf("expected payout_boost in rationale > 0, got %v ok=%v", v, ok)
 	}
 }
+
+func (r *fakeRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error { return nil }
+func (r *fakeRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) { return nil, nil }

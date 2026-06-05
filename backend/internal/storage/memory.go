@@ -38,6 +38,7 @@ type MemoryStore struct {
 	apiKeys             map[string]memoryAPIKey
 	annotations         map[string][]model.ScanAnnotation
 	shadowDecisions     []model.ShadowDecision
+	agentEvents         map[string][]model.ScanEvent
 }
 
 type memoryIdempotencyRecord struct {
@@ -70,6 +71,7 @@ func NewMemoryStore() *MemoryStore {
 		apiKeys:             map[string]memoryAPIKey{},
 		annotations:         map[string][]model.ScanAnnotation{},
 		shadowDecisions:     []model.ShadowDecision{},
+		agentEvents:         map[string][]model.ScanEvent{},
 	}
 }
 
@@ -1223,4 +1225,21 @@ func cloneValue[T any](value T) T {
 		return value
 	}
 	return out
+}
+
+
+func (m *MemoryStore) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
+m.mu.Lock()
+defer m.mu.Unlock()
+m.agentEvents[scanID] = append(m.agentEvents[scanID], event)
+return nil
+}
+
+func (m *MemoryStore) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
+m.mu.RLock()
+defer m.mu.RUnlock()
+events := m.agentEvents[scanID]
+result := make([]model.ScanEvent, len(events))
+copy(result, events)
+return result, nil
 }
