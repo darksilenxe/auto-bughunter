@@ -336,6 +336,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		input.DetectedTech = detectTechStack(resp.Header, bodyBytes)
 	}
 
+	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
+	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
@@ -360,6 +362,15 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runParamPollutionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runVhostDiscoveryProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runRequestSmugglingProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveLDAPInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActiveXPathInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runFormulaInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActivePrototypePollutionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runDanglingMarkupProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runMassAssignmentProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runAccountEnumerationProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runWebSocketProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSAMLProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
@@ -402,6 +413,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, s.runJWTProbe(ctx, input)...)
 		findings = append(findings, s.runCSRFProbe(ctx, input)...)
 		findings = append(findings, s.runPasswordResetProbe(ctx, input)...)
+		findings = append(findings, s.runCacheDeceptionProbe(ctx, input)...)
+		findings = append(findings, s.runMFABypassProbe(ctx, input)...)
 	}
 
 	integrationFindings := s.runOptionalIntegrations(ctx, input)
