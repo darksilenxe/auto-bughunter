@@ -319,9 +319,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	findings = append(findings, checkSecurityHeaders(resp.Header)...)
 	findings = append(findings, checkCookies(resp)...)
+	findings = append(findings, s.runSecurityHeadersProbe(input, resp.Header, resp)...)
 	if u.Scheme == "https" {
 		emitCmd(fmt.Sprintf("tlscheck %s", u.Host), "Checking TLS configuration")
 		findings = append(findings, checkTLS(u.Host)...)
+		findings = append(findings, s.runTLSConfigProbe(ctx, input)...)
 	}
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
@@ -336,6 +338,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		input.DetectedTech = detectTechStack(resp.Header, bodyBytes)
 	}
 
+	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
 	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
 	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
@@ -371,6 +374,15 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runAccountEnumerationProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runWebSocketProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.RunSAMLProbe(ctx, input.Target, input.Scope, input.Options, input.AuthProfile, input.Emit)...)
+	findings = append(findings, s.runHTTPMethodsProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runVerboseErrorProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runFileUploadProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runCommandInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSSIInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runCrossDomainPolicyProbe(ctx, input)...)
+	findings = append(findings, s.runXSSIJSONPProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runSMTPInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runCloudStorageProbe(ctx, input, bodyText)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
