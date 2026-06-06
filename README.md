@@ -16,6 +16,62 @@ OpenHack-inspired agent prompt references are available under
 This project is designed for defensive testing on systems you own or are explicitly authorized to test.
 Do not scan third-party systems without written permission.
 
+## System Requirements
+
+### Standard build (no local LLM)
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | 2 cores | 4+ cores |
+| RAM | 8 GB | 16 GB |
+| Disk | 10 GB free | 20 GB free |
+| Docker Engine | 24+ | latest |
+| Docker Compose | v2.20+ | latest |
+
+The standard build (`docker compose up --build`) starts the backend, frontend,
+PostgreSQL (pgvector), Neo4j, headless Chromium, the ML triage service, and the
+security-knowledge sidecar. No model downloads occur. AI features require an
+external OpenAI-compatible API key (OpenAI, Anthropic, Gemini, or AWS Bedrock)
+set in `.env`.
+
+> **Docker Desktop on Windows/macOS:** the default VM is usually allocated 4–6 GB.
+> Raise it to at least 8 GB in Docker Desktop → Settings → Resources before
+> running the full stack, or some sidecars (Neo4j, Chromium) may OOM.
+
+### With local LLM (Ollama profile)
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | 4 cores | 6–8 cores |
+| RAM | 16 GB | 24–32 GB |
+| Disk | 30 GB free | 50 GB free |
+| Docker Engine | 24+ | latest |
+| Docker Compose | v2.20+ | latest |
+
+Enabling `--profile ollama` adds the Ollama sidecar and pulls the three default
+models on first start:
+
+| Model | Role | Approx. size |
+|-------|------|-------------|
+| `dolphin-mistral` (7B) | Primary reasoning / triage | ~4 GB |
+| `codellama` (7B) | Orchestration planner | ~4 GB |
+| `llama3.2:3b` | Fast JSON decisions | ~2 GB |
+
+Total additional disk for model weights: **~10 GB** (one-time download, cached
+in the `ollama_data` Docker volume).
+
+Ollama runs on **CPU by default** and requires roughly 4–6 GB of RAM per loaded
+model. To avoid swapping, ensure you have enough free RAM for at least the two
+heaviest models simultaneously (~10 GB for dolphin-mistral + codellama). If RAM
+is limited, set `AI_FAST_MODEL=` (empty) to skip the third model.
+
+**GPU acceleration (optional):** Layer `docker-compose.gpu.yml` to pass an
+NVIDIA GPU to Ollama for significantly faster inference (requires the NVIDIA
+driver and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)).
+AMD ROCm discrete GPUs are supported via the commented snippet at the top of
+that file. See the [GPU acceleration](#gpu-acceleration-for-the-local-llm-optional)
+section below for details.
+
 ## Outbound traffic encryption (HTTPS guard)
 
 At startup, the backend validates every URL it has been configured to call
