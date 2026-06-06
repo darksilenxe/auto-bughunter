@@ -4450,6 +4450,13 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		// deserialization, DOM XSS, and stateful flow engine.
 		findings = append(findings, s.scanService.RunRaceConditionProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunOAuthProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunOAuthSessionProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunSAMLProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunMFAProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunLoginProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunSessionLifecycleProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunMagicLinkProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunJWTAdvancedProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunHostHeaderInjectionProbe(ctx, target, scanScope, options, authProfile, s.oast, emit)...)
 		findings = append(findings, s.scanService.RunDeserializationProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunDOMXSSProbe(ctx, target, scanScope, options, authProfile, emit)...)

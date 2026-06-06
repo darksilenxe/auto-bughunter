@@ -370,7 +370,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runMassAssignmentProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runAccountEnumerationProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runWebSocketProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSAMLProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.RunSAMLProbe(ctx, input.Target, input.Scope, input.Options, input.AuthProfile, input.Emit)...)
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
