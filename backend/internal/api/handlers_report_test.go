@@ -191,6 +191,9 @@ func (r *reportTestRepo) ListProbeRecordsByOutcome(context.Context, model.ProbeO
 func (r *reportTestRepo) ListProbeRecordsByCategory(context.Context, string, time.Time, int) ([]model.ProbeRecord, error) {
 	panic("not used")
 }
+func (r *reportTestRepo) GetRejectedFindingsByTarget(context.Context, string) ([]model.FindingVerification, error) {
+	return nil, nil
+}
 
 func TestHandleHealthIncludesDatabaseStatsWhenAvailable(t *testing.T) {
 	s := &Server{

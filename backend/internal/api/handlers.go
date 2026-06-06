@@ -304,6 +304,11 @@ type Repository interface {
 	// ListProbeRecordsByCategory returns probe records for the given vulnerability
 	// category created at or after since, newest-first, up to limit rows.
 	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
+	// GetRejectedFindingsByTarget returns all finding verifications with status
+	// "rejected" for findings associated with the given target host. The results
+	// are used to suppress historically-rejected findings from re-surfacing in
+	// subsequent scans.
+	GetRejectedFindingsByTarget(ctx context.Context, target string) ([]model.FindingVerification, error)
 }
 
 type shadowDecisionWriter interface {
@@ -901,7 +906,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.appendAuditEvent(id, "state", fmt.Sprintf("Loaded %d persisted runtime endpoints", len(persistedState.KnownRuntimeEndpoints)))
 	}
 	options = s.applySafetyModePolicy(options)
-	options = s.tuneScanOptions(options, persistedState, previousJob)
+	options = s.tuneScanOptions(context.Background(), target, options, persistedState, previousJob)
 	options, disabledForHealth := applyHealthAwareExecutionGating(options)
 	if len(disabledForHealth) > 0 {
 		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
@@ -1054,6 +1059,37 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		newItems, changedItems, resolvedItems, deltaFindings := buildDeltaFindings(previousJob.Findings, job.Findings)
 		job.Findings = append(job.Findings, deltaFindings...)
 		s.appendAuditEvent(id, "monitoring", fmt.Sprintf("Drift states: new=%d, changed=%d, resolved=%d", newItems, changedItems, resolvedItems))
+	}
+	// Suppress historically-rejected findings: look up operator-confirmed
+	// rejections for this target across all prior scans. Any current finding
+	// whose base fingerprint matches a rejected verification gets its
+	// confidence halved and its drift status marked "historically_rejected"
+	// so it stays visible for auditing while not meeting the strict-reporting
+	// threshold.
+	if rejectedVerifs, err := s.repo.GetRejectedFindingsByTarget(context.Background(), target); err == nil && len(rejectedVerifs) > 0 {
+		rejectedKeys := make(map[string]bool, len(rejectedVerifs))
+		for _, rv := range rejectedVerifs {
+			if rv.FindingID != "" {
+				rejectedKeys[rv.FindingID] = true
+			}
+		}
+		if len(rejectedKeys) > 0 {
+			suppressed := 0
+			for i, f := range job.Findings {
+				if rejectedKeys[fingerprintFindingBase(f)] || rejectedKeys[f.ID] {
+					job.Findings[i].Confidence *= 0.5
+					job.Findings[i].DriftStatus = "historically_rejected"
+					if job.Findings[i].EvidenceFields == nil {
+						job.Findings[i].EvidenceFields = map[string]string{}
+					}
+					job.Findings[i].EvidenceFields["historicallyRejected"] = "true"
+					suppressed++
+				}
+			}
+			if suppressed > 0 {
+				s.appendAuditEvent(id, "analysis", fmt.Sprintf("Suppressed %d historically-rejected findings", suppressed))
+			}
+		}
 	}
 	if len(job.Findings) > len(findings) {
 		s.appendAuditEvent(id, "monitoring", "Monitoring delta finding generated from previous completed scan")
@@ -3386,7 +3422,7 @@ func findingHasHighSeverityCorroboration(f model.Finding) bool {
 	return false
 }
 
-func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {
+func (s *Server) tuneScanOptions(ctx context.Context, target string, options model.ScanOptions, state *model.PersistentScanState, previous *model.ScanJob) model.ScanOptions {
 	if previous != nil && previous.Dashboard != nil && previous.Dashboard.CoverageCompletenessScore < coverageLowThreshold {
 		options.CrawlMaxPages = maxInt(options.CrawlMaxPages, coverageLowCrawlBoostPages)
 	}
@@ -3406,6 +3442,43 @@ func (s *Server) tuneScanOptions(options model.ScanOptions, state *model.Persist
 		options.UseSQLMapIntegration = false
 		options.UseFFUFIntegration = false
 	}
+
+	// Gap 13: adaptive category budget.
+	// Inspect the previous scan's probe records to identify categories that
+	// produced exclusively no_signal outcomes (≥ noSignalMinProbes probes with
+	// ≥ noSignalRateThreshold fraction of no_signal). Those categories are
+	// appended to AutonomySuppressAgents as "skip-cat:<category>" entries so
+	// that AdaptiveProbeAgent can forward them to the AI as a low-priority
+	// advisory rather than wasting step budget on provably-clean attack surface.
+	if previous != nil && previous.ID != "" {
+		records, err := s.repo.ListProbeRecords(ctx, previous.ID)
+		if err == nil && len(records) > 0 {
+			type catStats struct{ total, noSignal int }
+			stats := make(map[string]*catStats)
+			for _, r := range records {
+				if r.Category == "" {
+					continue
+				}
+				if stats[r.Category] == nil {
+					stats[r.Category] = &catStats{}
+				}
+				stats[r.Category].total++
+				if r.Outcome == model.ProbeNoSignal {
+					stats[r.Category].noSignal++
+				}
+			}
+			for cat, cs := range stats {
+				if cs.total >= noSignalMinProbes &&
+					float64(cs.noSignal)/float64(cs.total) >= noSignalRateThreshold {
+					options.AutonomySuppressAgents = append(
+						options.AutonomySuppressAgents,
+						"skip-cat:"+cat,
+					)
+				}
+			}
+		}
+	}
+
 	return options
 }
 
@@ -4140,7 +4213,52 @@ func deduplicateFindingsCrossAgent(findings []model.Finding) ([]model.Finding, i
 		}
 		out = append(out, cur.rep)
 	}
-	return out, len(findings) - len(out)
+
+	// Second-pass semantic deduplication: merge findings that share the same
+	// (category, affected-URL-host, affected-parameter) tuple even when their
+	// title, evidence text, or agent-assigned IDs differ. This collapses
+	// independent agents that independently detected the same vulnerability
+	// instance with slightly different wording.
+	type semanticKey struct {
+		category string
+		host     string
+		param    string
+	}
+	semClusters := map[semanticKey]int{} // maps semKey → index in out
+	semOrder := make([]model.Finding, 0, len(out))
+	for _, f := range out {
+		sk := semanticKey{
+			category: strings.ToLower(strings.TrimSpace(f.Category)),
+			host:     normalizeDedupToken(hostFromTarget(strings.TrimSpace(f.AffectedURL))),
+			param:    normalizeDedupToken(f.AffectedParameter),
+		}
+		// Only collapse when all three fields are non-empty to avoid
+		// over-aggressive merging of host-level or category-level findings.
+		if sk.category == "" || sk.host == "" || sk.param == "" {
+			semOrder = append(semOrder, f)
+			continue
+		}
+		idx, exists := semClusters[sk]
+		if !exists {
+			semClusters[sk] = len(semOrder)
+			semOrder = append(semOrder, f)
+			continue
+		}
+		rep := semOrder[idx]
+		// Keep the highest-confidence, highest-severity representative.
+		if severityWeight(f.Severity) > severityWeight(rep.Severity) ||
+			(severityWeight(f.Severity) == severityWeight(rep.Severity) && f.Confidence > rep.Confidence) {
+			rep = f
+		}
+		rep.Sources = dedupeStrings(append(rep.Sources, f.Sources...))
+		if rep.EvidenceFields == nil {
+			rep.EvidenceFields = map[string]string{}
+		}
+		rep.EvidenceFields["semanticDuplicateMerged"] = "true"
+		semOrder[idx] = rep
+	}
+	removed := len(findings) - len(semOrder)
+	return semOrder, removed
 }
 
 func applyEvidenceQualityTiers(findings []model.Finding) []model.Finding {
@@ -5778,6 +5896,13 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 	for _, f := range dedup {
 		out = append(out, f)
 	}
+	// Per-category evidence schema enforcement: reduce confidence for findings
+	// that are missing minimum required evidence fields. This prevents findings
+	// that lack key corroborating evidence from being promoted to the same
+	// confidence level as fully evidenced findings.
+	for i := range out {
+		out[i] = enforceMinimumEvidenceFields(out[i])
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Severity != out[j].Severity {
 			return severityRank(out[i].Severity) > severityRank(out[j].Severity)
@@ -5785,6 +5910,61 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 		return out[i].Title < out[j].Title
 	})
 	return out
+}
+
+// enforceMinimumEvidenceFields checks whether a finding has the minimum
+// required evidence fields for its category. Missing evidence is penalised
+// with a confidence multiplier of 0.5 and a "needs_context" tag so the
+// finding stays visible while not meeting the strict-reporting threshold.
+//
+// Requirements per category:
+//   - sqli/injection: responseBodySnippet or oobInteraction
+//   - ssrf: oobInteraction or timingDifferentialMs
+//   - ssti: responseBodySnippet showing template evaluation
+//   - xxe: responseBodySnippet or oobInteraction
+func enforceMinimumEvidenceFields(f model.Finding) model.Finding {
+	if f.EvidenceFields == nil {
+		f.EvidenceFields = map[string]string{}
+	}
+	cat := strings.ToLower(strings.TrimSpace(f.Category))
+	hasField := func(keys ...string) bool {
+		for _, k := range keys {
+			if v := strings.TrimSpace(f.EvidenceFields[k]); v != "" {
+				return true
+			}
+		}
+		return false
+	}
+	// Also accept evidence inlined in the Evidence field (legacy probes).
+	hasEvidence := strings.TrimSpace(f.Evidence) != ""
+
+	needsContext := false
+	switch {
+	case cat == "injection" || strings.Contains(cat, "sqli") || strings.Contains(cat, "sql"):
+		if !hasEvidence && !hasField("responseBodySnippet", "oobInteraction", "sqlErrorMatch") {
+			needsContext = true
+		}
+	case strings.Contains(cat, "ssrf"):
+		if !hasEvidence && !hasField("oobInteraction", "timingDifferentialMs") {
+			needsContext = true
+		}
+	case strings.Contains(cat, "ssti"):
+		if !hasEvidence && !hasField("responseBodySnippet", "templateEvalResult") {
+			needsContext = true
+		}
+	case strings.Contains(cat, "xxe"):
+		if !hasEvidence && !hasField("responseBodySnippet", "oobInteraction") {
+			needsContext = true
+		}
+	}
+	if needsContext {
+		f.Confidence *= 0.5
+		f.EvidenceFields["evidenceSchemaViolation"] = "missing required evidence fields for category"
+		if f.EvidenceFields["openhackTriageNeedsContext"] == "" {
+			f.EvidenceFields["openhackTriageNeedsContext"] = "true"
+		}
+	}
+	return f
 }
 
 func syntheticFindingID(f model.Finding) string {

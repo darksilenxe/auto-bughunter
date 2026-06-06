@@ -1091,6 +1091,11 @@ func (s *MemoryStore) ListProbeRecordsByCategory(_ context.Context, _ string, _ 
 	return nil, nil
 }
 
+// GetRejectedFindingsByTarget returns an empty slice; the in-memory store does not retain verification history.
+func (s *MemoryStore) GetRejectedFindingsByTarget(_ context.Context, _ string) ([]model.FindingVerification, error) {
+	return nil, nil
+}
+
 func (s *MemoryStore) SaveShadowDecision(ctx context.Context, decision model.ShadowDecision) error {
 	if err := checkContext(ctx); err != nil {
 		return err

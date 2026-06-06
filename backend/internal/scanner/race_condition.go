@@ -88,12 +88,52 @@ func (s *Service) RunRaceConditionProbe(
 
 // raceProbeEndpoint fires raceWorkers goroutines at ep simultaneously and
 // returns a finding when ≥2 receive a 2xx response.
+//
+// Before launching the concurrent burst it sends two sequential requests to
+// the same endpoint. When both return 2xx with structurally equivalent
+// bodies (after normalising dynamic tokens such as UUIDs and timestamps) the
+// endpoint is considered idempotent by design and the burst is skipped,
+// avoiding false-positive TOCTOU findings on endpoints that are intentionally
+// safe to call multiple times.
 func (s *Service) raceProbeEndpoint(
 	ctx context.Context,
 	ep string,
 	auth model.ScanAuthProfile,
 	options model.ScanOptions,
 ) *model.Finding {
+	// ── Idempotency pre-check ─────────────────────────────────────────────
+	// Fire two sequential POST requests and compare normalised response
+	// bodies. If they match the endpoint is idempotent (or stateless) and
+	// a race burst would produce spurious results.
+	seqCtx, seqCancel := context.WithTimeout(ctx, 6*time.Second)
+	defer seqCancel()
+	var seqBodies [2]string
+	for i := range seqBodies {
+		req, err := http.NewRequestWithContext(seqCtx, http.MethodPost, ep, nil)
+		if err != nil {
+			break
+		}
+		ApplyAuthProfile(req, auth)
+		resp, err := s.doRequestWithRetry(seqCtx, req, options)
+		if err != nil || resp == nil {
+			break
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, raceBodyLimit))
+		_ = resp.Body.Close()
+		if !is2xx(resp.StatusCode) {
+			// Non-2xx on sequential pre-check means the burst won't
+			// produce meaningful 2xx pairs either — skip.
+			return nil
+		}
+		seqBodies[i] = NormalizeResponseBody(string(b))
+	}
+	// If both sequential 2xx bodies normalise to the same content the
+	// endpoint is idempotent (returns the same result regardless of repeated
+	// calls) — a concurrent burst is not informative here.
+	if seqBodies[0] != "" && seqBodies[0] == seqBodies[1] {
+		return nil
+	}
+
 	var (
 		successCount int64
 		mu           sync.Mutex

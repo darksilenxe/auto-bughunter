@@ -165,6 +165,10 @@ type RunInput struct {
 	// for Java, etc.) so the fixed probe budget is used more efficiently.
 	// Populated automatically by Run(); callers may pre-set it to override.
 	DetectedTech TechStack
+	// WAFFingerprint is the result of the pre-scan WAF canary probe. It is
+	// populated automatically by Run() before any active probes launch so
+	// all probes can consult it without re-issuing the canary request.
+	WAFFingerprint WAFFingerprint
 }
 
 func NewService(cfg Config) *Service {
@@ -302,6 +306,14 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 				Message: msg,
 			})
 		}
+	}
+
+	// Fingerprint the WAF (if any) before launching active probes so every
+	// probe in this run can consult input.WAFFingerprint without re-issuing
+	// the canary request. The fingerprint is only captured once per scan;
+	// passive-only scans skip the canary to avoid triggering WAF alerts.
+	if !input.Options.PassiveOnly {
+		input.WAFFingerprint = s.CaptureWAFFingerprint(ctx, input.Target, input.AuthProfile, input.Options)
 	}
 
 	safeTargetURL, err := rebuildRequestURL(input.Target)

@@ -159,6 +159,18 @@ func (s *Service) RunIDORRoleDiff(ctx context.Context, target string, scanScope 
 				if abs(sa.size-sb.size) > idorBodyDelta {
 					continue
 				}
+				// Three-way differential: when comparing two authenticated
+				// roles, skip the pair if the endpoint is fully public
+				// (anonymous also receives 2xx). An endpoint reachable
+				// without any credentials is not an IDOR finding between
+				// specific roles — it is an unauthenticated-access issue
+				// which the anonymous-vs-role check below already surfaces.
+				neitherIsAnon := ra != "anonymous" && rb != "anonymous"
+				if neitherIsAnon {
+					if anonSample, ok := samples["anonymous"]; ok && anonSample.ok && is2xx(anonSample.status) {
+						continue
+					}
+				}
 				key := pairKey{a: ra, b: rb}
 				if emittedPair[key] {
 					continue

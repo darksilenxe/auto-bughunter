@@ -262,6 +262,7 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 			accumulated,
 			roundProbeResults,
 			coverageMap,
+			input.Options.PolicyPack,
 		)
 		lastReflection = &reflection
 
