@@ -200,6 +200,15 @@ func applyTriageDecision(f *model.Finding, d ai.OpenHackTriageDecision) bool {
 		return false
 	case "needs_context":
 		f.EvidenceFields["openhackTriageNeedsContext"] = "true"
+		// Reduce confidence to reflect that the finding still requires
+		// additional evidence before it can be treated as a confirmed
+		// vulnerability. This prevents needs_context findings from
+		// surfacing in strict-reporting mode while keeping them visible
+		// for manual review.
+		if f.Confidence > 0.55 {
+			f.Confidence *= 0.7
+		}
+		f.EvidenceFields["awaitingConfirmation"] = "true"
 		return true
 	default:
 		// "accepted", "downgraded", anything else → keep.

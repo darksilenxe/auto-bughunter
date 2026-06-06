@@ -81,6 +81,7 @@ func (c *Client) DecideNextProbe(
 	probeHistory []model.ProbeResult,
 	endpoints []string,
 	stepBudgetRemaining int,
+	policyPack ...string,
 ) ProbeDecision {
 	if c == nil || !c.shouldCallProvider() {
 		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
@@ -113,6 +114,66 @@ func (c *Client) DecideNextProbe(
 		})
 	}
 
+	baseInstructions := "You are an expert penetration tester driving an adaptive web application probe loop. " +
+		"You will receive the FULL history of HTTP probe results so far, including the plain-English " +
+		"'observation' field that describes what each probe actually observed at the HTTP level. " +
+		"\n\n" +
+		"Your task: choose the SINGLE most valuable probe to execute next. " +
+		"Do NOT follow a fixed checklist. Reason from the evidence:\n" +
+		"- If outcome='waf_blocked': the payload was filtered — pick an evasion-variant payload for the SAME endpoint\n" +
+		"- If outcome='near_miss': partial signal — refine the payload for the specific observed context\n" +
+		"- If outcome='server_error': exception triggered — try a blind/time-based follow-up on the SAME endpoint\n" +
+		"- If outcome='no_signal': move on — try a DIFFERENT endpoint, parameter, or category\n" +
+		"- If outcome='confirmed': the finding is proven — pivot to related attack surface (same endpoint, different category; or next endpoint)\n" +
+		"\n" +
+		"If stepBudgetRemaining is 0, or you have confirmed high-value findings and the remaining surface " +
+		"appears clean, set action='stop' and explain why in stopReason.\n" +
+		"When a 'knowledgeGuidance' field is present, prefer the techniques and payloads it describes " +
+		"(curated from HackTricks / PayloadsAllTheThings) when they fit the observed evidence.\n"
+
+	// Inject policy-specific constraints based on the automation profile.
+	// Also parse the low-signal advisory suffix that the AdaptiveProbeAgent
+	// encodes as "policyPack;low-signal-advisory:cat1,cat2".
+	policy := ""
+	var lowSignalAdvisory []string
+	if len(policyPack) > 0 {
+		raw := strings.TrimSpace(policyPack[0])
+		for _, part := range strings.Split(raw, ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "low-signal-advisory:") {
+				cats := strings.TrimPrefix(part, "low-signal-advisory:")
+				for _, c := range strings.Split(cats, ",") {
+					if c = strings.TrimSpace(c); c != "" {
+						lowSignalAdvisory = append(lowSignalAdvisory, c)
+					}
+				}
+			} else if part != "" {
+				policy = strings.ToLower(part)
+			}
+		}
+	}
+	switch policy {
+	case "safe":
+		baseInstructions += "\nPOLICY CONSTRAINT (safe mode): " +
+			"Do NOT suggest probes that involve authentication bypass, session hijacking, or destructive payloads. " +
+			"Require at least two corroborating signals before promoting any finding. " +
+			"Prefer passive observation and low-noise probes. Favour 'stop' over speculative further probing.\n"
+	case "aggressive":
+		baseInstructions += "\nPOLICY CONSTRAINT (aggressive mode): " +
+			"Prioritise novel payload families and chained attack paths. " +
+			"If previous probes suggest WAF filtering, try evasion variants even on endpoints already probed. " +
+			"Explore authentication bypass and privilege escalation paths when credentials are available.\n"
+	default:
+		// autonomous / canary — no extra constraint text needed
+	}
+	if len(lowSignalAdvisory) > 0 {
+		baseInstructions += "\nHISTORICAL SIGNAL ADVISORY: The following categories have consistently returned " +
+			"no_signal across recent scans of this target — consider these low-priority unless new evidence emerges: " +
+			strings.Join(lowSignalAdvisory, ", ") + ".\n"
+	}
+	baseInstructions += "\nReply with strict JSON only:\n" +
+		`{"action":"probe"|"stop","category":string,"endpoint":string,"paramName":string,"payload":string,"rationale":string,"stopReason":string}`
+
 	payload := map[string]any{
 		"target":              target,
 		"availableEndpoints":  endpoints,
@@ -123,25 +184,7 @@ func (c *Client) DecideNextProbe(
 			"xss", "sqli", "open_redirect", "cors", "ssrf",
 			"auth_bypass", "idor", "ssti", "business_logic",
 		},
-		"instructions": "You are an expert penetration tester driving an adaptive web application probe loop. " +
-			"You will receive the FULL history of HTTP probe results so far, including the plain-English " +
-			"'observation' field that describes what each probe actually observed at the HTTP level. " +
-			"\n\n" +
-			"Your task: choose the SINGLE most valuable probe to execute next. " +
-			"Do NOT follow a fixed checklist. Reason from the evidence:\n" +
-			"- If outcome='waf_blocked': the payload was filtered — pick an evasion-variant payload for the SAME endpoint\n" +
-			"- If outcome='near_miss': partial signal — refine the payload for the specific observed context\n" +
-			"- If outcome='server_error': exception triggered — try a blind/time-based follow-up on the SAME endpoint\n" +
-			"- If outcome='no_signal': move on — try a DIFFERENT endpoint, parameter, or category\n" +
-			"- If outcome='confirmed': the finding is proven — pivot to related attack surface (same endpoint, different category; or next endpoint)\n" +
-			"\n" +
-			"If stepBudgetRemaining is 0, or you have confirmed high-value findings and the remaining surface " +
-			"appears clean, set action='stop' and explain why in stopReason.\n" +
-			"When a 'knowledgeGuidance' field is present, prefer the techniques and payloads it describes " +
-			"(curated from HackTricks / PayloadsAllTheThings) when they fit the observed evidence.\n" +
-			"\n" +
-			"Reply with strict JSON only:\n" +
-			`{"action":"probe"|"stop","category":string,"endpoint":string,"paramName":string,"payload":string,"rationale":string,"stopReason":string}`,
+		"instructions": baseInstructions,
 	}
 
 	// Ground the decision in curated security knowledge when available.

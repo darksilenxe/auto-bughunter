@@ -217,6 +217,42 @@ services:
       retries: 3
       start_period: 15s
 
+  # Semgrep SAST HTTP wrapper service — runs semgrep --config=auto on code
+  # snippets extracted during reconnaissance and maps rule matches to findings.
+  # Enable by setting ENABLE_SEMGREP_INTEGRATION=true in the backend environment
+  # and pointing SEMGREP_SERVICE_URL at https://semgrep-service:8095.
+  semgrep-service:
+    build:
+      context: ./sidecars/semgrep-service
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${SEMGREP_SERVICE_LOG_LEVEL:-INFO}
+    ports:
+      - "8095:8095"
+    volumes:
+      - sidecar_certs:/certs:ro
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8095"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import ssl,urllib.request; ctx=ssl.create_default_context(cafile='/certs/server.crt'); urllib.request.urlopen('https://semgrep-service:8095/health', timeout=5, context=ctx)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models (~4 GB for dolphin-mistral).
   # Gated behind the `ollama` compose profile so it doesn't start by default

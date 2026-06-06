@@ -1,6 +1,36 @@
 package scanner
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+// dynamicTokenPatterns matches tokens that vary between requests and are
+// not security-meaningful for differential comparison: UUIDs, Unix
+// timestamps, CSRF nonces, and arbitrary session hex strings.
+var dynamicTokenPatterns = []*regexp.Regexp{
+	// UUID v1–v5
+	regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`),
+	// Unix epoch seconds (10 digits) or milliseconds (13 digits)
+	regexp.MustCompile(`\b(?:17\d{8}|1[5-9]\d{8}|\d{13})\b`),
+	// Long hex strings ≥ 16 chars (CSRF tokens, session IDs, nonces)
+	regexp.MustCompile(`[0-9a-fA-F]{16,}`),
+	// Base64 strings ≥ 24 chars (JWTs, bearer tokens)
+	regexp.MustCompile(`[A-Za-z0-9+/]{24,}={0,2}`),
+}
+
+// NormalizeResponseBody replaces dynamic, per-request tokens (UUIDs,
+// timestamps, CSRF nonces, session hex) with a stable placeholder so
+// that two responses that differ only in ephemeral tokens are treated as
+// structurally equivalent. This is used by probes that compare a baseline
+// response with a probed response to avoid false-positive signals caused
+// solely by token rotation.
+func NormalizeResponseBody(body string) string {
+	for _, pat := range dynamicTokenPatterns {
+		body = pat.ReplaceAllString(body, "<token>")
+	}
+	return body
+}
 
 func dedupeStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))

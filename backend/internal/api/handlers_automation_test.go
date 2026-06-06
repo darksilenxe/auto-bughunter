@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func TestTuneScanOptionsDisablesFlakyIntegrationsOnInstability(t *testing.T) {
 		UseSQLMapIntegration: true,
 		UseFFUFIntegration:   true,
 	}
-	tuned := s.tuneScanOptions(options, &model.PersistentScanState{SessionInstability: 3}, nil)
+	tuned := s.tuneScanOptions(context.Background(), "", options, &model.PersistentScanState{SessionInstability: 3}, nil)
 	if tuned.UseNucleiIntegration || tuned.UseSQLMapIntegration || tuned.UseFFUFIntegration {
 		t.Fatalf("expected flaky integrations to be disabled, got %+v", tuned)
 	}

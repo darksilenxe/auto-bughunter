@@ -71,6 +71,12 @@ func techAwareXSSProbeParams(tech TechStack) []string {
 //     the literal payload appearing unescaped in the response body.
 const xssMarker = `"><svg/onload=abh_xss_7f9e2()><!--abh_xss_7f9e2-->`
 
+// xssConfirmMarker is a structurally different secondary payload used to
+// confirm a reflection found by xssMarker. Requiring two distinct payloads to
+// reflect without HTML encoding virtually eliminates accidental matches caused
+// by debug output, error messages, or coincidental HTML fragments.
+const xssConfirmMarker = `'><script>/*abh_xss_c3f81*/</script><!--abh_c3f81-->`
+
 // xssMaxAttempts caps how many request/parameter combinations the active XSS
 // probe will attempt per scan to bound scan time. The same budget applies in
 // the existing contextual-probe code (12).
@@ -160,11 +166,45 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
 				_ = resp.Body.Close()
-				if isHTMLContextReflection(string(respBody), payload) {
-					hits = append(hits, hit{url: probeURL, param: p})
-					matched = true
+				if !isHTMLContextReflection(string(respBody), payload) {
+					continue
+				}
+				// Primary reflection confirmed. Issue a second probe with a
+				// structurally different marker to rule out accidental matches
+				// caused by error messages or debug output containing the
+				// same string fragment. Only promote to a finding when both
+				// distinct payloads reflect without HTML encoding.
+				confirmed := false
+				if attempts < xssMaxAttempts {
+					confirmProbe := *base
+					cq := confirmProbe.Query()
+					cq.Set(p, xssConfirmMarker)
+					confirmProbe.RawQuery = cq.Encode()
+					confirmURL := confirmProbe.String()
+					if scope.IsURLInScope(confirmURL, input.Scope) {
+						creq, cerr := http.NewRequestWithContext(ctx, http.MethodGet, confirmURL, nil)
+						if cerr == nil {
+							ApplyAuthProfile(creq, input.AuthProfile)
+							cresp, cerr := s.doRequestWithRetry(ctx, creq, input.Options)
+							attempts++
+							if cerr == nil && cresp != nil {
+								cb, _ := io.ReadAll(io.LimitReader(cresp.Body, 512*1024))
+								_ = cresp.Body.Close()
+								confirmed = isHTMLContextReflection(string(cb), xssConfirmMarker)
+							}
+						}
+					}
+				}
+				if !confirmed {
+					// Single-marker reflection only — not enough evidence.
+					// Reduce probability it was a coincidental string match
+					// by continuing to check other parameters, but don't
+					// emit a finding on the basis of one payload alone.
 					break
 				}
+				hits = append(hits, hit{url: probeURL, param: p})
+				matched = true
+				break
 			}
 			if matched {
 				// One reflection is enough to surface the issue; keep
@@ -204,9 +244,9 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		Severity:          model.SeverityHigh,
 		Title:             "Reflected Cross-Site Scripting (XSS) via unencoded parameter reflection",
 		Description:       "An HTML-context payload supplied via a query parameter was reflected into the response body without HTML encoding. An attacker who can craft a link to this endpoint can execute arbitrary script in a victim's browser, leading to session hijacking, credential theft and account takeover.",
-		Evidence:          fmt.Sprintf("Unescaped reflection of marker %q observed at: %s (parameters: %s)", xssMarker, strings.Join(limitStrings(urls, 6), ", "), strings.Join(params, ", ")),
+		Evidence:          fmt.Sprintf("Dual-marker reflection confirmed: both %q and a secondary marker reflected without HTML encoding at: %s (parameters: %s)", xssMarker, strings.Join(limitStrings(urls, 6), ", "), strings.Join(params, ", ")),
 		Recommendation:    "Apply context-aware output encoding (HTML, attribute, JS, URL) at every sink that emits user-controlled data. Prefer a templating engine with auto-escaping, and add a strict Content-Security-Policy as defense-in-depth.",
-		Confidence:        0.9,
+		Confidence:        0.97,
 		AffectedURL:       first.url,
 		AffectedParameter: first.param,
 		CWE:               "CWE-79",

@@ -79,6 +79,7 @@ func (c *Client) Reflect(
 	findings []model.Finding,
 	probeResults []model.ProbeResult,
 	coverageMap map[string][]string,
+	policyPack ...string,
 ) ReflectionResult {
 	if c == nil || !c.shouldCallProvider() {
 		return localReasonerReflect(target, round, findings, probeResults, coverageMap)
@@ -113,31 +114,50 @@ func (c *Client) Reflect(
 		})
 	}
 
+	baseReflectInstructions := "You are an expert penetration tester reflecting on a completed scan iteration. " +
+		"The 'probeResults' array contains the full HTTP-level observation for EVERY probe run this round, " +
+		"including ones that were blocked, near-missed, or returned server errors. " +
+		"Use the 'outcome' and 'observation' fields to understand WHY each probe succeeded or failed. " +
+		"For example: 'waf_blocked' means the payload was filtered — propose an evasion variant; " +
+		"'near_miss' means a partial signal was observed — refine the payload for the specific context; " +
+		"'server_error' on an injection probe means an exception was triggered — follow up with blind probes; " +
+		"'no_signal' means the target is genuinely clean on that combination. " +
+		"Write a clear iterationRationale (2–3 sentences) in plain English explaining WHY another iteration " +
+		"is warranted, citing specific signals from probeResults (e.g. 'Two XSS probes were WAF-blocked " +
+		"suggesting the payload is being filtered; evasion variants should be tried.'). " +
+		"If no further iteration is useful, explain that conclusion in iterationRationale instead. " +
+		"Recommend up to 3 refined payload hints as refinedHints, each targeting a specific near-miss or blocked probe. " +
+		"List focusAreas (up to 4 category names) for the next round. " +
+		"Set shouldEscalate to true if probeResults show WAF blocking or auth enforcement that requires " +
+		"authenticated or bypass-level probing. " +
+		"List skipCategories that are fully confirmed or have no_signal across all tried endpoints. "
+
+	// Inject policy-specific constraints.
+	reflectPolicy := ""
+	if len(policyPack) > 0 {
+		reflectPolicy = strings.ToLower(strings.TrimSpace(policyPack[0]))
+	}
+	switch reflectPolicy {
+	case "safe":
+		baseReflectInstructions += "POLICY CONSTRAINT (safe mode): " +
+			"Do NOT recommend probes that could cause data modification, denial of service, or authentication bypass. " +
+			"Only recommend further iterations when at least two distinct no_signal outcomes remain unexplored. " +
+			"Err on the side of stopping rather than speculative further probing.\n"
+	case "aggressive":
+		baseReflectInstructions += "POLICY CONSTRAINT (aggressive mode): " +
+			"Proactively recommend chained attack paths and novel payload families even when current probes return no_signal. " +
+			"Prioritise privilege escalation and authentication bypass refinements.\n"
+	}
+	baseReflectInstructions += "Reply with strict JSON only: " +
+		`{"gapAnalysis":string,"iterationRationale":string,"focusAreas":[string],"refinedHints":[{"category":string,"endpoint":string,"paramName":string,"payloadHint":string,"rationale":string}],"shouldEscalate":bool,"escalationReason":string,"skipCategories":[string]}`
+
 	payload := map[string]any{
 		"target":       target,
 		"round":        round,
 		"findings":     findingSummary,
 		"probeResults": probesSummary,
 		"coverageMap":  coverageMap,
-		"instructions": "You are an expert penetration tester reflecting on a completed scan iteration. " +
-			"The 'probeResults' array contains the full HTTP-level observation for EVERY probe run this round, " +
-			"including ones that were blocked, near-missed, or returned server errors. " +
-			"Use the 'outcome' and 'observation' fields to understand WHY each probe succeeded or failed. " +
-			"For example: 'waf_blocked' means the payload was filtered — propose an evasion variant; " +
-			"'near_miss' means a partial signal was observed — refine the payload for the specific context; " +
-			"'server_error' on an injection probe means an exception was triggered — follow up with blind probes; " +
-			"'no_signal' means the target is genuinely clean on that combination. " +
-			"Write a clear iterationRationale (2–3 sentences) in plain English explaining WHY another iteration " +
-			"is warranted, citing specific signals from probeResults (e.g. 'Two XSS probes were WAF-blocked " +
-			"suggesting the payload is being filtered; evasion variants should be tried.'). " +
-			"If no further iteration is useful, explain that conclusion in iterationRationale instead. " +
-			"Recommend up to 3 refined payload hints as refinedHints, each targeting a specific near-miss or blocked probe. " +
-			"List focusAreas (up to 4 category names) for the next round. " +
-			"Set shouldEscalate to true if probeResults show WAF blocking or auth enforcement that requires " +
-			"authenticated or bypass-level probing. " +
-			"List skipCategories that are fully confirmed or have no_signal across all tried endpoints. " +
-			"Reply with strict JSON only: " +
-			`{"gapAnalysis":string,"iterationRationale":string,"focusAreas":[string],"refinedHints":[{"category":string,"endpoint":string,"paramName":string,"payloadHint":string,"rationale":string}],"shouldEscalate":bool,"escalationReason":string,"skipCategories":[string]}`,
+		"instructions": baseReflectInstructions,
 	}
 
 	userJSON, err := json.Marshal(payload)

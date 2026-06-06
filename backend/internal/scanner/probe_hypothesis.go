@@ -445,3 +445,72 @@ func defaultPayloadForCategory(category string) string {
 		return "test"
 	}
 }
+
+// WAFFingerprint captures the active WAF vendor (if any) detected at scan
+// start. Probes use it to annotate findings that appear to be filtered and to
+// avoid false-positive WAF_BLOCKED outcomes when the response pattern matches
+// a known vendor page rather than genuine vulnerability suppression.
+type WAFFingerprint struct {
+	// Detected is true when the pre-scan canary probe triggered a WAF
+	// interception response.
+	Detected bool
+	// Vendor is the matched vendor name (e.g. "cloudflare", "akamai") or an
+	// empty string when the WAF vendor could not be identified.
+	Vendor string
+	// BlockStatus is the HTTP status returned for the canary probe.
+	BlockStatus int
+}
+
+// wafCanaryPayload is a deliberately invalid input sent to the target before
+// the scan begins to determine whether a WAF is present. It is not a real
+// exploit payload — it is simply a well-known string pattern that every major
+// WAF database recognises and blocks on sight.
+const wafCanaryPayload = `"><script>alert(1)</script>&' OR '1'='1`
+
+// CaptureWAFFingerprint sends a single canary probe to target and inspects
+// the HTTP status and response body for WAF interception signatures. The
+// result is stored on RunInput.WAFFingerprint so all subsequent probes can
+// consult it without re-issuing the canary request.
+func (s *Service) CaptureWAFFingerprint(
+	ctx context.Context,
+	target string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) WAFFingerprint {
+	fp := WAFFingerprint{}
+
+	// Append the canary payload as a query parameter.
+	sep := "?"
+	if strings.Contains(target, "?") {
+		sep = "&"
+	}
+	canaryURL := target + sep + "q=" + wafCanaryPayload
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, canaryURL, nil)
+	if err != nil {
+		return fp
+	}
+	ApplyAuthProfile(req, auth)
+
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return fp
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	bodyLow := strings.ToLower(string(bodyBytes))
+
+	fp.BlockStatus = resp.StatusCode
+	// Status codes WAFs typically use to block requests.
+	if resp.StatusCode == 403 || resp.StatusCode == 406 || resp.StatusCode == 429 || resp.StatusCode == 503 {
+		fp.Detected = true
+	}
+	for _, sig := range wafSignatures {
+		if strings.Contains(bodyLow, sig) {
+			fp.Detected = true
+			fp.Vendor = sig
+			break
+		}
+	}
+	return fp
+}

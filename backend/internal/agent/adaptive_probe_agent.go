@@ -89,6 +89,32 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	// Seed endpoints from target + any runtime-discovered URLs.
 	endpoints := append([]string{input.Target}, input.Options.SeedRuntimeEndpoints...)
 
+	// Extract low-signal category advisories from AutonomySuppressAgents.
+	// Entries prefixed with "skip-cat:" indicate that historical probe records
+	// show this category is consistently low-signal for this target and the AI
+	// should deprioritise it in its probe decisions.
+	var lowSignalCats []string
+	var filteredSuppress []string
+	for _, s := range input.Options.AutonomySuppressAgents {
+		if strings.HasPrefix(s, "skip-cat:") {
+			lowSignalCats = append(lowSignalCats, strings.TrimPrefix(s, "skip-cat:"))
+		} else {
+			filteredSuppress = append(filteredSuppress, s)
+		}
+	}
+	// Build the policy pack string: append low-signal advisory as a suffix so
+	// DecideNextProbe can include it in its instructions without a signature change.
+	probePolicy := input.Options.PolicyPack
+	if len(lowSignalCats) > 0 {
+		suffix := "low-signal-advisory:" + strings.Join(lowSignalCats, ",")
+		if probePolicy == "" {
+			probePolicy = suffix
+		} else {
+			probePolicy = probePolicy + ";" + suffix
+		}
+	}
+	_ = filteredSuppress // orchestrator handles agent-level suppression separately
+
 	// probeHistory is the full observation record passed to the AI each step.
 	probeHistory := make([]model.ProbeResult, 0, a.StepBudget)
 
@@ -133,6 +159,7 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			probeHistory,
 			endpoints,
 			budgetLeft,
+			probePolicy,
 		)
 
 		if decision.Action == "stop" {

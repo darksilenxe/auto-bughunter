@@ -1513,6 +1513,34 @@ func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID str
 	return out, rows.Err()
 }
 
+// GetRejectedFindingsByTarget returns all finding verifications with
+// status "rejected" that belong to scans whose target matches the given
+// target string. These are used to suppress historically-rejected
+// fingerprints from being re-promoted as new findings in subsequent scans.
+func (p *Postgres) GetRejectedFindingsByTarget(ctx context.Context, target string) ([]model.FindingVerification, error) {
+	rows, err := p.queryContext(ctx, `
+		SELECT fv.id, fv.scan_id, fv.finding_id, fv.status, fv.notes, fv.verified_by, fv.owner, fv.created_at
+		FROM finding_verifications fv
+		JOIN scan_jobs sj ON sj.id = fv.scan_id
+		WHERE fv.status = 'rejected'
+		  AND sj.target = $1
+		ORDER BY fv.created_at DESC
+	`, target)
+	if err != nil {
+		return nil, fmt.Errorf("get rejected findings by target: %w", err)
+	}
+	defer rows.Close()
+	var out []model.FindingVerification
+	for rows.Next() {
+		var v model.FindingVerification
+		if err := rows.Scan(&v.ID, &v.ScanID, &v.FindingID, &v.Status, &v.Notes, &v.VerifiedBy, &v.Owner, &v.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan rejected finding verification row: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *Postgres) SaveSuppressionRule(ctx context.Context, rule model.SuppressionRule) error {
 	_, err := p.execContext(ctx, `
 		INSERT INTO suppression_rules (id, target, finding_id, category, title, reason, created_by, created_at, expires_at)
