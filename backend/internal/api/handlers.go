@@ -4460,6 +4460,8 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		findings = append(findings, s.scanService.RunHostHeaderInjectionProbe(ctx, target, scanScope, options, authProfile, s.oast, emit)...)
 		findings = append(findings, s.scanService.RunDeserializationProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunDOMXSSProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunPostMessageProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunBrowserStorageProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunFlowEngine(ctx, target, scanScope, options, authProfile, emit, nil)...)
 	}
 	// Exploit-chain analysis: deterministic, zero-request, runs on the full

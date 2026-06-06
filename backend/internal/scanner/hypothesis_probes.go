@@ -60,6 +60,12 @@ func (s *Service) RunHypothesisVerification(
 		return s.verifyCacheDeceptionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
 	case "clickjacking":
 		return s.verifyClickjackingHypothesis(ctx, endpoint, payloadHint, auth, options)
+	case "command_injection", "cmdi", "rce":
+		return s.verifyCommandInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "ssi_injection", "ssi":
+		return s.verifySSIInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "smtp_injection", "smtp", "email_injection":
+		return s.verifySMTPInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
 	default:
 		return nil
 	}
@@ -573,4 +579,197 @@ func (s *Service) verifyClickjackingHypothesis(
 	f := findings[0]
 	f.ID = "hyp-clickjacking-verified"
 	return &f
+}
+
+// verifyCommandInjectionHypothesis probes a single endpoint+parameter with
+// OS command injection payloads and checks for execution output in the response.
+func (s *Service) verifyCommandInjectionHypothesis(
+ctx context.Context,
+endpoint, paramName, payloadHint string,
+auth model.ScanAuthProfile,
+options model.ScanOptions,
+) *model.Finding {
+if options.PassiveOnly {
+return nil
+}
+if err := safety.ValidateOutboundURL(endpoint); err != nil {
+return nil
+}
+payload := payloadHint
+if payload == "" {
+payload = "; echo " + cmdInjectionOutputMarker
+}
+param := paramName
+if param == "" {
+param = "cmd"
+}
+probeURL := endpoint + "?" + url.QueryEscape(param) + "=" + url.QueryEscape(payload)
+req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+if err != nil {
+return nil
+}
+ApplyAuthProfile(req, auth)
+resp, err := s.doRequestWithRetry(ctx, req, options)
+if err != nil || resp == nil {
+return nil
+}
+defer resp.Body.Close()
+bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+if strings.Contains(string(bodyBytes), cmdInjectionOutputMarker) {
+return &model.Finding{
+ID:          "hyp-cmdi-verified",
+Category:    "injection",
+Severity:    model.SeverityHigh,
+Title:       "OS command injection confirmed via hypothesis verification",
+Description: "The verification probe observed the command output marker in the HTTP response body.",
+Evidence:    fmt.Sprintf("GET %s returned command output marker %q", probeURL, cmdInjectionOutputMarker),
+Recommendation: "Never pass user input to OS commands. Use language-level APIs " +
+"instead of shell invocations. If shell execution is required, use an allowlist " +
+"of permitted commands and escape all arguments via shellescape.",
+Confidence:    0.93,
+AffectedURL:   endpoint,
+CWE:           "CWE-78",
+OWASPCategory: "A03:2021 - Injection",
+Sources:       []string{"hypothesis-agent", "active-scanner"},
+EvidenceFields: map[string]string{
+"param": param, "payload": payload, "validationType": "active-probe",
+},
+}
+}
+return nil
+}
+
+// verifySSIInjectionHypothesis probes a single endpoint+parameter with SSI
+// directives and checks for evaluation output in the response.
+func (s *Service) verifySSIInjectionHypothesis(
+ctx context.Context,
+endpoint, paramName, payloadHint string,
+auth model.ScanAuthProfile,
+options model.ScanOptions,
+) *model.Finding {
+if options.PassiveOnly {
+return nil
+}
+if err := safety.ValidateOutboundURL(endpoint); err != nil {
+return nil
+}
+payload := payloadHint
+if payload == "" {
+payload = "<!--#echo var=\"DOCUMENT_NAME\"-->"
+}
+param := paramName
+if param == "" {
+param = "q"
+}
+probeURL := endpoint + "?" + url.QueryEscape(param) + "=" + url.QueryEscape(payload)
+req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+if err != nil {
+return nil
+}
+ApplyAuthProfile(req, auth)
+resp, err := s.doRequestWithRetry(ctx, req, options)
+if err != nil || resp == nil {
+return nil
+}
+defer resp.Body.Close()
+bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+respBody := string(bodyBytes)
+// Evaluation evidence: the <!--#echo--> directive would be replaced by the
+// filename, or we look for the arithmetic evaluation marker from #expr.
+if !strings.Contains(respBody, "<!--#") && !strings.Contains(respBody, ssiOutputMarker) {
+// SSI was evaluated (directive not returned verbatim) — possible execution.
+if !strings.Contains(respBody, payload) {
+return &model.Finding{
+ID:       "hyp-ssi-verified",
+Category: "injection",
+Severity: model.SeverityHigh,
+Title:    "SSI injection confirmed via hypothesis verification",
+Description: "The SSI directive injected into the response was processed by the server " +
+"rather than returned verbatim, indicating SSI template processing of user input.",
+Evidence:    fmt.Sprintf("GET %s: directive not echoed back, likely evaluated", probeURL),
+Recommendation: "Disable SSI processing for user-controlled content. " +
+"Use a templating engine that auto-escapes directives. " +
+"Restrict SSI to static files only.",
+Confidence:    0.75,
+AffectedURL:   endpoint,
+CWE:           "CWE-97",
+OWASPCategory: "A03:2021 - Injection",
+Sources:       []string{"hypothesis-agent", "active-scanner"},
+EvidenceFields: map[string]string{
+"param": param, "payload": payload, "validationType": "active-probe",
+},
+}
+}
+}
+return nil
+}
+
+// verifySMTPInjectionHypothesis probes an endpoint with CRLF+BCC payloads and
+// checks for SMTP error indicators in the response.
+func (s *Service) verifySMTPInjectionHypothesis(
+ctx context.Context,
+endpoint, paramName, payloadHint string,
+auth model.ScanAuthProfile,
+options model.ScanOptions,
+) *model.Finding {
+if options.PassiveOnly {
+return nil
+}
+if err := safety.ValidateOutboundURL(endpoint); err != nil {
+return nil
+}
+payload := payloadHint
+if payload == "" {
+payload = "attacker@example.com\r\nBCC:attacker2@example.com"
+}
+param := paramName
+if param == "" {
+param = "email"
+}
+formVals := url.Values{}
+formVals.Set(param, payload)
+req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
+strings.NewReader(formVals.Encode()))
+if err != nil {
+return nil
+}
+req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+ApplyAuthProfile(req, auth)
+resp, err := s.doRequestWithRetry(ctx, req, options)
+if err != nil || resp == nil {
+return nil
+}
+defer resp.Body.Close()
+bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+respBodyLower := strings.ToLower(string(bodyBytes))
+for _, sig := range smtpErrorSignatures {
+if strings.Contains(respBodyLower, sig) {
+return &model.Finding{
+ID:       "hyp-smtp-injection-verified",
+Category: "injection",
+Severity: model.SeverityMedium,
+Title:    "SMTP header injection confirmed via hypothesis verification",
+Description: fmt.Sprintf(
+"The SMTP error indicator %q appeared in the HTTP response after injecting "+
+"a CRLF payload into parameter %q, confirming that user input is interpolated "+
+"into SMTP commands.", sig, param,
+),
+Evidence: fmt.Sprintf(
+"POST %s with %s=%s returned SMTP indicator %q",
+endpoint, param, payload, sig,
+),
+Recommendation: "Strip \\r, \\n, and \\0 from user-supplied email addresses. " +
+"Use a mail library that validates RFC 5321 addresses.",
+Confidence:    0.82,
+AffectedURL:   endpoint,
+CWE:           "CWE-93",
+OWASPCategory: "A03:2021 - Injection",
+Sources:       []string{"hypothesis-agent", "active-scanner"},
+EvidenceFields: map[string]string{
+"param": param, "payload": payload, "matchedSig": sig, "validationType": "active-probe",
+},
+}
+}
+}
+return nil
 }
