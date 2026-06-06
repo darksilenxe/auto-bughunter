@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
@@ -46,6 +48,12 @@ type Service struct {
 	externalURL string
 	authToken   string
 	httpClient  *http.Client
+
+	// calibrationMu protects categoryCalibration. The calibration map is
+	// populated by CalibrateProbeSignals and read (without blocking) in
+	// ScoreFindings. A zero-value map means no calibration has been applied.
+	calibrationMu      sync.RWMutex
+	categoryCalibration map[string]float64
 }
 
 func NewService(cfg Config) *Service {
@@ -966,10 +974,14 @@ func (s *Service) ScoreFindings(findings []model.Finding) []ScoredFinding {
 		if f.Exploitability != nil && f.Exploitability.Reachable {
 			exploit = "reachable"
 		}
+		conf := calibratedFindingConfidence(f)
+		// Apply per-category calibration multiplier when probe-signal
+		// calibration has been run for this scan (ML_CALIBRATE_PROBE_SIGNALS).
+		conf = clamp(conf*s.categoryCalibrationMultiplier(f.Category), 0.1, 0.99)
 		out = append(out, ScoredFinding{
 			Finding:        f,
 			Score:          round2(score),
-			Confidence:     round2(calibratedFindingConfidence(f)),
+			Confidence:     round2(conf),
 			Exploitability: exploit,
 		})
 	}
@@ -1261,6 +1273,80 @@ func hasUncertainLanguage(f model.Finding) bool {
 		}
 	}
 	return false
+}
+
+// probeSignalBatch is the JSON body sent to /v1/calibrate-probe-signals.
+type probeSignalBatch struct {
+	ProbeRecords []probeSignalRecord `json:"probeRecords"`
+}
+
+type probeSignalRecord struct {
+	Category   string `json:"category"`
+	Outcome    string `json:"outcome"`
+	StatusCode int    `json:"statusCode"`
+	Endpoint   string `json:"endpoint"`
+}
+
+type calibrateResponse struct {
+	Multipliers map[string]float64 `json:"multipliers"`
+	Calibrated  bool               `json:"calibrated"`
+}
+
+// CalibrateProbeSignals sends the probe records from the current scan to the
+// Python ml-service /v1/calibrate-probe-signals endpoint and updates the
+// per-category confidence multipliers stored on the Service.
+//
+// Gated by the ML_CALIBRATE_PROBE_SIGNALS=true env var and a configured
+// ExternalURL. If either is absent, the call is a no-op.
+func (s *Service) CalibrateProbeSignals(ctx context.Context, records []model.ProbeRecord) {
+	if os.Getenv("ML_CALIBRATE_PROBE_SIGNALS") != "true" {
+		return
+	}
+	if s.externalURL == "" || len(records) == 0 {
+		return
+	}
+	batch := probeSignalBatch{ProbeRecords: make([]probeSignalRecord, 0, len(records))}
+	for _, r := range records {
+		batch.ProbeRecords = append(batch.ProbeRecords, probeSignalRecord{
+			Category:   r.Category,
+			Outcome:    string(r.Outcome),
+			StatusCode: r.StatusCode,
+			Endpoint:   r.Endpoint,
+		})
+	}
+	var resp calibrateResponse
+	if !s.postJSON(ctx, "/v1/calibrate-probe-signals", batch, &resp) {
+		return
+	}
+	if !resp.Calibrated || len(resp.Multipliers) == 0 {
+		return
+	}
+	// Store multipliers so ScoreFindings can apply them without re-locking.
+	s.calibrationMu.Lock()
+	s.categoryCalibration = resp.Multipliers
+	s.calibrationMu.Unlock()
+}
+
+// categoryCalibrationMultiplier returns the stored per-category calibration
+// multiplier, clamped to [0.5, 1.5] so it cannot invert the confidence.
+// Returns 1.0 (neutral) when no calibration data is available.
+func (s *Service) categoryCalibrationMultiplier(category string) float64 {
+	if s == nil {
+		return 1.0
+	}
+	s.calibrationMu.RLock()
+	m := s.categoryCalibration[strings.ToLower(strings.TrimSpace(category))]
+	s.calibrationMu.RUnlock()
+	if m <= 0 {
+		return 1.0
+	}
+	if m < 0.5 {
+		return 0.5
+	}
+	if m > 1.5 {
+		return 1.5
+	}
+	return m
 }
 
 func (s *Service) postJSON(ctx context.Context, path string, payload any, out any) bool {

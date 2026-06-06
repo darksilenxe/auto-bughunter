@@ -121,6 +121,14 @@ const (
 	// multiple services are slow or unreachable.
 	postProcessTimeout = 2 * time.Minute
 	persistenceTimeout = 10 * time.Second
+
+	// noSignalMinProbes is the minimum number of probe records a category must
+	// have before it can be suppressed by the adaptive category budget (Gap 13).
+	noSignalMinProbes = 5
+	// noSignalRateThreshold is the fraction of no_signal outcomes that must be
+	// present for a category to be considered provably clean and thus skipped in
+	// the next scan via AutonomySuppressAgents.
+	noSignalRateThreshold = 0.90
 )
 
 // SetOAST attaches an OAST service so its admin endpoints become active.
@@ -832,6 +840,19 @@ func (s *Server) computeEnrichment(ctx context.Context, target string, findings 
 			mu.Lock()
 			res.recs = recs
 			mu.Unlock()
+		}()
+	}
+	// Calibrate per-category confidence multipliers from probe records collected
+	// during this scan. Runs in parallel with the other enrichment goroutines and
+	// is gated by ML_CALIBRATE_PROBE_SIGNALS=true inside CalibrateProbeSignals.
+	if s.mlService != nil && jobSnapshot != nil && jobSnapshot.ID != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			records, err := s.repo.ListProbeRecords(ctx, jobSnapshot.ID)
+			if err == nil && len(records) > 0 {
+				s.mlService.CalibrateProbeSignals(ctx, records)
+			}
 		}()
 	}
 	wg.Wait()

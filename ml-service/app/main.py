@@ -11,6 +11,16 @@ import numpy as np
 import onnxruntime as ort
 from pydantic import BaseModel, Field
 
+# Lazy imports for calibration (scipy/sklearn) — only loaded when the
+# calibration endpoint is actually exercised so a missing install degrades
+# gracefully to an empty-multiplier response rather than crashing the service.
+try:
+    from scipy.stats import beta as scipy_beta  # type: ignore
+    from sklearn.ensemble import GradientBoostingClassifier  # type: ignore
+    _CALIBRATION_DEPS_OK = True
+except ImportError:
+    _CALIBRATION_DEPS_OK = False
+
 
 logger = logging.getLogger("ml-service")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -20,6 +30,9 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
 _AUTH_EXEMPT_PATHS = {"/health"}
 SCORING_MODE = os.getenv("ML_SCORING_MODE", "blend").strip().lower()
+# When ML_CALIBRATE_PROBE_SIGNALS=true the /v1/calibrate-probe-signals endpoint
+# returns non-trivial per-category multipliers instead of the default 1.0 stubs.
+_CALIBRATE_ENABLED = os.getenv("ML_CALIBRATE_PROBE_SIGNALS", "false").strip().lower() == "true"
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -80,6 +93,46 @@ class FalsePositiveCandidatesRequest(BaseModel):
 
 class FalsePositiveCandidatesResponse(BaseModel):
     candidates: List[ScoredFinding]
+
+
+# ---------------------------------------------------------------------------
+# Probe-signal calibration models
+# ---------------------------------------------------------------------------
+
+class ProbeRecordInput(BaseModel):
+    """Slim projection of model.ProbeRecord sent from Go for calibration."""
+    category: str = ""
+    outcome: str = ""  # confirmed | waf_blocked | near_miss | server_error | no_signal | error
+    statusCode: int = 0
+    endpoint: str = ""
+
+
+class CalibrateProbeSignalsRequest(BaseModel):
+    probeRecords: List[ProbeRecordInput] = Field(default_factory=list)
+
+
+class CategoryCalibration(BaseModel):
+    """Per-category calibration result."""
+    category: str
+    # Bayesian posterior mean of the no-signal rate (Beta distribution).
+    noSignalRate: float
+    # Lower bound of the 95% credible interval on the no-signal rate.
+    noSignalRateLower: float
+    # Upper bound of the 95% credible interval on the no-signal rate.
+    noSignalRateUpper: float
+    # Calibrated confidence multiplier Go applies to findings in this category.
+    # Values < 1.0 shrink confidence (category is mostly no-signal); > 1.0 boost it.
+    confidenceMultiplier: float
+    # Predicted TP probability from the gradient-boosted classifier (0–1).
+    # Equals -1 when the classifier could not be fit (insufficient data).
+    tpProbability: float
+    probeCount: int
+
+
+class CalibrateProbeSignalsResponse(BaseModel):
+    multipliers: Dict[str, float]  # category -> confidenceMultiplier
+    categoryDetails: List[CategoryCalibration] = Field(default_factory=list)
+    calibrated: bool  # False when deps missing or gate disabled
 
 
 class ONNXScorer:
@@ -222,6 +275,160 @@ def false_positive_candidates(req: FalsePositiveCandidatesRequest) -> FalsePosit
     scored = score_findings_internal(req.findings)
     candidates = [s for s in scored if s.confidence <= 0.55]
     return FalsePositiveCandidatesResponse(candidates=candidates[:5])
+
+
+@app.post("/v1/calibrate-probe-signals", response_model=CalibrateProbeSignalsResponse)
+def calibrate_probe_signals(req: CalibrateProbeSignalsRequest) -> CalibrateProbeSignalsResponse:
+    """Compute per-category Bayesian confidence calibration from probe records.
+
+    Uses a Beta-distribution posterior on the no-signal rate and (when enough
+    data is available) a GradientBoostingClassifier to estimate the TP
+    probability for each category.  Returns per-category multipliers that the
+    Go backend applies to finding confidence scores before enrichment.
+    """
+    if not _CALIBRATE_ENABLED or not _CALIBRATION_DEPS_OK:
+        return CalibrateProbeSignalsResponse(multipliers={}, categoryDetails=[], calibrated=False)
+
+    records = req.probeRecords
+    if not records:
+        return CalibrateProbeSignalsResponse(multipliers={}, categoryDetails=[], calibrated=True)
+
+    return _compute_calibration(records)
+
+
+def _compute_calibration(records: List[ProbeRecordInput]) -> CalibrateProbeSignalsResponse:
+    """Core calibration logic — only called when deps are available and gate is on."""
+    from scipy.stats import beta as scipy_beta  # type: ignore  # noqa: F811
+    from sklearn.ensemble import GradientBoostingClassifier  # type: ignore  # noqa: F811
+
+    # --- Aggregate per-category counts ---
+    # Beta prior: Beta(1,1) = uniform prior on p_no_signal.
+    # Posterior given n_no_signal successes out of n_total trials:
+    #   Beta(1 + n_no_signal, 1 + n_total - n_no_signal)
+    BETA_ALPHA_PRIOR = 1.0
+    BETA_BETA_PRIOR = 1.0
+    CI_LEVEL = 0.95
+    _OUTCOME_CONFIRMED = "confirmed"
+
+    # Collect per-category stats and feature rows for the GB classifier.
+    cat_total: Dict[str, int] = {}
+    cat_no_signal: Dict[str, int] = {}
+    cat_confirmed: Dict[str, int] = {}
+
+    # Numeric encoding for outcome → classifier feature
+    outcome_map: Dict[str, float] = {
+        "confirmed": 1.0,
+        "near_miss": 0.75,
+        "waf_blocked": 0.5,
+        "server_error": 0.4,
+        "error": 0.2,
+        "no_signal": 0.0,
+    }
+
+    # All categories seen across records (for GB training)
+    all_cats = sorted({r.category for r in records if r.category})
+    cat_idx = {c: i for i, c in enumerate(all_cats)}
+
+    X_rows: List[List[float]] = []
+    y_rows: List[int] = []
+
+    for r in records:
+        cat = r.category or ""
+        if not cat:
+            continue
+        cat_total[cat] = cat_total.get(cat, 0) + 1
+        if r.outcome == "no_signal":
+            cat_no_signal[cat] = cat_no_signal.get(cat, 0) + 1
+        if r.outcome == _OUTCOME_CONFIRMED:
+            cat_confirmed[cat] = cat_confirmed.get(cat, 0) + 1
+
+        # Feature: [category_one_hot_idx_normalised, outcome_score, status_class]
+        outcome_score = outcome_map.get(r.outcome, 0.3)
+        status_class = min(r.statusCode // 100, 5) / 5.0
+        X_rows.append([cat_idx.get(cat, 0) / max(len(all_cats), 1), outcome_score, status_class])
+        # Label: 1 if this probe's category eventually has a confirmed record
+        # (computed after we finish scanning all records)
+        y_rows.append(0)  # filled in below
+
+    # Fill GB labels: 1 for rows whose category has at least one confirmed probe.
+    confirmed_cats = {c for c, n in cat_confirmed.items() if n > 0}
+    for i, r in enumerate(records):
+        if r.category in confirmed_cats:
+            y_rows[i] = 1
+
+    # --- Fit the GB classifier if we have enough data ---
+    _GB_MIN_SAMPLES = 10
+    gb_proba: Dict[str, float] = {}
+    if len(X_rows) >= _GB_MIN_SAMPLES and len(set(y_rows)) == 2:
+        try:
+            clf = GradientBoostingClassifier(n_estimators=50, max_depth=3, random_state=0)
+            clf.fit(X_rows, y_rows)
+            # Predict TP probability for each category using its mean feature row.
+            for cat in all_cats:
+                cat_rows = [X_rows[i] for i, r in enumerate(records) if r.category == cat]
+                if cat_rows:
+                    mean_feat = [sum(col) / len(cat_rows) for col in zip(*cat_rows)]
+                    prob = float(clf.predict_proba([mean_feat])[0][1])
+                    gb_proba[cat] = prob
+        except Exception as exc:  # pragma: no cover
+            logger.warning("GradientBoostingClassifier fit failed: %s", exc)
+
+    # --- Compute per-category calibration ---
+    details: List[CategoryCalibration] = []
+    multipliers: Dict[str, float] = {}
+
+    for cat in all_cats:
+        n = cat_total.get(cat, 0)
+        k = cat_no_signal.get(cat, 0)
+        # Beta posterior parameters
+        alpha = BETA_ALPHA_PRIOR + k
+        beta_param = BETA_BETA_PRIOR + (n - k)
+        # Posterior mean of the no-signal rate
+        no_signal_mean = alpha / (alpha + beta_param)
+        # 95% credible interval (equal-tailed)
+        lower_ci = float(scipy_beta.ppf((1 - CI_LEVEL) / 2, alpha, beta_param))
+        upper_ci = float(scipy_beta.ppf(1 - (1 - CI_LEVEL) / 2, alpha, beta_param))
+
+        tp_prob = gb_proba.get(cat, -1.0)
+
+        # Multiplier derivation:
+        # - High no-signal rate → lower confidence (multiplier < 1)
+        # - Confirmed probes (tp_prob high) → higher confidence (multiplier > 1)
+        # We use (1 - posterior_no_signal_mean) as the base signal fraction,
+        # and blend in the GB TP probability when available.
+        signal_fraction = 1.0 - no_signal_mean
+        if tp_prob >= 0:
+            # Weight GB at 60%, Beta at 40%
+            blended = 0.6 * tp_prob + 0.4 * signal_fraction
+        else:
+            blended = signal_fraction
+
+        # Map blended ∈ [0,1] → multiplier ∈ [0.5, 1.5]
+        multiplier = round(0.5 + blended, 4)
+
+        details.append(CategoryCalibration(
+            category=cat,
+            noSignalRate=round(no_signal_mean, 4),
+            noSignalRateLower=round(lower_ci, 4),
+            noSignalRateUpper=round(upper_ci, 4),
+            confidenceMultiplier=multiplier,
+            tpProbability=round(tp_prob, 4),
+            probeCount=n,
+        ))
+        multipliers[cat] = multiplier
+
+    logger.info(
+        "calibrate-probe-signals categories=%d total_records=%d confirmed_cats=%d gb_fit=%s",
+        len(all_cats),
+        len(records),
+        len(confirmed_cats),
+        bool(gb_proba),
+    )
+    return CalibrateProbeSignalsResponse(
+        multipliers=multipliers,
+        categoryDetails=details,
+        calibrated=True,
+    )
 
 
 def score_findings_internal(findings: List[Finding]) -> List[ScoredFinding]:
