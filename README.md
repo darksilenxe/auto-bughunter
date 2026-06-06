@@ -80,14 +80,63 @@ scanner→target traffic is a property of the target, not of this tool.
     candidate to re-rate severity, enforce evidence quality, and suppress
     `rejected`/`duplicate` candidates before reporting.
 - Built-in checks:
-  - Security headers
-  - Cookie flags
-  - TLS basics
-  - Headless form discovery (for review)
-  - **Wordlist-based enumeration**:
-    - Common directories (admin, api, config, uploads, etc.)
-    - Common subdomains (admin, api, staging, cdn, etc.)
-    - Common API endpoints (/api/v1, /graphql, /.well-known/openid-configuration, etc.)
+  - **Passive & reconnaissance**
+    - Security headers analysis
+    - Cookie security flags
+    - TLS/SSL configuration
+    - Tech stack fingerprinting (headers + response body)
+    - Runtime endpoint discovery (inline links, forms, SPA XHR interception)
+    - Supplemental resource fetch (referenced CSS/JS/sub-page scanning)
+    - Attack surface diff (cross-scan new/changed endpoint detection)
+  - **Injection probes**
+    - Reflected XSS (tech-aware payloads, optional WAF-bypass variants)
+    - Stored XSS (write-then-read probe cycle)
+    - DOM-based XSS (headless browser payload injection + sink monitoring)
+    - SQL injection (error-based and time-based)
+    - NoSQL injection (MongoDB-style operator payloads)
+    - Server-side template injection (SSTI)
+    - XXE injection (XML, RSS, Atom inputs)
+    - Path traversal / local file inclusion
+    - CRLF injection
+    - OS command injection (OAST-callback detection)
+  - **Logic, auth & access-control probes**
+    - CORS misconfiguration
+    - CSRF (token-forge + stripped-token)
+    - Open redirect
+    - HTTP request smuggling (CL.TE / TE.CL desync)
+    - Cache poisoning (header-based)
+    - HTTP parameter pollution
+    - Forbidden path bypass (path manipulation, X-Rewrite-URL, HTTP verb override)
+    - JWT security (alg:none, weak HMAC secret)
+    - Password reset link poisoning
+    - OAuth/OIDC flow abuse (state fixation, redirect-URI manipulation)
+    - IDOR & horizontal privilege escalation (multi-role response diff)
+    - Business logic diff (anonymous access, cross-role access, parameter tampering)
+    - Race condition (concurrent request window)
+    - Deserialization probes (Java/PHP/Python payload probes)
+    - Host header injection (OAST-backed)
+  - **Infrastructure & network**
+    - SSRF via request headers (X-Forwarded-For/Host, etc. with OAST callback)
+    - SSRF via body parameters (OAST callback)
+    - Subdomain takeover (dangling CNAME / DNS fingerprint matching)
+    - Virtual host discovery
+  - **GraphQL**
+    - GraphQL introspection exposure
+    - GraphQL abuse (batching, depth limit, field exhaustion, alias overloading)
+  - **JavaScript / client-side**
+    - Secrets in JavaScript bundles (inline and fetched scripts)
+    - JavaScript SAST (DOM sinks, eval/Function, insecure postMessage, client-side storage secrets, code defects, route extraction)
+  - **Browser-based**
+    - Headless browser crawl (form discovery, screenshot, XHR endpoint interception)
+  - **Sensitive asset discovery**
+    - Sensitive file exposure (`.git`, backups, config files, etc.)
+    - **Wordlist-based enumeration**:
+      - Common directories (admin, api, config, uploads, etc.)
+      - Common subdomains (admin, api, staging, cdn, etc.)
+      - Common API endpoints (/api/v1, /graphql, /.well-known/openid-configuration, etc.)
+  - **Correlation & chaining**
+    - Exploit chain analysis (auto-correlates findings into multi-step attack paths: CORS+XSS, SSRF cloud metadata, SQLi+IDOR, auth bypass, JWT confusion, subdomain takeover+XSS delivery, GraphQL+IDOR exfiltration, etc.)
+    - Multi-step flow engine (custom attack sequence replay)
 - Optional integrations behind feature flags:
   - Nuclei
   - OWASP ZAP Baseline
