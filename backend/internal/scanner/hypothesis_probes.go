@@ -48,6 +48,18 @@ func (s *Service) RunHypothesisVerification(
 		return s.verifyOpenRedirectHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
 	case "cors":
 		return s.verifyCORSHypothesis(ctx, endpoint, payloadHint, auth, options)
+	case "ldap_injection", "ldap":
+		return s.verifyLDAPInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "xpath_injection", "xpath":
+		return s.verifyXPathInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "formula_injection", "csv_injection":
+		return s.verifyFormulaInjectionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "prototype_pollution":
+		return s.verifyPrototypePollutionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "cache_deception", "web_cache_deception":
+		return s.verifyCacheDeceptionHypothesis(ctx, endpoint, paramName, payloadHint, auth, options)
+	case "clickjacking":
+		return s.verifyClickjackingHypothesis(ctx, endpoint, payloadHint, auth, options)
 	default:
 		return nil
 	}
@@ -335,12 +347,12 @@ func (s *Service) verifyCORSHypothesis(
 	}
 
 	return &model.Finding{
-		ID:            "hyp-cors-verified",
-		Category:      "cors",
-		Severity:      severity,
-		Title:         "CORS misconfiguration confirmed via hypothesis verification",
-		Description:   desc,
-		Evidence:      fmt.Sprintf("GET %s with Origin: %s → ACAO: %s ACAC: %s", endpoint, attackerOrigin, acao, acac),
+		ID:          "hyp-cors-verified",
+		Category:    "cors",
+		Severity:    severity,
+		Title:       "CORS misconfiguration confirmed via hypothesis verification",
+		Description: desc,
+		Evidence:    fmt.Sprintf("GET %s with Origin: %s → ACAO: %s ACAC: %s", endpoint, attackerOrigin, acao, acac),
 		Recommendation: "Restrict Access-Control-Allow-Origin to an explicit trusted-origin " +
 			"allowlist. Never reflect arbitrary request origins. Avoid pairing wildcard " +
 			"origins with Allow-Credentials: true.",
@@ -384,4 +396,181 @@ func sameOrigin(a, b string) bool {
 		return false
 	}
 	return ua.Host == ub.Host && ua.Scheme == ub.Scheme
+}
+
+func (s *Service) verifyLDAPInjectionHypothesis(
+	ctx context.Context,
+	endpoint, paramName, payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	if payload == "" {
+		payload = "*)(&"
+	}
+	if paramName == "" {
+		paramName = "username"
+	}
+	probeURL, err := appendQueryParam(endpoint, paramName, payload)
+	if err != nil || !sameOrigin(endpoint, probeURL) {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, hypothesisBodyLimit))
+	if sig := matchAnyLower(string(bodyBytes), ldapErrorSignatures); sig != "" {
+		return &model.Finding{ID: "hyp-ldap-verified", Category: "injection", Severity: model.SeverityHigh, Title: "LDAP injection confirmed via hypothesis verification", Description: "The verification probe triggered an LDAP-specific parser or bind error.", Evidence: fmt.Sprintf("GET %s returned LDAP indicator %q", probeURL, sig), Recommendation: "Escape LDAP filter input and avoid concatenating user-controlled values into LDAP queries.", Confidence: 0.88, AffectedURL: endpoint, CWE: "CWE-90", OWASPCategory: "A03:2021 - Injection", Sources: []string{"hypothesis-agent", "active-scanner"}, EvidenceFields: map[string]string{"param": paramName, "payload": payload, "signature": sig, "validationType": "active-probe"}}
+	}
+	return nil
+}
+
+func (s *Service) verifyXPathInjectionHypothesis(
+	ctx context.Context,
+	endpoint, paramName, payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	if payload == "" {
+		payload = "' or '1'='1"
+	}
+	if paramName == "" {
+		paramName = "q"
+	}
+	probeURL, err := appendQueryParam(endpoint, paramName, payload)
+	if err != nil || !sameOrigin(endpoint, probeURL) {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, hypothesisBodyLimit))
+	if sig := matchAnyLower(string(bodyBytes), xpathErrorSignatures); sig != "" {
+		return &model.Finding{ID: "hyp-xpath-verified", Category: "injection", Severity: model.SeverityHigh, Title: "XPath injection confirmed via hypothesis verification", Description: "The verification probe triggered an XPath parser or XML-processing error.", Evidence: fmt.Sprintf("GET %s returned XPath indicator %q", probeURL, sig), Recommendation: "Use safe XPath evaluation patterns and escape untrusted input before it reaches XPath expressions.", Confidence: 0.88, AffectedURL: endpoint, CWE: "CWE-643", OWASPCategory: "A03:2021 - Injection", Sources: []string{"hypothesis-agent", "active-scanner"}, EvidenceFields: map[string]string{"param": paramName, "payload": payload, "signature": sig, "validationType": "active-probe"}}
+	}
+	return nil
+}
+
+func (s *Service) verifyFormulaInjectionHypothesis(
+	ctx context.Context,
+	endpoint, paramName, payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	if payload == "" {
+		payload = formulaMarker
+	}
+	if paramName == "" {
+		paramName = "name"
+	}
+	probeURL, err := appendQueryParam(endpoint, paramName, payload)
+	if err != nil || !sameOrigin(endpoint, probeURL) {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, hypothesisBodyLimit))
+	if strings.Contains(string(bodyBytes), payload) {
+		return &model.Finding{ID: "hyp-formula-verified", Category: "injection", Severity: model.SeverityMedium, Title: "Formula injection confirmed via hypothesis verification", Description: "The verification marker beginning with '=' was reflected intact.", Evidence: fmt.Sprintf("GET %s reflected %q", probeURL, payload), Recommendation: "Neutralize formula-leading characters before exporting or reflecting user content into spreadsheet-compatible formats.", Confidence: 0.84, AffectedURL: endpoint, CWE: "CWE-1236", OWASPCategory: "A03:2021 - Injection", Sources: []string{"hypothesis-agent", "active-scanner"}, EvidenceFields: map[string]string{"param": paramName, "payload": payload, "validationType": "active-probe"}}
+	}
+	return nil
+}
+
+func (s *Service) verifyPrototypePollutionHypothesis(
+	ctx context.Context,
+	endpoint, _paramName, payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	if payload == "" {
+		payload = prototypePollutionMarker
+	}
+	probeURL, err := appendQueryParam(endpoint, "__proto__[polluted]", payload)
+	if err != nil || !sameOrigin(endpoint, probeURL) {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, hypothesisBodyLimit))
+	if strings.Contains(string(bodyBytes), payload) {
+		return &model.Finding{ID: "hyp-prototype-pollution-verified", Category: "input-validation", Severity: model.SeverityHigh, Title: "Prototype pollution signal confirmed", Description: "The prototype-pollution marker appeared in the response after adding a __proto__ parameter.", Evidence: fmt.Sprintf("GET %s reflected marker %q", probeURL, payload), Recommendation: "Block prototype keys during merges and use safe deserialization patterns.", Confidence: 0.8, AffectedURL: endpoint, CWE: "CWE-1321", OWASPCategory: "A03:2021 - Injection", Sources: []string{"hypothesis-agent", "active-scanner"}, EvidenceFields: map[string]string{"payload": payload, "validationType": "active-probe"}}
+	}
+	return nil
+}
+
+func (s *Service) verifyCacheDeceptionHypothesis(
+	ctx context.Context,
+	endpoint, _paramName, _payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	probeURL := appendPathSuffix(endpoint, ".css")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if strings.Contains(strings.ToUpper(resp.Header.Get("X-Cache")), "HIT") || resp.Header.Get("Age") != "" {
+		return &model.Finding{ID: "hyp-cache-deception-verified", Category: "cache_deception", Severity: model.SeverityMedium, Title: "Cache deception signal observed", Description: "A static-looking variant of the endpoint produced cache-hit headers, consistent with cache deception behavior that warrants manual follow-up.", Evidence: fmt.Sprintf("GET %s returned cache headers (%s)", probeURL, cacheHeaderSummary(resp.Header)), Recommendation: "Review cache rules for authenticated routes and static-suffix normalization.", Confidence: 0.72, AffectedURL: probeURL, CWE: "CWE-525", OWASPCategory: "A05:2021 - Security Misconfiguration", Sources: []string{"hypothesis-agent", "active-scanner"}, EvidenceFields: map[string]string{"validationType": "active-probe", "cacheHeaders": cacheHeaderSummary(resp.Header)}}
+	}
+	_ = auth
+	return nil
+}
+
+func (s *Service) verifyClickjackingHypothesis(
+	ctx context.Context,
+	endpoint, _payload string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	findings := s.runClickjackingProbe(RunInput{Target: endpoint}, resp.Header)
+	if len(findings) == 0 {
+		return nil
+	}
+	f := findings[0]
+	f.ID = "hyp-clickjacking-verified"
+	return &f
 }

