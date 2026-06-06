@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/safety"
 )
 
 // tlsConfigBodyLimit caps response body reads for the HTTP→HTTPS redirect check.
@@ -64,6 +65,9 @@ func (s *Service) runTLSConfigProbe(ctx context.Context, input RunInput) []model
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil
 	}
+	if err := safety.ValidateOutboundURL(input.Target); err != nil {
+		return nil
+	}
 
 	var findings []model.Finding
 
@@ -99,6 +103,10 @@ func (s *Service) runTLSConfigProbe(ctx context.Context, input RunInput) []model
 // redirected to HTTPS. If the server serves content over HTTP without
 // redirecting, it returns a finding.
 func (s *Service) checkHTTPSRedirect(ctx context.Context, input RunInput, httpURL, httpsURL string) *model.Finding {
+	if err := safety.ValidateOutboundURL(httpURL); err != nil {
+		return nil
+	}
+
 	noRedirect := *s.httpClient
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
@@ -115,16 +123,28 @@ func (s *Service) checkHTTPSRedirect(ctx context.Context, input RunInput, httpUR
 	defer resp.Body.Close()
 	_, _ = io.ReadAll(io.LimitReader(resp.Body, tlsConfigBodyLimit))
 
-	// A 301/302/307/308 redirect to HTTPS is the expected safe behaviour.
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		location := resp.Header.Get("Location")
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(location)), "https://") {
-			return nil
-		}
-	}
+	return evaluateHTTPSRedirectResponse(httpURL, httpsURL, resp.StatusCode, resp.Header.Get("Location"))
+}
 
-	// The server either returned 2xx (content over HTTP) or redirected to
-	// a non-HTTPS location — both are a misconfiguration.
+// u_host extracts the host portion from a raw URL string (used only for
+// human-readable strings in reproduction steps).
+func u_host(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return u.Host
+}
+
+// evaluateHTTPSRedirect inspects an HTTP response status and Location header and
+// returns a finding when the server is NOT redirecting to HTTPS. It is extracted
+// as a pure function so tests can exercise the detection logic without making
+// real HTTP requests through safety-gated code paths.
+func evaluateHTTPSRedirectResponse(httpURL, httpsURL string, statusCode int, location string) *model.Finding {
+	if statusCode >= 300 && statusCode < 400 &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(location)), "https://") {
+		return nil
+	}
 	return &model.Finding{
 		ID:       "tls-no-https-redirect",
 		Category: "tls",
@@ -134,11 +154,11 @@ func (s *Service) checkHTTPSRedirect(ctx context.Context, input RunInput, httpUR
 			"A plain HTTP request to %s returned HTTP %d without a redirect to HTTPS (%s). "+
 				"Serving content over unencrypted HTTP allows network-level attackers to intercept "+
 				"credentials, session tokens, and sensitive data, and to perform active man-in-the-middle attacks.",
-			httpURL, resp.StatusCode, httpsURL,
+			httpURL, statusCode, httpsURL,
 		),
 		Evidence: fmt.Sprintf(
 			"GET %s → HTTP %d (Location: %q); expected 301/302/307/308 redirect to https://",
-			httpURL, resp.StatusCode, resp.Header.Get("Location"),
+			httpURL, statusCode, location,
 		),
 		Recommendation: "Configure the server to return a permanent (301) redirect from HTTP to HTTPS for all requests. " +
 			"Combine with HSTS to prevent initial plain-text connections. " +
@@ -156,19 +176,9 @@ func (s *Service) checkHTTPSRedirect(ctx context.Context, input RunInput, httpUR
 			"validationType": "active-probe",
 			"httpURL":        httpURL,
 			"httpsURL":       httpsURL,
-			"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+			"responseStatus": fmt.Sprintf("%d", statusCode),
 		},
 	}
-}
-
-// u_host extracts the host portion from a raw URL string (used only for
-// human-readable strings in reproduction steps).
-func u_host(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	return u.Host
 }
 
 // checkWeakTLSVersions dials the target with explicitly permissive TLS settings

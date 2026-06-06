@@ -1,24 +1,12 @@
 package scanner
 
 import (
-	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
-func TestRunTLSConfigProbe_HTTPNoRedirect(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	svc := NewService(Config{})
-	// srv is plain HTTP, so simulate the "check redirect" path directly.
-	// The target is the HTTP server itself; we expect a finding because it
-	// doesn't redirect to HTTPS.
-	f := svc.checkHTTPSRedirect(context.Background(), RunInput{Target: srv.URL}, srv.URL, "https://"+srv.Listener.Addr().String()+"/")
+func TestEvaluateHTTPSRedirectResponse_NoRedirect(t *testing.T) {
+	f := evaluateHTTPSRedirectResponse("http://example.com", "https://example.com", 200, "")
 	if f == nil {
 		t.Fatal("expected finding when HTTP server does not redirect to HTTPS")
 	}
@@ -27,16 +15,17 @@ func TestRunTLSConfigProbe_HTTPNoRedirect(t *testing.T) {
 	}
 }
 
-func TestRunTLSConfigProbe_HTTPRedirectsToHTTPS_NoFinding(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusMovedPermanently)
-	}))
-	defer srv.Close()
-
-	svc := NewService(Config{})
-	f := svc.checkHTTPSRedirect(context.Background(), RunInput{Target: srv.URL}, srv.URL, "https://"+srv.Listener.Addr().String()+"/")
+func TestEvaluateHTTPSRedirectResponse_RedirectsToHTTPS_NoFinding(t *testing.T) {
+	f := evaluateHTTPSRedirectResponse("http://example.com", "https://example.com", 301, "https://example.com/")
 	if f != nil {
-		t.Fatalf("expected no finding when HTTP properly redirects to HTTPS, got: %+v", f)
+		t.Fatalf("expected no finding when HTTP redirects to HTTPS, got: %+v", f)
+	}
+}
+
+func TestEvaluateHTTPSRedirectResponse_NonHTTPSRedirectIsFinding(t *testing.T) {
+	f := evaluateHTTPSRedirectResponse("http://example.com", "https://example.com", 302, "http://other.example.com/")
+	if f == nil {
+		t.Fatal("expected finding when redirect target is not HTTPS")
 	}
 }
 
