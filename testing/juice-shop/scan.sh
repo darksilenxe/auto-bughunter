@@ -47,7 +47,7 @@ wait_for() {
 }
 
 wait_for "backend"    "${API_BASE}/api/health"
-wait_for "juice-shop" "http://localhost:3030/rest/admin/application-version"
+wait_for "juice-shop" "http://localhost:3030/"
 
 idem_key="juice-shop-$(date -u +%Y%m%dT%H%M%SZ)"
 
