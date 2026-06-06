@@ -27,12 +27,16 @@ services:
     # `wget` always failed and `service_healthy` never resolved. Use node
     # itself — it's guaranteed to be on $PATH because it's the entrypoint
     # runtime — to perform the HTTP probe.
+    #
+    # NOTE: /rest/admin/application-version requires authentication in
+    # Juice Shop v15+ (returns 401 without a valid JWT), so we probe the
+    # root path instead which always returns 200 when the server is ready.
     healthcheck:
       test:
         - "CMD"
         - "node"
         - "-e"
-        - "require('http').get('http://127.0.0.1:3000/rest/admin/application-version', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+        - "require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 30
