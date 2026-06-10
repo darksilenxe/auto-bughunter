@@ -6670,28 +6670,28 @@ func encodeMemoryText(text string) []float32 {
 }
 
 func (s *Server) handleGetScanActivity(w http.ResponseWriter, r *http.Request) {
-if r.Method != http.MethodGet {
-writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-return
-}
-// Extract ID from URL path, e.g., /api/scan/{id}/activity
-parts := strings.Split(r.URL.Path, "/")
-if len(parts) < 4 {
-writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
-return
-}
-id := parts[3]
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	// Extract ID from URL path, e.g., /api/scan/{id}/activity
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+	id := parts[3]
 
-events, err := s.repo.ListAgentEvents(r.Context(), id)
-if err != nil {
-log.Printf("failed to list agent events for %s: %v", id, err)
-writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list agent events"})
-return
-}
+	events, err := s.repo.ListAgentEvents(r.Context(), id)
+	if err != nil {
+		log.Printf("failed to list agent events for %s: %v", id, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list agent events"})
+		return
+	}
 
-if events == nil {
-events = []model.ScanEvent{}
-}
+	if events == nil {
+		events = []model.ScanEvent{}
+	}
 
-writeJSON(w, http.StatusOK, events)
+	writeJSON(w, http.StatusOK, events)
 }
