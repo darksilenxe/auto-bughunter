@@ -342,11 +342,27 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewCORSRedirectAgent(true))
 	reg.Register(agent.NewWordlistAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
-	reg.Register(agent.NewAIToolCallingAgent(aiClient, false))
+	// Agentic loop agents: these form the autonomous observe→reason→act core.
+	// They are registered in the static order so they always execute even when
+	// the AI planner is unavailable, while still being schedulable by the AI
+	// planner in autonomous mode. Each gracefully skips if its AI client or
+	// scanner dependency is missing.
+	reg.Register(agent.NewHypothesisAgent(aiClient, scanService, true))
+	reg.Register(agent.NewAdaptiveProbeAgent(aiClient, scanService, 0, true))
+	reg.Register(agent.NewPentestLoopAgent(aiClient, scanService, 0, true))
+	reg.Register(agent.NewReasoningIterationAgent(aiClient, scanService, 0, true))
+	reg.Register(agent.NewExploitChainAgent(true))
+	reg.Register(agent.NewHackTricksAgent(true, aiClient))
+	reg.Register(agent.NewToolBuilderAgent(true, aiClient))
+	// ai_tool_calling is enabled whenever an AI client is present so the LLM
+	// can invoke bounded tool actions without requiring an explicit per-scan flag.
+	reg.Register(agent.NewAIToolCallingAgent(aiClient, aiClient != nil))
 	reg.Register(agent.NewMLTriageAgent(mlService, true))
 	reg.Register(agent.NewAttackPathAgent(mlService, true))
 	reg.Register(agent.NewFalsePositiveReviewAgent(mlService, true))
 	reg.Register(agent.NewRemediationPlannerAgent(mlService, true))
+	reg.Register(agent.NewOpenHackExpertAgent(aiClient, nil, true))
+	reg.Register(agent.NewOpenHackTriageAgent(aiClient, nil, true))
 	reg.Register(agent.NewImpactVerifierAgent(true))
 	reg.Register(agent.NewReportingAgent(true))
 	reg.Register(agent.NewLLMChainSynthesisAgent(aiClient, true))
@@ -4544,6 +4560,27 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		}
 	}
 
+	// Pre-seed AutonomyMemory.PreferredAgents with Q-learner recommendations
+	// for the initial pipeline. Using the first static agent ("reconnaissance")
+	// as the source lets the Q-learner immediately promote any agents it has
+	// learned to be high-value right after recon, giving the AI planner a
+	// learned head-start from the very first round.
+	if s.agentLearner != nil {
+		seedRecs := s.agentLearner.Recommend(ctx, "reconnaissance", nil, 5, 0.6)
+		if len(seedRecs) > 0 {
+			existing := make(map[string]bool, len(autonomyMemory.PreferredAgents))
+			for _, name := range autonomyMemory.PreferredAgents {
+				existing[name] = true
+			}
+			for _, rec := range seedRecs {
+				if rec = strings.TrimSpace(rec); rec != "" && !existing[rec] {
+					autonomyMemory.PreferredAgents = append(autonomyMemory.PreferredAgents, rec)
+					existing[rec] = true
+				}
+			}
+		}
+	}
+
 	input := agent.AgentInput{
 		Target:         target,
 		ScanID:         scanID,
@@ -4667,6 +4704,12 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		aiPlanner := agent.NewAIPlanner(s.aiClient, available, fallback)
 		if input.Options.AutonomyExplorationBudgetPercent > 0 {
 			aiPlanner.ExplorationBudget = input.Options.AutonomyExplorationBudgetPercent
+		}
+		// Wire the Q-learner as the planner's Spawner so that historically
+		// high-signal agent sequences learned from past scans are merged into
+		// each planning round alongside the AI model's own suggestions.
+		if s.agentLearner != nil {
+			aiPlanner.Spawner = s.agentLearner
 		}
 		planner = aiPlanner
 	}
