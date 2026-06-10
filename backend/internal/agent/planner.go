@@ -91,6 +91,11 @@ type AIPlanner struct {
 	Fallback          *StaticPlanner
 	MaxAgentsPerRound int
 	ExplorationBudget int
+	// Spawner is an optional Q-learning spawn recommender (e.g. agentlearner.Client).
+	// When set, Plan merges its recommendations into each round's scheduling
+	// decision so that historically high-signal agent sequences learned from past
+	// scans influence the AI planner's choices.
+	Spawner Spawner
 }
 
 const (
@@ -213,6 +218,40 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 	if p.MaxAgentsPerRound > 0 && len(agents) > p.MaxAgentsPerRound {
 		agents = agents[:p.MaxAgentsPerRound]
 	}
+
+	// Augment with Q-learner spawn recommendations. When a Spawner is wired
+	// (typically agentlearner.Client), ask it which agents it recommends
+	// following the most recently completed agent. Its Q-table reflects what
+	// sequences have historically produced high-signal findings, so merging
+	// its suggestions here keeps the AI plan aligned with learned patterns.
+	if p.Spawner != nil && len(history) > 0 {
+		lastAgent := strings.TrimSpace(history[len(history)-1].AgentName)
+		if lastAgent != "" {
+			scheduledNames := make(map[string]bool, len(agents))
+			for _, a := range agents {
+				scheduledNames[a.Name] = true
+			}
+			recs := p.Spawner.Recommend(ctx, lastAgent, input.AllFindings, 3, 0.65)
+			for _, rec := range recs {
+				rec = strings.TrimSpace(rec)
+				if rec == "" {
+					continue
+				}
+				if _, ok := available[rec]; !ok {
+					continue
+				}
+				if blocked[rec] {
+					continue
+				}
+				if scheduledNames[rec] {
+					continue
+				}
+				agents = append(agents, AgentSpec{Name: rec, Reason: "q-learning"})
+				scheduledNames[rec] = true
+			}
+		}
+	}
+
 	if shouldInjectExploration(history, p.ExplorationBudget) {
 		exploration := pickExplorationAgent(p.AvailableAgents, history, agents, blocked, preferredSet)
 		if exploration != "" {

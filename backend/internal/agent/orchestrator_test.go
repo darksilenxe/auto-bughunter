@@ -440,3 +440,78 @@ func TestOrchestratorHonoursContextWhenPlannerBlocks(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+// fakeSpawner is a test double for the Spawner interface.
+type fakeSpawner struct {
+	recs        []string
+	calledWith  []string // source agent names passed to Recommend
+}
+
+func (s *fakeSpawner) Recommend(_ context.Context, sourceAgent string, _ []model.Finding, _ int, _ float64) []string {
+	s.calledWith = append(s.calledWith, sourceAgent)
+	return s.recs
+}
+
+// TestAIPlannerMergesQLearnerRecommendations verifies that when a Spawner is
+// wired into an AIPlanner, its recommendations are included in the planning
+// decision after the first agent completes.
+func TestAIPlannerMergesQLearnerRecommendations(t *testing.T) {
+	// AI planner returns "known"; the Q-learner recommends "learned".
+	caller := &fakeCaller{specs: []map[string]string{{"name": "known", "reason": "ai-planned"}}}
+	spawner := &fakeSpawner{recs: []string{"learned"}}
+	fb := NewStaticPlanner([]string{"known", "learned"})
+	p := NewAIPlanner(caller, []string{"known", "learned"}, fb)
+	p.Spawner = spawner
+	p.MaxAgentsPerRound = 0 // no cap — accept all candidates
+
+	// history: one agent already ran so the spawner has a source to recommend from.
+	history := []AgentOutput{{AgentName: "previous", Status: "completed"}}
+
+	dec, err := p.Plan(context.Background(), AgentInput{}, history)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	// Both the AI-planned agent and the Q-learning recommendation must appear.
+	names := make(map[string]bool, len(dec.Agents))
+	for _, a := range dec.Agents {
+		names[a.Name] = true
+	}
+	if !names["known"] {
+		t.Errorf("expected AI-planned agent 'known' in decision, got %+v", dec.Agents)
+	}
+	if !names["learned"] {
+		t.Errorf("expected Q-learning recommendation 'learned' in decision, got %+v", dec.Agents)
+	}
+	// Verify that the spawner was consulted for the last-completed agent.
+	if len(spawner.calledWith) == 0 || spawner.calledWith[len(spawner.calledWith)-1] != "previous" {
+		t.Errorf("expected spawner called with 'previous', got %v", spawner.calledWith)
+	}
+	// Verify the Q-learning agent carries the correct reason tag.
+	for _, a := range dec.Agents {
+		if a.Name == "learned" && a.Reason != "q-learning" {
+			t.Errorf("expected reason 'q-learning' for Q-learner recommendation, got %q", a.Reason)
+		}
+	}
+}
+
+// TestAIPlannerQLearnerSkipsUnavailableAgents ensures that Q-learner
+// recommendations for unknown (not-in-factory) agents are silently ignored.
+func TestAIPlannerQLearnerSkipsUnavailableAgents(t *testing.T) {
+	caller := &fakeCaller{specs: []map[string]string{{"name": "known", "reason": "r"}}}
+	spawner := &fakeSpawner{recs: []string{"ghost", "known"}} // ghost is not registered
+	fb := NewStaticPlanner([]string{"known"})
+	p := NewAIPlanner(caller, []string{"known"}, fb)
+	p.Spawner = spawner
+	p.MaxAgentsPerRound = 0
+
+	history := []AgentOutput{{AgentName: "prev", Status: "completed"}}
+	dec, err := p.Plan(context.Background(), AgentInput{}, history)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	for _, a := range dec.Agents {
+		if a.Name == "ghost" {
+			t.Errorf("unregistered agent 'ghost' must not appear in decision, got %+v", dec.Agents)
+		}
+	}
+}
