@@ -251,11 +251,33 @@ func main() {
 		server.SetAttackGraphStore(attackGraphStore)
 	}
 
-	// Optional episodic vector memory.  When ENABLE_VECTOR_MEMORY=true (and
-	// pgvector is available in the database), confirmed findings are embedded
-	// and stored for cross-scan hypothesis enrichment.  Falls back to the
-	// in-process local store when the pgvector extension cannot be loaded.
-	if getbool("ENABLE_VECTOR_MEMORY", false) {
+	// Optional episodic vector memory.  Three backends are available:
+	//   ENABLE_NEO4J_VECTOR_MEMORY=true  — Neo4j 5.x vector graph (recommended
+	//     for production; requires NEO4J_URI and optionally NEO4J_USERNAME,
+	//     NEO4J_PASSWORD, NEO4J_DATABASE). Findings and probes are stored as
+	//     graph nodes with vector embeddings so operators get both ANN
+	//     similarity search AND graph-traversal queries over probe chains.
+	//   ENABLE_VECTOR_MEMORY=true        — PostgreSQL + pgvector (default when
+	//     only pgvector is available).
+	//   Neither flag set                 — in-process LocalStore (dev/test).
+	if getbool("ENABLE_NEO4J_VECTOR_MEMORY", false) {
+		neo4jURI := getenv("NEO4J_URI", "bolt://neo4j:7687")
+		neo4jUser := getenv("NEO4J_USERNAME", "neo4j")
+		neo4jPass := getenv("NEO4J_PASSWORD", "")
+		neo4jDB := getenv("NEO4J_DATABASE", "neo4j")
+		n4jStore, n4jErr := memory.NewNeo4jVectorStore(context.Background(), neo4jURI, neo4jUser, neo4jPass, neo4jDB)
+		if n4jErr != nil {
+			log.Printf("neo4j vector memory unavailable (%v) — falling back to pgvector", n4jErr)
+			// fall through to pgvector / local below
+		} else {
+			log.Printf("neo4j vector graph memory initialised (uri=%s db=%s)", neo4jURI, neo4jDB)
+			server.SetVectorMemory(n4jStore)
+			defer func() {
+				_ = n4jStore.Close()
+			}()
+		}
+	}
+	if server.VectorMemory() == nil && getbool("ENABLE_VECTOR_MEMORY", false) {
 		memDSN := getenv("VECTOR_MEMORY_DSN", databaseURL)
 		pvStore, pvErr := memory.NewPgvectorStore(context.Background(), memDSN)
 		if pvErr != nil {

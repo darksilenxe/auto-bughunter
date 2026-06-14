@@ -179,6 +179,14 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 			})
 		}
 	}
+	if len(input.Options.OperatorHints) > 0 {
+		historySummary = append(historySummary, map[string]string{
+			"agent":          "operator",
+			"status":         "instructions",
+			"findings":       "0",
+			"operatorHints":  strings.Join(input.Options.OperatorHints, "; "),
+		})
+	}
 
 	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals, input.Options.PolicyPack)
 	if err != nil {

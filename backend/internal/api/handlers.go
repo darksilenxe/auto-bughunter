@@ -229,6 +229,9 @@ func (s *Server) persistAttackGraph(scanID, target string, graph *model.AttackGr
 // disables the feature.
 func (s *Server) SetVectorMemory(store memory.Store) { s.memoryStore = store }
 
+// VectorMemory returns the currently configured memory store, or nil if none.
+func (s *Server) VectorMemory() memory.Store { return s.memoryStore }
+
 type AttackGraphStore interface {
 	SaveAttackGraph(ctx context.Context, scanID, target string, graph *model.AttackGraphData) error
 	LoadAttackGraph(ctx context.Context, scanID string) (*model.AttackGraphData, error)
@@ -453,6 +456,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
 	mux.HandleFunc("/api/admin/logs", s.handleSystemLogs)
+	// Agent Console — dispatch a single named agent with custom instructions.
+	mux.HandleFunc("/api/agent/dispatch", s.handleAgentDispatch)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))

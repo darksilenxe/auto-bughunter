@@ -6,6 +6,7 @@ import MatrixRain from "./components/MatrixRain";
 import ScanProgressBar from "./components/ScanProgressBar";
 import Sidebar from "./components/Sidebar";
 import { ToastProvider } from "./components/Toast";
+import AgentConsole from "./pages/AgentConsole";
 import AgentActivity from "./pages/AgentActivity";
 import AttackGraph from "./pages/AttackGraph";
 import Dashboard from "./pages/Dashboard";
@@ -53,6 +54,7 @@ export default function App() {
               <Route path="/references"     element={<References />} />
               <Route path="/settings"       element={<Settings />} />
               <Route path="/agent-activity" element={<AgentActivity />} />
+              <Route path="/agent-console"  element={<AgentConsole />} />
               <Route path="/probe-coverage" element={<ProbeCoverage />} />
               <Route path="/scan-timeline"  element={<ScanTimeline />} />
               <Route path="/surface-map"    element={<SurfaceMap />} />
