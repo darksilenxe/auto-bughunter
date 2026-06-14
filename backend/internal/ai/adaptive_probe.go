@@ -38,6 +38,17 @@ type ProbeDecision struct {
 	// follow the AI's reasoning in real time.
 	Rationale string `json:"rationale,omitempty"`
 
+	// Thinking is the AI's chain-of-thought reasoning produced before it commits
+	// to this probe decision. It is shown in the operator console as a
+	// ScanEventThinking event so operators can follow the AI's reasoning live.
+	// Empty when the local rule-based fallback is used.
+	Thinking string `json:"thinking,omitempty"`
+
+	// GoalAlignment is a 0–1 score the AI assigns to how directly this probe
+	// advances the engagement's ImpactGoal(s). Used by the orchestrator to
+	// penalise low-alignment rounds when deciding whether to continue.
+	GoalAlignment float64 `json:"goalAlignment,omitempty"`
+
 	// --- Fields populated when Action == "stop" ---
 
 	// StopReason explains why the AI decided to stop iterating.
@@ -81,10 +92,11 @@ func (c *Client) DecideNextProbe(
 	probeHistory []model.ProbeResult,
 	endpoints []string,
 	stepBudgetRemaining int,
+	goals []model.ImpactGoal,
 	policyPack ...string,
 ) ProbeDecision {
 	if c == nil || !c.shouldCallProvider() {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
 	}
 
 	// Build compact observation history for the prompt.
@@ -112,6 +124,11 @@ func (c *Client) DecideNextProbe(
 			"title":    f.Title,
 			"url":      f.AffectedURL,
 		})
+	}
+
+	goalStrs := make([]string, 0, len(goals))
+	for _, g := range goals {
+		goalStrs = append(goalStrs, string(g))
 	}
 
 	baseInstructions := "You are an expert penetration tester driving an adaptive web application probe loop. " +
@@ -171,8 +188,14 @@ func (c *Client) DecideNextProbe(
 			"no_signal across recent scans of this target — consider these low-priority unless new evidence emerges: " +
 			strings.Join(lowSignalAdvisory, ", ") + ".\n"
 	}
+	if len(goalStrs) > 0 {
+		baseInstructions += "\nENGAGEMENT GOAL(S): " + strings.Join(goalStrs, ", ") + ". " +
+			"Prefer probes that, if confirmed, directly demonstrate one of these goals. " +
+			"Before committing to the probe, internally rate how well it advances the goal (0–1) " +
+			"and include that score in the 'goalAlignment' field of your JSON response.\n"
+	}
 	baseInstructions += "\nReply with strict JSON only:\n" +
-		`{"action":"probe"|"stop","category":string,"endpoint":string,"paramName":string,"payload":string,"rationale":string,"stopReason":string}`
+		`{"action":"probe"|"stop","thinking":string,"goalAlignment":number,"category":string,"endpoint":string,"paramName":string,"payload":string,"rationale":string,"stopReason":string}`
 
 	payload := map[string]any{
 		"target":              target,
@@ -185,6 +208,9 @@ func (c *Client) DecideNextProbe(
 			"auth_bypass", "idor", "ssti", "business_logic",
 		},
 		"instructions": baseInstructions,
+	}
+	if len(goalStrs) > 0 {
+		payload["impactGoals"] = goalStrs
 	}
 
 	// Ground the decision in curated security knowledge when available.
@@ -201,7 +227,7 @@ func (c *Client) DecideNextProbe(
 
 	userJSON, err := json.Marshal(payload)
 	if err != nil {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
 	}
 
 	messages := []Message{
@@ -215,12 +241,12 @@ func (c *Client) DecideNextProbe(
 
 	content, err := c.fastComplete(ctx, messages, 0.2, true)
 	if err != nil || content == "" {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
 	}
 
 	var decision ProbeDecision
 	if err := json.Unmarshal([]byte(content), &decision); err != nil {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
 	}
 
 	decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
@@ -228,12 +254,13 @@ func (c *Client) DecideNextProbe(
 	decision.Endpoint = strings.TrimSpace(decision.Endpoint)
 	decision.ParamName = strings.TrimSpace(decision.ParamName)
 	decision.Payload = strings.TrimSpace(decision.Payload)
+	decision.Thinking = strings.TrimSpace(decision.Thinking)
 	decision.Rationale = strings.TrimSpace(decision.Rationale)
 	decision.StopReason = strings.TrimSpace(decision.StopReason)
 
 	// Validate: probe decisions must have a category and endpoint.
 	if decision.Action == "probe" && (decision.Category == "" || decision.Endpoint == "") {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
 	}
 
 	return decision
@@ -258,7 +285,9 @@ func localProbeDecision(
 	probeHistory []model.ProbeResult,
 	endpoints []string,
 	stepBudgetRemaining int,
+	goals []model.ImpactGoal,
 ) ProbeDecision {
+	_ = goals
 	if stepBudgetRemaining <= 0 {
 		confirmedCount := 0
 		for _, pr := range probeHistory {
@@ -467,31 +496,31 @@ func truncateObs(s string, n int) string {
 // present in the confirmed findings and probe history so the knowledge query is
 // scoped to the techniques currently in play.
 func probeKnowledgeCategories(findings []model.Finding, history []model.ProbeResult) []string {
-seen := map[string]struct{}{}
-out := make([]string, 0, 8)
-add := func(c string) {
-c = strings.ToLower(strings.TrimSpace(c))
-if c == "" {
-return
-}
-if _, ok := seen[c]; ok {
-return
-}
-seen[c] = struct{}{}
-out = append(out, c)
-}
-for _, f := range findings {
-add(f.Category)
-}
-for _, p := range history {
-add(p.Category)
-}
-return out
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	add := func(c string) {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" {
+			return
+		}
+		if _, ok := seen[c]; ok {
+			return
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	for _, f := range findings {
+		add(f.Category)
+	}
+	for _, p := range history {
+		add(p.Category)
+	}
+	return out
 }
 
 // probeKnowledgeQuery builds a compact free-text query describing the current
 // probing context for knowledge retrieval.
 func probeKnowledgeQuery(target string, findings []model.Finding, history []model.ProbeResult) string {
-cats := probeKnowledgeCategories(findings, history)
-return strings.TrimSpace("adaptive web probe target=" + target + " categories=" + strings.Join(cats, ", "))
+	cats := probeKnowledgeCategories(findings, history)
+	return strings.TrimSpace("adaptive web probe target=" + target + " categories=" + strings.Join(cats, ", "))
 }

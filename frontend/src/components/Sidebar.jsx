@@ -10,6 +10,7 @@ const NAV = [
   { path: "/scans", label: "Engagement History", icon: "◫" },
   { path: "/proxy", label: "Proxy Suite", icon: "⌁" },
   { path: "/agent-activity", label: "Agent Activity", icon: "⌗" },
+  { path: "/agent-console",  label: "Agent Console",  icon: "⌘" },
   { path: "/probe-coverage", label: "Probe Coverage", icon: "◈" },
   { path: "/scan-timeline", label: "Scan Timeline", icon: "▦" },
   { path: "/surface-map", label: "Surface Map", icon: "⊕" },

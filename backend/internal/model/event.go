@@ -17,6 +17,12 @@ const (
 	// ScanEventReasoningLoop is emitted by the ReasoningIterationAgent after
 	// each reflection step so the frontend can show the live reasoning process.
 	ScanEventReasoningLoop ScanEventType = "reasoning_loop"
+	// ScanEventDiscovery is emitted when an agent makes a structural discovery
+	// (endpoint, tech stack, auth mechanism) that does not constitute a finding.
+	ScanEventDiscovery ScanEventType = "discovery"
+	// ScanEventThinking is emitted just before an AI probe decision is executed,
+	// carrying the AI's chain-of-thought reasoning for the operator to inspect.
+	ScanEventThinking ScanEventType = "thinking"
 )
 
 // ScanEvent is a structured real-time event emitted during scan execution.

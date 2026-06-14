@@ -56,10 +56,10 @@ type Client struct {
 	// tool-call decisions that run on the fast lane (and vice versa). The
 	// channels are created lazily on first use so Clients constructed via
 	// direct field assignment (the legacy path) are still limited.
-	semOnce     sync.Once
-	semPrimary  chan struct{}
-	semCoding   chan struct{}
-	semFast     chan struct{}
+	semOnce    sync.Once
+	semPrimary chan struct{}
+	semCoding  chan struct{}
+	semFast    chan struct{}
 }
 
 // aiLane selects which per-lane concurrency semaphore an outbound LLM request
@@ -339,6 +339,20 @@ func (c *Client) completeWith(ctx context.Context, lane aiLane, p Provider, mode
 		return "", err
 	}
 	return stripCodeFence(text), nil
+}
+
+// Chat sends a free-form conversation to the primary AI model and returns
+// the assistant's response. It is used by the MCP server for the AI Console.
+func (c *Client) Chat(ctx context.Context, systemPrompt string, messages []Message) (string, error) {
+	if c == nil || !c.shouldCallProvider() {
+		return "", fmt.Errorf("ai provider not configured")
+	}
+	msgs := make([]Message, 0, len(messages)+1)
+	if systemPrompt != "" {
+		msgs = append(msgs, Message{Role: "system", Content: systemPrompt})
+	}
+	msgs = append(msgs, messages...)
+	return c.primaryComplete(ctx, msgs, 0.7, false)
 }
 
 // primaryComplete runs a completion using the primary provider/model on the

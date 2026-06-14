@@ -320,6 +320,10 @@ type ScanOptions struct {
 	// inherits the server-level URL. Honoured only when proxying is on
 	// (either via the server default or UseProxy=true).
 	ProxyURL string `json:"proxyUrl,omitempty"`
+	// OperatorHints are free-form notes or instructions provided by an
+	// operator (e.g. via the Agent Console).  They are surfaced in AI planner
+	// and hypothesis-agent prompts as extra context for guiding the scan.
+	OperatorHints []string `json:"operatorHints,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

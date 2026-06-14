@@ -45,6 +45,34 @@ func (a *ReconnaissanceAgent) Run(ctx context.Context, input AgentInput) (AgentO
 	gatherHTTPVersion(ctx, input.Target, &output)
 	gatherServiceInfo(ctx, host, &output)
 
+	if input.SharedScanContext != nil {
+		if server := strings.TrimSpace(output.Metadata["server_header"]); server != "" {
+			input.SharedScanContext.SetTechStack([]string{server})
+			input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+				Kind:        DiscoveryTechStack,
+				Value:       server,
+				SourceAgent: a.Name(),
+				Confidence:  0.9,
+			}, input.Emit)
+		} else if proto := strings.TrimSpace(output.Metadata["http_version"]); proto != "" {
+			input.SharedScanContext.SetTechStack([]string{proto})
+			input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+				Kind:        DiscoveryTechStack,
+				Value:       proto,
+				SourceAgent: a.Name(),
+				Confidence:  0.6,
+			}, input.Emit)
+		}
+		if ips := strings.TrimSpace(output.Metadata["resolved_ips"]); ips != "" {
+			input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+				Kind:        DiscoveryGeneric,
+				Value:       "resolved_ips=" + ips,
+				SourceAgent: a.Name(),
+				Confidence:  1.0,
+			}, input.Emit)
+		}
+	}
+
 	output.DebugNotes = fmt.Sprintf("Reconnaissance completed for %s. Discovered %d services/endpoints.", host, len(output.Findings))
 	return output, nil
 }
@@ -86,6 +114,9 @@ func gatherHTTPVersion(ctx context.Context, target string, output *AgentOutput) 
 		defer resp.Body.Close()
 		output.Metadata["http_version"] = resp.Proto
 		output.Metadata["status_code"] = fmt.Sprintf("%d", resp.StatusCode)
+		if server := strings.TrimSpace(resp.Header.Get("Server")); server != "" {
+			output.Metadata["server_header"] = server
+		}
 
 		if strings.Contains(resp.Proto, "1.0") {
 			output.Findings = append(output.Findings, model.Finding{

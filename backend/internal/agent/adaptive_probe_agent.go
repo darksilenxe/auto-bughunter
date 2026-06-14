@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scanner"
 )
@@ -44,6 +46,7 @@ const (
 type AdaptiveProbeAgent struct {
 	aiClient    *ai.Client
 	scanService *scanner.Service
+	memStore    memory.Store
 	StepBudget  int
 	enabled     bool
 }
@@ -62,6 +65,12 @@ func NewAdaptiveProbeAgent(aiClient *ai.Client, scanService *scanner.Service, st
 	}
 }
 
+// SetMemoryStore attaches an episodic memory store used to recall and learn
+// from prior probe outcomes.
+func (a *AdaptiveProbeAgent) SetMemoryStore(s memory.Store) {
+	a.memStore = s
+}
+
 func (a *AdaptiveProbeAgent) Name() string  { return "adaptive_probe" }
 func (a *AdaptiveProbeAgent) Enabled() bool { return a.enabled }
 
@@ -78,6 +87,18 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	if a.aiClient == nil || a.scanService == nil {
 		output.DebugNotes = "AdaptiveProbeAgent: skipped — aiClient or scanService not configured"
 		return output, nil
+	}
+
+	store := a.memStore
+	if store == nil {
+		store = input.MemoryStore
+	}
+	if store != nil {
+		if priors, err := store.SearchSimilarProbes(ctx, memory.EncodeMulti(input.Target), "confirmed", 5); err == nil && len(priors) > 0 {
+			summary := buildPriorProbeSummary(priors)
+			output.Metadata["past_probe_context"] = summary
+			output.DebugNotes = "AdaptiveProbeAgent prior probes: " + summary
+		}
 	}
 
 	Emit(input.Emit, model.ScanEvent{
@@ -159,6 +180,7 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			probeHistory,
 			endpoints,
 			budgetLeft,
+			input.Options.ImpactGoals,
 			probePolicy,
 		)
 
@@ -172,14 +194,14 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				AgentName: a.Name(),
 				Message:   fmt.Sprintf("[adaptive] AI stopped after %d step(s): %s", stepsExecuted, stopReason),
 				Metadata: map[string]string{
-					"step":        itoa(step),
-					"status":      "ai_stopped",
-					"stopReason":  stopReason,
-					"stepsRun":    itoa(stepsExecuted),
-					"confirmed":   itoa(stepsConfirmed),
-					"wafBlocked":  itoa(stepsWAFBlocked),
-					"nearMiss":    itoa(stepsNearMiss),
-					"budgetLeft":  itoa(budgetLeft),
+					"step":       itoa(step),
+					"status":     "ai_stopped",
+					"stopReason": stopReason,
+					"stepsRun":   itoa(stepsExecuted),
+					"confirmed":  itoa(stepsConfirmed),
+					"wafBlocked": itoa(stepsWAFBlocked),
+					"nearMiss":   itoa(stepsNearMiss),
+					"budgetLeft": itoa(budgetLeft),
 				},
 			})
 			break
@@ -189,6 +211,15 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			// Invalid decision — treat as stop to avoid infinite loop.
 			stopReason = "AI returned an invalid probe decision; stopping early"
 			break
+		}
+
+		if decision.Thinking != "" {
+			Emit(input.Emit, model.ScanEvent{
+				Type:      model.ScanEventThinking,
+				AgentName: a.Name(),
+				Message:   decision.Thinking,
+				Metadata:  map[string]string{"step": itoa(step), "status": "thinking"},
+			})
 		}
 
 		// ── Emit the AI's reasoning before executing the probe ────────────
@@ -203,14 +234,15 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				decision.Rationale,
 			),
 			Metadata: map[string]string{
-				"step":       itoa(step),
-				"status":     "ai_decision",
-				"category":   decision.Category,
-				"endpoint":   decision.Endpoint,
-				"paramName":  decision.ParamName,
-				"payload":    decision.Payload,
-				"rationale":  decision.Rationale,
-				"budgetLeft": itoa(budgetLeft),
+				"step":          itoa(step),
+				"status":        "ai_decision",
+				"category":      decision.Category,
+				"endpoint":      decision.Endpoint,
+				"paramName":     decision.ParamName,
+				"payload":       decision.Payload,
+				"rationale":     decision.Rationale,
+				"goalAlignment": fmt.Sprintf("%.2f", decision.GoalAlignment),
+				"budgetLeft":    itoa(budgetLeft),
 			},
 		})
 
@@ -249,6 +281,12 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			stepsConfirmed++
 		}
 
+		output.ReasoningTrace = append(output.ReasoningTrace, ReasoningStep{
+			Thought:    decision.Thinking,
+			Evidence:   pr.Observation,
+			Conclusion: decision.Rationale,
+		})
+
 		// ── Emit the probe result ─────────────────────────────────────────
 		outcomeLabel := outcomeEmoji(pr.Outcome)
 		Emit(input.Emit, model.ScanEvent{
@@ -274,6 +312,30 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		if pr.Confirmed && pr.Finding != nil {
 			if u := strings.TrimSpace(pr.Finding.AffectedURL); u != "" {
 				endpoints = appendUnique(endpoints, u)
+			}
+			if store != nil {
+				prCopy := pr
+				go func() {
+					_ = store.UpsertProbe(context.Background(), memory.ProbeMemory{
+						ID:        probeMemoryID(input.Target, prCopy.Category, prCopy.Payload),
+						Target:    input.Target,
+						ScanID:    input.ScanID,
+						Category:  prCopy.Category,
+						Endpoint:  prCopy.Endpoint,
+						Payload:   prCopy.Payload,
+						Outcome:   string(prCopy.Outcome),
+						Embedding: memory.EncodeMulti(input.Target, prCopy.Category, prCopy.Payload),
+					})
+				}()
+			}
+			if input.SharedScanContext != nil {
+				input.SharedScanContext.AddEndpoint(pr.Finding.AffectedURL)
+				input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+					Kind:        DiscoveryEndpoint,
+					Value:       pr.Finding.AffectedURL,
+					SourceAgent: a.Name(),
+					Confidence:  pr.Finding.Confidence,
+				}, input.Emit)
 			}
 
 			// Tag finding with step provenance.
@@ -346,11 +408,39 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	}
 
 	a.writeMetadata(&output, stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss)
-	output.DebugNotes = fmt.Sprintf(
+	baseNotes := fmt.Sprintf(
 		"AdaptiveProbeAgent: %d step(s) executed, %d confirmed, %d WAF-blocked, %d near-miss. Stop: %s",
 		stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss, stopReason,
 	)
+	if output.DebugNotes != "" {
+		output.DebugNotes = output.DebugNotes + " | " + baseNotes
+	} else {
+		output.DebugNotes = baseNotes
+	}
 	return output, nil
+}
+
+func probeMemoryID(target, category, payload string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{target, category, payload}, "|")))
+	return fmt.Sprintf("probe-%x", sum)
+}
+
+func buildPriorProbeSummary(priors []memory.ProbeMemory) string {
+	parts := make([]string, 0, len(priors))
+	for _, p := range priors {
+		label := strings.TrimSpace(p.Category)
+		if ep := strings.TrimSpace(p.Endpoint); ep != "" {
+			label += "@" + ep
+		}
+		if payload := strings.TrimSpace(p.Payload); payload != "" {
+			label += " payload=" + truncate(payload, 24)
+		}
+		if out := strings.TrimSpace(p.Outcome); out != "" {
+			label += " outcome=" + out
+		}
+		parts = append(parts, strings.TrimSpace(label))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (a *AdaptiveProbeAgent) writeMetadata(out *AgentOutput, steps, confirmed, wafBlocked, nearMiss int) {

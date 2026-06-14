@@ -43,22 +43,36 @@ func (s *PgvectorStore) migrate(ctx context.Context) error {
 	stmts := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
 		`CREATE TABLE IF NOT EXISTS finding_embeddings (
-			id         TEXT PRIMARY KEY,
-			target     TEXT NOT NULL DEFAULT '',
-			scan_id    TEXT NOT NULL DEFAULT '',
-			category   TEXT NOT NULL DEFAULT '',
-			title      TEXT NOT NULL DEFAULT '',
-			severity   TEXT NOT NULL DEFAULT '',
-			embedding  vector(64) NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
+id         TEXT PRIMARY KEY,
+target     TEXT NOT NULL DEFAULT '',
+scan_id    TEXT NOT NULL DEFAULT '',
+category   TEXT NOT NULL DEFAULT '',
+title      TEXT NOT NULL DEFAULT '',
+severity   TEXT NOT NULL DEFAULT '',
+embedding  vector(64) NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
 		`CREATE INDEX IF NOT EXISTS idx_finding_embeddings_target
-			ON finding_embeddings(target)`,
-		// IVFFlat index for approximate nearest-neighbour search.
-		// lists=10 is suitable for tables up to ~100 000 rows.
+ON finding_embeddings(target)`,
 		`CREATE INDEX IF NOT EXISTS idx_finding_embeddings_vec
-			ON finding_embeddings USING ivfflat (embedding vector_cosine_ops)
-			WITH (lists = 10)`,
+ON finding_embeddings USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 10)`,
+		`CREATE TABLE IF NOT EXISTS probe_embeddings (
+id         TEXT PRIMARY KEY,
+target     TEXT NOT NULL DEFAULT '',
+scan_id    TEXT NOT NULL DEFAULT '',
+category   TEXT NOT NULL DEFAULT '',
+endpoint   TEXT NOT NULL DEFAULT '',
+payload    TEXT NOT NULL DEFAULT '',
+outcome    TEXT NOT NULL DEFAULT '',
+embedding  vector(64) NOT NULL,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_probe_embeddings_target_outcome
+ON probe_embeddings(target, outcome)`,
+		`CREATE INDEX IF NOT EXISTS idx_probe_embeddings_vec
+ON probe_embeddings USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 10)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -79,32 +93,35 @@ func (s *PgvectorStore) UpsertFinding(ctx context.Context, mem FindingMemory) er
 		createdAt = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO finding_embeddings (id, target, scan_id, category, title, severity, embedding, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8)
-		ON CONFLICT (id) DO UPDATE SET
-			target     = EXCLUDED.target,
-			scan_id    = EXCLUDED.scan_id,
-			category   = EXCLUDED.category,
-			title      = EXCLUDED.title,
-			severity   = EXCLUDED.severity,
-			embedding  = EXCLUDED.embedding,
-			created_at = EXCLUDED.created_at
-	`, mem.ID, mem.Target, mem.ScanID, mem.Category, mem.Title, mem.Severity, vecStr, createdAt)
+INSERT INTO finding_embeddings (id, target, scan_id, category, title, severity, embedding, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8)
+ON CONFLICT (id) DO UPDATE SET
+target     = EXCLUDED.target,
+scan_id    = EXCLUDED.scan_id,
+category   = EXCLUDED.category,
+title      = EXCLUDED.title,
+severity   = EXCLUDED.severity,
+embedding  = EXCLUDED.embedding,
+created_at = EXCLUDED.created_at
+`, mem.ID, mem.Target, mem.ScanID, mem.Category, mem.Title, mem.Severity, vecStr, createdAt)
 	return err
 }
 
 // SearchSimilar returns the topK most similar findings by cosine similarity.
 func (s *PgvectorStore) SearchSimilar(ctx context.Context, embedding []float32, topK int) ([]FindingMemory, error) {
+	if len(embedding) != embeddingDims {
+		return nil, fmt.Errorf("memory pgvector: embedding must be %d dimensions, got %d", embeddingDims, len(embedding))
+	}
 	if topK <= 0 {
 		topK = 5
 	}
 	vecStr := formatVector(embedding)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, target, scan_id, category, title, severity, created_at
-		FROM finding_embeddings
-		ORDER BY embedding <=> $1::vector
-		LIMIT $2
-	`, vecStr, topK)
+SELECT id, target, scan_id, category, title, severity, created_at
+FROM finding_embeddings
+ORDER BY embedding <=> $1::vector
+LIMIT $2
+`, vecStr, topK)
 	if err != nil {
 		return nil, err
 	}
@@ -118,17 +135,80 @@ func (s *PgvectorStore) SearchByTarget(ctx context.Context, target string, topK 
 		topK = 10
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, target, scan_id, category, title, severity, created_at
-		FROM finding_embeddings
-		WHERE target = $1
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, target, topK)
+SELECT id, target, scan_id, category, title, severity, created_at
+FROM finding_embeddings
+WHERE target = $1
+ORDER BY created_at DESC
+LIMIT $2
+`, target, topK)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return scanMemoryRows(rows)
+}
+
+// UpsertProbe inserts or updates a probe embedding.
+func (s *PgvectorStore) UpsertProbe(ctx context.Context, mem ProbeMemory) error {
+	if len(mem.Embedding) != embeddingDims {
+		return fmt.Errorf("memory pgvector: probe embedding must be %d dimensions, got %d", embeddingDims, len(mem.Embedding))
+	}
+	vecStr := formatVector(mem.Embedding)
+	createdAt := mem.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO probe_embeddings (id, target, scan_id, category, endpoint, payload, outcome, embedding, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9)
+ON CONFLICT (id) DO UPDATE SET
+target     = EXCLUDED.target,
+scan_id    = EXCLUDED.scan_id,
+category   = EXCLUDED.category,
+endpoint   = EXCLUDED.endpoint,
+payload    = EXCLUDED.payload,
+outcome    = EXCLUDED.outcome,
+embedding  = EXCLUDED.embedding,
+created_at = EXCLUDED.created_at
+`, mem.ID, mem.Target, mem.ScanID, mem.Category, mem.Endpoint, mem.Payload, mem.Outcome, vecStr, createdAt)
+	return err
+}
+
+// SearchSimilarProbes returns the topK most similar probes by cosine similarity.
+func (s *PgvectorStore) SearchSimilarProbes(ctx context.Context, embedding []float32, outcome string, topK int) ([]ProbeMemory, error) {
+	if len(embedding) != embeddingDims {
+		return nil, fmt.Errorf("memory pgvector: probe embedding must be %d dimensions, got %d", embeddingDims, len(embedding))
+	}
+	if topK <= 0 {
+		topK = 5
+	}
+	vecStr := formatVector(embedding)
+	outcome = strings.TrimSpace(outcome)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if outcome == "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, target, scan_id, category, endpoint, payload, outcome, created_at
+FROM probe_embeddings
+ORDER BY embedding <=> $1::vector
+LIMIT $2
+`, vecStr, topK)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, target, scan_id, category, endpoint, payload, outcome, created_at
+FROM probe_embeddings
+WHERE outcome = $2
+ORDER BY embedding <=> $1::vector
+LIMIT $3
+`, vecStr, outcome, topK)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanProbeRows(rows)
 }
 
 // Close releases the database connection pool.
@@ -143,6 +223,18 @@ func scanMemoryRows(rows *sql.Rows) ([]FindingMemory, error) {
 	for rows.Next() {
 		var m FindingMemory
 		if err := rows.Scan(&m.ID, &m.Target, &m.ScanID, &m.Category, &m.Title, &m.Severity, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func scanProbeRows(rows *sql.Rows) ([]ProbeMemory, error) {
+	var out []ProbeMemory
+	for rows.Next() {
+		var m ProbeMemory
+		if err := rows.Scan(&m.ID, &m.Target, &m.ScanID, &m.Category, &m.Endpoint, &m.Payload, &m.Outcome, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

@@ -33,6 +33,24 @@ type FindingMemory struct {
 	CreatedAt time.Time
 }
 
+// ProbeMemory is an episodic memory entry for a single probe outcome.
+// Storing probe-level memories lets the platform learn which probe
+// strategies work on similar targets, not just which findings were
+// confirmed.
+type ProbeMemory struct {
+	// ID is stable: SHA-like derived from target+category+payload.
+	ID       string
+	Target   string
+	ScanID   string
+	Category string
+	Endpoint string
+	Payload  string
+	Outcome  string // "confirmed", "waf_blocked", "near_miss", "no_signal", etc.
+	// Embedding is the 64-dimensional vector for similarity search.
+	Embedding []float32
+	CreatedAt time.Time
+}
+
 // Store is the interface for the episodic memory backend.
 type Store interface {
 	// UpsertFinding stores or updates a finding embedding.  The ID field
@@ -46,6 +64,14 @@ type Store interface {
 	// SearchByTarget returns the most recent topK findings for a given
 	// target, ordered by created_at descending.
 	SearchByTarget(ctx context.Context, target string, topK int) ([]FindingMemory, error)
+
+	// UpsertProbe stores or updates a probe memory.
+	UpsertProbe(ctx context.Context, mem ProbeMemory) error
+
+	// SearchSimilarProbes returns the topK most similar ProbeMemory entries
+	// to the given embedding, optionally filtered to a specific outcome.
+	// Pass outcome="" to return all outcomes.
+	SearchSimilarProbes(ctx context.Context, embedding []float32, outcome string, topK int) ([]ProbeMemory, error)
 
 	// Close releases underlying resources.
 	Close() error
