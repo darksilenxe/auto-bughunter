@@ -28,6 +28,8 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/attackgraph"
 	"auto-bughunter/backend/internal/knowledge"
+	"auto-bughunter/backend/internal/mcp"
+	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
@@ -82,7 +84,8 @@ type Server struct {
 	eventBus                   *EventBus
 	oast                       *oast.Service
 	attackGraphDB              AttackGraphStore
-	memoryStore                vectorMemoryStore
+	memoryStore                memory.Store
+	mcpServer                  *mcp.Server
 	apiRateLimiter             *apiRateLimiter
 	defaultMinROI              float64
 	campaignPoll               time.Duration
@@ -222,31 +225,9 @@ func (s *Server) persistAttackGraph(scanID, target string, graph *model.AttackGr
 	return s.attackGraphDB.SaveAttackGraph(ctx, scanID, target, graph)
 }
 
-// SetVectorMemory attaches an episodic vector memory store.  Nil is safe and
+// SetVectorMemory attaches an episodic vector memory store. Nil is safe and
 // disables the feature.
-func (s *Server) SetVectorMemory(store vectorMemoryStore) { s.memoryStore = store }
-
-// vectorMemoryStore is a local interface alias for memory.Store so that the
-// api package can reference the memory package without creating a hard build
-// dependency in test-only code paths.
-type vectorMemoryStore interface {
-	UpsertFinding(ctx context.Context, mem VectorMemoryFinding) error
-	SearchByTarget(ctx context.Context, target string, topK int) ([]VectorMemoryFinding, error)
-	Close() error
-}
-
-// VectorMemoryFinding mirrors memory.FindingMemory for the purposes of the
-// api layer.  The adapter in main.go wraps the concrete memory.Store behind
-// this interface.
-type VectorMemoryFinding struct {
-	ID        string
-	Target    string
-	ScanID    string
-	Category  string
-	Title     string
-	Severity  string
-	Embedding []float32
-}
+func (s *Server) SetVectorMemory(store memory.Store) { s.memoryStore = store }
 
 type AttackGraphStore interface {
 	SaveAttackGraph(ctx context.Context, scanID, target string, graph *model.AttackGraphData) error
@@ -414,6 +395,10 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 		cancelFuncs:                map[string]context.CancelFunc{},
 	}
+	s.mcpServer = mcp.NewServer(s.aiClient)
+	s.mcpServer.SetContextProvider(func() []mcp.Resource {
+		return s.buildMCPResources()
+	})
 	// Wire the proxy store into the scanner so that all outbound HTTP
 	// requests made during scans are captured and shown in the Network Graph.
 	if proxyStore != nil {
@@ -429,6 +414,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/scan", s.handleCreateScan)
 	mux.HandleFunc("/api/scan/", s.handleScanOrEvents)
 	mux.HandleFunc("/api/scans", s.handleListScans)
+	mux.Handle("/api/mcp", s.mcpServer)
+	mux.Handle("/api/mcp/", s.mcpServer)
 	// Proxy management endpoints.
 	mux.HandleFunc("/api/proxy/requests", s.handleProxyRequests)
 	mux.HandleFunc("/api/proxy/requests/", s.handleGetProxyRequest)
@@ -469,6 +456,54 @@ func (s *Server) Routes() http.Handler {
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))
+}
+
+func (s *Server) buildMCPResources() []mcp.Resource {
+	return []mcp.Resource{
+		{
+			URI:         "auto-bughunter://findings/recent",
+			Name:        "Recent Findings",
+			Description: "Most recent confirmed findings from active scans",
+			MimeType:    "application/json",
+			Text:        s.recentFindingsJSON(),
+		},
+	}
+}
+
+func (s *Server) recentFindingsJSON() string {
+	if s == nil || s.repo == nil {
+		return "[]"
+	}
+	ctx, cancel := s.persistenceContext()
+	defer cancel()
+	jobs, err := s.repo.ListCompletedJobs(ctx, 5)
+	if err != nil || len(jobs) == 0 {
+		return "[]"
+	}
+	job := jobs[0]
+	if job == nil || len(job.Findings) == 0 {
+		return "[]"
+	}
+	findings := job.Findings
+	if len(findings) > 20 {
+		findings = findings[:20]
+	}
+	type summary struct {
+		ID       string         `json:"id"`
+		Title    string         `json:"title"`
+		Category string         `json:"category"`
+		Severity model.Severity `json:"severity"`
+		URL      string         `json:"url,omitempty"`
+	}
+	out := make([]summary, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, summary{ID: f.ID, Title: f.Title, Category: f.Category, Severity: f.Severity, URL: f.AffectedURL})
+	}
+	blob, err := json.Marshal(out)
+	if err != nil {
+		return "[]"
+	}
+	return string(blob)
 }
 
 // withRecovery wraps every HTTP handler in a deferred recover so that panics
@@ -3187,8 +3222,8 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			}
 			return roundTo2(float64(shadowAligned) / float64(shadowSamples))
 		}(),
-		ShadowAlignmentByCategory: shadowAlignmentByCategory,
-		ShadowSamples:             shadowSamples,
+		ShadowAlignmentByCategory:   shadowAlignmentByCategory,
+		ShadowSamples:               shadowSamples,
 		VerifiedFindingsSampled:     verifiedSampled,
 		StrictReportingSuppressed:   strictSuppressed,
 		StrictReportingScansSampled: strictScans,
@@ -4590,6 +4625,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		AutonomyMemory: autonomyMemory,
 		Emit:           emit,
 		ProbeRecorder:  s.repo,
+		MemoryStore:    s.memoryStore,
 	}
 	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
@@ -4670,6 +4706,9 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 // the findings observed so far. Otherwise it falls back to the static
 // registry order so the historical behavior is preserved exactly.
 func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent.AgentOutput, []model.Finding, error) {
+	if input.SharedScanContext == nil {
+		input.SharedScanContext = agent.NewSharedScanContext()
+	}
 	if input.Options.AutonomyEmergencyStop {
 		return nil, nil, errors.New("autonomy emergency stop is enabled")
 	}
@@ -6645,7 +6684,7 @@ func (s *Server) upsertFindingMemories(scanID, target string, fs []model.Finding
 		sum := sha256.Sum256([]byte(scanID + ":" + f.ID))
 		id := fmt.Sprintf("%x", sum[:8]) // 16-char hex prefix is collision-safe for this use
 		text := f.Category + " " + f.Title + " " + string(f.Severity)
-		mem := VectorMemoryFinding{
+		mem := memory.FindingMemory{
 			ID:        id,
 			Target:    target,
 			ScanID:    scanID,

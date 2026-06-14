@@ -62,8 +62,9 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 
 	var parsed struct {
 		Agents []struct {
-			Name   string `json:"name"`
-			Reason string `json:"reason"`
+			Name          string `json:"name"`
+			Reason        string `json:"reason"`
+			GoalRationale string `json:"goalRationale"`
 		} `json:"agents"`
 		Done bool `json:"done"`
 	}
@@ -78,8 +79,9 @@ func (c *Client) Plan(ctx context.Context, target string, findings []any, histor
 			continue
 		}
 		specs = append(specs, map[string]string{
-			"name":   name,
-			"reason": strings.TrimSpace(a.Reason),
+			"name":          name,
+			"reason":        strings.TrimSpace(a.Reason),
+			"goalRationale": strings.TrimSpace(a.GoalRationale),
 		})
 	}
 	return specs, parsed.Done, nil

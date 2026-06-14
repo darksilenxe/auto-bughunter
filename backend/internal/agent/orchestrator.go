@@ -61,6 +61,9 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 	if o == nil || o.Planner == nil || o.Factory == nil {
 		return nil, nil, fmt.Errorf("orchestrator not configured")
 	}
+	if input.SharedScanContext == nil {
+		input.SharedScanContext = NewSharedScanContext()
+	}
 
 	outputs := make([]AgentOutput, 0)
 	allFindings := make([]model.Finding, 0)
@@ -295,6 +298,11 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 			}
 			outputs = append(outputs, output)
 			allFindings = append(allFindings, output.Findings...)
+			if input.SharedScanContext != nil {
+				for _, ep := range input.SharedScanContext.GetEndpoints() {
+					input.Options.SeedRuntimeEndpoints = appendUnique(input.Options.SeedRuntimeEndpoints, ep)
+				}
+			}
 			delete(forcePending, output.AgentName)
 		}
 

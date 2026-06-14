@@ -156,7 +156,7 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		findings = append(findings, entry)
 	}
 
-	historySummary := make([]map[string]string, 0, len(history))
+	historySummary := make([]map[string]string, 0, len(history)+1)
 	stats := computeAgentRunStats(history)
 	for _, h := range history {
 		historySummary = append(historySummary, map[string]string{
@@ -168,6 +168,16 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 			"novelty":    itoa(stats[h.AgentName].NovelFindings),
 			"durationMs": itoa(int(h.DurationMs)),
 		})
+	}
+	if input.SharedScanContext != nil {
+		if summary := strings.TrimSpace(input.SharedScanContext.DiscoverySummary()); summary != "" {
+			historySummary = append(historySummary, map[string]string{
+				"agent":      "shared_scan_context",
+				"status":     "context",
+				"findings":   "0",
+				"blackboard": summary,
+			})
+		}
 	}
 
 	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals, input.Options.PolicyPack)
@@ -354,11 +364,11 @@ func buildBlockedAgents(stats map[string]agentRunStats, memory model.AutonomyMem
 func unblockForHighPayoutFindings(blocked map[string]bool, findings []model.Finding) {
 	// Maps goal → agents that should be unblocked to pursue it.
 	goalAgents := map[string][]string{
-		"account_takeover":       {"auth_bypass", "pentest_loop", "adaptive_probe"},
-		"auth_bypass":            {"auth_bypass", "pentest_loop"},
-		"ssrf_internal_access":   {"ssrf", "pentest_loop"},
-		"cross_tenant_access":    {"access_control", "pentest_loop"},
-		"payment_abuse":          {"input_validation", "pentest_loop"},
+		"account_takeover":        {"auth_bypass", "pentest_loop", "adaptive_probe"},
+		"auth_bypass":             {"auth_bypass", "pentest_loop"},
+		"ssrf_internal_access":    {"ssrf", "pentest_loop"},
+		"cross_tenant_access":     {"access_control", "pentest_loop"},
+		"payment_abuse":           {"input_validation", "pentest_loop"},
 		"sensitive_data_exposure": {"information_disclosure", "scanning"},
 	}
 	for _, f := range findings {
@@ -553,9 +563,9 @@ func contextPreferredAgents(target string, findings []model.Finding, available [
 
 		// Promote agents covering high-payout categories seen on this target.
 		catToAgent := map[string][]string{
-			"access_control":    {"access_control", "auth_bypass"},
-			"injection":         {"input_validation", "scanning"},
-			"ssrf":              {"ssrf"},
+			"access_control":         {"access_control", "auth_bypass"},
+			"injection":              {"input_validation", "scanning"},
+			"ssrf":                   {"ssrf"},
 			"information_disclosure": {"information_disclosure", "analysis"},
 		}
 		for _, cat := range roiProfile.HighPayoutCategories {

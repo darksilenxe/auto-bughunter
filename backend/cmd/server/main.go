@@ -261,10 +261,10 @@ func main() {
 		if pvErr != nil {
 			log.Printf("pgvector memory unavailable (%v) — falling back to in-process local store", pvErr)
 			localMem := memory.NewLocalStore()
-			server.SetVectorMemory(&localMemoryAdapter{localMem})
+			server.SetVectorMemory(localMem)
 		} else {
 			log.Printf("pgvector episodic memory initialised (DSN=%s)", maskDSN(memDSN))
-			server.SetVectorMemory(&pgvectorMemoryAdapter{pvStore})
+			server.SetVectorMemory(pvStore)
 			defer func() {
 				_ = pvStore.Close()
 			}()
@@ -358,62 +358,6 @@ func getint(key string, fallback int) int {
 	}
 	return n
 }
-
-// ---------------------------------------------------------------------------
-// Vector memory adapters bridge memory.Store → api.vectorMemoryStore without
-// creating an interface cycle.  The api package defines vectorMemoryFinding;
-// these adapters translate to/from the canonical memory.FindingMemory.
-// ---------------------------------------------------------------------------
-
-type pgvectorMemoryAdapter struct{ s *memory.PgvectorStore }
-
-func (a *pgvectorMemoryAdapter) UpsertFinding(ctx context.Context, f api.VectorMemoryFinding) error {
-	return a.s.UpsertFinding(ctx, memory.FindingMemory{
-		ID: f.ID, Target: f.Target, ScanID: f.ScanID, Category: f.Category,
-		Title: f.Title, Severity: f.Severity, Embedding: f.Embedding,
-	})
-}
-
-func (a *pgvectorMemoryAdapter) SearchByTarget(ctx context.Context, target string, topK int) ([]api.VectorMemoryFinding, error) {
-	rows, err := a.s.SearchByTarget(ctx, target, topK)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]api.VectorMemoryFinding, len(rows))
-	for i, r := range rows {
-		out[i] = api.VectorMemoryFinding{
-			ID: r.ID, Target: r.Target, ScanID: r.ScanID, Category: r.Category,
-			Title: r.Title, Severity: r.Severity, Embedding: r.Embedding,
-		}
-	}
-	return out, nil
-}
-func (a *pgvectorMemoryAdapter) Close() error { return a.s.Close() }
-
-type localMemoryAdapter struct{ s *memory.LocalStore }
-
-func (a *localMemoryAdapter) UpsertFinding(ctx context.Context, f api.VectorMemoryFinding) error {
-	return a.s.UpsertFinding(ctx, memory.FindingMemory{
-		ID: f.ID, Target: f.Target, ScanID: f.ScanID, Category: f.Category,
-		Title: f.Title, Severity: f.Severity, Embedding: f.Embedding,
-	})
-}
-
-func (a *localMemoryAdapter) SearchByTarget(ctx context.Context, target string, topK int) ([]api.VectorMemoryFinding, error) {
-	rows, err := a.s.SearchByTarget(ctx, target, topK)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]api.VectorMemoryFinding, len(rows))
-	for i, r := range rows {
-		out[i] = api.VectorMemoryFinding{
-			ID: r.ID, Target: r.Target, ScanID: r.ScanID, Category: r.Category,
-			Title: r.Title, Severity: r.Severity, Embedding: r.Embedding,
-		}
-	}
-	return out, nil
-}
-func (a *localMemoryAdapter) Close() error { return a.s.Close() }
 
 // maskDSN redacts the password from a PostgreSQL DSN for safe logging.
 func maskDSN(dsn string) string {

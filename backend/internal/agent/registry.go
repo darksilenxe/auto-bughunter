@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
 )
@@ -69,6 +70,14 @@ type AgentInput struct {
 	// first-class ML training data alongside finding-level feedback.
 	// Calls are fire-and-forget; a nil recorder is silently ignored.
 	ProbeRecorder ProbeRecorder
+	// SharedScanContext is a thread-safe blackboard shared across all agent
+	// rounds in one scan. Agents read accumulated discoveries and write their
+	// own observations so subsequent agents can bias their strategy accordingly.
+	SharedScanContext *SharedScanContext
+	// MemoryStore is an optional episodic memory backend. When non-nil, agents
+	// that execute probes query it for prior outcomes on similar targets and
+	// upsert confirmed results so the platform learns in real time.
+	MemoryStore memory.Store
 }
 
 type AgentOutput struct {
@@ -83,6 +92,17 @@ type AgentOutput struct {
 	TimedOut    bool
 	Error       string
 	Telemetry   model.AgentRunTelemetry
+	// ReasoningTrace captures the chain-of-thought steps the agent went through.
+	// Each step has Thought (the AI's internal reasoning), Evidence (what signals
+	// it observed), and Conclusion (what it decided and why).
+	ReasoningTrace []ReasoningStep
+}
+
+// ReasoningStep is one step in an agent's chain-of-thought trace.
+type ReasoningStep struct {
+	Thought    string `json:"thought"`
+	Evidence   string `json:"evidence,omitempty"`
+	Conclusion string `json:"conclusion"`
 }
 
 // Spawner is an optional callback that the registry calls during autonomous

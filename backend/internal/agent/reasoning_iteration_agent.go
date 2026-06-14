@@ -6,14 +6,15 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scanner"
 )
 
 const (
-	defaultReasoningRounds      = 4
-	maxRefinedHintsPerRound     = 3
-	coverageExhaustedThreshold  = 6 // stop when this many categories confirmed
+	defaultReasoningRounds     = 4
+	maxRefinedHintsPerRound    = 3
+	coverageExhaustedThreshold = 6 // stop when this many categories confirmed
 )
 
 // allProbeCategories is the full set of vulnerability categories the
@@ -44,6 +45,7 @@ var allProbeCategories = []string{
 type ReasoningIterationAgent struct {
 	aiClient    *ai.Client
 	scanService *scanner.Service
+	memStore    memory.Store
 	MaxRounds   int
 	enabled     bool
 }
@@ -62,6 +64,12 @@ func NewReasoningIterationAgent(aiClient *ai.Client, scanService *scanner.Servic
 	}
 }
 
+// SetMemoryStore attaches an episodic memory store used to recall and learn
+// from prior probe outcomes.
+func (a *ReasoningIterationAgent) SetMemoryStore(s memory.Store) {
+	a.memStore = s
+}
+
 func (a *ReasoningIterationAgent) Name() string  { return "reasoning_iteration" }
 func (a *ReasoningIterationAgent) Enabled() bool { return a.enabled }
 
@@ -78,6 +86,20 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 	if a.aiClient == nil || a.scanService == nil {
 		output.DebugNotes = "ReasoningIterationAgent: skipped — aiClient or scanService not configured"
 		return output, nil
+	}
+
+	store := a.memStore
+	if store == nil {
+		store = input.MemoryStore
+	}
+	if store != nil {
+		if priors, err := store.SearchSimilarProbes(ctx, memory.EncodeMulti(input.Target), "confirmed", 5); err == nil && len(priors) > 0 {
+			summary := buildPriorProbeSummary(priors)
+			if input.SharedScanContext != nil {
+				input.SharedScanContext.SetNote(a.Name(), "prior_probes: "+summary)
+			}
+			output.Metadata["prior_probe_context"] = summary
+		}
 	}
 
 	coverage := NewCoverageTracker()
@@ -162,11 +184,11 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 			AgentName: a.Name(),
 			Message:   fmt.Sprintf("[reasoning r%d] Testing %d hypotheses — focus: %s", round, len(hypotheses), strings.Join(focusCategories, ", ")),
 			Metadata: map[string]string{
-				"round":        itoa(round),
-				"status":       "probing",
-				"hypotheses":   itoa(len(hypotheses)),
-				"focusAreas":   strings.Join(focusCategories, ","),
-				"totalTried":   itoa(coverage.TotalTried()),
+				"round":          itoa(round),
+				"status":         "probing",
+				"hypotheses":     itoa(len(hypotheses)),
+				"focusAreas":     strings.Join(focusCategories, ","),
+				"totalTried":     itoa(coverage.TotalTried()),
 				"totalConfirmed": itoa(coverage.TotalConfirmed()),
 			},
 		})
@@ -227,6 +249,23 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 		if len(roundFindings) > 0 {
 			novelRounds++
 		}
+		if store != nil {
+			for _, f := range roundFindings {
+				f := f
+				go func() {
+					emb := memory.EncodeMulti(input.Target, f.Category, f.Title)
+					_ = store.UpsertFinding(context.Background(), memory.FindingMemory{
+						ID:        f.ID,
+						Target:    input.Target,
+						ScanID:    input.ScanID,
+						Category:  f.Category,
+						Title:     f.Title,
+						Severity:  string(f.Severity),
+						Embedding: emb,
+					})
+				}()
+			}
+		}
 
 		// ── Step 4: exploit chain analysis ───────────────────────────────
 		chainInput := append(accumulated, roundFindings...)
@@ -255,6 +294,14 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 		// read the actual HTTP observations (WAF blocks, near-misses, server
 		// errors) and explain WHY another iteration is or isn't warranted.
 		coverageMap := coverage.CoverageSummary()
+		if input.SharedScanContext != nil {
+			if stack := input.SharedScanContext.GetTechStack(); len(stack) > 0 {
+				coverageMap["shared_tech_stack"] = stack
+			}
+			if eps := input.SharedScanContext.GetEndpoints(); len(eps) > 0 {
+				coverageMap["shared_endpoints"] = eps
+			}
+		}
 		reflection := a.aiClient.Reflect(
 			ctx,
 			input.Target,

@@ -83,6 +83,32 @@ func (a *JavaScriptSASTAgent) Run(ctx context.Context, input AgentInput) (AgentO
 		output.Metadata["sast_vuln_categories"] = strings.Join(result.VulnCategories, ",")
 	}
 
+	if input.SharedScanContext != nil {
+		if routes := output.Metadata["discovered_routes"]; routes != "" {
+			for _, r := range strings.Split(routes, ",") {
+				r = strings.TrimSpace(r)
+				if r == "" {
+					continue
+				}
+				input.SharedScanContext.AddEndpoint(r)
+				input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+					Kind:        DiscoveryAPIRoute,
+					Value:       r,
+					SourceAgent: a.Name(),
+					Confidence:  0.85,
+				}, input.Emit)
+			}
+		}
+		if cats := output.Metadata["sast_vuln_categories"]; cats != "" {
+			input.SharedScanContext.AddDiscovery(DiscoveryEvent{
+				Kind:        DiscoveryGeneric,
+				Value:       "sast_categories=" + cats,
+				SourceAgent: a.Name(),
+				Confidence:  0.8,
+			}, input.Emit)
+		}
+	}
+
 	output.DebugNotes = fmt.Sprintf(
 		"JavaScript SAST analyzed %d bundle(s): %d finding(s) (%d code defect(s)), %d code-discovered route(s), categories=[%s].",
 		result.ScriptsAnalyzed, len(result.Findings), bugCount, len(result.Routes), strings.Join(result.VulnCategories, ","),
