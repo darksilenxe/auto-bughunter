@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/agent"
 	"auto-bughunter/backend/internal/model"
@@ -55,5 +56,31 @@ func TestMergeAutonomyMemoryAppliesOperatorFeedback(t *testing.T) {
 	}
 	if stat.OperatorRejections != 1 {
 		t.Fatalf("expected 1 rejection, got %d", stat.OperatorRejections)
+	}
+}
+
+func TestMergeAutonomyMemoryIgnoresUnknownAgentFeedback(t *testing.T) {
+	initial := model.AutonomyMemory{
+		AgentStats: map[string]model.AutonomyAgentStat{
+			"agent-a": {Runs: 2},
+		},
+	}
+	merged := mergeAutonomyMemory(initial, nil, 30, []model.ReportFeedback{
+		{Category: "autonomy-action", Outcome: "accepted", Notes: "agent=non-existent"},
+	})
+	if _, ok := merged.AgentStats["non-existent"]; ok {
+		t.Fatal("expected unknown agent feedback to be ignored")
+	}
+}
+
+func TestFilterRecentMemoryFeedbackHonorsRetentionWindow(t *testing.T) {
+	now := time.Now().UTC()
+	items := []model.ReportFeedback{
+		{FindingID: "recent", CreatedAt: now.Add(-24 * time.Hour)},
+		{FindingID: "stale", CreatedAt: now.Add(-40 * 24 * time.Hour)},
+	}
+	out := filterRecentMemoryFeedback(items, 30)
+	if len(out) != 1 || out[0].FindingID != "recent" {
+		t.Fatalf("expected only recent feedback to remain, got %+v", out)
 	}
 }

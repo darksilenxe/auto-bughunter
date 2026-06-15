@@ -252,6 +252,45 @@ func TestAllAgentRunsFailed(t *testing.T) {
 	}
 }
 
+func TestAutonomyFallbackReason(t *testing.T) {
+	if got := autonomyFallbackReason(nil, []agent.AgentOutput{{Status: "completed"}}, true); got != "" {
+		t.Fatalf("expected no fallback reason for successful run, got %q", got)
+	}
+	if got := autonomyFallbackReason(context.DeadlineExceeded, nil, true); got != "planner_error" {
+		t.Fatalf("expected planner_error fallback reason, got %q", got)
+	}
+	if got := autonomyFallbackReason(nil, []agent.AgentOutput{{Status: "error"}}, true); got != "all_agent_runs_failed" {
+		t.Fatalf("expected all_agent_runs_failed fallback reason, got %q", got)
+	}
+	if got := autonomyFallbackReason(context.DeadlineExceeded, nil, false); got != "" {
+		t.Fatalf("expected fallback disabled to suppress fallback reason, got %q", got)
+	}
+}
+
+func TestAutonomyOutcomeScore(t *testing.T) {
+	high := autonomyOutcomeScore(&model.ScanJob{
+		Status: "completed",
+		AgentRuns: []model.AgentRunTelemetry{
+			{Status: "completed"},
+		},
+		Findings: []model.Finding{
+			{Confidence: 0.9, Severity: model.SeverityHigh},
+		},
+	})
+	low := autonomyOutcomeScore(&model.ScanJob{
+		Status: "failed",
+		AgentRuns: []model.AgentRunTelemetry{
+			{Status: "failed", TimedOut: true},
+		},
+	})
+	if high <= low {
+		t.Fatalf("expected successful scan score > failed scan score, got high=%.2f low=%.2f", high, low)
+	}
+	if high <= 0 || high > 1 || low < 0 || low > 1 {
+		t.Fatalf("expected normalized scores in [0,1], got high=%.2f low=%.2f", high, low)
+	}
+}
+
 func TestNormalizeAutomationMode_AcceptsCanary(t *testing.T) {
 	if got := normalizeAutomationMode("canary"); got != "canary" {
 		t.Fatalf("expected canary automation mode, got %s", got)
