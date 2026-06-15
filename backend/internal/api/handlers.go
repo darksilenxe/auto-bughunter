@@ -3067,9 +3067,15 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	jobs, _ := s.repo.ListCompletedJobs(r.Context(), 1000)
 	strategyROI := map[string]float64{}
 	strategyCounts := map[string]int{}
+	outcomeByStrategy := map[string]float64{}
+	outcomeSamplesByStrategy := map[string]int{}
 	canaryByPolicy := map[string]int{}
 	failedRuns := 0
 	totalRuns := 0
+	fallbackRuns := 0
+	fallbackRecoveredRuns := 0
+	outcomeScoreTotal := 0.0
+	outcomeScoreSamples := 0
 	verifiedSampled := 0
 	rejectedCount := 0
 	verifiedByCategory := map[string]int{}
@@ -3087,11 +3093,22 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		if job.Dashboard != nil {
 			strategyROI[strategy] += maxFloat(0, job.Dashboard.ExpectedROIUSD)
 		}
+		outcomeScore := autonomyOutcomeScore(job)
+		outcomeByStrategy[strategy] += outcomeScore
+		outcomeSamplesByStrategy[strategy]++
+		outcomeScoreTotal += outcomeScore
+		outcomeScoreSamples++
 		strategyCounts[strategy]++
 		for _, run := range job.AgentRuns {
 			totalRuns++
 			if strings.EqualFold(strings.TrimSpace(run.Status), "failed") || run.TimedOut {
 				failedRuns++
+			}
+			if run.Metadata != nil && strings.EqualFold(strings.TrimSpace(run.Metadata["autonomy_fallback"]), "static") {
+				fallbackRuns++
+				if strings.EqualFold(strings.TrimSpace(run.Status), "completed") && !run.TimedOut && strings.TrimSpace(run.Error) == "" {
+					fallbackRecoveredRuns++
+				}
 			}
 		}
 		if job.Options.StrictReporting {
@@ -3186,6 +3203,11 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			strategyROI[name] = roundTo2(strategyROI[name] / float64(total))
 		}
 	}
+	for name, total := range outcomeSamplesByStrategy {
+		if total > 0 {
+			outcomeByStrategy[name] = roundTo2(outcomeByStrategy[name] / float64(total))
+		}
+	}
 	avgLag := 0.0
 	if lagCount > 0 {
 		avgLag = lagSum / float64(lagCount)
@@ -3210,6 +3232,24 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	}
 	if toolFailureRate > floatFromEnv("AUTOMATION_ALERT_TOOL_FAILURE_RATE", 0.25) {
 		alerts = append(alerts, "tool failure rate exceeded threshold")
+	}
+	avgOutcomeScore := 0.0
+	if outcomeScoreSamples > 0 {
+		avgOutcomeScore = outcomeScoreTotal / float64(outcomeScoreSamples)
+	}
+	if avgOutcomeScore > 0 && avgOutcomeScore < floatFromEnv("AUTOMATION_ALERT_AUTONOMY_OUTCOME_SCORE", 0.45) {
+		alerts = append(alerts, "autonomy outcome score dropped below threshold")
+	}
+	fallbackRecoveryRate := 0.0
+	if fallbackRuns > 0 {
+		fallbackRecoveryRate = float64(fallbackRecoveredRuns) / float64(fallbackRuns)
+	}
+	if fallbackRuns > 0 && fallbackRecoveryRate < floatFromEnv("AUTOMATION_ALERT_FALLBACK_RECOVERY_RATE", 0.5) {
+		alerts = append(alerts, "autonomy fallback recovery rate below threshold")
+	}
+	killSwitchActive := boolFromEnv("AUTONOMY_GLOBAL_KILL_SWITCH", false)
+	if killSwitchActive {
+		alerts = append(alerts, "autonomy global kill switch is active")
 	}
 	writeJSON(w, http.StatusOK, model.AutomationMetrics{
 		GeneratedAt:           now,
@@ -3250,10 +3290,57 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			return roundTo2(float64(strictSuppressed) / float64(strictScans))
 		}(),
 		Extra: map[string]float64{
-			"lagSamples": float64(lagCount),
-			"agentRuns":  float64(totalRuns),
+			"lagSamples":                   float64(lagCount),
+			"agentRuns":                    float64(totalRuns),
+			"autonomyOutcomeScore":         roundTo2(avgOutcomeScore),
+			"autonomyFallbackRuns":         float64(fallbackRuns),
+			"autonomyFallbackRecoveryRate": roundTo2(fallbackRecoveryRate),
+			"autonomyKillSwitchActive": func() float64 {
+				if killSwitchActive {
+					return 1
+				}
+				return 0
+			}(),
 		},
 	})
+}
+
+func autonomyOutcomeScore(job *model.ScanJob) float64 {
+	if job == nil {
+		return 0
+	}
+	completion := 0.0
+	switch strings.ToLower(strings.TrimSpace(job.Status)) {
+	case "completed":
+		completion = 1
+	case "cancelled":
+		completion = 0.2
+	}
+	runSuccess := 0.0
+	if len(job.AgentRuns) == 0 {
+		if completion > 0 {
+			runSuccess = completion
+		}
+	} else {
+		success := 0
+		for _, run := range job.AgentRuns {
+			if strings.EqualFold(strings.TrimSpace(run.Status), "completed") && !run.TimedOut && strings.TrimSpace(run.Error) == "" {
+				success++
+			}
+		}
+		runSuccess = float64(success) / float64(len(job.AgentRuns))
+	}
+	highSignal := 0
+	for _, finding := range job.Findings {
+		if finding.Confidence >= 0.75 || finding.Severity == model.SeverityHigh {
+			highSignal++
+		}
+	}
+	signalQuality := 0.0
+	if len(job.Findings) > 0 {
+		signalQuality = float64(highSignal) / float64(len(job.Findings))
+	}
+	return clampFloat(completion*0.5+runSuccess*0.3+signalQuality*0.2, 0, 1)
 }
 
 func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Request) {
@@ -4725,6 +4812,9 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	if input.SharedScanContext == nil {
 		input.SharedScanContext = agent.NewSharedScanContext()
 	}
+	if boolFromEnv("AUTONOMY_GLOBAL_KILL_SWITCH", false) {
+		return nil, nil, errors.New("autonomy global kill switch is enabled")
+	}
 	if input.Options.AutonomyEmergencyStop {
 		return nil, nil, errors.New("autonomy emergency stop is enabled")
 	}
@@ -4789,10 +4879,51 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 	for _, o := range outputs {
 		metrics.AgentRun(o.AgentName)
 	}
-	if err == nil && input.Options.AutonomyFallbackRerun && allAgentRunsFailed(outputs) {
-		return s.agentRegistry.RunAll(ctx, input)
+	fallbackReason := autonomyFallbackReason(err, outputs, input.Options.AutonomyFallbackRerun)
+	if fallbackReason != "" {
+		fallbackOutputs, fallbackFindings, fallbackErr := s.agentRegistry.RunAll(ctx, input)
+		annotateAutonomyFallback(fallbackOutputs, fallbackReason)
+		for _, o := range fallbackOutputs {
+			metrics.AgentRun(o.AgentName)
+		}
+		if fallbackErr == nil {
+			return fallbackOutputs, fallbackFindings, nil
+		}
+		if err == nil {
+			err = fallbackErr
+		} else {
+			err = fmt.Errorf("%w; static fallback rerun failed: %v", err, fallbackErr)
+		}
+		return fallbackOutputs, fallbackFindings, err
 	}
 	return outputs, findings, err
+}
+
+func autonomyFallbackReason(runErr error, outputs []agent.AgentOutput, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	if runErr != nil {
+		return "planner_error"
+	}
+	if allAgentRunsFailed(outputs) {
+		return "all_agent_runs_failed"
+	}
+	return ""
+}
+
+func annotateAutonomyFallback(outputs []agent.AgentOutput, reason string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	for i := range outputs {
+		if outputs[i].Metadata == nil {
+			outputs[i].Metadata = map[string]string{}
+		}
+		outputs[i].Metadata["autonomy_fallback"] = "static"
+		outputs[i].Metadata["autonomy_fallback_reason"] = reason
+	}
 }
 
 func shouldEnableCanaryAutonomy(target string, canaryPercent int) bool {
@@ -5620,6 +5751,7 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	if retentionDays <= 0 {
 		retentionDays = intFromEnv("AUTONOMY_MEMORY_RETENTION_DAYS", 30)
 	}
+	feedback = filterRecentMemoryFeedback(feedback, retentionDays)
 	if retentionDays > 0 && !memory.LastRunAt.IsZero() {
 		expiry := memory.LastRunAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
 		if time.Now().UTC().After(expiry) {
@@ -5735,6 +5867,11 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 		if agentName == "" {
 			continue
 		}
+		if _, ok := memory.AgentStats[agentName]; !ok {
+			// Ignore feedback that references unknown/unseen agents so stale or
+			// malformed operator annotations cannot poison memory.
+			continue
+		}
 		stat := memory.AgentStats[agentName]
 		switch strings.ToLower(strings.TrimSpace(item.Outcome)) {
 		case "accepted":
@@ -5775,6 +5912,34 @@ func mergeAutonomyMemory(memory model.AutonomyMemory, outputs []agent.AgentOutpu
 	memory.SuppressedAgents = limitStrings(suppressed, 8)
 	memory.RetentionAppliedAt = time.Now().UTC()
 	return memory
+}
+
+func filterRecentMemoryFeedback(feedback []model.ReportFeedback, retentionDays int) []model.ReportFeedback {
+	if len(feedback) == 0 {
+		return nil
+	}
+	if retentionDays <= 0 {
+		return feedback
+	}
+	now := time.Now().UTC()
+	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	out := make([]model.ReportFeedback, 0, len(feedback))
+	for _, item := range feedback {
+		if item.CreatedAt.IsZero() {
+			out = append(out, item)
+			continue
+		}
+		ts := item.CreatedAt.UTC()
+		if ts.Before(cutoff) {
+			continue
+		}
+		if ts.After(now.Add(24 * time.Hour)) {
+			// Ignore suspiciously future-dated feedback entries.
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func parseOperatorFeedbackAgent(notes string) string {
