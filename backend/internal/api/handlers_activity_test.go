@@ -38,7 +38,14 @@ func TestHandleGetScanActivityRejectsNonGet(t *testing.T) {
 }
 
 func TestHandleGetScanActivityReturnsEmptyArrayWhenNoEvents(t *testing.T) {
-	s := &Server{repo: &activityRepo{events: map[string][]model.ScanEvent{}}}
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{
+				"nosuchid": {ID: "nosuchid", WorkspaceID: "default"},
+			},
+		},
+		events: map[string][]model.ScanEvent{},
+	}}
 	req := authRequest("GET", "/api/scan/nosuchid/activity", nil)
 	rec := httptest.NewRecorder()
 	s.handleGetScanActivity(rec, req)
@@ -62,7 +69,14 @@ func TestHandleGetScanActivityReturnsStoredEvents(t *testing.T) {
 		{Type: model.ScanEventAgentComplete, AgentName: "recon", Message: "done", Timestamp: ts},
 		{Type: model.ScanEventFinding, AgentName: "xss-agent", FindingTitle: "Reflected XSS", Severity: "high", Timestamp: ts},
 	}
-	s := &Server{repo: &activityRepo{events: map[string][]model.ScanEvent{"scan-1": stored}}}
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{
+				"scan-1": {ID: "scan-1", WorkspaceID: "default"},
+			},
+		},
+		events: map[string][]model.ScanEvent{"scan-1": stored},
+	}}
 	req := authRequest("GET", "/api/scan/scan-1/activity", nil)
 	rec := httptest.NewRecorder()
 	s.handleGetScanActivity(rec, req)
@@ -86,7 +100,14 @@ func TestHandleGetScanActivityReturnsStoredEvents(t *testing.T) {
 }
 
 func TestHandleGetScanActivityReturns500OnRepoError(t *testing.T) {
-	s := &Server{repo: &activityRepo{err: fmt.Errorf("db is down")}}
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{
+				"scan-1": {ID: "scan-1", WorkspaceID: "default"},
+			},
+		},
+		err: fmt.Errorf("db is down"),
+	}}
 	req := authRequest("GET", "/api/scan/scan-1/activity", nil)
 	rec := httptest.NewRecorder()
 	s.handleGetScanActivity(rec, req)
@@ -98,10 +119,18 @@ func TestHandleGetScanActivityReturns500OnRepoError(t *testing.T) {
 
 func TestHandleGetScanActivityIsolatesScanIDs(t *testing.T) {
 	ts := time.Now().UTC()
-	s := &Server{repo: &activityRepo{events: map[string][]model.ScanEvent{
-		"scan-A": {{Type: model.ScanEventInfo, Message: "for A", Timestamp: ts}},
-		"scan-B": {{Type: model.ScanEventInfo, Message: "for B", Timestamp: ts}},
-	}}}
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{
+				"scan-A": {ID: "scan-A", WorkspaceID: "default"},
+				"scan-B": {ID: "scan-B", WorkspaceID: "default"},
+			},
+		},
+		events: map[string][]model.ScanEvent{
+			"scan-A": {{Type: model.ScanEventInfo, Message: "for A", Timestamp: ts}},
+			"scan-B": {{Type: model.ScanEventInfo, Message: "for B", Timestamp: ts}},
+		},
+	}}
 
 	for _, tc := range []struct{ id, want string }{
 		{"scan-A", "for A"},
@@ -121,5 +150,44 @@ func TestHandleGetScanActivityIsolatesScanIDs(t *testing.T) {
 		if len(got) != 1 || got[0].Message != tc.want {
 			t.Fatalf("[%s] got %v, want message %q", tc.id, got, tc.want)
 		}
+	}
+}
+
+func TestHandleGetScanActivityReturnsNotFoundWhenScanMissing(t *testing.T) {
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{jobs: map[string]*model.ScanJob{}},
+		events:         map[string][]model.ScanEvent{},
+	}}
+	req := authRequest("GET", "/api/scan/missing/activity", nil)
+	rec := httptest.NewRecorder()
+	s.handleGetScanActivity(rec, req)
+
+	if rec.Code != 404 {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleGetScanActivityRejectsInaccessibleWorkspace(t *testing.T) {
+	s := &Server{repo: &activityRepo{
+		reportTestRepo: reportTestRepo{
+			jobs: map[string]*model.ScanJob{
+				"scan-1": {ID: "scan-1", WorkspaceID: "other-workspace"},
+			},
+		},
+		events: map[string][]model.ScanEvent{},
+	}}
+	req := authRequest("GET", "/api/scan/scan-1/activity", nil)
+	req = req.WithContext(context.WithValue(req.Context(), principalContextKey, principal{
+		KeyID:       "test-key",
+		WorkspaceID: "default",
+		Role:        model.APIKeyRoleAdmin,
+		Name:        "test-admin",
+		SuperAdmin:  false,
+	}))
+	rec := httptest.NewRecorder()
+	s.handleGetScanActivity(rec, req)
+
+	if rec.Code != 403 {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }

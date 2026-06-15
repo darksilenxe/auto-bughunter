@@ -136,6 +136,13 @@ func (s *Server) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runDispatchedAgent(jobID, agentName, target string, options model.ScanOptions) {
 	rawEmit := s.eventBus.EmitterFor(jobID)
 	emit := func(event model.ScanEvent) {
+		if shouldPersistAgentEvent(event.Type) {
+			go func(e model.ScanEvent) {
+				if err := s.repo.SaveAgentEvent(context.Background(), jobID, e); err != nil {
+					log.Printf("agent dispatch: failed to save event for scan %s: %v", jobID, err)
+				}
+			}(event)
+		}
 		rawEmit(event)
 	}
 
