@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useScan } from "../context/ScanContext";
+import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 
 const EVENT_ACCENT = {
   agent_start:    "#4db8ff",
@@ -58,7 +58,11 @@ export default function AgentConsole() {
 
   // Fetch available agents on mount.
   useEffect(() => {
-    fetch("/api/agent/dispatch")
+    const apiKey = getAPIKey();
+    const workspaceID = getWorkspaceID();
+    fetch(`${API_BASE}/api/agent/dispatch?workspaceId=${encodeURIComponent(workspaceID)}`, {
+      headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
+    })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.agents) setAgents(data.agents); })
       .catch(() => {});
@@ -84,9 +88,11 @@ export default function AgentConsole() {
 
     setRunning(true);
     try {
-      const res = await fetch("/api/agent/dispatch", {
+      const apiKey = getAPIKey();
+      const workspaceID = getWorkspaceID();
+      const res = await fetch(`${API_BASE}/api/agent/dispatch?workspaceId=${encodeURIComponent(workspaceID)}`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
         body:    JSON.stringify({ agentName, target: target.trim(), instructions }),
       });
       if (!res.ok) {
@@ -97,7 +103,7 @@ export default function AgentConsole() {
       setJobId(jid);
 
       // Open SSE stream.
-      const es = new EventSource(`/api/scan/${jid}/events`);
+      const es = new EventSource(`${API_BASE}/api/scan/${jid}/events?api_key=${encodeURIComponent(apiKey)}&workspaceId=${encodeURIComponent(workspaceID)}`);
       esRef.current = es;
 
       es.onmessage = (e) => {

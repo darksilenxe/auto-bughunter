@@ -936,15 +936,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	rawEmit := s.eventBus.EmitterFor(id)
 	emit := func(event model.ScanEvent) {
-		if event.Type == model.ScanEventAgentStart ||
-			event.Type == model.ScanEventAgentComplete ||
-			event.Type == model.ScanEventAgentSpawned ||
-			event.Type == model.ScanEventInfo ||
-			event.Type == model.ScanEventReasoningLoop ||
-			event.Type == model.ScanEventCommand ||
-			event.Type == model.ScanEventCommandResult ||
-			event.Type == model.ScanEventFinding ||
-			event.Type == model.ScanEventScreenshot {
+		if shouldPersistAgentEvent(event.Type) {
 			go func(e model.ScanEvent) {
 				if err := s.repo.SaveAgentEvent(context.Background(), id, e); err != nil {
 					log.Printf("failed to save agent event for scan %s: %v", id, err)
@@ -2922,6 +2914,25 @@ func (s *Server) handlePolicyProfileDefaults(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func shouldPersistAgentEvent(eventType model.ScanEventType) bool {
+	switch eventType {
+	case model.ScanEventAgentStart,
+		model.ScanEventAgentComplete,
+		model.ScanEventAgentSpawned,
+		model.ScanEventInfo,
+		model.ScanEventReasoningLoop,
+		model.ScanEventThinking,
+		model.ScanEventDiscovery,
+		model.ScanEventCommand,
+		model.ScanEventCommandResult,
+		model.ScanEventFinding,
+		model.ScanEventScreenshot:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Request) {
@@ -6761,13 +6772,27 @@ func (s *Server) handleGetScanActivity(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	// Extract ID from URL path, e.g., /api/scan/{id}/activity
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+	path := strings.TrimPrefix(r.URL.Path, "/api/scan/")
+	path = strings.TrimSuffix(path, "/activity")
+	id := strings.TrimSpace(path)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
 		return
 	}
-	id := parts[3]
+	job, err := s.repo.GetJob(r.Context(), id)
+	if err != nil || job == nil {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("failed to load scan %s for activity: %v", id, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
 
 	events, err := s.repo.ListAgentEvents(r.Context(), id)
 	if err != nil {
