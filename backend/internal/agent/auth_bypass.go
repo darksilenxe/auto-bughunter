@@ -19,6 +19,15 @@ import (
 // AuthBypassAgent actively tests authentication controls for weaknesses
 // including JWT algorithm confusion, missing/bypassable auth on sensitive
 // endpoints, session fixation hints, and common token manipulation flaws.
+// An AI advisor may reorder or skip entries based on scan context.
+var authBypassChecks = []string{
+	"jwt_alg_none",
+	"jwt_weak_secret",
+	"missing_auth",
+	"session_fixation",
+	"password_reset_flaws",
+}
+
 type AuthBypassAgent struct {
 	enabled bool
 }
@@ -48,14 +57,32 @@ func (a *AuthBypassAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 		},
 	}
 
-	output.Findings = append(output.Findings, testJWTAlgNone(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, testJWTWeakSecret(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, testMissingAuthOnSensitiveEndpoints(ctx, client, input.Target)...)
-	output.Findings = append(output.Findings, testSessionFixation(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, testPasswordResetFlaws(ctx, client, input.Target)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, authBypassChecks)
+
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"jwt_alg_none":         func() []model.Finding { return testJWTAlgNone(ctx, client, input.Target, input.AuthProfile) },
+		"jwt_weak_secret":      func() []model.Finding { return testJWTWeakSecret(ctx, client, input.Target, input.AuthProfile) },
+		"missing_auth":         func() []model.Finding { return testMissingAuthOnSensitiveEndpoints(ctx, client, input.Target) },
+		"session_fixation":     func() []model.Finding { return testSessionFixation(ctx, client, input.Target, input.AuthProfile) },
+		"password_reset_flaws": func() []model.Finding { return testPasswordResetFlaws(ctx, client, input.Target) },
+	}
+
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "Auth bypass testing completed: JWT manipulation, missing auth, session fixation, password reset."
+	output.DebugNotes = "Auth bypass testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 

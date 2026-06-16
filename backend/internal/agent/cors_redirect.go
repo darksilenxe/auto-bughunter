@@ -28,6 +28,14 @@ func (a *CORSRedirectAgent) Enabled() bool {
 	return a.enabled
 }
 
+// corsRedirectChecks is the canonical ordered list of checks this agent
+// performs. An AI advisor may reorder or skip entries based on scan context.
+var corsRedirectChecks = []string{
+	"open_redirect",
+	"cors_misconfig",
+	"unvalidated_redirect",
+}
+
 func (a *CORSRedirectAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
 		AgentName: a.Name(),
@@ -47,17 +55,36 @@ func (a *CORSRedirectAgent) Run(ctx context.Context, input AgentInput) (AgentOut
 		},
 	}
 
-	// Test for open redirects
-	output.Findings = append(output.Findings, testOpenRedirects(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, corsRedirectChecks)
 
-	// Test for CORS misconfigurations
-	output.Findings = append(output.Findings, testCORSMisconfigurations(ctx, client, input.Target)...)
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"open_redirect": func() []model.Finding {
+			return testOpenRedirects(ctx, client, input.Target, input.AuthProfile)
+		},
+		"cors_misconfig": func() []model.Finding {
+			return testCORSMisconfigurations(ctx, client, input.Target)
+		},
+		"unvalidated_redirect": func() []model.Finding {
+			return testUnvalidatedRedirects(ctx, client, input.Target, input.AuthProfile)
+		},
+	}
 
-	// Test for unvalidated redirects
-	output.Findings = append(output.Findings, testUnvalidatedRedirects(ctx, client, input.Target, input.AuthProfile)...)
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "CORS and redirect testing completed."
+	output.DebugNotes = "CORS and redirect testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 

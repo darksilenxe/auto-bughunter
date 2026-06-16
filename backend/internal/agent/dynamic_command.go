@@ -16,6 +16,14 @@ import (
 //
 // This agent runs AFTER the scanning and analysis phases so it has the richest
 // possible context to work from.
+
+// dynamicCommandChecks lists the logical phases this agent performs. An AI
+// advisor provides pre-run focus and writes a post-run lesson to the blackboard.
+var dynamicCommandChecks = []string{
+	"command_generation",
+	"command_execution",
+}
+
 type DynamicCommandAgent struct {
 	enabled   bool
 	generator *cmdbuilder.Generator

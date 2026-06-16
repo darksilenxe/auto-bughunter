@@ -12,6 +12,13 @@ type ReportingAgent struct {
 	enabled bool
 }
 
+// reportingChecks lists the logical phases this agent performs. An AI advisor
+// may reorder or skip entries based on scan context.
+var reportingChecks = []string{
+	"risk_ranking",
+	"executive_summary",
+}
+
 func NewReportingAgent(enabled bool) *ReportingAgent {
 	return &ReportingAgent{enabled: enabled}
 }

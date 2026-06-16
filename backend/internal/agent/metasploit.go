@@ -41,6 +41,37 @@ import (
 // in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
 const metasploitNativeProbeCount = 23
 
+// metasploitChecks lists the canonical check names for each native probe and
+// the optional Metasploit RPC phase. An AI advisor may reorder or skip entries
+// based on the tech stack discovered earlier in the scan (e.g. skip Java probes
+// when the server is confirmed to be nginx/PHP).
+var metasploitChecks = []string{
+	"log4shell",
+	"spring4shell",
+	"shellshock",
+	"struts_s2057",
+	"php_cgi_injection",
+	"http_put_webshell",
+	"apache_path_traversal",
+	"drupalgeddon2",
+	"confluence_ognl",
+	"jenkins_script_console",
+	"citrix_adc_traversal",
+	"thinkphp_rce",
+	"exchange_proxylogon",
+	"webassembly_module_abuse",
+	"phpunit_eval_stdin",
+	"grafana_plugin_traversal",
+	"vbulletin_widget_rce",
+	"f5_bigiip_tmui_traversal",
+	"pulsesecure_file_disclosure",
+	"cisco_asa_path_traversal",
+	"fortinet_sslvpn_file_read",
+	"dotenv_file_exposure",
+	"git_config_exposure",
+	"msf_rpc_modules",
+}
+
 // MetasploitAgent orchestrates Metasploit-based web exploit checks.
 type MetasploitAgent struct {
 	enabled bool
@@ -71,53 +102,94 @@ func (a *MetasploitAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 		},
 	}
 
-	// ── Phase 1: native Go web exploit probes ─────────────────────────────
-	output.Findings = append(output.Findings, probeLog4Shell(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeSpring4Shell(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeShellshock(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeApacheStrutsS2057(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probePHPCGIInjection(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeHTTPPutWebshell(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeApachePathTraversal(ctx, client, input.Target, input.AuthProfile)...)
-	// Extended exploit probes (added in phase-2 expansion)
-	output.Findings = append(output.Findings, probeDrupalgeddon2(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeConfluenceOGNL(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeJenkinsScriptConsole(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeCitrixADCTraversal(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeThinkPHPRCE(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeGrafanaPluginTraversal(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeF5BIGIPTMUITraversal(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeCiscoASAPathTraversal(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeFortinetSSLVPNFileRead(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeDotEnvFileExposure(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, probeGitConfigExposure(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. The advisor may suppress entire probe families
+	// (e.g. Java-specific CVEs when the tech stack is PHP) to save scan time.
+	// Default order is preserved when no advice is present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, metasploitChecks)
 
-	// ── Phase 2: Metasploit RPC (optional, when msfrpcd is reachable) ─────
 	msfURL := strings.TrimSpace(os.Getenv("MSF_RPC_URL"))
 	msfPass := strings.TrimSpace(os.Getenv("MSF_RPC_PASSWORD"))
-	if msfURL != "" {
-		rpcFindings, note := runMSFRPCModules(ctx, client, msfURL, msfPass, input.Target, input.AuthProfile)
-		output.Findings = append(output.Findings, rpcFindings...)
-		output.Metadata["msf_rpc_note"] = note
-	} else {
-		output.Findings = append(output.Findings, model.Finding{
-			ID:          "metasploit-rpc-not-configured",
-			Category:    "integration",
-			Severity:    model.SeverityInfo,
-			Title:       "Metasploit RPC not configured",
-			Description: "Set MSF_RPC_URL (e.g. http://metasploit:55553) and MSF_RPC_PASSWORD to enable live Metasploit module execution via msfrpcd. Native web exploit probes still ran.",
-			Evidence:    "MSF_RPC_URL env var is empty",
-			Recommendation: "Start msfrpcd inside the metasploit sidecar: " +
-				"`msfrpcd -P <password> -S false -a 0.0.0.0 -p 55553` and set MSF_RPC_URL in the backend environment.",
-		})
+
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"log4shell":              func() []model.Finding { return probeLog4Shell(ctx, client, input.Target, input.AuthProfile) },
+		"spring4shell":           func() []model.Finding { return probeSpring4Shell(ctx, client, input.Target, input.AuthProfile) },
+		"shellshock":             func() []model.Finding { return probeShellshock(ctx, client, input.Target, input.AuthProfile) },
+		"struts_s2057":           func() []model.Finding { return probeApacheStrutsS2057(ctx, client, input.Target, input.AuthProfile) },
+		"php_cgi_injection":      func() []model.Finding { return probePHPCGIInjection(ctx, client, input.Target, input.AuthProfile) },
+		"http_put_webshell":      func() []model.Finding { return probeHTTPPutWebshell(ctx, client, input.Target, input.AuthProfile) },
+		"apache_path_traversal":  func() []model.Finding { return probeApachePathTraversal(ctx, client, input.Target, input.AuthProfile) },
+		"drupalgeddon2":          func() []model.Finding { return probeDrupalgeddon2(ctx, client, input.Target, input.AuthProfile) },
+		"confluence_ognl":        func() []model.Finding { return probeConfluenceOGNL(ctx, client, input.Target, input.AuthProfile) },
+		"jenkins_script_console": func() []model.Finding { return probeJenkinsScriptConsole(ctx, client, input.Target, input.AuthProfile) },
+		"citrix_adc_traversal":   func() []model.Finding { return probeCitrixADCTraversal(ctx, client, input.Target, input.AuthProfile) },
+		"thinkphp_rce":           func() []model.Finding { return probeThinkPHPRCE(ctx, client, input.Target, input.AuthProfile) },
+		"exchange_proxylogon":    func() []model.Finding { return probeExchangeProxyLogon(ctx, client, input.Target, input.AuthProfile) },
+		"webassembly_module_abuse": func() []model.Finding {
+			return probeWebAssemblyModuleAbuse(ctx, client, input.Target, input.AuthProfile)
+		},
+		"phpunit_eval_stdin": func() []model.Finding {
+			return probePHPUnitEvalStdinRCE(ctx, client, input.Target, input.AuthProfile)
+		},
+		"grafana_plugin_traversal": func() []model.Finding {
+			return probeGrafanaPluginTraversal(ctx, client, input.Target, input.AuthProfile)
+		},
+		"vbulletin_widget_rce": func() []model.Finding {
+			return probeVBulletinWidgetTemplateRCE(ctx, client, input.Target, input.AuthProfile)
+		},
+		"f5_bigiip_tmui_traversal": func() []model.Finding {
+			return probeF5BIGIPTMUITraversal(ctx, client, input.Target, input.AuthProfile)
+		},
+		"pulsesecure_file_disclosure": func() []model.Finding {
+			return probePulseSecureFileDisclosure(ctx, client, input.Target, input.AuthProfile)
+		},
+		"cisco_asa_path_traversal": func() []model.Finding {
+			return probeCiscoASAPathTraversal(ctx, client, input.Target, input.AuthProfile)
+		},
+		"fortinet_sslvpn_file_read": func() []model.Finding {
+			return probeFortinetSSLVPNFileRead(ctx, client, input.Target, input.AuthProfile)
+		},
+		"dotenv_file_exposure": func() []model.Finding {
+			return probeDotEnvFileExposure(ctx, client, input.Target, input.AuthProfile)
+		},
+		"git_config_exposure": func() []model.Finding {
+			return probeGitConfigExposure(ctx, client, input.Target, input.AuthProfile)
+		},
+		"msf_rpc_modules": func() []model.Finding {
+			if msfURL == "" {
+				return []model.Finding{{
+					ID:          "metasploit-rpc-not-configured",
+					Category:    "integration",
+					Severity:    model.SeverityInfo,
+					Title:       "Metasploit RPC not configured",
+					Description: "Set MSF_RPC_URL (e.g. http://metasploit:55553) and MSF_RPC_PASSWORD to enable live Metasploit module execution via msfrpcd. Native web exploit probes still ran.",
+					Evidence:    "MSF_RPC_URL env var is empty",
+					Recommendation: "Start msfrpcd inside the metasploit sidecar: " +
+						"`msfrpcd -P <password> -S false -a 0.0.0.0 -p 55553` and set MSF_RPC_URL in the backend environment.",
+				}}
+			}
+			rpcFindings, note := runMSFRPCModules(ctx, client, msfURL, msfPass, input.Target, input.AuthProfile)
+			output.Metadata["msf_rpc_note"] = note
+			return rpcFindings
+		},
 	}
 
-	output.Metadata["native_probes_run"] = fmt.Sprintf("%d", metasploitNativeProbeCount)
+	probesRun := 0
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+			if check != "msf_rpc_modules" {
+				probesRun++
+			}
+		}
+	}
+
+	output.Metadata["native_probes_run"] = fmt.Sprintf("%d", probesRun)
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
 	output.DebugNotes = "Metasploit agent: native CVE probes + optional msfrpc module execution."
 	return output, nil

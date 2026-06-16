@@ -14,6 +14,13 @@ type AnalysisAgent struct {
 	enabled bool
 }
 
+// analysisChecks lists the logical phases this agent performs. An AI advisor
+// may reorder or skip entries based on scan context.
+var analysisChecks = []string{
+	"deduplication",
+	"scoring",
+}
+
 func NewAnalysisAgent(enabled bool) *AnalysisAgent {
 	return &AnalysisAgent{enabled: enabled}
 }

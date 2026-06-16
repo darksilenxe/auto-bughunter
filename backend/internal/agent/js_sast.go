@@ -20,6 +20,17 @@ import (
 //   - It extracts web-application routes referenced from the code and records
 //     them in metadata so the wordlist agent can probe real, code-confirmed
 //     endpoints directly instead of brute-forcing the full wordlist.
+
+// jsSASTChecks lists the weakness classes this agent inspects. An AI advisor
+// may reorder or skip entries based on the tech stack or prior findings.
+var jsSASTChecks = []string{
+	"dom_xss",
+	"eval_injection",
+	"postmessage_security",
+	"client_storage_secrets",
+	"route_extraction",
+}
+
 type JavaScriptSASTAgent struct {
 	scanService *scanner.Service
 	enabled     bool

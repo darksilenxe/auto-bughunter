@@ -12,6 +12,13 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
+// An AI advisor may reorder or skip entries based on scan context.
+var reconnaissanceChecks = []string{
+	"dns_info",
+	"http_version",
+	"service_info",
+}
+
 type ReconnaissanceAgent struct {
 	enabled bool
 }
@@ -41,9 +48,27 @@ func (a *ReconnaissanceAgent) Run(ctx context.Context, input AgentInput) (AgentO
 		return output, fmt.Errorf("invalid target URL")
 	}
 
-	gatherDNSInfo(ctx, host, &output)
-	gatherHTTPVersion(ctx, input.Target, &output)
-	gatherServiceInfo(ctx, host, &output)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, reconnaissanceChecks)
+
+	type checkFn func()
+	checkMap := map[string]checkFn{
+		"dns_info":     func() { gatherDNSInfo(ctx, host, &output) },
+		"http_version": func() { gatherHTTPVersion(ctx, input.Target, &output) },
+		"service_info": func() { gatherServiceInfo(ctx, host, &output) },
+	}
+
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			fn()
+		}
+	}
 
 	if input.SharedScanContext != nil {
 		if server := strings.TrimSpace(output.Metadata["server_header"]); server != "" {
@@ -73,7 +98,7 @@ func (a *ReconnaissanceAgent) Run(ctx context.Context, input AgentInput) (AgentO
 		}
 	}
 
-	output.DebugNotes = fmt.Sprintf("Reconnaissance completed for %s. Discovered %d services/endpoints.", host, len(output.Findings))
+	output.DebugNotes = fmt.Sprintf("Reconnaissance completed for %s. Checked: %s. Discovered %d services/endpoints.", host, strings.Join(ordered, ", "), len(output.Findings))
 	return output, nil
 }
 

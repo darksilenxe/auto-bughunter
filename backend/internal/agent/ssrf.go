@@ -18,6 +18,13 @@ import (
 // requests to attacker-controlled destinations (cloud metadata endpoints,
 // internal services, file/gopher schemes) and flags any that fetch unexpected
 // content or return anomalous responses.
+// An AI advisor may reorder or skip entries based on scan context.
+var ssrfChecks = []string{
+	"url_param_injection",
+	"cloud_metadata",
+	"internal_service",
+}
+
 type SSRFAgent struct {
 	enabled bool
 }
@@ -26,8 +33,8 @@ func NewSSRFAgent(enabled bool) *SSRFAgent {
 	return &SSRFAgent{enabled: enabled}
 }
 
-func (a *SSRFAgent) Name() string    { return "ssrf" }
-func (a *SSRFAgent) Enabled() bool   { return a.enabled }
+func (a *SSRFAgent) Name() string  { return "ssrf" }
+func (a *SSRFAgent) Enabled() bool { return a.enabled }
 
 func (a *SSRFAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
@@ -47,12 +54,36 @@ func (a *SSRFAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, err
 		},
 	}
 
-	output.Findings = append(output.Findings, testSSRFViaParams(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, testCloudMetadataSSRF(ctx, client, input.Target, input.AuthProfile)...)
-	output.Findings = append(output.Findings, testInternalServiceSSRF(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, ssrfChecks)
+
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"url_param_injection": func() []model.Finding {
+			return testSSRFViaParams(ctx, client, input.Target, input.AuthProfile)
+		},
+		"cloud_metadata": func() []model.Finding {
+			return testCloudMetadataSSRF(ctx, client, input.Target, input.AuthProfile)
+		},
+		"internal_service": func() []model.Finding {
+			return testInternalServiceSSRF(ctx, client, input.Target, input.AuthProfile)
+		},
+	}
+
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "SSRF testing completed: URL parameter injection, cloud metadata, and internal service probes."
+	output.DebugNotes = "SSRF testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 

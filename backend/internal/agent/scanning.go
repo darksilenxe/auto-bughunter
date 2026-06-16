@@ -16,6 +16,13 @@ type ScanningAgent struct {
 	enabled     bool
 }
 
+// scanningChecks lists the check performed by this agent. An AI advisor
+// provides pre-run focus context and writes a post-run lesson to the
+// blackboard even though the scan itself is a single delegated pass.
+var scanningChecks = []string{
+	"vulnerability_scan",
+}
+
 func NewScanningAgent(scanService *scanner.Service, enabled bool) *ScanningAgent {
 	return &ScanningAgent{
 		scanService: scanService,

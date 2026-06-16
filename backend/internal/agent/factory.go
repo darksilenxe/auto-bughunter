@@ -18,15 +18,16 @@ type AgentBuilder func() Agent
 // Factory creates Agent instances by name. Builders may be the default ones
 // pre-registered in NewFactory or ones registered by callers via Register.
 type Factory struct {
-	mu       sync.RWMutex
-	builders map[string]AgentBuilder
+	mu        sync.RWMutex
+	builders  map[string]AgentBuilder
+	mlService *ml.Service
 }
 
 // NewFactory wires up the standard agent builders, all enabled by default.
 // scanService and mlService may be nil; agents that require them will simply
 // produce empty findings when the dependency is missing.
 func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
-	f := &Factory{builders: map[string]AgentBuilder{}}
+	f := &Factory{builders: map[string]AgentBuilder{}, mlService: mlService}
 
 	f.Register("reconnaissance", func() Agent { return NewReconnaissanceAgent(true) })
 	f.Register("js_sast", func() Agent { return NewJavaScriptSASTAgent(scanService, true) })
@@ -111,6 +112,8 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 //   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
 //   - "adaptive_probe" uses the planning model for one-probe-at-a-time AI decisions.
 //   - "reasoning_iteration" uses the planning model for reflection and iteration rationale.
+//   - All remaining static agents gain AI-guided check ordering and post-run
+//     lesson synthesis via an AgentAdvisor wrapper.
 //
 // This is called after NewFactory once the AI client is available. It is safe
 // to call concurrently with other factory operations.
@@ -138,6 +141,91 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	// provider routing in ai.Client (planningComplete).
 	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(c, nil, true) })
 	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(c, nil, true) })
+
+	// Wrap all static/deterministic agents with an AgentAdvisor so that every
+	// agent in the pipeline benefits from AI-guided check ordering, pre-run
+	// focus thinking, and post-run lesson synthesis. When shouldCallProvider()
+	// is false the advisor is a no-op and behaviour is identical to the
+	// unwrapped agents.
+	advisor := NewAgentAdvisor(c)
+
+	// ── Previously wrapped agents ────────────────────────────────────────
+	f.Register("input_validation", func() Agent {
+		return advisor.Wrap(NewInputValidationAgent(true), inputValidationChecks)
+	})
+	f.Register("access_control", func() Agent {
+		return advisor.Wrap(NewAccessControlAgent(true), accessControlChecks)
+	})
+	f.Register("information_disclosure", func() Agent {
+		return advisor.Wrap(NewInformationDisclosureAgent(true), informationDisclosureChecks)
+	})
+	f.Register("api_security", func() Agent {
+		return advisor.Wrap(NewAPISecurityAgent(true), apiSecurityChecks)
+	})
+	f.Register("cors_redirect", func() Agent {
+		return advisor.Wrap(NewCORSRedirectAgent(true), corsRedirectChecks)
+	})
+
+	// ── Newly agentic: HTTP-testing agents with multi-check ordering ─────
+	f.Register("auth_bypass", func() Agent {
+		return advisor.Wrap(NewAuthBypassAgent(true), authBypassChecks)
+	})
+	f.Register("ssrf", func() Agent {
+		return advisor.Wrap(NewSSRFAgent(true), ssrfChecks)
+	})
+	f.Register("file_upload", func() Agent {
+		return advisor.Wrap(NewFileUploadAgent(true), fileUploadChecks)
+	})
+	f.Register("reconnaissance", func() Agent {
+		return advisor.Wrap(NewReconnaissanceAgent(true), reconnaissanceChecks)
+	})
+	f.Register("wordlist", func() Agent {
+		return advisor.Wrap(NewWordlistAgent(true), wordlistChecks)
+	})
+	f.Register("metasploit", func() Agent {
+		return advisor.Wrap(NewMetasploitAgent(true), metasploitChecks)
+	})
+
+	// ── Newly agentic: JavaScript SAST ───────────────────────────────────
+	f.Register("js_sast", func() Agent {
+		return advisor.Wrap(NewJavaScriptSASTAgent(scanService, true), jsSASTChecks)
+	})
+
+	// ── Newly agentic: analysis / post-processing agents ─────────────────
+	f.Register("scanning", func() Agent {
+		return advisor.Wrap(NewScanningAgent(scanService, true), scanningChecks)
+	})
+	f.Register("analysis", func() Agent {
+		return advisor.Wrap(NewAnalysisAgent(true), analysisChecks)
+	})
+	f.Register("reporting", func() Agent {
+		return advisor.Wrap(NewReportingAgent(true), reportingChecks)
+	})
+	f.Register("impact_verifier", func() Agent {
+		return advisor.Wrap(NewImpactVerifierAgent(true), impactVerifierChecks)
+	})
+	f.Register("exploit_chain", func() Agent {
+		return advisor.Wrap(NewExploitChainAgent(true), exploitChainChecks)
+	})
+	f.Register("dynamic_commands", func() Agent {
+		return advisor.Wrap(NewDynamicCommandAgent(true), dynamicCommandChecks)
+	})
+
+	// ── Newly agentic: ML pipeline agents ────────────────────────────────
+	// The mlService is stored on the factory from NewFactory so the advisor
+	// wrappers here carry the same ML dependency as the default builders.
+	f.Register("ml_triage", func() Agent {
+		return advisor.Wrap(NewMLTriageAgent(f.mlService, true), mlTriageChecks)
+	})
+	f.Register("attack_path", func() Agent {
+		return advisor.Wrap(NewAttackPathAgent(f.mlService, true), attackPathChecks)
+	})
+	f.Register("false_positive_review", func() Agent {
+		return advisor.Wrap(NewFalsePositiveReviewAgent(f.mlService, true), falsePositiveReviewChecks)
+	})
+	f.Register("remediation_planner", func() Agent {
+		return advisor.Wrap(NewRemediationPlannerAgent(f.mlService, true), remediationPlannerChecks)
+	})
 }
 
 // Register adds or replaces a builder for the given agent name.

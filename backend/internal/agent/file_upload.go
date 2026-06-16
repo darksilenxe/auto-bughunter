@@ -18,6 +18,14 @@ import (
 // FileUploadAgent tests file upload endpoints for security weaknesses such as
 // unrestricted file type acceptance, content-type bypass, double-extension
 // bypasses, path traversal in filenames, and zip-slip vulnerabilities.
+// An AI advisor may reorder or skip entries based on scan context.
+var fileUploadChecks = []string{
+	"unrestricted_type",
+	"content_type_bypass",
+	"double_extension",
+	"path_traversal",
+}
+
 type FileUploadAgent struct {
 	enabled bool
 }
@@ -40,15 +48,41 @@ func (a *FileUploadAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 	client := &http.Client{Timeout: 12 * time.Second}
 
 	uploadEndpoints := discoverUploadEndpoints(ctx, client, input.Target, input.AuthProfile)
+	output.Metadata["upload_endpoints_found"] = fmt.Sprintf("%d", len(uploadEndpoints))
 
-	output.Findings = append(output.Findings, testUnrestrictedFileUpload(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)...)
-	output.Findings = append(output.Findings, testContentTypeBypass(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)...)
-	output.Findings = append(output.Findings, testDoubleExtensionBypass(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)...)
-	output.Findings = append(output.Findings, testPathTraversalInFilename(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, fileUploadChecks)
+
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"unrestricted_type": func() []model.Finding {
+			return testUnrestrictedFileUpload(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)
+		},
+		"content_type_bypass": func() []model.Finding {
+			return testContentTypeBypass(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)
+		},
+		"double_extension": func() []model.Finding {
+			return testDoubleExtensionBypass(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)
+		},
+		"path_traversal": func() []model.Finding {
+			return testPathTraversalInFilename(ctx, client, input.Target, input.AuthProfile, uploadEndpoints)
+		},
+	}
+
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.Metadata["upload_endpoints_found"] = fmt.Sprintf("%d", len(uploadEndpoints))
-	output.DebugNotes = fmt.Sprintf("File upload security testing completed. %d upload endpoint(s) probed.", len(uploadEndpoints))
+	output.DebugNotes = fmt.Sprintf("File upload security testing completed. %d upload endpoint(s) probed. Checked: %s.", len(uploadEndpoints), strings.Join(ordered, ", "))
 	return output, nil
 }
 

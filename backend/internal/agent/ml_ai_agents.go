@@ -15,6 +15,13 @@ type MLTriageAgent struct {
 	enabled bool
 }
 
+// mlTriageChecks lists the logical phases this agent performs. An AI advisor
+// provides pre-run focus and writes a post-run lesson to the blackboard.
+var mlTriageChecks = []string{
+	"false_positive_triage",
+	"confidence_calibration",
+}
+
 func NewMLTriageAgent(mlService *ml.Service, enabled bool) *MLTriageAgent {
 	return &MLTriageAgent{ml: mlService, enabled: enabled}
 }
@@ -90,6 +97,13 @@ type AttackPathAgent struct {
 	enabled bool
 }
 
+// attackPathChecks lists the logical phases this agent performs. An AI advisor
+// provides pre-run focus and writes a post-run lesson to the blackboard.
+var attackPathChecks = []string{
+	"path_analysis",
+	"chain_detection",
+}
+
 func NewAttackPathAgent(mlService *ml.Service, enabled bool) *AttackPathAgent {
 	return &AttackPathAgent{ml: mlService, enabled: enabled}
 }
@@ -146,6 +160,12 @@ func (a *AttackPathAgent) Run(ctx context.Context, input AgentInput) (AgentOutpu
 type FalsePositiveReviewAgent struct {
 	ml      *ml.Service
 	enabled bool
+}
+
+// falsePositiveReviewChecks lists the check this agent performs. An AI advisor
+// provides pre-run focus and writes a post-run lesson to the blackboard.
+var falsePositiveReviewChecks = []string{
+	"fp_review",
 }
 
 func NewFalsePositiveReviewAgent(mlService *ml.Service, enabled bool) *FalsePositiveReviewAgent {
@@ -207,6 +227,12 @@ func (a *FalsePositiveReviewAgent) Run(ctx context.Context, input AgentInput) (A
 type RemediationPlannerAgent struct {
 	ml      *ml.Service
 	enabled bool
+}
+
+// remediationPlannerChecks lists the check this agent performs. An AI advisor
+// provides pre-run focus and writes a post-run lesson to the blackboard.
+var remediationPlannerChecks = []string{
+	"remediation_planning",
 }
 
 func NewRemediationPlannerAgent(mlService *ml.Service, enabled bool) *RemediationPlannerAgent {

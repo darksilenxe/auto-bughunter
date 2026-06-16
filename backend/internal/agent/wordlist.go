@@ -11,6 +11,14 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 )
 
+// An AI advisor may reorder or skip entries based on scan context.
+var wordlistChecks = []string{
+	"directories",
+	"seed_routes",
+	"subdomains",
+	"api_endpoints",
+}
+
 type WordlistAgent struct {
 	wordlistScanner *scanner.WordlistScanner
 	enabled         bool
@@ -39,26 +47,50 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
-	dirs := a.wordlistScanner.ScanDirectories(ctx, input.Target, input.AuthProfile, input.Scope)
-	output.Findings = append(output.Findings, dirs...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, wordlistChecks)
 
-	// When the JavaScript SAST agent has already surfaced routes from the
-	// target's own code, probe those confirmed endpoints directly first. This
-	// is a faster, higher-signal pass than the blind wordlist sweep because the
-	// route list is small and known-relevant.
+	// seed_routes depends on history; collect once so the closure captures it.
 	seedRoutes := sastDiscoveredRoutes(input.History)
-	var seeded []model.Finding
-	if len(seedRoutes) > 0 {
-		seeded = a.wordlistScanner.ScanSeedRoutes(ctx, input.Target, seedRoutes, input.AuthProfile, input.Scope)
-		output.Findings = append(output.Findings, seeded...)
-		output.Metadata["code_discovered_routes_probed"] = fmt.Sprintf("%d", len(seedRoutes))
+
+	var dirs, seeded, subs, apis []model.Finding
+
+	type checkFn func()
+	checkMap := map[string]checkFn{
+		"directories": func() {
+			dirs = a.wordlistScanner.ScanDirectories(ctx, input.Target, input.AuthProfile, input.Scope)
+			output.Findings = append(output.Findings, dirs...)
+		},
+		"seed_routes": func() {
+			// When the JavaScript SAST agent has already surfaced routes from the
+			// target's own code, probe those confirmed endpoints directly first.
+			if len(seedRoutes) > 0 {
+				seeded = a.wordlistScanner.ScanSeedRoutes(ctx, input.Target, seedRoutes, input.AuthProfile, input.Scope)
+				output.Findings = append(output.Findings, seeded...)
+				output.Metadata["code_discovered_routes_probed"] = fmt.Sprintf("%d", len(seedRoutes))
+			}
+		},
+		"subdomains": func() {
+			subs = a.wordlistScanner.ScanSubdomains(ctx, input.Target, input.Scope)
+			output.Findings = append(output.Findings, subs...)
+		},
+		"api_endpoints": func() {
+			apis = a.wordlistScanner.ScanAPIEndpoints(ctx, input.Target, input.AuthProfile, input.Scope)
+			output.Findings = append(output.Findings, apis...)
+		},
 	}
 
-	subs := a.wordlistScanner.ScanSubdomains(ctx, input.Target, input.Scope)
-	output.Findings = append(output.Findings, subs...)
-
-	apis := a.wordlistScanner.ScanAPIEndpoints(ctx, input.Target, input.AuthProfile, input.Scope)
-	output.Findings = append(output.Findings, apis...)
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			fn()
+		}
+	}
 
 	output.Metadata["directories_found"] = fmt.Sprintf("%d", acceptedWordlistCount(dirs))
 	output.Metadata["subdomains_found"] = fmt.Sprintf("%d", len(subs))
@@ -93,7 +125,7 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		})
 	}
 
-	output.DebugNotes = fmt.Sprintf("Wordlist scanning completed: %d directories, %d subdomains, %d API endpoints discovered.", len(dirs), len(subs), len(apis))
+	output.DebugNotes = fmt.Sprintf("Wordlist scanning completed. Checked: %s. %d directories, %d subdomains, %d API endpoints discovered.", strings.Join(ordered, ", "), len(dirs), len(subs), len(apis))
 
 	return output, nil
 }

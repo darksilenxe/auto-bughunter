@@ -29,6 +29,16 @@ func (a *APISecurityAgent) Enabled() bool {
 	return a.enabled
 }
 
+// apiSecurityChecks is the canonical ordered list of checks this agent
+// performs. An AI advisor may reorder or skip entries based on scan context.
+var apiSecurityChecks = []string{
+	"graphql_introspection",
+	"rate_limiting",
+	"cors_misconfiguration",
+	"api_versioning",
+	"resource_exposure",
+}
+
 func (a *APISecurityAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
 		AgentName: a.Name(),
@@ -39,23 +49,42 @@ func (a *APISecurityAgent) Run(ctx context.Context, input AgentInput) (AgentOutp
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Test for GraphQL introspection
-	output.Findings = append(output.Findings, testGraphQLIntrospection(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, apiSecurityChecks)
 
-	// Test for API rate limiting
-	output.Findings = append(output.Findings, testRateLimitingAbsence(ctx, client, input.Target)...)
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"graphql_introspection": func() []model.Finding {
+			return testGraphQLIntrospection(ctx, client, input.Target, input.AuthProfile)
+		},
+		"rate_limiting": func() []model.Finding {
+			return testRateLimitingAbsence(ctx, client, input.Target)
+		},
+		"cors_misconfiguration": func() []model.Finding {
+			return testCORSMisconfiguration(ctx, client, input.Target)
+		},
+		"api_versioning": func() []model.Finding {
+			return testAPIVersioning(ctx, client, input.Target, input.AuthProfile)
+		},
+		"resource_exposure": func() []model.Finding {
+			return testResourceExposure(ctx, client, input.Target, input.AuthProfile)
+		},
+	}
 
-	// Test for CORS misconfigurations
-	output.Findings = append(output.Findings, testCORSMisconfiguration(ctx, client, input.Target)...)
-
-	// Test for API versioning issues
-	output.Findings = append(output.Findings, testAPIVersioning(ctx, client, input.Target, input.AuthProfile)...)
-
-	// Test for resource exposure
-	output.Findings = append(output.Findings, testResourceExposure(ctx, client, input.Target, input.AuthProfile)...)
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "API security testing completed."
+	output.DebugNotes = "API security testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 
