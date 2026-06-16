@@ -63,6 +63,17 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: Replay planner regression gate
+        run: |
+          go run ./cmd/replayharness \
+            -input ../testing/replay/ai-planner-history.json \
+            -baseline static \
+            -candidate recorded \
+            -min-candidate-match-rate 0.95 \
+            -min-candidate-first-choice-rate 0.95 \
+            -max-candidate-early-stops 0 \
+            -require-candidate-not-worse
+
   frontend:
     name: Frontend (npm ci + npm run build)
     runs-on: ubuntu-latest

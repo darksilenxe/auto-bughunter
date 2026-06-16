@@ -1,0 +1,35 @@
+[
+  {
+    "scanId": "fixture-juice-like-1",
+    "target": "https://fixture-one.example",
+    "availableAgents": [
+      "analysis",
+      "reconnaissance",
+      "scanning",
+      "input_validation"
+    ],
+    "runs": [
+      {"agentName": "reconnaissance"},
+      {"agentName": "scanning"},
+      {"agentName": "input_validation"},
+      {"agentName": "analysis"}
+    ]
+  },
+  {
+    "scanId": "fixture-juice-like-2",
+    "target": "https://fixture-two.example",
+    "availableAgents": [
+      "analysis",
+      "reconnaissance",
+      "scanning",
+      "input_validation",
+      "reporting"
+    ],
+    "runs": [
+      {"agentName": "reconnaissance"},
+      {"agentName": "scanning"},
+      {"agentName": "input_validation"},
+      {"agentName": "reporting"}
+    ]
+  }
+]

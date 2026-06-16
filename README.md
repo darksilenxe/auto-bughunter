@@ -1085,9 +1085,13 @@ planning strategies against a baseline.
 
 ```bash
 go run ./backend/cmd/replayharness \
-  -input path/to/history.json \
+  -input testing/replay/ai-planner-history.json \
   -baseline static \
   -candidate recorded \
+  -min-candidate-match-rate 0.95 \
+  -min-candidate-first-choice-rate 0.95 \
+  -max-candidate-early-stops 0 \
+  -require-candidate-not-worse \
   -output /tmp/replay-report.json
 ```
 
@@ -1099,6 +1103,13 @@ order) and `recorded` (oracle that follows the historical execution order).
 The output report includes per-round planner decisions, per-run match rates,
 aggregate `matchRate` / `firstChoiceMatchRate`, and a `delta` block summarising
 candidate-minus-baseline improvement.
+
+Optional gate flags make this CI-friendly:
+
+- `-min-candidate-match-rate` (0..1 floor)
+- `-min-candidate-first-choice-rate` (0..1 floor)
+- `-max-candidate-early-stops` (integer ceiling)
+- `-require-candidate-not-worse` (fails on baseline regression)
 
 ## Notes
 

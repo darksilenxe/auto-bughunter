@@ -31,6 +31,13 @@ import (
 	"auto-bughunter/backend/internal/replay"
 )
 
+type gateOptions struct {
+	minCandidateMatchRate       float64
+	minCandidateFirstChoiceRate float64
+	maxCandidateEarlyStops      int
+	requireCandidateNotWorse    bool
+}
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "replayharness:", err)
@@ -45,6 +52,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	output := fs.String("output", "", "path to write the comparison report (defaults to stdout)")
 	baselineKind := fs.String("baseline", "static", "baseline planner kind: static|recorded")
 	candidateKind := fs.String("candidate", "recorded", "candidate planner kind: static|recorded")
+	minCandidateMatchRate := fs.Float64("min-candidate-match-rate", -1, "optional floor for candidate aggregate match rate (0..1)")
+	minCandidateFirstChoiceRate := fs.Float64("min-candidate-first-choice-rate", -1, "optional floor for candidate aggregate first-choice match rate (0..1)")
+	maxCandidateEarlyStops := fs.Int("max-candidate-early-stops", -1, "optional ceiling for candidate early-stop count")
+	requireCandidateNotWorse := fs.Bool("require-candidate-not-worse", false, "when set, fail if candidate aggregate rates regress versus baseline")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -69,6 +80,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	report, err := replay.Compare(context.Background(), runs, *baselineKind, baseline, *candidateKind, candidate)
 	if err != nil {
+		return err
+	}
+	if err := validateGates(report, gateOptions{
+		minCandidateMatchRate:       *minCandidateMatchRate,
+		minCandidateFirstChoiceRate: *minCandidateFirstChoiceRate,
+		maxCandidateEarlyStops:      *maxCandidateEarlyStops,
+		requireCandidateNotWorse:    *requireCandidateNotWorse,
+	}); err != nil {
 		return err
 	}
 
@@ -133,4 +152,51 @@ func plannerFactory(kind string) (replay.PlannerFactory, error) {
 	default:
 		return nil, fmt.Errorf("unknown planner kind %q (supported: static, recorded)", kind)
 	}
+}
+
+func validateGates(report replay.ComparisonReport, gates gateOptions) error {
+	if gates.minCandidateMatchRate >= 0 {
+		if report.Candidate.AggregateMatchRate < gates.minCandidateMatchRate {
+			return fmt.Errorf(
+				"candidate aggregate match rate %.4f is below required floor %.4f",
+				report.Candidate.AggregateMatchRate,
+				gates.minCandidateMatchRate,
+			)
+		}
+	}
+	if gates.minCandidateFirstChoiceRate >= 0 {
+		if report.Candidate.AggregateFirstChoiceMatchRate < gates.minCandidateFirstChoiceRate {
+			return fmt.Errorf(
+				"candidate aggregate first-choice match rate %.4f is below required floor %.4f",
+				report.Candidate.AggregateFirstChoiceMatchRate,
+				gates.minCandidateFirstChoiceRate,
+			)
+		}
+	}
+	if gates.maxCandidateEarlyStops >= 0 {
+		if report.Candidate.EarlyStops > gates.maxCandidateEarlyStops {
+			return fmt.Errorf(
+				"candidate early stops %d exceed max allowed %d",
+				report.Candidate.EarlyStops,
+				gates.maxCandidateEarlyStops,
+			)
+		}
+	}
+	if gates.requireCandidateNotWorse {
+		if report.Candidate.AggregateMatchRate < report.Baseline.AggregateMatchRate {
+			return fmt.Errorf(
+				"candidate aggregate match rate %.4f regressed from baseline %.4f",
+				report.Candidate.AggregateMatchRate,
+				report.Baseline.AggregateMatchRate,
+			)
+		}
+		if report.Candidate.AggregateFirstChoiceMatchRate < report.Baseline.AggregateFirstChoiceMatchRate {
+			return fmt.Errorf(
+				"candidate aggregate first-choice match rate %.4f regressed from baseline %.4f",
+				report.Candidate.AggregateFirstChoiceMatchRate,
+				report.Baseline.AggregateFirstChoiceMatchRate,
+			)
+		}
+	}
+	return nil
 }
