@@ -1147,10 +1147,12 @@ func buildToolCallSystemPrompt(req ToolCallRequest) string {
 		"Choose exactly one next action using this strict JSON schema: "+toolCallDecisionSchema+".",
 		"Rules:",
 		"(1) Prefer the smallest next action that increases confidence in real-world impact.",
+		"(1a) If the last action is working (completed with useful signal), prioritize corroborating or deepening that path before pivoting.",
+		"(1b) Prefer actions that verify material state change (pre/post status or body-delta evidence) so false positives are filtered early.",
 		"(2) For run_command, choose only from allowedBinaries and include concrete args.",
 		"(3) For run_hacktricks, choose a category from hacktricksTopics and optionally a findingId.",
 		"(4) For generate_tool, request a focused sandboxed probe task tied to a concrete impact hypothesis.",
-		"(5) If recent results show low value or the evidence is already sufficient, return stop.",
+		"(5) If recent results show low value, repeated no-state-change outcomes, or evidence is already sufficient, return stop.",
 		"(6) Never emit markdown or extra text.",
 	)
 	return strings.Join(lines, " ")

@@ -74,6 +74,7 @@ func (s *Service) ProbeHypothesis(
 	}
 
 	base.StatusCode = statusCode
+	base.ResponseBodyLength = len(body)
 
 	// ── WAF / rate-limit detection ────────────────────────────────────────
 	if statusCode == 403 || statusCode == 406 || statusCode == 429 {
