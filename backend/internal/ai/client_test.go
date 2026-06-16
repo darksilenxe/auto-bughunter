@@ -147,6 +147,18 @@ func TestPlanToolCall_InvalidActionReturnsNil(t *testing.T) {
 	}
 }
 
+func TestBuildToolCallSystemPrompt_IncludesStateChangeGuidance(t *testing.T) {
+	prompt := buildToolCallSystemPrompt(ToolCallRequest{
+		ImpactGoals: []string{"account_takeover"},
+	})
+	if !strings.Contains(prompt, "verify material state change") {
+		t.Fatalf("expected state-change guidance in prompt, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "If the last action is working") {
+		t.Fatalf("expected working-action continuation guidance in prompt, got: %q", prompt)
+	}
+}
+
 // countingProvider records the peak number of concurrent Complete calls so a
 // test can assert the Client's concurrency limiter is enforced.
 type countingProvider struct {

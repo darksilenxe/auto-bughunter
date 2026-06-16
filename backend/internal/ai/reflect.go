@@ -118,6 +118,9 @@ func (c *Client) Reflect(
 		"The 'probeResults' array contains the full HTTP-level observation for EVERY probe run this round, " +
 		"including ones that were blocked, near-missed, or returned server errors. " +
 		"Use the 'outcome' and 'observation' fields to understand WHY each probe succeeded or failed. " +
+		"Classify likely false positives when signals are weak, non-repeatable, or explicitly show no material state change. " +
+		"Treat SPA targets as API-centric surfaces and call out missing coverage of route APIs/XHR-backed endpoints. " +
+		"Use state-change language precisely: a state change requires a material pre/post differential (status/body-length deltas or repeatable side effects), not just reflected text. " +
 		"For example: 'waf_blocked' means the payload was filtered — propose an evasion variant; " +
 		"'near_miss' means a partial signal was observed — refine the payload for the specific context; " +
 		"'server_error' on an injection probe means an exception was triggered — follow up with blind probes; " +

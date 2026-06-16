@@ -116,6 +116,10 @@ type ProbeResult struct {
 	// StatusCode is the HTTP status code returned by the server.
 	StatusCode int `json:"statusCode"`
 
+	// ResponseBodyLength is the byte length of the probe response excerpt that
+	// was inspected for oracle and near-miss signals.
+	ResponseBodyLength int `json:"responseBodyLength,omitempty"`
+
 	// Observation is a one- or two-sentence plain-English description of
 	// what the probe observed. This is written for the AI: it describes
 	// the response in terms a penetration tester would understand and

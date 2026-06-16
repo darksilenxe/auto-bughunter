@@ -137,6 +137,9 @@ func (c *Client) DecideNextProbe(
 		"\n\n" +
 		"Your task: choose the SINGLE most valuable probe to execute next. " +
 		"Do NOT follow a fixed checklist. Reason from the evidence:\n" +
+		"- Treat a finding as likely false positive when signals are non-repeatable, confidence is low, or state-change checks repeatedly say no material delta.\n" +
+		"- Treat SPA targets as API-driven attack surfaces: prioritize JSON/XHR/fetch endpoints, auth/session APIs, and client-side route-backed calls over static HTML-only checks.\n" +
+		"- Determine state change by comparing pre/post response status and body-length deltas in observations; require a material delta or repeatable side effect before escalating confidence.\n" +
 		"- If outcome='waf_blocked': the payload was filtered — pick an evasion-variant payload for the SAME endpoint\n" +
 		"- If outcome='near_miss': partial signal — refine the payload for the specific observed context\n" +
 		"- If outcome='server_error': exception triggered — try a blind/time-based follow-up on the SAME endpoint\n" +

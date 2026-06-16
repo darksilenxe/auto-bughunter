@@ -21,6 +21,8 @@ const (
 	// maxPayloadDisplayLength is the maximum number of characters of a payload
 	// shown inline in event messages, to keep log lines readable.
 	maxPayloadDisplayLength = 30
+	stateChangeAbsThreshold = 120
+	stateChangePctThreshold = 0.20
 )
 
 // AdaptiveProbeAgent implements a true observe → reason → act loop for web
@@ -280,6 +282,14 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		case model.ProbeConfirmed:
 			stepsConfirmed++
 		}
+		stateObs, materialStateChange := assessProbeStateChange(baselineByEndpoint[decision.Endpoint], pr)
+		if stateObs != "" {
+			if pr.Observation != "" {
+				pr.Observation = strings.TrimSpace(pr.Observation + " " + stateObs)
+			} else {
+				pr.Observation = stateObs
+			}
+		}
 
 		output.ReasoningTrace = append(output.ReasoningTrace, ReasoningStep{
 			Thought:    decision.Thinking,
@@ -350,9 +360,12 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			// Annotate with response differential vs baseline when available.
 			if bl, ok := baselineByEndpoint[decision.Endpoint]; ok && bl.StatusCode > 0 {
 				pr.Finding.EvidenceFields["baselineStatusCode"] = itoa(bl.StatusCode)
+				pr.Finding.EvidenceFields["baselineBodyLength"] = itoa(bl.BodyLength)
+				pr.Finding.EvidenceFields["probeBodyLength"] = itoa(pr.ResponseBodyLength)
 				if bl.StatusCode != pr.StatusCode {
 					pr.Finding.EvidenceFields["responseStatusDiff"] = itoa(bl.StatusCode) + "->" + itoa(pr.StatusCode)
 				}
+				pr.Finding.EvidenceFields["stateChangeDetected"] = boolStr(materialStateChange)
 			}
 
 			// Multi-probe consensus: track confirmation count per category+endpoint.
@@ -479,4 +492,36 @@ func formatParam(param, payload string) string {
 		p = p[:maxPayloadDisplayLength] + "…"
 	}
 	return "[" + param + "=" + p + "]"
+}
+
+func assessProbeStateChange(baseline scanner.BaselineResponse, pr model.ProbeResult) (string, bool) {
+	if baseline.StatusCode <= 0 {
+		return "State-change check: inconclusive (no baseline response available for comparison).", false
+	}
+	statusChanged := baseline.StatusCode != pr.StatusCode
+	bodyDelta := intAbs(pr.ResponseBodyLength - baseline.BodyLength)
+	var ratio float64
+	if baseline.BodyLength > 0 {
+		ratio = float64(bodyDelta) / float64(baseline.BodyLength)
+	}
+	material := statusChanged || (bodyDelta >= stateChangeAbsThreshold && ratio >= stateChangePctThreshold)
+	if material {
+		return fmt.Sprintf(
+			"State-change check: material response delta detected (status %d→%d, bodyLen %d→%d, delta=%d). "+
+				"Treat this as a likely state transition and prioritize corroboration.",
+			baseline.StatusCode, pr.StatusCode, baseline.BodyLength, pr.ResponseBodyLength, bodyDelta,
+		), true
+	}
+	return fmt.Sprintf(
+		"State-change check: no material response delta (status %d→%d, bodyLen %d→%d, delta=%d); "+
+			"treat positive signals cautiously to avoid false positives.",
+		baseline.StatusCode, pr.StatusCode, baseline.BodyLength, pr.ResponseBodyLength, bodyDelta,
+	), false
+}
+
+func intAbs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
