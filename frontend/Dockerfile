@@ -11,7 +11,7 @@ ARG VITE_WORKSPACE_ID=default
 ENV VITE_WORKSPACE_ID=${VITE_WORKSPACE_ID}
 
 COPY package.json ./
-RUN npm install
+RUN npm install && npm install @rolldown/binding-linux-x64-musl
 
 COPY . .
 RUN npm run build
