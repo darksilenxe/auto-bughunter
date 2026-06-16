@@ -145,17 +145,17 @@ func TestPlanToolCall_InvalidActionReturnsNil(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected nil for invalid action, got %+v", got)
 	}
+}
 
-	func TestBuildToolCallSystemPrompt_IncludesStateChangeGuidance(t *testing.T) {
-		prompt := buildToolCallSystemPrompt(ToolCallRequest{
-			ImpactGoals: []string{"account_takeover"},
-		})
-		if !strings.Contains(prompt, "verify material state change") {
-			t.Fatalf("expected state-change guidance in prompt, got: %q", prompt)
-		}
-		if !strings.Contains(prompt, "If the last action is working") {
-			t.Fatalf("expected working-action continuation guidance in prompt, got: %q", prompt)
-		}
+func TestBuildToolCallSystemPrompt_IncludesStateChangeGuidance(t *testing.T) {
+	prompt := buildToolCallSystemPrompt(ToolCallRequest{
+		ImpactGoals: []string{"account_takeover"},
+	})
+	if !strings.Contains(prompt, "verify material state change") {
+		t.Fatalf("expected state-change guidance in prompt, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "If the last action is working") {
+		t.Fatalf("expected working-action continuation guidance in prompt, got: %q", prompt)
 	}
 }
 
