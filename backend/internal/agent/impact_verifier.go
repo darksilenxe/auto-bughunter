@@ -14,6 +14,13 @@ type ImpactVerifierAgent struct {
 	enabled bool
 }
 
+// impactVerifierChecks lists the logical phases this agent performs. An AI
+// advisor may reorder or skip entries based on scan context.
+var impactVerifierChecks = []string{
+	"impact_scoring",
+	"exploitability_check",
+}
+
 func NewImpactVerifierAgent(enabled bool) *ImpactVerifierAgent {
 	return &ImpactVerifierAgent{enabled: enabled}
 }
