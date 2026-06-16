@@ -12,8 +12,7 @@
       {"agentName": "reconnaissance"},
       {"agentName": "scanning"},
       {"agentName": "input_validation"},
-      {"agentName": "analysis"},
-      {"agentName": "reconnaissance"}
+      {"agentName": "analysis"}
     ]
   },
   {

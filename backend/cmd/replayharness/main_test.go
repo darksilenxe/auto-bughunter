@@ -8,21 +8,8 @@ import (
 	"testing"
 )
 
-func writeHistoricalRunFixture(t *testing.T, dir string) string {
+func writeHistoricalRunFixture(t *testing.T, dir, payload string) string {
 	t.Helper()
-	payload := `{
-  "scanId": "scan-1",
-  "target": "https://example.com",
-  "availableAgents": ["analysis", "reconnaissance", "scanning", "input_validation"],
-  "runs": [
-    {"agentName": "reconnaissance"},
-    {"agentName": "scanning"},
-    {"agentName": "input_validation"},
-    {"agentName": "analysis"},
-    {"agentName": "reconnaissance"}
-  ]
-}
-`
 	path := filepath.Join(dir, "history.json")
 	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -32,7 +19,18 @@ func writeHistoricalRunFixture(t *testing.T, dir string) string {
 
 func TestRunPassesGateThresholds(t *testing.T) {
 	dir := t.TempDir()
-	input := writeHistoricalRunFixture(t, dir)
+	input := writeHistoricalRunFixture(t, dir, `{
+  "scanId": "scan-1",
+  "target": "https://example.com",
+  "availableAgents": ["analysis", "reconnaissance", "scanning", "input_validation"],
+  "runs": [
+    {"agentName": "reconnaissance"},
+    {"agentName": "scanning"},
+    {"agentName": "input_validation"},
+    {"agentName": "analysis"}
+  ]
+}
+`)
 	var stdout, stderr bytes.Buffer
 
 	err := run([]string{
@@ -54,7 +52,18 @@ func TestRunPassesGateThresholds(t *testing.T) {
 
 func TestRunFailsWhenCandidateRegresses(t *testing.T) {
 	dir := t.TempDir()
-	input := writeHistoricalRunFixture(t, dir)
+	input := writeHistoricalRunFixture(t, dir, `{
+  "scanId": "scan-2",
+  "target": "https://example.com",
+  "availableAgents": ["analysis", "reconnaissance", "scanning", "input_validation"],
+  "runs": [
+    {"agentName": "reconnaissance"},
+    {"agentName": "scanning"},
+    {"agentName": "input_validation"},
+    {"agentName": "analysis"}
+  ]
+}
+`)
 	var stdout, stderr bytes.Buffer
 
 	err := run([]string{
@@ -73,7 +82,15 @@ func TestRunFailsWhenCandidateRegresses(t *testing.T) {
 
 func TestRunFailsOnEarlyStopCeiling(t *testing.T) {
 	dir := t.TempDir()
-	input := writeHistoricalRunFixture(t, dir)
+	input := writeHistoricalRunFixture(t, dir, `{
+  "scanId": "scan-3",
+  "target": "https://example.com",
+  "availableAgents": [],
+  "runs": [
+    {"agentName": "reconnaissance"}
+  ]
+}
+`)
 	var stdout, stderr bytes.Buffer
 
 	err := run([]string{
