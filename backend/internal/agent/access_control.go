@@ -29,6 +29,16 @@ func (a *AccessControlAgent) Enabled() bool {
 	return a.enabled
 }
 
+// accessControlChecks is the canonical ordered list of checks this agent
+// performs. An AI advisor may reorder or skip entries based on scan context.
+var accessControlChecks = []string{
+	"idor",
+	"weak_auth",
+	"default_creds",
+	"admin_panel",
+	"priv_escalation",
+}
+
 func (a *AccessControlAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
 		AgentName: a.Name(),
@@ -39,23 +49,35 @@ func (a *AccessControlAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Test for IDOR vulnerabilities
-	output.Findings = append(output.Findings, testIDOR(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. When no advice is present the default order
+	// (idor → weak_auth → default_creds → admin_panel → priv_escalation) is
+	// preserved exactly.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, accessControlChecks)
 
-	// Test for weak authentication
-	output.Findings = append(output.Findings, testWeakAuthentication(ctx, client, input.Target)...)
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"idor":           func() []model.Finding { return testIDOR(ctx, client, input.Target, input.AuthProfile) },
+		"weak_auth":      func() []model.Finding { return testWeakAuthentication(ctx, client, input.Target) },
+		"default_creds":  func() []model.Finding { return testDefaultCredentials(ctx, client, input.Target) },
+		"admin_panel":    func() []model.Finding { return testAdminPanelExposure(ctx, client, input.Target) },
+		"priv_escalation": func() []model.Finding {
+			return testPrivilegeEscalation(ctx, client, input.Target, input.AuthProfile)
+		},
+	}
 
-	// Test for default credentials
-	output.Findings = append(output.Findings, testDefaultCredentials(ctx, client, input.Target)...)
-
-	// Test for admin panel exposure
-	output.Findings = append(output.Findings, testAdminPanelExposure(ctx, client, input.Target)...)
-
-	// Test for privilege escalation
-	output.Findings = append(output.Findings, testPrivilegeEscalation(ctx, client, input.Target, input.AuthProfile)...)
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "Access control testing completed."
+	output.DebugNotes = "Access control testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 

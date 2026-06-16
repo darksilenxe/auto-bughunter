@@ -29,6 +29,16 @@ func (a *InformationDisclosureAgent) Enabled() bool {
 	return a.enabled
 }
 
+// informationDisclosureChecks is the canonical ordered list of checks this
+// agent performs. An AI advisor may reorder or skip entries based on context.
+var informationDisclosureChecks = []string{
+	"sensitive_headers",
+	"debug_info",
+	"sensitive_files",
+	"api_key_exposure",
+	"internal_ip",
+}
+
 func (a *InformationDisclosureAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
 		AgentName: a.Name(),
@@ -39,23 +49,42 @@ func (a *InformationDisclosureAgent) Run(ctx context.Context, input AgentInput) 
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Test for sensitive headers
-	output.Findings = append(output.Findings, testSensitiveHeaders(ctx, client, input.Target, input.AuthProfile)...)
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. Default order is preserved when no advice is
+	// present.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, informationDisclosureChecks)
 
-	// Test for stack traces and debug information
-	output.Findings = append(output.Findings, testDebugInformation(ctx, client, input.Target, input.AuthProfile)...)
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"sensitive_headers": func() []model.Finding {
+			return testSensitiveHeaders(ctx, client, input.Target, input.AuthProfile)
+		},
+		"debug_info": func() []model.Finding {
+			return testDebugInformation(ctx, client, input.Target, input.AuthProfile)
+		},
+		"sensitive_files": func() []model.Finding {
+			return testSensitiveFiles(ctx, client, input.Target, input.AuthProfile)
+		},
+		"api_key_exposure": func() []model.Finding {
+			return testAPIKeyExposure(ctx, client, input.Target, input.AuthProfile)
+		},
+		"internal_ip": func() []model.Finding {
+			return testInternalIPExposure(ctx, client, input.Target, input.AuthProfile)
+		},
+	}
 
-	// Test for sensitive files and paths
-	output.Findings = append(output.Findings, testSensitiveFiles(ctx, client, input.Target, input.AuthProfile)...)
-
-	// Test for API key/token leakage
-	output.Findings = append(output.Findings, testAPIKeyExposure(ctx, client, input.Target, input.AuthProfile)...)
-
-	// Test for internal IP exposure
-	output.Findings = append(output.Findings, testInternalIPExposure(ctx, client, input.Target, input.AuthProfile)...)
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
+		}
+		if fn, ok := checkMap[check]; ok {
+			output.Findings = append(output.Findings, fn()...)
+		}
+	}
 
 	output.Metadata["findings_count"] = fmt.Sprintf("%d", len(output.Findings))
-	output.DebugNotes = "Information disclosure testing completed."
+	output.DebugNotes = "Information disclosure testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 

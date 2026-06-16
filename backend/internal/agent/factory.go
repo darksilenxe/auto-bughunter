@@ -111,6 +111,9 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 //   - "llm_chain_synthesis" uses the coding model to synthesize novel attack chains.
 //   - "adaptive_probe" uses the planning model for one-probe-at-a-time AI decisions.
 //   - "reasoning_iteration" uses the planning model for reflection and iteration rationale.
+//   - Static agents (input_validation, access_control, information_disclosure,
+//     api_security, cors_redirect) gain AI-guided check ordering and post-run
+//     lesson synthesis via an AgentAdvisor wrapper.
 //
 // This is called after NewFactory once the AI client is available. It is safe
 // to call concurrently with other factory operations.
@@ -138,6 +141,27 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	// provider routing in ai.Client (planningComplete).
 	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(c, nil, true) })
 	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(c, nil, true) })
+
+	// Wrap static deterministic agents with an AgentAdvisor so that each scan
+	// benefits from AI-guided check ordering and learns from its own results.
+	// When shouldCallProvider() is false the advisor is a no-op and behaviour
+	// is identical to the unwrapped agents.
+	advisor := NewAgentAdvisor(c)
+	f.Register("input_validation", func() Agent {
+		return advisor.Wrap(NewInputValidationAgent(true), inputValidationChecks)
+	})
+	f.Register("access_control", func() Agent {
+		return advisor.Wrap(NewAccessControlAgent(true), accessControlChecks)
+	})
+	f.Register("information_disclosure", func() Agent {
+		return advisor.Wrap(NewInformationDisclosureAgent(true), informationDisclosureChecks)
+	})
+	f.Register("api_security", func() Agent {
+		return advisor.Wrap(NewAPISecurityAgent(true), apiSecurityChecks)
+	})
+	f.Register("cors_redirect", func() Agent {
+		return advisor.Wrap(NewCORSRedirectAgent(true), corsRedirectChecks)
+	})
 }
 
 // Register adds or replaces a builder for the given agent name.

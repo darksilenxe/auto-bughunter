@@ -29,6 +29,17 @@ func (a *InputValidationAgent) Enabled() bool {
 	return a.enabled
 }
 
+// inputValidationChecks is the canonical ordered list of checks this agent
+// performs. The order defines the default execution priority; an AI advisor
+// may reorder or skip entries for a given scan context.
+var inputValidationChecks = []string{
+	"sqli",
+	"xss",
+	"path_traversal",
+	"xxe",
+	"cmd_injection",
+}
+
 func (a *InputValidationAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
 		AgentName: a.Name(),
@@ -41,58 +52,41 @@ func (a *InputValidationAgent) Run(ctx context.Context, input AgentInput) (Agent
 	// tests many payloads sequentially. Also check context before each test.
 	client := &http.Client{Timeout: 3 * time.Second}
 
-	// Early exit if context is already cancelled
+	// Early exit if context is already cancelled.
 	select {
 	case <-ctx.Done():
 		return output, ctx.Err()
 	default:
 	}
 
-	// Test for SQL injection - early exit on first finding to avoid timeouts
-	if findings := testSQLInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
-		output.Findings = append(output.Findings, findings...)
-		output.DebugNotes = "Input validation testing completed early (SQL injection found)"
-		return output, nil
+	// If an AgentAdvisor pre-run hook wrote advice to the blackboard, use it
+	// to reorder or skip checks. When no advice is present the default order
+	// (sqli → xss → path_traversal → xxe → cmd_injection) is preserved.
+	advice := ParseAdviceNote(input.SharedScanContext.GetNote(a.Name()))
+	ordered := OrderChecks(advice, inputValidationChecks)
+
+	type checkFn func() []model.Finding
+	checkMap := map[string]checkFn{
+		"sqli":           func() []model.Finding { return testSQLInjection(ctx, client, input.Target, input.AuthProfile) },
+		"xss":            func() []model.Finding { return testXSSVulnerability(ctx, client, input.Target, input.AuthProfile) },
+		"path_traversal": func() []model.Finding { return testPathTraversal(ctx, client, input.Target, input.AuthProfile) },
+		"xxe":            func() []model.Finding { return testXXEInjection(ctx, client, input.Target, input.AuthProfile) },
+		"cmd_injection":  func() []model.Finding { return testCommandInjection(ctx, client, input.Target, input.AuthProfile) },
 	}
 
-	// Test for XSS vulnerabilities - only if context still valid
-	if ctx.Err() == nil {
-		if findings := testXSSVulnerability(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
-			output.Findings = append(output.Findings, findings...)
-			output.DebugNotes = "Input validation testing completed early (XSS found)"
-			return output, nil
+	for _, check := range ordered {
+		if ctx.Err() != nil {
+			break
 		}
-	}
-
-	// Test for path traversal - only if context still valid
-	if ctx.Err() == nil {
-		if findings := testPathTraversal(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
-			output.Findings = append(output.Findings, findings...)
-			output.DebugNotes = "Input validation testing completed early (path traversal found)"
-			return output, nil
+		fn, ok := checkMap[check]
+		if !ok {
+			continue
 		}
-	}
-
-	// Test for XXE injection - only if context still valid
-	if ctx.Err() == nil {
-		if findings := testXXEInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
-			output.Findings = append(output.Findings, findings...)
-			output.DebugNotes = "Input validation testing completed early (XXE found)"
-			return output, nil
-		}
-	}
-
-	// Test for command injection - only if context still valid
-	if ctx.Err() == nil {
-		if findings := testCommandInjection(ctx, client, input.Target, input.AuthProfile); len(findings) > 0 {
-			output.Findings = append(output.Findings, findings...)
-			output.DebugNotes = "Input validation testing completed early (command injection found)"
-			return output, nil
-		}
+		output.Findings = append(output.Findings, fn()...)
 	}
 
 	output.Metadata["findings_count"] = strconv.Itoa(len(output.Findings))
-	output.DebugNotes = "Input validation testing completed. Tested for SQL injection, XSS, path traversal, XXE, and command injection."
+	output.DebugNotes = "Input validation testing completed. Checked: " + strings.Join(ordered, ", ") + "."
 	return output, nil
 }
 
