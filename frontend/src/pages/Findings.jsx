@@ -2,31 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useToast } from "../components/Toast";
 import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 import { impactGoalMeta, proofStateLabel, sortFindings, summarizeFindings } from "../lib/impact";
-
-const HACKTRICKS_URLS = {
-  xss: "https://book.hacktricks.xyz/pentesting-web/xss-cross-site-scripting",
-  sqli: "https://book.hacktricks.xyz/pentesting-web/sql-injection",
-  "sql injection": "https://book.hacktricks.xyz/pentesting-web/sql-injection",
-  csrf: "https://book.hacktricks.xyz/pentesting-web/csrf-cross-site-request-forgery",
-  ssrf: "https://book.hacktricks.xyz/pentesting-web/ssrf-server-side-request-forgery",
-  xxe: "https://book.hacktricks.xyz/pentesting-web/xxe-xee-xml-external-entity",
-  rce: "https://book.hacktricks.xyz/pentesting-web/command-injection",
-  "command injection": "https://book.hacktricks.xyz/pentesting-web/command-injection",
-  "path traversal": "https://book.hacktricks.xyz/pentesting-web/file-inclusion",
-  lfi: "https://book.hacktricks.xyz/pentesting-web/file-inclusion",
-  rfi: "https://book.hacktricks.xyz/pentesting-web/file-inclusion",
-  idor: "https://book.hacktricks.xyz/pentesting-web/idor",
-  "open redirect": "https://book.hacktricks.xyz/pentesting-web/open-redirect",
-  "request smuggling": "https://book.hacktricks.xyz/pentesting-web/http-request-smuggling",
-  ssti: "https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection",
-  "template injection": "https://book.hacktricks.xyz/pentesting-web/ssti-server-side-template-injection",
-  clickjacking: "https://book.hacktricks.xyz/pentesting-web/clickjacking",
-  jwt: "https://book.hacktricks.xyz/pentesting-web/hacking-jwt-json-web-tokens",
-  oauth: "https://book.hacktricks.xyz/pentesting-web/oauth-to-account-takeover",
-  "auth bypass": "https://book.hacktricks.xyz/pentesting-web/login-bypass",
-  "broken access": "https://book.hacktricks.xyz/pentesting-web/broken-access-control",
-  "mass assignment": "https://book.hacktricks.xyz/pentesting-web/mass-assignment",
-};
+import { coverageReferenceForFinding } from "../lib/webVulnerabilityCoverage";
 
 const LIFECYCLE_TRANSITIONS = {
   "": ["verified", "rejected", "suppressed"],
@@ -39,11 +15,7 @@ const LIFECYCLE_TRANSITIONS = {
 };
 
 function hackTricksUrl(finding) {
-  const haystack = `${finding.title || ""} ${finding.category || ""} ${finding.description || ""}`.toLowerCase();
-  for (const [keyword, url] of Object.entries(HACKTRICKS_URLS)) {
-    if (haystack.includes(keyword)) return url;
-  }
-  return "https://book.hacktricks.xyz/pentesting-web/web-vulnerabilities-methodology";
+  return coverageReferenceForFinding(finding) || "https://hacktricks.wiki/en/pentesting-web/web-vulnerabilities-methodology";
 }
 
 export default function Findings() {
