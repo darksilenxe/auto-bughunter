@@ -297,6 +297,7 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 	hasAuthIssue := false
 	hasUploadEndpoint := false
 	hasRCEIndicator := false
+	hasAIAgent := false
 	for _, f := range allFindings {
 		if f.Severity == model.SeverityHigh {
 			hasHigh = true
@@ -306,6 +307,14 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 		ev := strings.ToLower(f.Evidence)
 		if strings.Contains(cat, "injection") || strings.Contains(title, "sql") || strings.Contains(ev, "sql") {
 			hasSQLi = true
+		}
+		if strings.Contains(cat, "ai-agent") || strings.Contains(cat, "prompt-injection") ||
+			strings.Contains(cat, "ai-insecure-output") || strings.Contains(cat, "ai-disclosure") ||
+			strings.Contains(cat, "ai-excessive-agency") || strings.Contains(cat, "ai-dos") ||
+			strings.Contains(cat, "ai-agent-vulnerabilities") ||
+			strings.Contains(title, "llm") || strings.Contains(title, "prompt injection") ||
+			strings.Contains(title, "ai agent") || strings.Contains(title, "language model") {
+			hasAIAgent = true
 		}
 		if strings.Contains(title, "wordpress") || strings.Contains(ev, "wordpress") || strings.Contains(ev, "wp-content") {
 			hasWordPress = true
@@ -340,6 +349,13 @@ func (r *Registry) orchestrate(ctx context.Context, completedAgent string, outpu
 
 	_ = hasSQLi
 	_ = hasWordPress
+
+	// Spawn the AI vulnerability expert when any AI agent indicator is present.
+	// This is evaluated globally (not tied to a single completedAgent case) so
+	// the expert runs regardless of which phase first surfaces an AI finding.
+	if hasAIAgent {
+		spawned = append(spawned, "openhack_expert")
+	}
 
 	// Static rules.
 	switch completedAgent {

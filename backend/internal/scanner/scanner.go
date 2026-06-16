@@ -397,6 +397,16 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runSMTPInjectionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runCloudStorageProbe(ctx, input, bodyText)...)
 
+	// AI/LLM agent vulnerability probes.
+	// Run detection first; it marks DetectedTech["ai-agent"] so all subsequent
+	// probes can gate themselves without re-probing the endpoint.
+	findings = append(findings, s.runAIAgentDetectProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runActivePromptInjectionProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runAIOutputHandlingProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runAIDisclosureProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runAIToolAbuseProbe(ctx, input, bodyText)...)
+	findings = append(findings, s.runAIDOSProbe(ctx, input, bodyText)...)
+
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
 	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
 	if err != nil {
