@@ -288,19 +288,19 @@ var (
 	agentsByName   = map[string]*Counter{}
 	agentsByNameMu sync.Mutex
 
-	agentDurationByName   = map[string]*Histogram{}
-	agentFindingsByName   = map[string]*Histogram{}
-	agentStatusByKey      = map[string]*Counter{}
-	agentDetailMetricsMu  sync.Mutex
+	agentDurationByName  = map[string]*Histogram{}
+	agentFindingsByName  = map[string]*Histogram{}
+	agentStatusByKey     = map[string]*Counter{}
+	agentDetailMetricsMu sync.Mutex
 
 	toolRunsByKey     = map[string]*Counter{}
 	toolDurationByKey = map[string]*Histogram{}
 	toolMetricsMu     sync.Mutex
 
-	aiCallsByType        = map[string]*Counter{}
-	aiDurationByType     = map[string]*Histogram{}
-	aiErrorsByType       = map[string]*Counter{}
-	aiCallMetricsMu      sync.Mutex
+	aiCallsByType    = map[string]*Counter{}
+	aiDurationByType = map[string]*Histogram{}
+	aiErrorsByType   = map[string]*Counter{}
+	aiCallMetricsMu  sync.Mutex
 )
 
 // FindingRecorded increments the findings counter for the given severity label.
@@ -545,6 +545,9 @@ func escapeLabel(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
 	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "&", `\x26`)
+	s = strings.ReplaceAll(s, "<", `\x3c`)
+	s = strings.ReplaceAll(s, ">", `\x3e`)
 	return s
 }
 

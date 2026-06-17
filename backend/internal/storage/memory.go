@@ -979,6 +979,20 @@ func (s *MemoryStore) ListAPIKeys(ctx context.Context, workspaceID string) ([]mo
 	return out, nil
 }
 
+func (s *MemoryStore) GetAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.apiKeys[strings.TrimSpace(id)]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	rec := cloneValue(state.Record)
+	return &rec, nil
+}
+
 func (s *MemoryStore) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, string, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, "", err
@@ -1232,19 +1246,18 @@ func cloneValue[T any](value T) T {
 	return out
 }
 
-
 func (m *MemoryStore) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
-m.mu.Lock()
-defer m.mu.Unlock()
-m.agentEvents[scanID] = append(m.agentEvents[scanID], event)
-return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.agentEvents[scanID] = append(m.agentEvents[scanID], event)
+	return nil
 }
 
 func (m *MemoryStore) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
-m.mu.RLock()
-defer m.mu.RUnlock()
-events := m.agentEvents[scanID]
-result := make([]model.ScanEvent, len(events))
-copy(result, events)
-return result, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	events := m.agentEvents[scanID]
+	result := make([]model.ScanEvent, len(events))
+	copy(result, events)
+	return result, nil
 }

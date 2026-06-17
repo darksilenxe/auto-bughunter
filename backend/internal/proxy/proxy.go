@@ -81,19 +81,15 @@ func NewServer(store Store) *Server {
 // so request and response bodies can be captured. When ca is nil, CONNECT
 // tunnels are passed through transparently.
 func NewServerWithCA(store Store, ca *CA) *Server {
+	transport := safety.NewSafeTransport()
+	transport.ResponseHeaderTimeout = 20 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.MaxIdleConns = 100
+	transport.IdleConnTimeout = 90 * time.Second
 	return &Server{
-		store: store,
-		ca:    ca,
-		transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   15 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 20 * time.Second,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-		},
+		store:     store,
+		ca:        ca,
+		transport: transport,
 	}
 }
 

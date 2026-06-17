@@ -1,14 +1,14 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 )
 
 // handleOASTTokens supports:
-//   GET  /api/oast/tokens            - list active tokens (optional ?scanId= filter)
-//   POST /api/oast/tokens            - issue a new token (body: {"scanId":"...","label":"..."})
+//
+//	GET  /api/oast/tokens            - list active tokens (optional ?scanId= filter)
+//	POST /api/oast/tokens            - issue a new token (body: {"scanId":"...","label":"..."})
 func (s *Server) handleOASTTokens(w http.ResponseWriter, r *http.Request) {
 	if s.oast == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "oast service not enabled"})
@@ -28,7 +28,7 @@ func (s *Server) handleOASTTokens(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
 			defer r.Body.Close()
 			// Empty body is fine; both fields are optional.
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = decodeJSONBody(w, r, &body)
 		}
 		tok := s.oast.Issue(strings.TrimSpace(body.ScanID), strings.TrimSpace(body.Label))
 		if tok.CallbackURL == "" {
@@ -45,7 +45,8 @@ func (s *Server) handleOASTTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOASTHits returns recorded callback interactions for a token.
-//   GET /api/oast/hits/{token}
+//
+//	GET /api/oast/hits/{token}
 func (s *Server) handleOASTHits(w http.ResponseWriter, r *http.Request) {
 	if s.oast == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "oast service not enabled"})

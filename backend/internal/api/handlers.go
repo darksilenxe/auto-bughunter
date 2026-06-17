@@ -639,7 +639,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req model.ScanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1582,7 +1582,7 @@ func (s *Server) handleProxyReplay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req model.ProxyReplayRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1654,7 +1654,7 @@ func (s *Server) handleScanAnnotate(w http.ResponseWriter, r *http.Request) {
 		Text   string `json:"text"`
 		Author string `json:"author,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1730,7 +1730,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req model.ReportFeedback
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1771,7 +1771,7 @@ func (s *Server) handleAutomationOperatorFeedback(w http.ResponseWriter, r *http
 		AgentName       string `json:"agentName"`
 		Notes           string `json:"notes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1833,7 +1833,7 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req model.FindingVerification
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -1983,7 +1983,7 @@ func (s *Server) handleSuppressions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req model.SuppressionRule
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -2070,7 +2070,7 @@ func (s *Server) handleAutomationEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req model.AutomationEventRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -2154,7 +2154,7 @@ func (s *Server) handleAutomationCampaigns(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, items)
 	case http.MethodPost, http.MethodPut:
 		var req model.AutomationCampaignUpsertRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
@@ -2441,7 +2441,7 @@ func (s *Server) handleAutomationROIOverrides(w http.ResponseWriter, r *http.Req
 			ProgramName       string  `json:"programName"`
 			MinExpectedROIUSD float64 `json:"minExpectedRoiUsd"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
@@ -2955,7 +2955,7 @@ func (s *Server) handleAutomationPolicyPacks(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		var req model.AutomationPolicyPack
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
@@ -3363,7 +3363,7 @@ func (s *Server) handleAutomationRebalance(w http.ResponseWriter, r *http.Reques
 		Rollback       bool    `json:"rollback"`
 		ExpectedMinROI float64 `json:"expectedMinRoiUsd"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -6036,7 +6036,8 @@ func sendWebhookJSON(target string, payload any) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Transport: safety.NewSafeTransport(),
+		Timeout:   5 * time.Second,
 		CheckRedirect: func(redirReq *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")

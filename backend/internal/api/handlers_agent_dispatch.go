@@ -26,7 +26,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -65,7 +64,7 @@ func (s *Server) handleAgentDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req agentDispatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
