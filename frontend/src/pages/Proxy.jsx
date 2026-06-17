@@ -666,7 +666,19 @@ function ConfigureTab({ settings }) {
   }
 
   const proxyURL = `${settings.host}:${settings.port}`;
-  const caDownloadURL = `${API_BASE}/api/proxy/ca-certificate?api_key=${encodeURIComponent(API_KEY)}`;
+  const downloadCA = async () => {
+    const res = await fetch(`${API_BASE}/api/proxy/ca-certificate`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const objectURL = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectURL;
+    anchor.download = "auto-bughunter-proxy-ca.pem";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectURL);
+  };
   return (
     <div className="two-column-grid">
       <section className="card">
@@ -678,7 +690,7 @@ function ConfigureTab({ settings }) {
               Download the auto-generated CA certificate and import it into your browser/OS trust store so HTTPS requests are intercepted without warnings.
             </p>
             <div className="button-row" style={{ marginTop: 10 }}>
-              <a href={caDownloadURL} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
+              <button type="button" onClick={downloadCA} className="button-link">Download CA certificate</button>
             </div>
           </div>
         )}
@@ -708,7 +720,7 @@ HTTP Proxy: ${settings.host}    Port: ${settings.port}
               {settings.caNotAfter && <li>Expires: <code>{settings.caNotAfter}</code></li>}
             </ul>
             <div className="button-row" style={{ marginTop: 14 }}>
-              <a href={caDownloadURL} download="auto-bughunter-proxy-ca.pem" className="button-link">Download CA certificate</a>
+              <button type="button" onClick={downloadCA} className="button-link">Download CA certificate</button>
             </div>
             <pre className="summary" style={{ marginTop: 14 }}>{`Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import…
 macOS:   open auto-bughunter-proxy-ca.pem → Keychain Access → set "Always Trust"

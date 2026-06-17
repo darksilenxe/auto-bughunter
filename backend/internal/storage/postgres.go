@@ -2535,6 +2535,10 @@ func (p *Postgres) ListAPIKeys(ctx context.Context, workspaceID string) ([]model
 	return out, rows.Err()
 }
 
+func (p *Postgres) GetAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, error) {
+	return p.getAPIKeyByID(ctx, id)
+}
+
 func (p *Postgres) RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, string, error) {
 	raw, err := generateRawAPIKey()
 	if err != nil {
@@ -2896,46 +2900,46 @@ func redactText(value string) string {
 }
 
 func (p *Postgres) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
-eventJSON, err := json.Marshal(event)
-if err != nil {
-return fmt.Errorf("marshal agent event: %w", err)
-}
-_, err = p.execContext(ctx, `
+	eventJSON, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal agent event: %w", err)
+	}
+	_, err = p.execContext(ctx, `
 INSERT INTO scan_agent_events (scan_id, event, created_at)
 VALUES ($1, $2, $3)
 `, scanID, eventJSON, event.Timestamp)
-if err != nil {
-return fmt.Errorf("insert agent event: %w", err)
-}
-return nil
+	if err != nil {
+		return fmt.Errorf("insert agent event: %w", err)
+	}
+	return nil
 }
 
 func (p *Postgres) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
-rows, err := p.queryContext(ctx, `
+	rows, err := p.queryContext(ctx, `
 SELECT event
 FROM scan_agent_events
 WHERE scan_id = $1
 ORDER BY id ASC
 `, scanID)
-if err != nil {
-return nil, fmt.Errorf("query agent events: %w", err)
-}
-defer rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("query agent events: %w", err)
+	}
+	defer rows.Close()
 
-var events []model.ScanEvent
-for rows.Next() {
-var eventJSON []byte
-if err := rows.Scan(&eventJSON); err != nil {
-return nil, fmt.Errorf("scan agent event: %w", err)
-}
-var event model.ScanEvent
-if err := json.Unmarshal(eventJSON, &event); err != nil {
-return nil, fmt.Errorf("unmarshal agent event: %w", err)
-}
-events = append(events, event)
-}
-if err := rows.Err(); err != nil {
-return nil, fmt.Errorf("rows err: %w", err)
-}
-return events, nil
+	var events []model.ScanEvent
+	for rows.Next() {
+		var eventJSON []byte
+		if err := rows.Scan(&eventJSON); err != nil {
+			return nil, fmt.Errorf("scan agent event: %w", err)
+		}
+		var event model.ScanEvent
+		if err := json.Unmarshal(eventJSON, &event); err != nil {
+			return nil, fmt.Errorf("unmarshal agent event: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+	return events, nil
 }

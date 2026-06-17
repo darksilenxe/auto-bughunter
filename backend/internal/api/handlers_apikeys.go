@@ -1,7 +1,8 @@
 package api
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -39,7 +40,7 @@ func (s *Server) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"apiKeys": keys})
 	case http.MethodPost:
 		var req apiKeyCreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
@@ -91,6 +92,19 @@ func (s *Server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch action {
 	case "rotate":
+		existing, err := store.GetAPIKey(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "api key not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load api key"})
+			return
+		}
+		if !canAccessWorkspace(r.Context(), existing.WorkspaceID) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+			return
+		}
 		record, raw, err := store.RotateAPIKey(r.Context(), id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to rotate api key"})
@@ -102,6 +116,19 @@ func (s *Server) handleAPIKeyByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"apiKey": record, "token": raw})
 	case "revoke":
+		existing, err := store.GetAPIKey(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "api key not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load api key"})
+			return
+		}
+		if !canAccessWorkspace(r.Context(), existing.WorkspaceID) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+			return
+		}
 		if err := store.RevokeAPIKey(r.Context(), id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke api key"})
 			return

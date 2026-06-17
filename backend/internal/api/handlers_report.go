@@ -3,7 +3,6 @@ package api
 import (
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,7 +141,7 @@ func (s *Server) serveMainReport(w http.ResponseWriter, r *http.Request, scanID 
 		return
 	}
 
-	opts, format, reportType, err := parseReportRequest(r)
+	opts, format, reportType, err := parseReportRequest(w, r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -385,7 +384,7 @@ func (s *Server) loadJobOrRespond(w http.ResponseWriter, r *http.Request, scanID
 // parseReportRequest pulls ReportTemplateOptions, format, and report type from
 // either the query string (GET) or the JSON body (POST). Query-string
 // parameters take precedence for format/type.
-func parseReportRequest(r *http.Request) (model.ReportTemplateOptions, string, string, error) {
+func parseReportRequest(w http.ResponseWriter, r *http.Request) (model.ReportTemplateOptions, string, string, error) {
 	q := r.URL.Query()
 	opts := model.ReportTemplateOptions{
 		CompanyName:    strings.TrimSpace(q.Get("companyName")),
@@ -398,7 +397,7 @@ func parseReportRequest(r *http.Request) (model.ReportTemplateOptions, string, s
 
 	if r.Method == http.MethodPost {
 		var body model.ReportTemplateOptions
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		if err := decodeJSONBody(w, r, &body); err != nil && !errors.Is(err, io.EOF) {
 			return opts, "", "", fmt.Errorf("invalid JSON body: %w", err)
 		}
 		// JSON body fills in any unset values.

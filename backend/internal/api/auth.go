@@ -31,6 +31,7 @@ const principalContextKey contextKey = "apiPrincipal"
 type APIKeyStore interface {
 	CreateAPIKey(ctx context.Context, workspaceID, name string, role model.APIKeyRole) (*model.APIKeyRecord, string, error)
 	ListAPIKeys(ctx context.Context, workspaceID string) ([]model.APIKeyRecord, error)
+	GetAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, error)
 	RotateAPIKey(ctx context.Context, id string) (*model.APIKeyRecord, string, error)
 	RevokeAPIKey(ctx context.Context, id string) error
 	AuthenticateAPIKey(ctx context.Context, rawKey string) (*model.APIKeyRecord, error)
@@ -273,7 +274,7 @@ func extractAPIKey(r *http.Request) string {
 	if h := strings.TrimSpace(r.Header.Get("X-API-Key")); h != "" {
 		return h
 	}
-	if q := strings.TrimSpace(r.URL.Query().Get("api_key")); q != "" {
+	if q := strings.TrimSpace(r.URL.Query().Get("api_key")); q != "" && allowQueryAPIKey(r) {
 		return q
 	}
 	authz := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -281,6 +282,15 @@ func extractAPIKey(r *http.Request) string {
 		return strings.TrimSpace(authz[7:])
 	}
 	return ""
+}
+
+func allowQueryAPIKey(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := r.URL.Path
+	return strings.HasPrefix(path, "/api/scan/") && strings.HasSuffix(path, "/events") ||
+		path == "/api/proxy/browse"
 }
 
 func normalizeAPIKeyRole(raw string) model.APIKeyRole {

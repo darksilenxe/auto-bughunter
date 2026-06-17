@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -106,7 +105,7 @@ func (s *Server) handleProxyIntruder(w http.ResponseWriter, r *http.Request) {
 		OverrideHeaders map[string]string `json:"overrideHeaders"`
 		OverrideBody    string            `json:"overrideBody"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
@@ -199,7 +198,8 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 	// history and on the Network Graph.  RecordingTransport saves each
 	// request/response pair; no additional save is needed here.
 	rt := &proxy.RecordingTransport{
-		Store: s.proxyServer.Store(),
+		Wrapped: safety.NewSafeTransport(),
+		Store:   s.proxyServer.Store(),
 	}
 	client := &http.Client{
 		Transport: rt,
@@ -279,8 +279,8 @@ func injectBaseHref(body []byte, targetURL string) []byte {
 
 // handleProxyPassiveFindings serves the passive-scan finding store.
 //
-//   GET    /api/proxy/passive-findings  — returns all deduplicated findings
-//   DELETE /api/proxy/passive-findings  — clears the finding store
+//	GET    /api/proxy/passive-findings  — returns all deduplicated findings
+//	DELETE /api/proxy/passive-findings  — clears the finding store
 //
 // Findings are discovered automatically whenever traffic flows through the
 // intercepting proxy or through the proxy browse endpoint.

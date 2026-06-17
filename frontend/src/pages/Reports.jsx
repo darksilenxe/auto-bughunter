@@ -28,6 +28,7 @@ export default function Reports() {
   const [checklist, setChecklist] = useState({});
   const [showChecklist, setShowChecklist] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [previewURL, setPreviewURL] = useState("");
 
   const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
@@ -53,12 +54,10 @@ export default function Reports() {
   }
 
   const reportURL = (overrides = {}) => {
-    const apiKey = getAPIKey();
     const workspaceId = getWorkspaceID();
     const params = new URLSearchParams();
     params.set("format", overrides.format || format);
     params.set("type", overrides.type || reportType);
-    params.set("api_key", apiKey);
     params.set("workspaceId", workspaceId);
     if (companyName) params.set("companyName", companyName);
     if (classification) params.set("classification", classification);
@@ -103,10 +102,42 @@ export default function Reports() {
     }
   };
 
+  const downloadWithAuth = async (url, filename) => {
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    const res = await fetch(url, { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const objectURL = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectURL;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(objectURL);
+  };
+
+  const togglePreview = async () => {
+    if (showPreview) {
+      setShowPreview(false);
+      if (previewURL) URL.revokeObjectURL(previewURL);
+      setPreviewURL("");
+      return;
+    }
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    const res = await fetch(reportURL({ format: "html" }), { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    setPreviewURL(URL.createObjectURL(blob));
+    setShowPreview(true);
+  };
+
   const copyBugBountySubmission = async (finding) => {
     const apiKey = getAPIKey();
     const workspaceId = getWorkspaceID();
-    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&api_key=${encodeURIComponent(apiKey)}&workspaceId=${encodeURIComponent(workspaceId)}`;
+    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&workspaceId=${encodeURIComponent(workspaceId)}`;
     try {
       const res = await fetch(url, { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
       if (!res.ok) {
@@ -257,10 +288,10 @@ export default function Reports() {
           </div>
 
           <div className="button-row" style={{ marginTop: 16 }}>
-            <a href={reportURL()} download={filenameFor()} className="button-link">Download report</a>
-            <a href={`${API_BASE}/api/report/${scanId}/bugbounty.zip?api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}.zip`} className="button-link">Download bounty bundle</a>
+            <button type="button" className="button-link" onClick={() => downloadWithAuth(reportURL(), filenameFor())}>Download report</button>
+            <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/bugbounty.zip?workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}.zip`)}>Download bounty bundle</button>
             {format === "html" && (
-              <button type="button" className="button-secondary" onClick={() => setShowPreview((v) => !v)}>
+              <button type="button" className="button-secondary" onClick={togglePreview}>
                 {showPreview ? "Hide preview" : "Preview HTML"}
               </button>
             )}
@@ -270,7 +301,7 @@ export default function Reports() {
             <div style={{ marginTop: 16 }}>
               <p className="meta" style={{ marginBottom: 8 }}>Inline HTML preview (scrollable):</p>
               <iframe
-                src={reportURL()}
+                src={previewURL}
                 title="HTML report preview"
                 style={{ width: "100%", height: 600, border: "1px solid var(--border)", borderRadius: 10, background: "#fff" }}
                 sandbox="allow-same-origin"
@@ -323,8 +354,8 @@ export default function Reports() {
                         <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>
                           {copyStatus[finding.id] || "Copy via API"}
                         </button>
-                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.md`} className="button-link">.md</a>
-                        <a href={`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf&api_key=${encodeURIComponent(getAPIKey())}&workspaceId=${encodeURIComponent(getWorkspaceID())}`} download={`bugbounty-${scanId}-${finding.id}.pdf`} className="button-link">.pdf</a>
+                        <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}-${finding.id}.md`)}>.md</button>
+                        <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}-${finding.id}.pdf`)}>.pdf</button>
                       </div>
                     </td>
                   </tr>
