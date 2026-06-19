@@ -10,6 +10,7 @@ import (
 	"auto-bughunter/backend/internal/memory"
 	"auto-bughunter/backend/internal/metrics"
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/oast"
 )
 
 type Agent interface {
@@ -48,10 +49,11 @@ func recordProbeAsync(recorder ProbeRecorder, scanID string, pr model.ProbeResul
 }
 
 type AgentInput struct {
-	Target      string
-	AuthProfile model.ScanAuthProfile
-	Options     model.ScanOptions
-	Scope       model.ScanScope
+	Target       string
+	AuthProfile  model.ScanAuthProfile
+	Options      model.ScanOptions
+	Scope        model.ScanScope
+	RoleProfiles []model.RoleAuthProfile
 	// ScanID is the parent scan job identifier. It is used by agents that
 	// persist per-probe evidence to the probe_records table.
 	ScanID string
@@ -78,6 +80,16 @@ type AgentInput struct {
 	// that execute probes query it for prior outcomes on similar targets and
 	// upsert confirmed results so the platform learns in real time.
 	MemoryStore memory.Store
+	// OAST is an optional out-of-band interaction service used by probes that
+	// confirm SSRF / host-header style interactions through callback hits.
+	OAST *oast.Service
+	// PriorSurfaceSnapshot is the previously persisted surface fingerprint for
+	// the target. Agents that analyse surface drift can update it.
+	PriorSurfaceSnapshot *model.SurfaceSnapshot
+	// RoleReplay marks a follow-up execution under an alternate role profile.
+	// Agents can use this to skip baseline-only probes that would otherwise be
+	// duplicated for every role replay.
+	RoleReplay bool
 }
 
 type AgentOutput struct {
@@ -96,6 +108,9 @@ type AgentOutput struct {
 	// Each step has Thought (the AI's internal reasoning), Evidence (what signals
 	// it observed), and Conclusion (what it decided and why).
 	ReasoningTrace []ReasoningStep
+	// SurfaceSnapshot carries an updated surface fingerprint produced by agents
+	// that compute drift or refresh attack-surface state.
+	SurfaceSnapshot *model.SurfaceSnapshot
 }
 
 // ReasoningStep is one step in an agent's chain-of-thought trace.
