@@ -55,7 +55,7 @@ func (s *Service) RunHostHeaderInjectionProbe(
 	scanScope model.ScanScope,
 	options model.ScanOptions,
 	auth model.ScanAuthProfile,
-	oastSvc *oast.Service,
+	oastSvc oast.Provider,
 	emit func(model.ScanEvent),
 ) []model.Finding {
 	if options.PassiveOnly {

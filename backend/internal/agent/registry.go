@@ -80,9 +80,9 @@ type AgentInput struct {
 	// that execute probes query it for prior outcomes on similar targets and
 	// upsert confirmed results so the platform learns in real time.
 	MemoryStore memory.Store
-	// OAST is an optional out-of-band interaction service used by probes that
+	// OAST is an optional out-of-band interaction provider used by probes that
 	// confirm SSRF / host-header style interactions through callback hits.
-	OAST *oast.Service
+	OAST oast.Provider
 	// PriorSurfaceSnapshot is the previously persisted surface fingerprint for
 	// the target. Agents that analyse surface drift can update it.
 	PriorSurfaceSnapshot *model.SurfaceSnapshot
