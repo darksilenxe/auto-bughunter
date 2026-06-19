@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"auto-bughunter/backend/internal/model"
@@ -63,9 +64,65 @@ func (s *Service) runDNSSANProbe(ctx context.Context, input RunInput) []model.Fi
 	return findings
 }
 
-// ---------------------------------------------------------------------------
-// DNS checks
-// ---------------------------------------------------------------------------
+// runDNSSANProbeForHosts spawns one DNS/SAN sub-agent per discovered hostname
+// in parallel and merges the results. This is called from the integration
+// pipeline (Phase 5) so every host surfaced by subfinder, certificate
+// transparency, or shuffledns gets the same DNS + SAN coverage as the base
+// target.
+//
+// scheme is inferred from the base target ("https" by default).
+// hosts should already be deduplicated by the caller.
+func (s *Service) runDNSSANProbeForHosts(ctx context.Context, scheme string, hosts []string) []model.Finding {
+	if len(hosts) == 0 {
+		return nil
+	}
+	if scheme == "" {
+		scheme = "https"
+	}
+
+	type hostResult struct {
+		findings []model.Finding
+	}
+	resultCh := make(chan hostResult, len(hosts))
+
+	var wg sync.WaitGroup
+	for _, h := range hosts {
+		h := strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(hostname string) {
+			defer wg.Done()
+			// Synthesise a target URL for this host using the base scheme.
+			targetURL := scheme + "://" + hostname
+			subInput := RunInput{Target: targetURL}
+			found := s.runDNSSANProbe(ctx, subInput)
+			resultCh <- hostResult{findings: found}
+		}(h)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Merge and deduplicate findings.  We key on ID+hostname so we don't
+	// suppress legitimate identical findings across different hosts.
+	seen := map[string]struct{}{}
+	var all []model.Finding
+	for res := range resultCh {
+		for _, f := range res.findings {
+			key := f.ID + "|" + f.AffectedURL
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			all = append(all, f)
+		}
+	}
+	return all
+}
 
 func checkDNSRecords(ctx context.Context, hostname, target string) []model.Finding {
 	resolver := &net.Resolver{}

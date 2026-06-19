@@ -3,7 +3,9 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
+	"sync"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/toolclient"
@@ -165,4 +167,142 @@ func (s *Service) RunUISimulationProbe(
 	}
 
 	return findings, discovered
+}
+
+// uiSimulationMaxOrigins caps the number of parallel simulation agents so the
+// scan budget doesn't explode for targets with hundreds of discovered endpoints.
+const uiSimulationMaxOrigins = 8
+
+// RunUISimulationAgents collects all unique in-scope origins reachable from the
+// scan target (base URL, SeedRuntimeEndpoints, and all endpoints already
+// discovered by earlier integration phases) and spawns one simulation agent per
+// origin in parallel.  The combined findings and discovered endpoints from all
+// agents are returned to the caller.
+//
+// This turns the UI simulation from a single-target crawl into a full-scope
+// agentic sweep: every distinct application entry point (dashboard, admin panel,
+// API playground, etc.) is exercised by its own headless browser session.
+func (s *Service) RunUISimulationAgents(
+	ctx context.Context,
+	input RunInput,
+	state *integrationState,
+) ([]model.Finding, []DiscoveredEndpoint) {
+	if !s.cfg.EnableUISimulation {
+		return nil, nil
+	}
+
+	client := toolclient.NewUISimulationClient()
+	if !client.IsAvailable(ctx) {
+		return nil, nil
+	}
+
+	// Collect unique origins to simulate.
+	origins := uiSimulationCollectOrigins(input, state)
+
+	type agentResult struct {
+		findings  []model.Finding
+		endpoints []DiscoveredEndpoint
+	}
+	resultCh := make(chan agentResult, len(origins))
+
+	var wg sync.WaitGroup
+	for i, origin := range origins {
+		if i >= uiSimulationMaxOrigins {
+			break
+		}
+		wg.Add(1)
+		go func(targetOrigin string) {
+			defer wg.Done()
+			// Build a per-origin RunInput derived from the original.
+			originInput := input
+			originInput.Target = targetOrigin
+			f, ep := s.RunUISimulationProbe(ctx, originInput)
+			resultCh <- agentResult{findings: f, endpoints: ep}
+		}(origin)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	seenFinding := map[string]bool{}
+	seenEP := map[string]bool{}
+	var allFindings []model.Finding
+	var allEndpoints []DiscoveredEndpoint
+
+	for res := range resultCh {
+		for _, f := range res.findings {
+			if !seenFinding[f.ID+"|"+f.AffectedURL] {
+				seenFinding[f.ID+"|"+f.AffectedURL] = true
+				allFindings = append(allFindings, f)
+			}
+		}
+		for _, ep := range res.endpoints {
+			key := ep.Method + "|" + ep.URL
+			if !seenEP[key] {
+				seenEP[key] = true
+				allEndpoints = append(allEndpoints, ep)
+			}
+		}
+	}
+
+	if len(origins) > 1 {
+		allFindings = append(allFindings, model.Finding{
+			ID:       "ui-simulation-multi-origin",
+			Category: "discovery",
+			Severity: model.SeverityInfo,
+			Title:    fmt.Sprintf("UI simulation ran %d parallel agents across %d origin(s)", len(origins), len(origins)),
+			Description: "The UI simulation ran one independent headless browser agent per unique " +
+				"in-scope application origin so that every distinct entry point receives " +
+				"full human-behaviour simulation coverage.",
+			Evidence: fmt.Sprintf("origins=%s totalEndpointsDiscovered=%d",
+				strings.Join(origins, ", "), len(allEndpoints)),
+			Recommendation: "Review the per-origin crawl findings below for missing authentication, " +
+				"injection sinks, and access-control gaps.",
+		})
+	}
+
+	return allFindings, allEndpoints
+}
+
+// uiSimulationCollectOrigins returns deduplicated, in-scope origin URLs for
+// the simulation agents.  An "origin" is scheme+host — all paths under the same
+// host are crawled by the same agent starting from the root.
+func uiSimulationCollectOrigins(input RunInput, state *integrationState) []string {
+	seen := map[string]struct{}{}
+	var origins []string
+
+	addOrigin := func(rawURL string) {
+		u, err := url.Parse(strings.TrimSpace(rawURL))
+		if err != nil || u.Host == "" {
+			return
+		}
+		origin := u.Scheme + "://" + u.Host
+		if _, ok := seen[origin]; ok {
+			return
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+
+	// 1. Base target (always first).
+	addOrigin(input.Target)
+
+	// 2. Explicit seeds provided by the user.
+	for _, seed := range input.Options.SeedRuntimeEndpoints {
+		addOrigin(seed)
+	}
+
+	// 3. Endpoints discovered by earlier phases (katana, gau, ffuf, etc.).
+	if state != nil {
+		state.mu.Lock()
+		eps := append([]string(nil), state.DiscoveredEndpoints...)
+		state.mu.Unlock()
+		for _, ep := range eps {
+			addOrigin(ep)
+		}
+	}
+
+	return origins
 }
