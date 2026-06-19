@@ -116,8 +116,9 @@ type Config struct {
 	EnableRetireJS    bool
 	EnableTruffleHog  bool
 	EnableUncover     bool
-	EnableSemgrep     bool
-	AllowDestructive  bool
+	EnableSemgrep        bool
+	EnableUISimulation   bool
+	AllowDestructive     bool
 	NucleiBinary      string
 	ZAPBaselineBinary string
 	XSSMapBinary      string

@@ -114,6 +114,7 @@ func main() {
 		EnableTruffleHog:   getbool("ENABLE_TRUFFLEHOG_INTEGRATION", false),
 		EnableUncover:      getbool("ENABLE_UNCOVER_INTEGRATION", false),
 		EnableSemgrep:      getbool("ENABLE_SEMGREP_INTEGRATION", false),
+		EnableUISimulation: getbool("ENABLE_UI_SIMULATION", false),
 		AllowDestructive:   getbool("ALLOW_DESTRUCTIVE_CHECKS", false),
 		NucleiBinary:       getenv("NUCLEI_BINARY", "nuclei"),
 		ZAPBaselineBinary:  getenv("ZAP_BASELINE_BINARY", "zap-baseline.py"),

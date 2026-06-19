@@ -342,6 +342,15 @@ return res
 			return s.runLinkFinder(ctx, input.Target, input.Scope, state)
 		})...)
 	}
+	if input.Options.UseUISimulationIntegration {
+		findings = append(findings, runTool("ui-simulation", input.Target, func() []model.Finding {
+			simFindings, simEndpoints := s.RunUISimulationProbe(ctx, input)
+			for _, ep := range simEndpoints {
+				state.addEndpoints(ep.URL)
+			}
+			return simFindings
+		})...)
+	}
 
 	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {

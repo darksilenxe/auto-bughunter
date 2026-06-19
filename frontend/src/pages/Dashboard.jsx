@@ -97,6 +97,7 @@ export default function Dashboard() {
   const [useNuclei, setUseNuclei] = useState(true);
   const [useZap, setUseZap] = useState(false);
   const [useXSSMap, setUseXSSMap] = useState(false);
+  const [useUISimulation, setUseUISimulation] = useState(false);
   const [useMLTriage, setUseMLTriage] = useState(true);
   const [useAttackPath, setUseAttackPath] = useState(true);
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(true);
@@ -160,7 +161,7 @@ export default function Dashboard() {
       cookiesJson, userAgent, loginUrl, username, password,
       basicAuthUsername, basicAuthPassword,
       includeHosts, excludeHosts, excludePaths, programRules,
-      useNuclei, useZap, useXSSMap, useMLTriage, useAttackPath,
+      useNuclei, useZap, useXSSMap, useUISimulation, useMLTriage, useAttackPath,
       useFalsePositiveReview, useRemediationPlanner, useAIToolCalling,
       aggressiveExploitation, humanPaced, strictReporting, minReportConfidence,
       loginSteps, impactGoals,
@@ -188,6 +189,7 @@ export default function Dashboard() {
     if (cfg.useNuclei !== undefined) setUseNuclei(cfg.useNuclei);
     if (cfg.useZap !== undefined) setUseZap(cfg.useZap);
     if (cfg.useXSSMap !== undefined) setUseXSSMap(cfg.useXSSMap);
+    if (cfg.useUISimulation !== undefined) setUseUISimulation(cfg.useUISimulation);
     if (cfg.useMLTriage !== undefined) setUseMLTriage(cfg.useMLTriage);
     if (cfg.useAttackPath !== undefined) setUseAttackPath(cfg.useAttackPath);
     if (cfg.useFalsePositiveReview !== undefined) setUseFalsePositiveReview(cfg.useFalsePositiveReview);
@@ -231,6 +233,7 @@ export default function Dashboard() {
     setUseNuclei(preset.useNuclei);
     setUseZap(preset.useZap);
     setUseXSSMap(preset.useXSSMap);
+    setUseUISimulation(preset.useUISimulation ?? false);
     setUseMLTriage(preset.useMLTriage);
     setUseAttackPath(preset.useAttackPath);
     setUseFalsePositiveReview(preset.useFalsePositiveReview);
@@ -307,6 +310,7 @@ export default function Dashboard() {
         useNucleiIntegration: useNuclei,
         useZapBaselineIntegration: useZap,
         useXssMapIntegration: useXSSMap,
+        useUiSimulationIntegration: useUISimulation,
         useMLTriageAgent: useMLTriage,
         useAttackPathAgent: useAttackPath,
         useFalsePositiveReview,
@@ -626,6 +630,7 @@ export default function Dashboard() {
                 <label className="check"><input type="checkbox" checked={useNuclei} onChange={(e) => setUseNuclei(e.target.checked)} />Use Nuclei</label>
                 <label className="check"><input type="checkbox" checked={useZap} onChange={(e) => setUseZap(e.target.checked)} />Use ZAP baseline</label>
                 <label className="check"><input type="checkbox" checked={useXSSMap} onChange={(e) => setUseXSSMap(e.target.checked)} />Use XSSMap</label>
+                <label className="check"><input type="checkbox" checked={useUISimulation} onChange={(e) => setUseUISimulation(e.target.checked)} />UI simulation (human-behaviour crawl)</label>
                 <label className="check"><input type="checkbox" checked={useMLTriage} onChange={(e) => setUseMLTriage(e.target.checked)} />ML triage agent</label>
                 <label className="check"><input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />Attack path agent</label>
                 <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
