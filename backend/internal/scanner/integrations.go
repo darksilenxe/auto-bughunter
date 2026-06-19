@@ -342,6 +342,18 @@ return res
 			return s.runLinkFinder(ctx, input.Target, input.Scope, state)
 		})...)
 	}
+	if input.Options.UseUISimulationIntegration {
+		findings = append(findings, runTool("ui-simulation", input.Target, func() []model.Finding {
+			// RunUISimulationAgents spawns one parallel simulation agent per unique
+			// in-scope origin (base + all seeds + all discovered endpoints so far)
+			// so every distinct application entry point gets full coverage.
+			simFindings, simEndpoints := s.RunUISimulationAgents(ctx, input, state)
+			for _, ep := range simEndpoints {
+				state.addEndpoints(ep.URL)
+			}
+			return simFindings
+		})...)
+	}
 
 	// Phase 5 — TLS and infrastructure analysis.
 	if input.Options.UseTlsxIntegration {
@@ -357,6 +369,20 @@ return res
 	if input.Options.UseAsnmapIntegration {
 		findings = append(findings, runTool("asnmap", "-i "+input.Target, func() []model.Finding {
 			return s.runAsnmap(ctx, input.Target)
+		})...)
+	}
+
+	// Phase 5b — DNS/SAN sub-agents for every discovered host.
+	// Each host surfaced by subfinder, certificate transparency, shuffledns, etc.
+	// gets the same DNS record + certificate SAN coverage as the base target.
+	// Agents run in parallel so the cost scales with concurrency, not host count.
+	if len(state.DiscoveredHosts) > 0 {
+		baseScheme := "https"
+		if bu, err := url.Parse(input.Target); err == nil && bu.Scheme != "" {
+			baseScheme = bu.Scheme
+		}
+		findings = append(findings, runTool("dns-san-hosts", fmt.Sprintf("%d discovered hosts", len(state.DiscoveredHosts)), func() []model.Finding {
+			return s.runDNSSANProbeForHosts(ctx, baseScheme, state.DiscoveredHosts)
 		})...)
 	}
 

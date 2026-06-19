@@ -253,6 +253,43 @@ services:
       retries: 3
       start_period: 30s
 
+  # UI Simulation service — Playwright-powered human-behaviour simulator that
+  # drives a headless Chromium browser through a target web application:
+  # clicks tabs/buttons/nav elements, fills forms, scrolls, and captures all
+  # network requests generated during the session.  Enable by setting
+  # ENABLE_UI_SIMULATION=true in the backend environment.
+  ui-simulation-service:
+    build:
+      context: ./sidecars/ui-simulation-service
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${UI_SIMULATION_LOG_LEVEL:-INFO}
+    ports:
+      - "8096:8096"
+    volumes:
+      - sidecar_certs:/certs:ro
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8096"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import ssl,urllib.request; ctx=ssl.create_default_context(cafile='/certs/server.crt'); urllib.request.urlopen('https://ui-simulation-service:8096/health', timeout=10, context=ctx)\""]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models (~4 GB for dolphin-mistral).
   # Gated behind the `ollama` compose profile so it doesn't start by default
@@ -414,6 +451,8 @@ services:
         condition: service_started
       kiterunner:
         condition: service_started
+      ui-simulation-service:
+        condition: service_started
       # tool-updater is a one-shot service; we wait for it to *finish* so
       # nuclei templates are guaranteed up-to-date and the update report
       # is on disk before the backend starts serving /api/tools/updates.
@@ -472,7 +511,7 @@ services:
       # browser proceed; acceptable here because this Chromium only ever talks
       # to the trusted in-mesh proxy while scanning attacker-supplied targets.
       - --ignore-certificate-errors
-      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap
+      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap,ui-simulation-service
     restart: unless-stopped
     healthcheck:
       # Probe the DevTools port via socat (wget/curl are not in this image).

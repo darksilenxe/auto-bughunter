@@ -210,8 +210,9 @@ type ScanOptions struct {
 	UseLinkFinderIntegration  bool     `json:"useLinkFinderIntegration,omitempty"`
 	UseRetireJSIntegration    bool     `json:"useRetireJsIntegration,omitempty"`
 	UseTruffleHogIntegration  bool     `json:"useTruffleHogIntegration,omitempty"`
-	UseUncoverIntegration     bool     `json:"useUncoverIntegration,omitempty"`
-	RescanIntervalMinutes     int      `json:"rescanIntervalMinutes,omitempty"`
+	UseUncoverIntegration        bool     `json:"useUncoverIntegration,omitempty"`
+	UseUISimulationIntegration   bool     `json:"useUiSimulationIntegration,omitempty"`
+	RescanIntervalMinutes        int      `json:"rescanIntervalMinutes,omitempty"`
 	Priority                  int      `json:"priority,omitempty"`
 	MaxRetries                int      `json:"maxRetries,omitempty"`
 	BackoffMillis             int      `json:"backoffMillis,omitempty"`

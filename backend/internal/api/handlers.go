@@ -319,6 +319,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewReconnaissanceAgent(true))
 	reg.Register(agent.NewJavaScriptSASTAgent(scanService, true))
 	reg.Register(agent.NewScanningAgent(scanService, true))
+	reg.Register(agent.NewAdvancedCoverageAgent(scanService, true))
 	reg.Register(agent.NewInputValidationAgent(true))
 	reg.Register(agent.NewInformationDisclosureAgent(true))
 	reg.Register(agent.NewAccessControlAgent(true))
@@ -4725,14 +4726,27 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		AuthProfile:    authProfile,
 		Options:        options,
 		Scope:          scanScope,
+		RoleProfiles:   roleProfiles,
 		AutonomyMemory: autonomyMemory,
 		Emit:           emit,
 		ProbeRecorder:  s.repo,
 		MemoryStore:    s.memoryStore,
+		OAST:           s.oast,
+		PriorSurfaceSnapshot: func() *model.SurfaceSnapshot {
+			if persistedState == nil {
+				return nil
+			}
+			return persistedState.SurfaceSnapshot
+		}(),
 	}
 	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
 		return outputs, findings, err
+	}
+	if persistedState != nil {
+		if snapshot := latestSurfaceSnapshot(outputs); snapshot != nil {
+			persistedState.SurfaceSnapshot = snapshot
+		}
 	}
 	baselineFindings := append([]model.Finding(nil), findings...)
 	roleFindingMap := map[string][]model.Finding{}
@@ -4742,6 +4756,9 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		}
 		roleInput := input
 		roleInput.AuthProfile = rp.AuthProfile
+		roleInput.RoleReplay = true
+		roleInput.RoleProfiles = nil
+		roleInput.PriorSurfaceSnapshot = nil
 		roleOutputs, roleFindings, roleErr := s.runAgents(ctx, roleInput)
 		outputs = append(outputs, roleOutputs...)
 		if roleErr != nil {
@@ -4758,48 +4775,6 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		findings = append(findings, roleFindings...)
 	}
 	findings = append(findings, buildRoleDiffFindings(baselineFindings, roleFindingMap)...)
-	if s.scanService != nil {
-		findings = append(findings, s.scanService.RunIDORRoleDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
-		findings = append(findings, s.scanService.RunBusinessLogicDiff(ctx, target, scanScope, options, authProfile, roleProfiles, emit)...)
-		// Senior-parity probes: race conditions, OAuth, host-header injection,
-		// deserialization, DOM XSS, and stateful flow engine.
-		findings = append(findings, s.scanService.RunRaceConditionProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunOAuthProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunOAuthSessionProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunSAMLProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunMFAProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunLoginProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunSessionLifecycleProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunMagicLinkProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunJWTAdvancedProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunHostHeaderInjectionProbe(ctx, target, scanScope, options, authProfile, s.oast, emit)...)
-		findings = append(findings, s.scanService.RunDeserializationProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunDOMXSSProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunPostMessageProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunBrowserStorageProbe(ctx, target, scanScope, options, authProfile, emit)...)
-		findings = append(findings, s.scanService.RunFlowEngine(ctx, target, scanScope, options, authProfile, emit, nil)...)
-	}
-	// Exploit-chain analysis: deterministic, zero-request, runs on the full
-	// accumulated finding set to detect multi-step attack paths.
-	findings = append(findings, scanner.RunExploitChain(findings, emit)...)
-	// Surface diff probe: compare the current surface fingerprint against the
-	// prior snapshot to detect newly added or changed attack surface.
-	if s.scanService != nil {
-		var priorSnapshot *model.SurfaceSnapshot
-		if persistedState != nil {
-			priorSnapshot = persistedState.SurfaceSnapshot
-		}
-		surfaceFindings, newSnapshot := s.scanService.RunSurfaceDiffProbe(
-			ctx, target, options, authProfile,
-			"", // bodyText not re-fetched here; TakeSurfaceSnapshot probes well-known paths directly
-			priorSnapshot,
-			emit,
-		)
-		findings = append(findings, surfaceFindings...)
-		if persistedState != nil && newSnapshot != nil {
-			persistedState.SurfaceSnapshot = newSnapshot
-		}
-	}
 	return outputs, findings, nil
 }
 
@@ -5023,6 +4998,15 @@ func buildRoleDiffFindings(baseline []model.Finding, perRole map[string][]model.
 		})
 	}
 	return findings
+}
+
+func latestSurfaceSnapshot(outputs []agent.AgentOutput) *model.SurfaceSnapshot {
+	for i := len(outputs) - 1; i >= 0; i-- {
+		if outputs[i].SurfaceSnapshot != nil {
+			return outputs[i].SurfaceSnapshot
+		}
+	}
+	return nil
 }
 
 func (s *Server) acquireTargetSlot(target string, options model.ScanOptions) func() {
