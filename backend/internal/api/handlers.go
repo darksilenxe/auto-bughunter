@@ -4770,6 +4770,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		findings = append(findings, s.scanService.RunMFAProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunLoginProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunSessionLifecycleProbe(ctx, target, scanScope, options, authProfile, emit)...)
+		findings = append(findings, s.scanService.RunSessionEdgeCaseAgents(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunMagicLinkProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunJWTAdvancedProbe(ctx, target, scanScope, options, authProfile, emit)...)
 		findings = append(findings, s.scanService.RunHostHeaderInjectionProbe(ctx, target, scanScope, options, authProfile, s.oast, emit)...)

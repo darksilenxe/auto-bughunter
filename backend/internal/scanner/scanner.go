@@ -339,6 +339,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, checkTLS(u.Host)...)
 		findings = append(findings, s.runTLSConfigProbe(ctx, input)...)
 	}
+	emitCmd(fmt.Sprintf("dns-san %s", u.Hostname()), "Evaluating DNS records and certificate SANs")
+	findings = append(findings, s.runDNSSANProbe(ctx, input)...)
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	bodyText := string(bodyBytes)

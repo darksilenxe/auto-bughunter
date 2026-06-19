@@ -454,8 +454,7 @@ func checkCertSANs(hostname, addr, target string) []model.Finding {
 	}
 
 	// ── 2. Hostname ↔ SAN mismatch ─────────────────────────────────────────
-	if len(dnsNames) > 0 && !leaf.VerifyHostname(hostname) == false {
-		// VerifyHostname returns nil on match; check the actual error
+	if len(dnsNames) > 0 {
 		if verifyErr := leaf.VerifyHostname(hostname); verifyErr != nil {
 			findings = append(findings, model.Finding{
 				ID:       "cert-san-hostname-mismatch",
