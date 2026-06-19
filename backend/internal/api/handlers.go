@@ -82,7 +82,7 @@ type Server struct {
 	persistenceTimeout         time.Duration
 	enrichmentHook             func(ctx context.Context, target string, findings []model.Finding, jobSnapshot *model.ScanJob) enrichmentResult
 	eventBus                   *EventBus
-	oast                       *oast.Service
+	oast                       oast.Provider
 	attackGraphDB              AttackGraphStore
 	memoryStore                memory.Store
 	mcpServer                  *mcp.Server
@@ -134,9 +134,9 @@ const (
 	noSignalRateThreshold = 0.90
 )
 
-// SetOAST attaches an OAST service so its admin endpoints become active.
+// SetOAST attaches an OAST provider so its admin endpoints become active.
 // Safe to call with nil to disable.
-func (s *Server) SetOAST(o *oast.Service) { s.oast = o }
+func (s *Server) SetOAST(o oast.Provider) { s.oast = o }
 
 // SetProxyServer replaces the API server's intercepting proxy with an
 // externally-built one (e.g. configured with a CA for HTTPS interception).

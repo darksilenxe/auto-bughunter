@@ -13,6 +13,7 @@ import (
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/api"
 	"auto-bughunter/backend/internal/graphdb"
+	"auto-bughunter/backend/internal/interactsh"
 	"auto-bughunter/backend/internal/knowledge"
 	"auto-bughunter/backend/internal/logbuffer"
 	"auto-bughunter/backend/internal/memory"
@@ -196,18 +197,53 @@ func main() {
 		os.Getenv("SIDECAR_AUTH_TOKEN"),
 	)
 
-	// Optional self-hosted OAST (out-of-band) callback service. When enabled,
-	// scanners can request a callback URL and detect blind/out-of-band
-	// vulnerabilities (e.g. SSRF) by observing inbound interactions.
-	var oastSvc *oast.Service
-	if getbool("ENABLE_OAST", false) {
-		oastSvc = oast.NewService(oast.Config{
+	// Out-of-band (OAST) callback service.
+	//
+	// Two mutually exclusive back-ends are supported:
+	//
+	//   ENABLE_INTERACTSH=true  — use the projectdiscovery interactsh public
+	//     (or self-hosted) server. No local listener is required; the client
+	//     registers with the remote server, pre-allocates a pool of unique
+	//     interaction domains and polls periodically for DNS/HTTP/SMTP hits.
+	//
+	//   ENABLE_OAST=true        — start a self-hosted HTTP callback listener
+	//     on OAST_LISTEN_PORT. Requires OAST_PUBLIC_BASE_URL to be reachable
+	//     by probe targets.
+	//
+	// When both are set, interactsh takes priority.
+	var oastProvider oast.Provider
+	if getbool("ENABLE_INTERACTSH", false) {
+		icfg := interactsh.Config{
+			ServerURL:    strings.TrimSpace(os.Getenv("INTERACTSH_SERVER_URL")),
+			Token:        strings.TrimSpace(os.Getenv("INTERACTSH_TOKEN")),
+			PollInterval: time.Duration(getint("INTERACTSH_POLL_INTERVAL_SECONDS", 5)) * time.Second,
+			TTL:          time.Duration(getint("INTERACTSH_TOKEN_TTL_MINUTES", 60)) * time.Minute,
+		}
+		client, err := interactsh.New(icfg)
+		if err != nil {
+			log.Printf("interactsh: init error: %v", err)
+		} else if err := client.Start(context.Background()); err != nil {
+			log.Printf("interactsh: start error (continuing without OAST): %v", err)
+		} else {
+			oastProvider = client
+			log.Printf("interactsh: registered with %s (correlation ID prefix: ...%s)", client.PublicBaseURL(), "registered")
+			// Pre-allocate interaction domains so agents have a ready pool.
+			if n := getint("INTERACTSH_PREALLOCATE_DOMAINS", 0); n > 0 {
+				urls := client.PreAllocate(n)
+				log.Printf("interactsh: pre-allocated %d interaction domain(s):", len(urls))
+				for _, u := range urls {
+					log.Printf("  %s", u)
+				}
+			}
+		}
+	} else if getbool("ENABLE_OAST", false) {
+		oastSvc := oast.NewService(oast.Config{
 			PublicBaseURL:   strings.TrimSpace(os.Getenv("OAST_PUBLIC_BASE_URL")),
 			TTL:             time.Duration(getint("OAST_TOKEN_TTL_MINUTES", 60)) * time.Minute,
 			MaxBodyBytes:    int64(getint("OAST_MAX_BODY_BYTES", 4096)),
 			MaxHitsPerToken: getint("OAST_MAX_HITS_PER_TOKEN", 25),
 		})
-		scanService.SetOAST(oastSvc)
+		oastProvider = oastSvc
 		oastAddr := ":" + getenv("OAST_LISTEN_PORT", "9000")
 		oastHttpServer := &http.Server{
 			Addr:              oastAddr,
@@ -225,6 +261,9 @@ func main() {
 				log.Printf("oast listener error: %v", err)
 			}
 		}()
+	}
+	if oastProvider != nil {
+		scanService.SetOAST(oastProvider)
 	}
 
 	server := api.NewServer(
@@ -245,8 +284,8 @@ func main() {
 		},
 		time.Duration(getint("SCAN_TIMEOUT_SECONDS", 600))*time.Second,
 	)
-	if oastSvc != nil {
-		server.SetOAST(oastSvc)
+	if oastProvider != nil {
+		server.SetOAST(oastProvider)
 	}
 	if attackGraphStore != nil {
 		server.SetAttackGraphStore(attackGraphStore)

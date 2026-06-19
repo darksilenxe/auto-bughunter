@@ -26,7 +26,7 @@ import (
 type Service struct {
 	httpClient     *http.Client
 	cfg            Config
-	oast           *oast.Service
+	oast           oast.Provider
 	proxyStore     proxy.Store
 	scannerProxy   ProxyConfig
 	proxyTransport http.RoundTripper
@@ -47,11 +47,11 @@ var (
 	htmlWhitespaceRe  = regexp.MustCompile(`\s+`)
 )
 
-// SetOAST attaches an OAST service. Safe to call with nil to disable.
-func (s *Service) SetOAST(o *oast.Service) { s.oast = o }
+// SetOAST attaches an OAST provider. Safe to call with nil to disable.
+func (s *Service) SetOAST(o oast.Provider) { s.oast = o }
 
-// OAST returns the attached OAST service or nil.
-func (s *Service) OAST() *oast.Service { return s.oast }
+// OAST returns the attached OAST provider or nil.
+func (s *Service) OAST() oast.Provider { return s.oast }
 
 // SetProxyStore attaches a proxy store so that all outbound HTTP requests made
 // by the scanner are recorded and visible in the Network Graph UI. Safe to
