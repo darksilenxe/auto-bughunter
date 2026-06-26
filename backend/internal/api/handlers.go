@@ -534,6 +534,10 @@ func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 		s.handleScanEvents(w, r)
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/probes") {
+		s.handleListScanProbes(w, r)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/annotate") {
 		s.handleScanAnnotate(w, r)
 		return
@@ -724,6 +728,59 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 
 	go s.runJob(jobID, target, req.AuthProfile, req.AuthProfiles, req.Options, req.Scope)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": jobID, "status": "queued"})
+}
+
+// handleListScanProbes handles GET /api/scan/{id}/probes.
+func (s *Server) handleListScanProbes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/probes")
+	scanID := strings.TrimSpace(strings.TrimPrefix(path, "/api/scan/"))
+	if scanID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+
+	job, err := s.repo.GetJob(r.Context(), scanID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+		return
+	}
+	if job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+
+	records, err := s.repo.ListProbeRecords(r.Context(), scanID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list probe records"})
+		return
+	}
+
+	findingID := strings.TrimSpace(r.URL.Query().Get("findingId"))
+	if findingID != "" {
+		filtered := make([]model.ProbeRecord, 0, len(records))
+		for _, record := range records {
+			if record.FindingID == findingID {
+				filtered = append(filtered, record)
+			}
+		}
+		records = filtered
+	}
+	if records == nil {
+		records = []model.ProbeRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
 }
 
 func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {

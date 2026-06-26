@@ -42,6 +42,12 @@ func sampleJob() *model.ScanJob {
 				Recommendation:    "Use parameterized queries.",
 				AffectedURL:       "https://example.com/users",
 				AffectedParameter: "id",
+				ProofState:        model.ProofStateImpactDemonstrated,
+				ImpactScore:       0.88,
+				BountyScore:       0.84,
+				ProofArtifacts: []model.ProofArtifact{
+					{Type: "evidence", Label: "Raw evidence", Value: "responseDiff=other-user"},
+				},
 			},
 			{
 				ID:       "headers-missing-csp",
@@ -105,6 +111,11 @@ func TestRenderPentestMarkdownIncludesAllSections(t *testing.T) {
 		"SQL injection in id parameter",
 		"CWE-89",
 		"Reproduction Steps",
+		"Proof State",
+		"Impact Score:** 0.88",
+		"Bounty Score:** 0.84",
+		"**Proof Artifacts**",
+		"Raw evidence",
 		"Appendix A — Tools Used",
 	}
 	for _, s := range wantSubstrings {
@@ -200,6 +211,11 @@ func TestRenderPentestHTMLContainsExpectedTags(t *testing.T) {
 		"sev-high",
 		"SQL injection",
 		"<h2>Findings</h2>",
+		"Proof State",
+		"Impact Score:",
+		"Bounty Score:",
+		"Proof Artifacts:",
+		"Raw evidence",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("html missing %q", want)
