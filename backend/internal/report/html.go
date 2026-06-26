@@ -301,6 +301,7 @@ func writeFindingHTML(b *bytes.Buffer, index int, f model.Finding, target string
 		{"CWE", f.CWE},
 		{"OWASP", f.OWASPCategory},
 		{"CVSS", fmtCVSS(f.CVSSScore, f.CVSSVector)},
+		{"Proof State", strings.ReplaceAll(string(f.ProofState), "_", " ")},
 		{"Affected URL", findingAsset(f, target)},
 		{"Affected Parameter", f.AffectedParameter},
 	}
@@ -318,6 +319,19 @@ func writeFindingHTML(b *bytes.Buffer, index int, f model.Finding, target string
 	if f.Impact != "" {
 		b.WriteString("<p><strong>Impact:</strong> " + html.EscapeString(f.Impact) + "</p>\n")
 	}
+	if f.ImpactScore > 0 || f.BountyScore > 0 {
+		b.WriteString("<p>")
+		if f.ImpactScore > 0 {
+			b.WriteString("<strong>Impact Score:</strong> " + html.EscapeString(fmt.Sprintf("%.2f", f.ImpactScore)))
+		}
+		if f.ImpactScore > 0 && f.BountyScore > 0 {
+			b.WriteString("<br>")
+		}
+		if f.BountyScore > 0 {
+			b.WriteString("<strong>Bounty Score:</strong> " + html.EscapeString(fmt.Sprintf("%.2f", f.BountyScore)))
+		}
+		b.WriteString("</p>\n")
+	}
 	if len(f.ReproductionSteps) > 0 {
 		b.WriteString("<p><strong>Reproduction Steps:</strong></p>\n<ol>")
 		for _, s := range f.ReproductionSteps {
@@ -330,6 +344,23 @@ func writeFindingHTML(b *bytes.Buffer, index int, f model.Finding, target string
 	}
 	if f.PoC != "" {
 		b.WriteString("<p><strong>Proof of Concept:</strong></p>\n<pre>" + html.EscapeString(f.PoC) + "</pre>\n")
+	}
+	if len(f.ProofArtifacts) > 0 {
+		b.WriteString("<p><strong>Proof Artifacts:</strong></p>\n<ul>")
+		for _, artifact := range f.ProofArtifacts {
+			line := artifact.Label
+			if line == "" {
+				line = artifact.Type
+			}
+			if artifact.Value != "" {
+				line += ": " + artifact.Value
+			}
+			if artifact.Description != "" {
+				line += " — " + artifact.Description
+			}
+			b.WriteString("<li>" + html.EscapeString(line) + "</li>")
+		}
+		b.WriteString("</ul>\n")
 	}
 	if f.Recommendation != "" {
 		b.WriteString("<p><strong>Remediation:</strong> " + html.EscapeString(f.Recommendation) + "</p>\n")

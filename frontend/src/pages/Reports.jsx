@@ -12,6 +12,13 @@ const SUBMISSION_CHECKS = [
   { id: "scope", label: "Affected URL is within program scope" },
 ];
 
+function formatProofArtifactLine(artifact) {
+  const label = artifact?.label || artifact?.type || "Artifact";
+  const value = artifact?.value ? `: ${artifact.value}` : "";
+  const description = artifact?.description ? ` — ${artifact.description}` : "";
+  return `- **${label}**${value}${description}`;
+}
+
 export default function Reports() {
   const { job, scanId, screenshots } = useScan();
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
@@ -159,6 +166,7 @@ export default function Reports() {
       `**Severity:** ${(finding.severity || "info").toUpperCase()}${finding.cvss ? `  |  **CVSS:** ${Number(finding.cvss).toFixed(1)}` : ""}`,
       `**Affected URL:** ${finding.affectedUrl || "n/a"}`,
       `**Category:** ${finding.category || "n/a"}`,
+      finding.proofState ? `**Proof State:** ${proofStateLabel(finding.proofState)}` : "",
       "",
       `### Description`,
       finding.description || finding.impact || "No description provided.",
@@ -171,9 +179,14 @@ export default function Reports() {
         ? finding.reproductionSteps.map((s, i) => `${i + 1}. ${s}`)
         : ["No reproduction steps recorded."]),
       "",
+      `### Proof Artifacts`,
+      ...(finding.proofArtifacts?.length
+        ? finding.proofArtifacts.map((artifact) => formatProofArtifactLine(artifact))
+        : ["No structured proof artifacts were attached."]),
+      "",
       `### Remediation`,
       finding.recommendation || "No remediation guidance captured.",
-    ];
+    ].filter(Boolean);
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
       setCopyStatus((prev) => ({ ...prev, [finding.id + "_md"]: "Copied!" }));

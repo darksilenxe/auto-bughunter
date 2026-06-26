@@ -273,6 +273,7 @@ func writeFindingMarkdown(b *strings.Builder, index int, f model.Finding, target
 		{"CWE", f.CWE},
 		{"OWASP", f.OWASPCategory},
 		{"CVSS", fmtCVSS(f.CVSSScore, f.CVSSVector)},
+		{"Proof State", strings.ReplaceAll(string(f.ProofState), "_", " ")},
 		{"Affected URL", findingAsset(f, target)},
 		{"Affected Parameter", f.AffectedParameter},
 	}
@@ -289,6 +290,15 @@ func writeFindingMarkdown(b *strings.Builder, index int, f model.Finding, target
 	if f.Impact != "" {
 		b.WriteString("**Impact**\n\n" + f.Impact + "\n\n")
 	}
+	if f.ImpactScore > 0 || f.BountyScore > 0 {
+		if f.ImpactScore > 0 {
+			b.WriteString(fmt.Sprintf("**Impact Score:** %.2f  \n", f.ImpactScore))
+		}
+		if f.BountyScore > 0 {
+			b.WriteString(fmt.Sprintf("**Bounty Score:** %.2f  \n", f.BountyScore))
+		}
+		b.WriteString("\n")
+	}
 	if len(f.ReproductionSteps) > 0 {
 		b.WriteString("**Reproduction Steps**\n\n")
 		for i, s := range f.ReproductionSteps {
@@ -301,6 +311,20 @@ func writeFindingMarkdown(b *strings.Builder, index int, f model.Finding, target
 	}
 	if f.PoC != "" {
 		b.WriteString("**Proof of Concept**\n\n```\n" + f.PoC + "\n```\n\n")
+	}
+	if len(f.ProofArtifacts) > 0 {
+		b.WriteString("**Proof Artifacts**\n\n")
+		for _, artifact := range f.ProofArtifacts {
+			line := "- **" + artifact.Label + "**"
+			if artifact.Value != "" {
+				line += ": " + artifact.Value
+			}
+			if artifact.Description != "" {
+				line += " — " + artifact.Description
+			}
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("\n")
 	}
 	if f.Recommendation != "" {
 		b.WriteString("**Remediation**\n\n" + f.Recommendation + "\n\n")
