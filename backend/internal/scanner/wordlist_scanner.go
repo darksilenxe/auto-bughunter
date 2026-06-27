@@ -758,13 +758,6 @@ func tokenSet(text string) map[string]struct{} {
 	return out
 }
 
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 func isReflectedFallbackResponse(candidate, baseline pathStateFingerprint) bool {
 	if candidate.status < 200 || candidate.status >= 300 || baseline.status < 200 || baseline.status >= 300 {
 		return false
