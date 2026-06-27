@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,40 @@ func TestProbeMultipleSuppressesReflectedFallbackResponses(t *testing.T) {
 	}
 	if joined := strings.Join(summary.Suppressed, " "); !strings.Contains(joined, "reflects requested path in fallback template") {
 		t.Fatalf("expected reflected fallback suppression reason, got %q", joined)
+	}
+}
+
+func TestProbeMultipleSuppressesVolatileTokenFallbackResponses(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	nonceCounter := 0
+	nextNonce := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		nonceCounter++
+		char := 'a' + rune(nonceCounter%26)
+		return strings.Repeat(string(char), 24)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><head><title>Brand Portal</title><meta name="csrf-token" content="` + nextNonce() + `"></head><body>Welcome to the portal shell.</body></html>`))
+	}))
+	defer srv.Close()
+
+	ws := newWordlistTestScanner(srv.Client())
+	scanScope := scope.Normalize(srv.URL, model.ScanScope{})
+	profile, _, baseline := ws.captureEnumerationContext(context.Background(), srv.URL, model.ScanAuthProfile{}, scanScope)
+	results, summary := ws.probeMultiple(context.Background(), srv.URL, []string{"/admin", "/debug"}, model.ScanAuthProfile{}, scanScope, wordlistScanKindDirectory, profile, baseline)
+	if len(results) != 0 {
+		t.Fatalf("expected no discoveries, got %+v", results)
+	}
+	if summary.SuppressedCount != 2 {
+		t.Fatalf("expected 2 suppressed volatile-token fallbacks, got %d (%v)", summary.SuppressedCount, summary.Suppressed)
+	}
+	if joined := strings.Join(summary.Suppressed, " "); !strings.Contains(joined, "matches baseline fallback") {
+		t.Fatalf("expected baseline fallback suppression reason, got %q", joined)
 	}
 }
 

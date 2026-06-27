@@ -354,6 +354,29 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		input.DetectedTech = detectTechStack(resp.Header, bodyBytes)
 	}
 
+	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
+	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
+	if err != nil {
+		findings = append(findings, model.Finding{
+			ID:             "browser-error",
+			Category:       "scanner",
+			Severity:       model.SeverityLow,
+			Title:          "Headless browser check failed",
+			Description:    "The headless browser module could not complete on this target.",
+			Evidence:       err.Error(),
+			Recommendation: "Validate target accessibility and Chromium dependencies in the runner.",
+		})
+	} else {
+		findings = append(findings, browserFindings...)
+	}
+	// Record endpoints discovered by the SPA XHR interceptor and feed them
+	// back into the scan before vulnerability probes run, so probe candidates
+	// include API routes whose state changes do not appear in the HTML shell.
+	for _, ep := range browserEndpoints {
+		input.Session.AddDiscoveredEndpoint(ep)
+	}
+	seedRuntimeEndpointsFromSession(&input)
+
 	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
 	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
 	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
@@ -410,41 +433,6 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runAIToolAbuseProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runAIDOSProbe(ctx, input, bodyText)...)
 
-	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
-	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
-	if err != nil {
-		findings = append(findings, model.Finding{
-			ID:             "browser-error",
-			Category:       "scanner",
-			Severity:       model.SeverityLow,
-			Title:          "Headless browser check failed",
-			Description:    "The headless browser module could not complete on this target.",
-			Evidence:       err.Error(),
-			Recommendation: "Validate target accessibility and Chromium dependencies in the runner.",
-		})
-	} else {
-		findings = append(findings, browserFindings...)
-	}
-	// Record endpoints discovered by the SPA XHR interceptor and feed them
-	// back into the scan so all subsequent probes see the real API surface.
-	for _, ep := range browserEndpoints {
-		input.Session.AddDiscoveredEndpoint(ep)
-	}
-	if discovered := input.Session.DiscoveredURLs(); len(discovered) > 0 {
-		for _, du := range discovered {
-			alreadySeeded := false
-			for _, existing := range input.Options.SeedRuntimeEndpoints {
-				if existing == du {
-					alreadySeeded = true
-					break
-				}
-			}
-			if !alreadySeeded {
-				input.Options.SeedRuntimeEndpoints = append(input.Options.SeedRuntimeEndpoints, du)
-			}
-		}
-	}
-
 	// Stateful probes that require a live session (cookies/tokens already harvested).
 	if !input.Options.PassiveOnly {
 		findings = append(findings, s.runStoredXSSProbe(ctx, input)...)
@@ -459,6 +447,28 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, integrationFindings...)
 
 	return findings, nil
+}
+
+func seedRuntimeEndpointsFromSession(input *RunInput) {
+	if input == nil || input.Session == nil {
+		return
+	}
+	discovered := input.Session.DiscoveredURLs()
+	if len(discovered) == 0 {
+		return
+	}
+	for _, du := range discovered {
+		alreadySeeded := false
+		for _, existing := range input.Options.SeedRuntimeEndpoints {
+			if existing == du {
+				alreadySeeded = true
+				break
+			}
+		}
+		if !alreadySeeded {
+			input.Options.SeedRuntimeEndpoints = append(input.Options.SeedRuntimeEndpoints, du)
+		}
+	}
 }
 
 func discoverRuntimeSurface(target, body string, scanScope model.ScanScope) []model.Finding {

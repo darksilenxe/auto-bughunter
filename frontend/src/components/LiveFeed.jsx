@@ -6,6 +6,7 @@ const ICON = {
   agent_spawned:   "⚡",
   finding:         "◎",
   command:         "$",
+  command_result:  "⇐",
   screenshot:      "◫",
   info:            "•",
   reasoning_loop:  "⟳",
@@ -37,11 +38,12 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
         acc.total += 1;
         if (evt.type === "finding") acc.findings += 1;
         if (evt.type === "command") acc.commands += 1;
+        if (evt.type === "command_result") acc.commandResults += 1;
         if (evt.type === "reasoning_loop") acc.reasoningSteps += 1;
         if (evt.type === "agent_start" || evt.type === "agent_complete" || evt.type === "agent_spawned") acc.agentSteps += 1;
         return acc;
       },
-      { total: 0, findings: 0, commands: 0, agentSteps: 0, reasoningSteps: 0 }
+      { total: 0, findings: 0, commands: 0, commandResults: 0, agentSteps: 0, reasoningSteps: 0 }
     );
   }, [events]);
 
@@ -71,6 +73,9 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
             <span className="chip chip--reasoning">{counters.reasoningSteps} reasoning</span>
           )}
           <span className="chip chip--muted">{counters.commands} commands</span>
+          {counters.commandResults > 0 && (
+            <span className="chip chip--muted">{counters.commandResults} outputs</span>
+          )}
           <span className="chip chip--muted">{counters.findings} findings</span>
         </div>
       </div>
@@ -94,7 +99,18 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
                   <>[{evt.severity?.toUpperCase() || "INFO"}] {evt.findingTitle}</>
                 )}
                 {evt.type === "command" && (
-                  <><span style={{ color: "#7c8aa5" }}>$ </span>{evt.command}</>
+                  <>
+                    {evt.agentName ? <span style={{ color: "#7c8aa5" }}>[{evt.agentName}] </span> : null}
+                    <span style={{ color: "#7c8aa5" }}>$ </span>
+                    {evt.command || evt.message}
+                  </>
+                )}
+                {evt.type === "command_result" && (
+                  <>
+                    {evt.agentName ? <span style={{ color: "#7c8aa5" }}>[{evt.agentName}] </span> : null}
+                    {evt.command ? <span style={{ color: "#7c8aa5" }}>{evt.command} → </span> : null}
+                    {evt.output ? evt.output.split("\n").filter(Boolean)[0] || "(no output)" : "(no output)"}
+                  </>
                 )}
                 {evt.type === "screenshot" && (
                   <>
@@ -131,4 +147,3 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
     </section>
   );
 }
-

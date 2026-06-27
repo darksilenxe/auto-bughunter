@@ -23,8 +23,9 @@ import (
 
 var (
 	pathStateWhitespaceRe = regexp.MustCompile(`\s+`)
-	pathStateTokenRe      = regexp.MustCompile(`\b[0-9a-f]{8,}\b|\b\d{4,}\b`)
+	pathStateTokenRe      = regexp.MustCompile(`\b[0-9a-f]{8,}\b|\b\d{4,}\b|\b[0-9a-f]{8}-[0-9a-f-]{13,}\b|\b[a-z0-9_-]*\d[a-z0-9_-]{15,}\b|\b[a-z0-9+/]{24,}={0,2}\b`)
 	pathStateTitleRe      = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	pathStateWordRe       = regexp.MustCompile(`[a-z0-9_/-]{3,}`)
 	spaResponseHints      = []string{"id=\"root\"", "id='root'", "id=\"__next\"", "data-reactroot", "__nuxt", "data-v-app", "__vite", "single page app", "/_next/", "/_nuxt/"}
 	loginWallHints        = []string{"sign in", "log in", "login", "password", "remember me", "name=\"password\"", "name='password'"}
 	apiErrorEnvelopeHints = []string{"\"error\"", "\"message\"", "\"status\"", "\"path\"", "\"timestamp\"", "\"errors\""}
@@ -712,9 +713,49 @@ func isLoginRedirect(location string) bool {
 func samePathState(left, right pathStateFingerprint) bool {
 	return left.status == right.status &&
 		left.contentType == right.contentType &&
-		left.bodySample == right.bodySample &&
+		equivalentPathStateBody(left.bodySample, right.bodySample) &&
 		left.title == right.title &&
 		left.location == right.location
+}
+
+func equivalentPathStateBody(left, right string) bool {
+	if left == right {
+		return true
+	}
+	if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
+		return false
+	}
+	if absInt(len(left)-len(right)) > 64 {
+		return false
+	}
+	return jaccardTokenSimilarity(left, right) >= 0.95
+}
+
+func jaccardTokenSimilarity(left, right string) float64 {
+	leftTokens := tokenSet(left)
+	rightTokens := tokenSet(right)
+	if len(leftTokens) == 0 || len(rightTokens) == 0 {
+		return 0
+	}
+	intersection := 0
+	for token := range leftTokens {
+		if _, ok := rightTokens[token]; ok {
+			intersection++
+		}
+	}
+	union := len(leftTokens) + len(rightTokens) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func tokenSet(text string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, token := range pathStateWordRe.FindAllString(strings.ToLower(text), -1) {
+		out[token] = struct{}{}
+	}
+	return out
 }
 
 func isReflectedFallbackResponse(candidate, baseline pathStateFingerprint) bool {
