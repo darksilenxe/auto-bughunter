@@ -101,7 +101,31 @@ func (s *Service) RunDOMXSSProbe(
 	var findings []model.Finding
 	emitted := map[string]bool{}
 
+	// baselineTitles caches the control-navigation (no crafted fragment)
+	// title and body text for each endpoint. This lets us detect SPAs whose
+	// router echoes the route name or fragment into the document title or
+	// body as a normal (non-XSS) behaviour, preventing false positives where
+	// the marker appears in the DOM only because the SPA renders the hash as
+	// a route/page name, not because a DOM sink executed it.
+	type baseline struct {
+		title string
+		body  string
+	}
+	endpointBaselines := make(map[string]baseline, len(candidates))
 	for _, ep := range candidates {
+		blCtx, blCancel := chromedpContext(ctx)
+		var blTitle, blBody string
+		_ = chromedp.Run(blCtx,
+			chromedp.Navigate(ep),
+			chromedp.Title(&blTitle),
+			chromedp.InnerHTML("body", &blBody, chromedp.ByQuery),
+		)
+		blCancel()
+		endpointBaselines[ep] = baseline{title: blTitle, body: blBody}
+	}
+
+	for _, ep := range candidates {
+		bl := endpointBaselines[ep]
 		for _, payload := range domXSSPayloads {
 			fid := "dom-xss-" + payload.label + "-" + raceSlug(ep)
 			if emitted[fid] {
@@ -130,6 +154,21 @@ func (s *Service) RunDOMXSSProbe(
 			markerInBody := strings.Contains(bodyText, domXSSPayloadMarker)
 			markerInConsole := false
 
+			if !markerInTitle && !markerInBody && !markerInConsole {
+				continue
+			}
+
+			// Control check: if the marker was already present in the
+			// baseline navigation (no crafted fragment), the SPA is
+			// rendering the fragment as a route label or 404 message — this
+			// is not a DOM XSS sink. Only flag when the marker is absent in
+			// the baseline but present after fragment injection.
+			if markerInTitle && strings.Contains(bl.title, domXSSPayloadMarker) {
+				markerInTitle = false
+			}
+			if markerInBody && strings.Contains(bl.body, domXSSPayloadMarker) {
+				markerInBody = false
+			}
 			if !markerInTitle && !markerInBody && !markerInConsole {
 				continue
 			}

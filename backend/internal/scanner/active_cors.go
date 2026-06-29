@@ -67,12 +67,13 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 	}
 
 	type hit struct {
-		url           string
-		origin        string
-		allowOrigin   string
-		allowCreds    bool
-		nullVariant   bool
-		credentialed  bool // shorthand: high-severity case
+		url          string
+		origin       string
+		allowOrigin  string
+		allowCreds   bool
+		nullVariant  bool
+		credentialed bool // shorthand: high-severity case
+		jsonAPI      bool // true when the endpoint serves JSON (not HTML)
 	}
 	var hits []hit
 	attempts := 0
@@ -91,6 +92,29 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 		// safety.ValidateOutboundURL is intentionally not re-checked
 		// here: the URL comes from extractRuntimeEndpoints/SeedRuntimeEndpoints
 		// or input.Target, both of which are validated upstream.
+
+		// Control request — send without an Origin header. If the endpoint
+		// already responds with a non-empty Access-Control-Allow-Origin in
+		// the absence of an Origin header it is an intentional wildcard CORS
+		// policy, not a reflection attack. Flagging it would be a false
+		// positive: the server is not echoing our controlled value back.
+		// Consume one attempt slot for the control request.
+		var baselineACAO string
+		var isJSONAPI bool
+		if attempts < corsMaxAttempts {
+			ctrlReq, ctrlErr := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+			if ctrlErr == nil {
+				ApplyAuthProfile(ctrlReq, input.AuthProfile)
+				ctrlResp, ctrlErr := s.doRequestWithRetry(ctx, ctrlReq, input.Options)
+				attempts++
+				if ctrlErr == nil && ctrlResp != nil {
+					baselineACAO = strings.TrimSpace(ctrlResp.Header.Get("Access-Control-Allow-Origin"))
+					isJSONAPI = !isHTMLLikeContentType(ctrlResp.Header)
+					_ = ctrlResp.Body.Close()
+				}
+			}
+		}
+
 		for _, origin := range corsProbeOrigins {
 			if attempts >= corsMaxAttempts {
 				break
@@ -117,6 +141,13 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 			if !reflected && !nullVariant {
 				continue
 			}
+			// Skip if the baseline (no-Origin) response already returned the
+			// same ACAO value: this means the server unconditionally sends it
+			// without inspecting the Origin header, making it a permissive
+			// policy rather than an active reflection attack.
+			if baselineACAO != "" && strings.EqualFold(baselineACAO, allowOrigin) {
+				continue
+			}
 			hits = append(hits, hit{
 				url:          probeURL,
 				origin:       origin,
@@ -124,6 +155,7 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 				allowCreds:   allowCreds,
 				nullVariant:  nullVariant,
 				credentialed: allowCreds,
+				jsonAPI:      isJSONAPI,
 			})
 		}
 	}
@@ -146,6 +178,15 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 		severity = model.SeverityHigh
 		confidence = 0.92
 		title = "CORS misconfiguration with credentials: cross-origin reads of authenticated data"
+	} else if primary.jsonAPI {
+		// Non-credentialed CORS reflection on a JSON API endpoint is
+		// significantly lower impact: without cookies or session tokens the
+		// attacker cannot read authenticated responses. Downgrade severity
+		// so SPA backends that legitimately serve open APIs are not reported
+		// at medium; they still surface for review but at informational.
+		severity = model.SeverityInfo
+		confidence = 0.72
+		title = "CORS misconfiguration: attacker-controlled Origin reflected on unauthenticated JSON API"
 	}
 
 	urls := make([]string, 0, len(hits))
@@ -182,12 +223,13 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 		ReproductionSteps: steps,
 		PoC:               curl,
 		EvidenceFields: map[string]string{
-			"validationType":          "active-probe",
-			"reproStep":               "Replay the listed URL with the controlled Origin header and inspect ACAO/ACAC",
-			"reflectedOrigin":         primary.origin,
-			"allowOriginResponse":     primary.allowOrigin,
-			"credentialsAllowed":      fmt.Sprintf("%v", primary.credentialed),
-			"curlReproducer":          curl,
+			"validationType":      "active-probe",
+			"reproStep":           "Replay the listed URL with the controlled Origin header and inspect ACAO/ACAC",
+			"reflectedOrigin":     primary.origin,
+			"allowOriginResponse": primary.allowOrigin,
+			"credentialsAllowed":  fmt.Sprintf("%v", primary.credentialed),
+			"jsonAPIEndpoint":     fmt.Sprintf("%v", primary.jsonAPI),
+			"curlReproducer":      curl,
 		},
 	}}
 }
@@ -199,12 +241,16 @@ func idForCORSFinding(h struct {
 	allowCreds   bool
 	nullVariant  bool
 	credentialed bool
+	jsonAPI      bool
 }) string {
 	if h.credentialed {
 		return "active-cors-credentialed-reflection"
 	}
 	if h.nullVariant {
 		return "active-cors-null-origin-reflected"
+	}
+	if h.jsonAPI {
+		return "active-cors-json-api-origin-reflected"
 	}
 	return "active-cors-origin-reflected"
 }

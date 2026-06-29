@@ -169,6 +169,50 @@ return strings.TrimSpace(f.AffectedParameter) != "" || strings.TrimSpace(f.Affec
 hasAny(blob, "url=", "return=", "next=", "redirect=", "callback=", "param")
 }},
 },
+"cors": {
+// Require that the probe explicitly observed an Origin header echoed
+// back by the server (reflected). Without this evidence the finding has
+// no distinguishing signal over a static analysis guess.
+{name: "origin_reflection_evidence", hit: func(blob string, f model.Finding) bool {
+return hasAny(blob, "access-control-allow-origin", "acao", "cors misconfiguration",
+"reflected origin", "origin reflection") ||
+strings.TrimSpace(f.EvidenceFields["reflectedOrigin"]) != "" ||
+strings.TrimSpace(f.EvidenceFields["allowOriginResponse"]) != ""
+}},
+// Require that the finding identifies the affected resource.
+{name: "affected_url_or_endpoint", hit: func(blob string, f model.Finding) bool {
+return strings.TrimSpace(f.AffectedURL) != "" || strings.TrimSpace(f.AffectedParameter) != "" ||
+hasAny(blob, "endpoint", "url", "api", "route")
+}},
+// Require a credentialing signal — either confirming credentials flow or
+// explicitly noting that they do not (which drives the lower-impact path).
+{name: "credentialing_status", hit: func(blob string, f model.Finding) bool {
+return hasAny(blob, "access-control-allow-credentials", "acac", "credentials", "credentialed",
+"bearer", "session", "cookie", "authenticated", "unauthenticated") ||
+strings.TrimSpace(f.EvidenceFields["credentialsAllowed"]) != ""
+}},
+},
+"clickjacking": {
+// Require that the probe confirmed the response is rendered as HTML.
+// A JSON API endpoint without X-Frame-Options is not a meaningful
+// clickjacking surface. Missing evidence for html_response context
+// means the finding lacks the minimal context for it to be exploitable.
+{name: "html_response_context", hit: func(blob string, f model.Finding) bool {
+return hasAny(blob, "text/html", "html", "page", "rendered", "iframe", "frame", "ui")
+}},
+// Require explicit confirmation that the framing protection header is
+// absent or insufficiently restrictive.
+{name: "missing_frame_protection", hit: func(blob string, f model.Finding) bool {
+return hasAny(blob, "x-frame-options", "frame-ancestors", "missing", "absent",
+"not set", "weak", "clickjacking", "ui redress", "framing") ||
+strings.TrimSpace(f.EvidenceFields["xFrameOptions"]) != ""
+}},
+// Require a concrete affected URL — findings without an endpoint
+// reference cannot be reproduced.
+{name: "affected_url", hit: func(blob string, f model.Finding) bool {
+return strings.TrimSpace(f.AffectedURL) != ""
+}},
+},
 }
 
 // categoryMinCoverage defines the minimum proof-policy coverage fraction
@@ -186,6 +230,7 @@ var categoryMinCoverage = map[string]float64{
 "path_traversal": 0.66,
 "open_redirect":  0.66,
 "cors":           0.66,
+"clickjacking":   1.0,
 "headers":        0.50,
 "wordlist":       0.50,
 }
@@ -248,6 +293,10 @@ case "path_traversal", "directory_traversal", "lfi":
 return "path_traversal"
 case "open_redirect", "unvalidated_redirect":
 return "open_redirect"
+case "cors", "cors_redirect", "cors_misconfiguration":
+return "cors"
+case "clickjacking", "ui_redress", "ui_redressing":
+return "clickjacking"
 default:
 return ""
 }

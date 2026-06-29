@@ -70,3 +70,23 @@ func TestIsHTMLContextReflection(t *testing.T) {
 		t.Fatal("empty inputs must not match")
 	}
 }
+
+// TestRunActiveXSSProbe_NoFindingForJSONResponse verifies that the probe does
+// not raise a false positive when the target reflects the payload into a JSON
+// response body. A payload inside JSON is not executed as HTML; reporting it
+// as XSS would be a false positive on SPA API endpoints.
+func TestRunActiveXSSProbe_NoFindingForJSONResponse(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// JSON body that reflects the query parameter verbatim.
+		q := r.URL.Query().Get("q")
+		_, _ = w.Write([]byte(`{"query":"` + q + `"}`))
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveXSSProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 0 {
+		t.Fatalf("JSON response: expected 0 findings (not an HTML context), got %d", len(findings))
+	}
+}
