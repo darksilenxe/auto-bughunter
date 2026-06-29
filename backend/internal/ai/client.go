@@ -1429,6 +1429,50 @@ var domainProfilePacks = []DomainProfilePack{
 	},
 }
 
+// GenerateCode uses the configured coding model (CodeLlama by default) to
+// generate a PoC or helper script from a natural-language prompt. The caller
+// may supply an optional language hint and free-form context (e.g. a finding
+// description or HTTP request snippet). The returned string contains the raw
+// generated code; it is never empty on success. An error is returned when no
+// provider is configured or the model returns an unusable response.
+//
+// Guardrails are intentionally minimal: the system prompt instructs the model
+// to act as a security-research coding assistant and does not add refusal
+// clauses, allowing the operator to generate realistic PoC code for bug-bounty
+// and pentest work.
+func (c *Client) GenerateCode(ctx context.Context, prompt, language, extraContext string) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("ai client not initialised")
+	}
+	if !c.shouldCallProvider() && strings.TrimSpace(c.CodingModel) == "" {
+		return "", fmt.Errorf("ai provider not configured")
+	}
+	lang := strings.TrimSpace(language)
+	if lang == "" {
+		lang = "Python 3"
+	}
+	systemPrompt := "You are a security research coding assistant. " +
+		"Generate working, self-contained " + lang + " code that implements the operator's request. " +
+		"Focus on correctness and clarity. Output only the code with brief inline comments — no markdown fences, no preamble."
+	userContent := strings.TrimSpace(prompt)
+	if ctx2 := strings.TrimSpace(extraContext); ctx2 != "" {
+		userContent += "\n\n--- context ---\n" + ctx2
+	}
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userContent},
+	}
+	code, err := c.planningComplete(ctx, messages, 0.3, false)
+	if err != nil {
+		return "", fmt.Errorf("code generation failed: %w", err)
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", fmt.Errorf("model returned empty response")
+	}
+	return code, nil
+}
+
 // SelectDomainProfile returns the best-matching DomainProfilePack for a target
 // URL, or nil when no profile matches.
 func SelectDomainProfile(targetURL string) *DomainProfilePack {

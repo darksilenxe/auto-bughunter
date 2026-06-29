@@ -459,6 +459,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/admin/logs", s.handleSystemLogs)
 	// Agent Console — dispatch a single named agent with custom instructions.
 	mux.HandleFunc("/api/agent/dispatch", s.handleAgentDispatch)
+	// IDE — generate PoC / exploit code using the configured coding model.
+	mux.HandleFunc("/api/ide/generate", s.handleIDEGenerate)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))
@@ -7013,4 +7015,46 @@ func (s *Server) handleGetScanActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, events)
+}
+
+// handleIDEGenerate accepts a POST request with a prompt, optional language,
+// and optional context snippet, then calls the configured coding model
+// (CodeLlama by default) to generate PoC / exploit code. Guardrails are
+// minimal so operators can freely create security research scripts.
+func (s *Server) handleIDEGenerate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		Prompt      string `json:"prompt"`
+		Language    string `json:"language"`
+		Context     string `json:"context"`
+		WorkspaceID string `json:"workspaceId"`
+	}
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if req.Prompt == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+		return
+	}
+	workspaceID := firstNonEmpty(workspaceFromRequest(r), workspaceFromHeader(r), strings.TrimSpace(req.WorkspaceID), "default")
+	if !canAccessWorkspaceForRequest(r.Context(), workspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "workspace access denied"})
+		return
+	}
+	if s.aiClient == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "ai provider not configured"})
+		return
+	}
+	code, err := s.aiClient.GenerateCode(r.Context(), req.Prompt, req.Language, req.Context)
+	if err != nil {
+		log.Printf("ide: code generation failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"code": code, "model": s.aiClient.CodingModel})
 }
