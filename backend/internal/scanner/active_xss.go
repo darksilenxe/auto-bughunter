@@ -165,7 +165,14 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				// Skip non-HTML responses: a payload echoed into a JSON or
+				// plain-text body is not executable in an HTML context and
+				// would be a false positive on SPA API endpoints.
+				if !isHTMLLikeContentType(respHeader) {
+					continue
+				}
 				if !isHTMLContextReflection(string(respBody), payload) {
 					continue
 				}

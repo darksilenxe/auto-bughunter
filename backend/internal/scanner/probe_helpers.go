@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"mime"
+	"net/http"
 	"regexp"
 	"strings"
 )
@@ -65,4 +67,31 @@ func matchAnyLower(body string, signatures []string) string {
 		}
 	}
 	return ""
+}
+
+// isHTMLLikeContentType returns true when the Content-Type header signals
+// that the response body is rendered as HTML in a browser. This is used by
+// probes that only make sense for HTML responses — for example, clickjacking
+// (framing only matters if the page renders as HTML) and reflected-XSS (a
+// payload echoed into a JSON or plain-text body is not executable in an HTML
+// context). When the Content-Type header is absent or empty the function
+// returns true to preserve conservative behaviour for legacy endpoints that
+// omit the header.
+func isHTMLLikeContentType(h http.Header) bool {
+	ct := strings.TrimSpace(h.Get("Content-Type"))
+	if ct == "" {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		// Unparseable content-type — treat as HTML to stay conservative.
+		return true
+	}
+	mediaType = strings.ToLower(mediaType)
+	switch mediaType {
+	case "text/html", "application/xhtml+xml", "text/xhtml":
+		return true
+	default:
+		return false
+	}
 }

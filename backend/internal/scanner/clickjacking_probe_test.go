@@ -53,3 +53,40 @@ func TestRunClickjackingProbe_NoFindingWhenSafe(t *testing.T) {
 		t.Fatalf("expected 0 findings, got %d", len(findings))
 	}
 }
+
+// TestRunClickjackingProbe_NoFindingForNonHTMLResponse verifies that the probe
+// does not flag JSON API endpoints for a missing X-Frame-Options header. SPAs
+// expose many JSON endpoints that cannot be meaningfully framed.
+func TestRunClickjackingProbe_NoFindingForNonHTMLResponse(t *testing.T) {
+	for _, ct := range []string{
+		"application/json",
+		"application/json; charset=utf-8",
+		"application/vnd.api+json",
+		"text/plain",
+		"application/xml",
+	} {
+		ct := ct
+		t.Run(ct, func(t *testing.T) {
+			h := http.Header{}
+			h.Set("Content-Type", ct)
+			svc := NewService(Config{})
+			findings := svc.runClickjackingProbe(RunInput{Target: "http://example.com"}, h)
+			if len(findings) != 0 {
+				t.Fatalf("Content-Type %q: expected 0 findings for non-HTML response, got %d", ct, len(findings))
+			}
+		})
+	}
+}
+
+// TestRunClickjackingProbe_FlagsMissingHeaderWhenContentTypeAbsent verifies
+// the conservative fallback: when the Content-Type header is absent the probe
+// still reports the missing framing protection.
+func TestRunClickjackingProbe_FlagsMissingHeaderWhenContentTypeAbsent(t *testing.T) {
+	h := http.Header{}
+	// No Content-Type set — conservative path should still flag.
+	svc := NewService(Config{})
+	findings := svc.runClickjackingProbe(RunInput{Target: "http://example.com"}, h)
+	if len(findings) != 1 {
+		t.Fatalf("missing Content-Type: expected 1 finding (conservative), got %d", len(findings))
+	}
+}

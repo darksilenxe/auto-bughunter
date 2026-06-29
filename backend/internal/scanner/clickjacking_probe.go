@@ -12,6 +12,13 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 	if respHeader == nil {
 		return nil
 	}
+	// Clickjacking only applies to pages that are rendered as HTML by the
+	// browser. JSON/XML API responses used by SPAs cannot be embedded in a
+	// meaningful iframe — skip them to avoid false positives on API endpoints
+	// that are legitimately missing X-Frame-Options.
+	if !isHTMLLikeContentType(respHeader) {
+		return nil
+	}
 	xfo := strings.ToUpper(strings.TrimSpace(respHeader.Get("X-Frame-Options")))
 	if xfo == "DENY" || xfo == "SAMEORIGIN" {
 		return nil

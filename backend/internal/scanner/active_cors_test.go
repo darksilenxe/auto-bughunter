@@ -67,3 +67,52 @@ func TestRunActiveCORSProbe_PassiveOnlyDisables(t *testing.T) {
 		t.Fatalf("PassiveOnly must disable, got %d findings", len(findings))
 	}
 }
+
+// TestRunActiveCORSProbe_NoFindingWhenBaselineAlreadySendsACAO verifies that
+// the probe does not flag an endpoint when the server returns
+// Access-Control-Allow-Origin unconditionally (without inspecting the Origin
+// header). This is an intentional open CORS policy, not a reflection attack.
+func TestRunActiveCORSProbe_NoFindingWhenBaselineAlreadySendsACAO(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always return the same ACAO regardless of whether Origin was sent.
+		w.Header().Set("Access-Control-Allow-Origin", "https://abh-cors-canary.invalid")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveCORSProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 0 {
+		t.Fatalf("unconditional ACAO (not reflection): expected 0 findings, got %d", len(findings))
+	}
+}
+
+// TestRunActiveCORSProbe_DowngradesNonCredentialedJSONAPIToInfo verifies that
+// non-credentialed CORS reflection on a JSON API endpoint is downgraded to
+// Info severity. SPA backends that serve Bearer-token-authenticated JSON APIs
+// and happen to reflect the Origin header without credentials are much lower
+// impact than HTML endpoints with cookies.
+func TestRunActiveCORSProbe_DowngradesNonCredentialedJSONAPIToInfo(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			// No Access-Control-Allow-Credentials header.
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveCORSProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding (downgraded), got %d", len(findings))
+	}
+	f := findings[0]
+	if f.Severity != model.SeverityInfo {
+		t.Fatalf("expected Info severity for non-credentialed JSON API CORS, got %s", f.Severity)
+	}
+	if f.ID != "active-cors-json-api-origin-reflected" {
+		t.Fatalf("expected json-api finding ID, got %q", f.ID)
+	}
+}

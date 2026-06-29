@@ -221,3 +221,125 @@ func TestSQLiBelowMinCoverageFlag(t *testing.T) {
 		t.Fatal("partial sqli coverage should set BelowMinCoverage=true (min=1.0)")
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// CORS proof policy tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+func TestCORSPolicySatisfied(t *testing.T) {
+	f := model.Finding{
+		Category:    "cors",
+		AffectedURL: "https://api.example.com/user/data",
+		Evidence:    "Access-Control-Allow-Origin reflected attacker-controlled origin; Access-Control-Allow-Credentials: true observed.",
+		EvidenceFields: map[string]string{
+			"reflectedOrigin":     "https://abh-cors-canary.invalid",
+			"allowOriginResponse": "https://abh-cors-canary.invalid",
+			"credentialsAllowed":  "true",
+		},
+	}
+	out := EvaluateFinding(f)
+	if out.Category != "cors" {
+		t.Fatalf("expected cors category, got %q", out.Category)
+	}
+	if len(out.Missing) != 0 {
+		t.Fatalf("expected full coverage, missing: %v", out.Missing)
+	}
+	if out.BelowMinCoverage {
+		t.Fatalf("full coverage should not be below minimum")
+	}
+}
+
+func TestCORSPolicyMissingOriginReflectionEvidence(t *testing.T) {
+	// A finding with no explicit CORS reflection evidence should fail the
+	// origin_reflection_evidence requirement and surface as below-min-coverage.
+	f := model.Finding{
+		Category:    "cors",
+		AffectedURL: "https://api.example.com/user/data",
+		Evidence:    "Cross-origin read may be possible.",
+	}
+	out := EvaluateFinding(f)
+	if out.Category != "cors" {
+		t.Fatalf("expected cors category, got %q", out.Category)
+	}
+	if out.Coverage >= 1 {
+		t.Fatalf("expected partial coverage, got %.2f", out.Coverage)
+	}
+	if !out.BelowMinCoverage {
+		t.Fatalf("partial cors coverage should be below minimum (0.66)")
+	}
+}
+
+func TestCORSCategoryNormalisation(t *testing.T) {
+	for _, cat := range []string{"cors", "cors_redirect", "cors_misconfiguration", "CORS"} {
+		out := EvaluateFinding(model.Finding{
+			Category:    cat,
+			AffectedURL: "https://api.example.com/",
+			Evidence:    "Access-Control-Allow-Origin reflected origin; credentials allowed.",
+			EvidenceFields: map[string]string{
+				"reflectedOrigin":    "https://evil.example",
+				"credentialsAllowed": "true",
+			},
+		})
+		if out.Category != "cors" {
+			t.Fatalf("category %q: expected canonical 'cors', got %q", cat, out.Category)
+		}
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Clickjacking proof policy tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+func TestClickjackingPolicySatisfied(t *testing.T) {
+	f := model.Finding{
+		Category:    "clickjacking",
+		AffectedURL: "https://app.example.com/dashboard",
+		Evidence:    "HTML page rendered in iframe; X-Frame-Options absent; frame-ancestors CSP directive not set.",
+		EvidenceFields: map[string]string{
+			"xFrameOptions": "",
+			"csp":           "",
+		},
+	}
+	out := EvaluateFinding(f)
+	if out.Category != "clickjacking" {
+		t.Fatalf("expected clickjacking category, got %q", out.Category)
+	}
+	if len(out.Missing) != 0 {
+		t.Fatalf("expected full coverage, missing: %v", out.Missing)
+	}
+}
+
+func TestClickjackingPolicyMissingAffectedURL(t *testing.T) {
+	// Without an affected URL the finding cannot be reproduced; it should fail
+	// the affected_url requirement and surface as below-min-coverage.
+	f := model.Finding{
+		Category: "clickjacking",
+		Evidence: "X-Frame-Options missing on HTML page.",
+		EvidenceFields: map[string]string{
+			"xFrameOptions": "",
+		},
+	}
+	out := EvaluateFinding(f)
+	if out.Category != "clickjacking" {
+		t.Fatalf("expected clickjacking category, got %q", out.Category)
+	}
+	if !out.BelowMinCoverage {
+		t.Fatalf("missing affected_url should push coverage below minimum")
+	}
+}
+
+func TestClickjackingCategoryNormalisation(t *testing.T) {
+	for _, cat := range []string{"clickjacking", "ui_redress", "ui_redressing", "Clickjacking"} {
+		out := EvaluateFinding(model.Finding{
+			Category:    cat,
+			AffectedURL: "https://app.example.com/",
+			Evidence:    "HTML page; X-Frame-Options absent.",
+			EvidenceFields: map[string]string{
+				"xFrameOptions": "",
+			},
+		})
+		if out.Category != "clickjacking" {
+			t.Fatalf("category %q: expected canonical 'clickjacking', got %q", cat, out.Category)
+		}
+	}
+}
