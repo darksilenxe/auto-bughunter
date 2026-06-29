@@ -11,6 +11,7 @@ import AgentActivity from "./pages/AgentActivity";
 import AttackGraph from "./pages/AttackGraph";
 import Dashboard from "./pages/Dashboard";
 import Findings from "./pages/Findings";
+import IDE from "./pages/IDE";
 import ProbeCoverage from "./pages/ProbeCoverage";
 import Proxy from "./pages/Proxy";
 import References from "./pages/References";
@@ -48,6 +49,7 @@ export default function App() {
               <Route path="/"               element={<Dashboard />} />
               <Route path="/attack-graph"   element={<AttackGraph />} />
               <Route path="/findings"       element={<Findings />} />
+              <Route path="/ide"            element={<IDE />} />
               <Route path="/reports"        element={<Reports />} />
               <Route path="/scans"          element={<Scans />} />
               <Route path="/proxy"          element={<Proxy />} />
