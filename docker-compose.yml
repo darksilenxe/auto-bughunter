@@ -291,7 +291,7 @@ services:
       start_period: 60s
 
   # Local Ollama LLM — powers AI summaries without any external API key.
-  # On first start it will download the configured models (~4 GB for dolphin-mistral).
+  # On first start it will download the configured models.
   # Gated behind the `ollama` compose profile so it doesn't start by default
   # (e.g. in CI or for users who don't want the model download). Enable with:
   #   docker compose --profile ollama up -d
@@ -318,10 +318,10 @@ services:
         condition: service_started
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-dolphin-mistral}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-Huihui-Qwythos-9B}
       OLLAMA_SECONDARY_MODEL: ${OLLAMA_SECONDARY_MODEL:-codellama}
       OLLAMA_FAST_MODEL: ${OLLAMA_FAST_MODEL:-llama3.2:3b}
-    entrypoint: /bin/sh -c "sleep 5 && primary=$${OLLAMA_MODEL:-dolphin-mistral} && secondary=$${OLLAMA_SECONDARY_MODEL:-codellama} && fast=$${OLLAMA_FAST_MODEL:-llama3.2:3b} && if [ -n \"$$primary\" ]; then ollama pull \"$$primary\"; fi && if [ -n \"$$secondary\" ] && [ \"$$secondary\" != \"$$primary\" ]; then ollama pull \"$$secondary\"; fi && if [ -n \"$$fast\" ] && [ \"$$fast\" != \"$$primary\" ] && [ \"$$fast\" != \"$$secondary\" ]; then ollama pull \"$$fast\"; fi"
+    entrypoint: /bin/sh -c "sleep 5 && primary=$${OLLAMA_MODEL:-Huihui-Qwythos-9B} && secondary=$${OLLAMA_SECONDARY_MODEL:-codellama} && fast=$${OLLAMA_FAST_MODEL:-llama3.2:3b} && if [ -n \"$$primary\" ]; then ollama pull \"$$primary\"; fi && if [ -n \"$$secondary\" ] && [ \"$$secondary\" != \"$$primary\" ]; then ollama pull \"$$secondary\"; fi && if [ -n \"$$fast\" ] && [ \"$$fast\" != \"$$primary\" ] && [ \"$$fast\" != \"$$secondary\" ]; then ollama pull \"$$fast\"; fi"
     volumes:
       - ollama_data:/root/.ollama
 
@@ -673,7 +673,7 @@ services:
     entrypoint: ["sh", "-c", "tail -f /dev/null"]
     environment:
       XSSMAP_OLLAMA_URL: ${XSSMAP_OLLAMA_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-dolphin-mistral}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-Huihui-Qwythos-9B}
       XSSMAP_TIMEOUT_SECONDS: ${XSSMAP_TIMEOUT_SECONDS:-120}
     restart: unless-stopped
 

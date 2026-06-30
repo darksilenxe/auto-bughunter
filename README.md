@@ -53,16 +53,16 @@ models on first start:
 
 | Model | Role | Approx. size |
 |-------|------|-------------|
-| `dolphin-mistral` (7B) | Primary reasoning / triage | ~4 GB |
+| `Huihui-Qwythos-9B` (9B) | Primary reasoning / triage | Varies by quantization |
 | `codellama` (7B) | Orchestration planner | ~4 GB |
 | `llama3.2:3b` | Fast JSON decisions | ~2 GB |
 
-Total additional disk for model weights: **~10 GB** (one-time download, cached
-in the `ollama_data` Docker volume).
+Total additional disk for model weights depends on the selected quantization
+(one-time download, cached in the `ollama_data` Docker volume).
 
 Ollama runs on **CPU by default** and requires roughly 4–6 GB of RAM per loaded
 model. To avoid swapping, ensure you have enough free RAM for at least the two
-heaviest models simultaneously (~10 GB for dolphin-mistral + codellama). If RAM
+heaviest models simultaneously (primary model + codellama). If RAM
 is limited, set `AI_FAST_MODEL=` (empty) to skip the third model.
 
 **GPU acceleration (optional):** Layer `docker-compose.gpu.yml` to pass an

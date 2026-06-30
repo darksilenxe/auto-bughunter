@@ -13,8 +13,8 @@ const EMPTY_PROGRAM = {
 };
 
 const DEFAULT_AI_CONFIG = {
-  summaryModel: "dolphin-mistral",
-  triageModel: "dolphin-mistral",
+  summaryModel: "Huihui-Qwythos-9B",
+  triageModel: "Huihui-Qwythos-9B",
   plannerModel: "codellama",
   temperature: "0.2",
   plannerTemperature: "0.1",
