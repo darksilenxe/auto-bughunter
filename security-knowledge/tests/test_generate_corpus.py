@@ -249,6 +249,146 @@ class GenerateCorpusTests(unittest.TestCase):
             written = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(written["entries"][0]["id"], "web-text")
 
+    def test_build_corpus_expands_sitemap_bulk_import(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            sitemap_path = temp_path / "sitemap.xml"
+            sitemap_path.write_text(
+                """
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                  <url><loc>http://127.0.0.1:9999/en/pentesting-web/xss.html</loc></url>
+                  <url><loc>http://127.0.0.1:9999/es/ignored.html</loc></url>
+                </urlset>
+                """,
+                encoding="utf-8",
+            )
+            handler = partial(SimpleHTTPRequestHandler, directory=str(temp_path))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                source_path = temp_path / "sources.json"
+                source_path.write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "phase": "phase-1",
+                            "allowlists": {
+                                "sourceTypes": ["hacktricks"],
+                                "licenses": ["source-url-only"],
+                            },
+                            "entries": [],
+                            "bulkImports": [
+                                {
+                                    "kind": "sitemap",
+                                    "enabled": True,
+                                    "idPrefix": "hacktricks",
+                                    "sourceType": "hacktricks",
+                                    "license": "source-url-only",
+                                    "sourceLabel": "HackTricks",
+                                    "url": f"http://127.0.0.1:{server.server_address[1]}/sitemap.xml",
+                                    "include": ["/en/"],
+                                    "fullText": True,
+                                    "websiteImport": {"enabled": True},
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                output_path = temp_path / "corpus.json"
+                review_path = temp_path / "review.json"
+                corpus, review = generator.build_corpus(
+                    source_path,
+                    output_path,
+                    review_path,
+                    expand_imports=True,
+                    import_timeout=5,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            self.assertEqual(review["summary"]["errors"], 0)
+            self.assertEqual(len(corpus), 1)
+            self.assertEqual(corpus[0]["sourceType"], "hacktricks")
+            self.assertTrue(corpus[0]["id"].startswith("hacktricks-"))
+            self.assertTrue(corpus[0]["url"].endswith("/en/pentesting-web/xss.html"))
+
+    def test_build_corpus_expands_github_tree_bulk_import(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tree_path = temp_path / "tree.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "tree": [
+                            {"path": "XSS Injection/README.md", "type": "blob"},
+                            {"path": "SQL Injection/Intruder/payload.txt", "type": "blob"},
+                            {"path": "docs/image.png", "type": "blob"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            handler = partial(SimpleHTTPRequestHandler, directory=str(temp_path))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                source_path = temp_path / "sources.json"
+                source_path.write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "phase": "phase-1",
+                            "allowlists": {
+                                "sourceTypes": ["payloadsallthethings"],
+                                "licenses": ["source-url-only"],
+                            },
+                            "entries": [],
+                            "bulkImports": [
+                                {
+                                    "kind": "github-tree",
+                                    "enabled": True,
+                                    "idPrefix": "payloadsallthethings",
+                                    "sourceType": "payloadsallthethings",
+                                    "license": "source-url-only",
+                                    "sourceLabel": "PayloadsAllTheThings",
+                                    "repo": "swisskyrepo/PayloadsAllTheThings",
+                                    "ref": "master",
+                                    "apiUrl": f"http://127.0.0.1:{server.server_address[1]}/tree.json",
+                                    "include": ["XSS Injection"],
+                                    "extensions": [".md"],
+                                    "fullText": True,
+                                    "websiteImport": {"enabled": True},
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                output_path = temp_path / "corpus.json"
+                review_path = temp_path / "review.json"
+                corpus, review = generator.build_corpus(
+                    source_path,
+                    output_path,
+                    review_path,
+                    expand_imports=True,
+                    import_timeout=5,
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            self.assertEqual(review["summary"]["errors"], 0)
+            self.assertEqual(len(corpus), 1)
+            self.assertEqual(corpus[0]["sourceType"], "payloadsallthethings")
+            self.assertIn("XSS Injection/README.md", corpus[0]["url"])
+            self.assertTrue(corpus[0]["id"].startswith("payloadsallthethings-"))
+
 
 if __name__ == "__main__":
     unittest.main()

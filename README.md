@@ -1171,8 +1171,8 @@ Optional gate flags make this CI-friendly:
 - Set `ML_SCORING_MODE` to control inference rollout safety: `blend` (default), `shadow` (serve deterministic output and log model deltas), or `heuristic` (force deterministic only).
 - Use `ml-service/app/training_pipeline.py` to snapshot `/api/ml/engagements`, enforce quality/privacy gates, train and evaluate a candidate ONNX model, and update model registry/promotion artifacts.
 - Scheduled retraining scaffold is provided in `.github/workflows/ml-training.yml` (expects `TRAINING_API_BASE` and optional `TRAINING_API_KEY` secrets).
-- If `KNOWLEDGE_SERVICE_URL` is configured and reachable, the backend retrieves curated PortSwigger/OWASP/CWE context with source URLs and includes that context in AI summaries, next actions, and generated reports.
-- The seed `security-knowledge` corpus stores short manually-authored notes plus citations rather than mirrored third-party article bodies; confirm licensing before importing additional content.
+- If `KNOWLEDGE_SERVICE_URL` is configured and reachable, the backend retrieves curated references (including PortSwigger/OWASP/CWE and optional HackTricks/PayloadsAllTheThings bulk imports) with source URLs and includes that context in AI summaries, next actions, and generated reports.
+- `security-knowledge` supports optional full-catalog expansion for HackTricks and PayloadsAllTheThings at image build time (`KNOWLEDGE_EXPAND_IMPORTS`, default `true`) plus optional full-text mirroring (`KNOWLEDGE_ALLOW_FULL_TEXT`, default `true`); disable either for hermetic/offline builds.
 - Wordlist agent discovers endpoints by HTTP status code (200-399 range) with concurrent checking (5 parallel requests by default).
 - Wordlists include embedded defaults + optional external sources (SecLists, Kiterunner) with local caching.
 - External wordlist sources are downloaded on-demand, cached for 24 hours, and fall back to embedded defaults if unavailable.
