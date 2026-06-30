@@ -24,6 +24,9 @@ the configured AI summary flow.
 
 The source-of-truth now lives in `sources/corpus_sources.json`. It contains
 approved references and short curated notes for the current phase-1 seed set.
+It can also declare `bulkImports` to auto-expand large third-party catalogs
+into per-document corpus entries (for example, all HackTricks sitemap pages and
+all PayloadsAllTheThings markdown blobs).
 The generated corpus keeps the runtime schema stable for
 `security-knowledge/app/main.py`, which validates and scores the following
 fields:
@@ -62,6 +65,8 @@ repository owner has signed off on mirroring these third-party bodies, so
 full-text ingestion is **on by default**:
 
 - mark the source entry with `"fullText": true` and `"websiteImport": {"enabled": true}`
+- for full-catalog ingestion, add a `bulkImports` item and run with
+  `--expand-imports` so import catalogs are expanded into concrete entries
 - fetch the page text with `generate_corpus.py fetch-web-text`
 - rebuild (full text is mirrored by default; pass `--no-full-text` to opt out for
   hermetic/offline builds where no network is available)
@@ -90,6 +95,7 @@ only.
    python3 tools/generate_corpus.py \
      fetch-web-text \
      --sources sources/corpus_sources.json \
+     --expand-imports \
      --output data/website_text.json
    ```
 
@@ -104,6 +110,7 @@ only.
    python3 tools/generate_corpus.py \
      build \
      --sources sources/corpus_sources.json \
+     --expand-imports \
      --website-text data/website_text.json \
      --output data/corpus.json \
      --review-output data/corpus.review.json

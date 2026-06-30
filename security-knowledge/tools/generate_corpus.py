@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -24,6 +26,7 @@ PASSAGE_PREFIX = "Curated note:"
 PASSAGE_MAX_LENGTH = 320
 WEBSITE_TEXT_MAX_LENGTH = 12000
 LOW_CONFIDENCE_MIN_WORDS = 120
+IMPORT_DEFAULT_TIMEOUT = 20
 # Maximum length of full-text body stored on a corpus document. Full-text
 # ingestion is ON by default (owner sign-off; disable with --no-full-text) and
 # only ever applies to entries explicitly flagged with "fullText": true.
@@ -149,6 +152,179 @@ def fetch_url_text(url: str, timeout: int) -> tuple[str, str]:
 
 
 def load_sources(path: Path) -> dict[str, Any]:
+    return load_sources_with_imports(path)
+
+
+def slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", normalize_space(value).lower()).strip("-")
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
+
+
+def _stable_id(prefix: str, seed: str) -> str:
+    base = slugify(seed)[:48] or "entry"
+    return f"{slugify(prefix) or 'import'}-{base}-{_short_hash(seed)}"
+
+
+def _keywords_from_tokens(*values: str) -> list[str]:
+    tokens = []
+    for value in values:
+        tokens.extend(re.findall(r"[a-z0-9]+", value.lower()))
+    return normalize_keywords(tokens)
+
+
+def _collect_sitemap_urls(url: str, timeout: int, depth: int = 0) -> list[str]:
+    if depth > 2:
+        return []
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - curated source import URLs only
+        body = response.read()
+    root = ET.fromstring(body)
+    tag = str(root.tag).lower()
+    locs = [normalize_space(node.text or "") for node in root.iter() if str(node.tag).lower().endswith("loc")]
+    locs = [loc for loc in locs if loc]
+    if tag.endswith("sitemapindex"):
+        results: list[str] = []
+        for loc in locs:
+            results.extend(_collect_sitemap_urls(loc, timeout, depth + 1))
+        return results
+    return locs
+
+
+def _expand_sitemap_import(cfg: dict[str, Any], timeout: int) -> list[dict[str, Any]]:
+    sitemap_url = required_string(cfg, "url")
+    source_type = required_string(cfg, "sourceType")
+    license_name = required_string(cfg, "license")
+    id_prefix = required_string(cfg, "idPrefix")
+    include = [normalize_space(str(item)) for item in (cfg.get("include") or []) if normalize_space(str(item))]
+    exclude = [normalize_space(str(item)) for item in (cfg.get("exclude") or []) if normalize_space(str(item))]
+    default_topic = normalize_space(str(cfg.get("defaultTopic") or "community security reference"))
+    default_class = normalize_space(str(cfg.get("defaultVulnerabilityClass") or "security knowledge"))
+    default_technique = normalize_space(str(cfg.get("defaultTechnique") or "catalog-driven payload and technique enrichment"))
+    website_import_enabled = bool((cfg.get("websiteImport") or {}).get("enabled", True))
+    mark_full_text = bool(cfg.get("fullText", True))
+    source_label = normalize_space(str(cfg.get("sourceLabel") or source_type.title()))
+
+    entries: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for loc in _collect_sitemap_urls(sitemap_url, timeout):
+        if include and not any(token in loc for token in include):
+            continue
+        if exclude and any(token in loc for token in exclude):
+            continue
+        if loc in seen_urls:
+            continue
+        seen_urls.add(loc)
+        parsed = urlparse(loc)
+        path = parsed.path.strip("/") or parsed.netloc
+        stem = path.rsplit("/", 1)[-1]
+        title_hint = stem.replace(".html", "").replace("-", " ").replace("_", " ").strip()
+        title = f"{source_label} — {title_hint or path}"
+        segments = [segment for segment in path.split("/") if segment]
+        topic_hint = segments[1] if len(segments) > 1 else (segments[0] if segments else path)
+        topic = normalize_space(topic_hint.replace("-", " ").replace("_", " ")) or default_topic
+        vuln_class = topic if topic else default_class
+        technique = default_technique
+        note = f"{PASSAGE_PREFIX} imported from {source_label} catalog ({path}) for expanded agent training context."
+        note = note[:PASSAGE_MAX_LENGTH]
+        entries.append(
+            {
+                "id": _stable_id(id_prefix, loc),
+                "title": title,
+                "url": loc,
+                "sourceType": source_type,
+                "license": license_name,
+                "topic": topic or default_topic,
+                "vulnerabilityClass": vuln_class or default_class,
+                "technique": technique,
+                "keywords": _keywords_from_tokens(path, source_label),
+                "passage": note,
+                "websiteImport": {"enabled": website_import_enabled},
+                "fullText": mark_full_text,
+            }
+        )
+    return entries
+
+
+def _expand_github_tree_import(cfg: dict[str, Any], timeout: int) -> list[dict[str, Any]]:
+    source_type = required_string(cfg, "sourceType")
+    license_name = required_string(cfg, "license")
+    id_prefix = required_string(cfg, "idPrefix")
+    repo = required_string(cfg, "repo")
+    ref = normalize_space(str(cfg.get("ref") or "master"))
+    include = [normalize_space(str(item)) for item in (cfg.get("include") or []) if normalize_space(str(item))]
+    exclude = [normalize_space(str(item)) for item in (cfg.get("exclude") or []) if normalize_space(str(item))]
+    extensions = [normalize_space(str(ext)).lower() for ext in (cfg.get("extensions") or [".md"]) if normalize_space(str(ext))]
+    default_topic = normalize_space(str(cfg.get("defaultTopic") or "payload catalog"))
+    default_class = normalize_space(str(cfg.get("defaultVulnerabilityClass") or "security payload reference"))
+    default_technique = normalize_space(str(cfg.get("defaultTechnique") or "catalog-driven payload and bypass enrichment"))
+    website_import_enabled = bool((cfg.get("websiteImport") or {}).get("enabled", True))
+    mark_full_text = bool(cfg.get("fullText", True))
+    source_label = normalize_space(str(cfg.get("sourceLabel") or source_type.title()))
+    tree_url = normalize_space(
+        str(cfg.get("apiUrl") or f"https://api.github.com/repos/{repo}/git/trees/{ref}?recursive=1")
+    )
+
+    request = Request(tree_url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - curated source import URLs only
+        payload = json.loads(response.read().decode("utf-8"))
+
+    tree = payload.get("tree") or []
+    entries: list[dict[str, Any]] = []
+    for item in tree:
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
+        path = normalize_space(str(item.get("path", "")))
+        path_lower = path.lower()
+        if not path:
+            continue
+        if extensions and not any(path_lower.endswith(ext) for ext in extensions):
+            continue
+        if include and not any(token in path for token in include):
+            continue
+        if exclude and any(token in path for token in exclude):
+            continue
+        title_hint = Path(path).stem.replace("-", " ").replace("_", " ").strip()
+        top_dir = path.split("/", 1)[0].replace("-", " ").replace("_", " ")
+        note = f"{PASSAGE_PREFIX} imported from {source_label} catalog ({path}) for expanded agent training context."
+        entries.append(
+            {
+                "id": _stable_id(id_prefix, path),
+                "title": f"{source_label} — {title_hint or path}",
+                "url": f"https://raw.githubusercontent.com/{repo}/{ref}/{path}",
+                "sourceType": source_type,
+                "license": license_name,
+                "topic": normalize_space(top_dir) or default_topic,
+                "vulnerabilityClass": normalize_space(top_dir) or default_class,
+                "technique": default_technique,
+                "keywords": _keywords_from_tokens(path, source_label, top_dir),
+                "passage": note[:PASSAGE_MAX_LENGTH],
+                "websiteImport": {"enabled": website_import_enabled},
+                "fullText": mark_full_text,
+            }
+        )
+    return entries
+
+
+def _expand_bulk_imports(payload: dict[str, Any], timeout: int) -> list[dict[str, Any]]:
+    imports = payload.get("bulkImports") or []
+    expanded: list[dict[str, Any]] = []
+    for cfg in imports:
+        if not isinstance(cfg, dict) or not cfg.get("enabled", True):
+            continue
+        kind = normalize_space(str(cfg.get("kind", "")).lower())
+        if kind == "sitemap":
+            expanded.extend(_expand_sitemap_import(cfg, timeout))
+        elif kind == "github-tree":
+            expanded.extend(_expand_github_tree_import(cfg, timeout))
+        else:
+            raise CorpusGenerationError(f"unsupported bulk import kind: {kind}")
+    return expanded
+
+
+def load_sources_with_imports(path: Path, expand_imports: bool = False, import_timeout: int = IMPORT_DEFAULT_TIMEOUT) -> dict[str, Any]:
     payload = load_json(path)
     if not isinstance(payload, dict):
         raise CorpusGenerationError("source file must be a JSON object")
@@ -156,11 +332,19 @@ def load_sources(path: Path) -> dict[str, Any]:
     payload.setdefault("entries", [])
     if not isinstance(payload["entries"], list):
         raise CorpusGenerationError("entries must be a JSON array")
+    if expand_imports:
+        payload["entries"] = [*payload["entries"], *_expand_bulk_imports(payload, import_timeout)]
     return payload
 
 
-def fetch_website_texts(source_path: Path, output_path: Path, timeout: int = 20) -> dict[str, Any]:
-    payload = load_sources(source_path)
+def fetch_website_texts(
+    source_path: Path,
+    output_path: Path,
+    timeout: int = 20,
+    expand_imports: bool = False,
+    import_timeout: int = IMPORT_DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    payload = load_sources_with_imports(source_path, expand_imports=expand_imports, import_timeout=import_timeout)
     results: list[dict[str, Any]] = []
     for entry in payload["entries"]:
         if not entry.get("websiteImport", {}).get("enabled", True):
@@ -222,8 +406,16 @@ def fetch_website_texts(source_path: Path, output_path: Path, timeout: int = 20)
     return output
 
 
-def build_corpus(source_path: Path, output_path: Path, review_path: Path, website_text_path: Path | None = None, allow_full_text: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    payload = load_sources(source_path)
+def build_corpus(
+    source_path: Path,
+    output_path: Path,
+    review_path: Path,
+    website_text_path: Path | None = None,
+    allow_full_text: bool = True,
+    expand_imports: bool = False,
+    import_timeout: int = IMPORT_DEFAULT_TIMEOUT,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    payload = load_sources_with_imports(source_path, expand_imports=expand_imports, import_timeout=import_timeout)
     allowlists = payload.get("allowlists") or {}
     allowed_source_types = set(allowlists.get("sourceTypes") or [])
     allowed_licenses = set(allowlists.get("licenses") or [])
@@ -389,12 +581,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     fetch_parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCE_PATH)
     fetch_parser.add_argument("--output", type=Path, default=DEFAULT_WEBSITE_TEXT_PATH)
     fetch_parser.add_argument("--timeout", type=int, default=20)
+    fetch_parser.add_argument("--expand-imports", action="store_true", default=False)
+    fetch_parser.add_argument("--import-timeout", type=int, default=IMPORT_DEFAULT_TIMEOUT)
 
     build_parser = subparsers.add_parser("build", help="Build data/corpus.json and a review report.")
     build_parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCE_PATH)
     build_parser.add_argument("--output", type=Path, default=DEFAULT_CORPUS_PATH)
     build_parser.add_argument("--review-output", type=Path, default=DEFAULT_REVIEW_PATH)
     build_parser.add_argument("--website-text", type=Path, default=DEFAULT_WEBSITE_TEXT_PATH)
+    build_parser.add_argument("--expand-imports", action="store_true", default=False)
+    build_parser.add_argument("--import-timeout", type=int, default=IMPORT_DEFAULT_TIMEOUT)
     build_parser.add_argument(
         "--allow-full-text",
         dest="allow_full_text",
@@ -422,7 +618,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     if args.command == "fetch-web-text":
-        fetch_website_texts(args.sources.resolve(), args.output.resolve(), args.timeout)
+        fetch_website_texts(
+            args.sources.resolve(),
+            args.output.resolve(),
+            args.timeout,
+            expand_imports=args.expand_imports,
+            import_timeout=args.import_timeout,
+        )
         return 0
     if args.command == "build":
         website_text = args.website_text.resolve()
@@ -432,6 +634,8 @@ def main(argv: list[str] | None = None) -> int:
             args.review_output.resolve(),
             website_text if website_text.exists() else None,
             allow_full_text=args.allow_full_text,
+            expand_imports=args.expand_imports,
+            import_timeout=args.import_timeout,
         )
         return 0
     raise AssertionError(f"unexpected command: {args.command}")

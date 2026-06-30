@@ -841,5 +841,54 @@
       },
       "fullText": true
     }
+  ],
+  "bulkImports": [
+    {
+      "kind": "sitemap",
+      "enabled": true,
+      "idPrefix": "hacktricks",
+      "sourceType": "hacktricks",
+      "license": "source-url-only",
+      "sourceLabel": "HackTricks",
+      "url": "https://book.hacktricks.wiki/sitemap.xml",
+      "include": [
+        "/en/"
+      ],
+      "exclude": [
+        "/search/",
+        "/print.html"
+      ],
+      "defaultTopic": "hacktricks reference",
+      "defaultVulnerabilityClass": "web security",
+      "defaultTechnique": "reference-driven recon and exploitation workflow",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "kind": "github-tree",
+      "enabled": true,
+      "idPrefix": "payloadsallthethings",
+      "sourceType": "payloadsallthethings",
+      "license": "source-url-only",
+      "sourceLabel": "PayloadsAllTheThings",
+      "repo": "swisskyrepo/PayloadsAllTheThings",
+      "ref": "master",
+      "include": [],
+      "exclude": [
+        ".github/"
+      ],
+      "extensions": [
+        ".md"
+      ],
+      "defaultTopic": "payload catalog",
+      "defaultVulnerabilityClass": "security payload reference",
+      "defaultTechnique": "payload and bypass catalog enrichment",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    }
   ]
 }

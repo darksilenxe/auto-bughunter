@@ -18,21 +18,27 @@ COPY tools /app/tools
 # ALLOW_FULL_TEXT=false for a hermetic, network-free build that regenerates
 # data/corpus.json from the curated notes only.
 ARG ALLOW_FULL_TEXT=true
-RUN if [ "$ALLOW_FULL_TEXT" = "true" ]; then \
+ARG EXPAND_IMPORTS=true
+RUN IMPORT_ARGS=""; \
+    if [ "$EXPAND_IMPORTS" = "true" ]; then IMPORT_ARGS="--expand-imports"; fi; \
+    if [ "$ALLOW_FULL_TEXT" = "true" ]; then \
         python3 tools/generate_corpus.py fetch-web-text \
             --sources sources/corpus_sources.json \
-            --output data/website_text.json && \
+            --output data/website_text.json \
+            $IMPORT_ARGS && \
         python3 tools/generate_corpus.py build \
             --sources sources/corpus_sources.json \
             --output data/corpus.json \
             --review-output data/corpus.review.json \
             --website-text data/website_text.json \
+            $IMPORT_ARGS \
             --allow-full-text ; \
     else \
         python3 tools/generate_corpus.py build \
             --sources sources/corpus_sources.json \
             --output data/corpus.json \
             --review-output data/corpus.review.json \
+            $IMPORT_ARGS \
             --no-full-text ; \
     fi
 

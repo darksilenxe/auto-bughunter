@@ -90,8 +90,12 @@ services:
       args:
         # Set to "true" to fetch and mirror full-text bodies for entries flagged
         # "fullText": true (HackTricks / PayloadsAllTheThings) during the image
-        # build. Requires build-time network access; off by default.
+        # build. Requires build-time network access.
         ALLOW_FULL_TEXT: ${KNOWLEDGE_ALLOW_FULL_TEXT:-true}
+        # Set to "true" to expand bulk-import catalogs (all HackTricks sitemap
+        # pages and all PayloadsAllTheThings markdown blobs) into the generated
+        # training corpus at build time.
+        EXPAND_IMPORTS: ${KNOWLEDGE_EXPAND_IMPORTS:-true}
     environment:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       KNOWLEDGE_CORPUS_PATH: /app/data/corpus.json
