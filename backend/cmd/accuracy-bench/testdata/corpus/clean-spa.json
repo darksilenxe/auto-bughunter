@@ -1,0 +1,16 @@
+{
+  "target": "clean-spa",
+  "description": "Reference clean single-page application. No known vulnerabilities. Used to catch false positives from probes that misfire on modern SPAs (SPA XHR seeding, DOM XSS, clickjacking on client-rendered shells).",
+  "baseUrl": "https://clean-spa.example",
+  "expectedFindings": [],
+  "safeEndpoints": [
+    { "category": "xss", "endpoint": "/", "note": "SPA shell has no server-side reflection" },
+    { "category": "clickjacking", "endpoint": "/", "note": "SPA served with frame-ancestors CSP" },
+    { "category": "csp", "endpoint": "/", "note": "CSP is present and strict; no report expected" },
+    { "category": "cors", "endpoint": "/api/health", "note": "CORS is intentionally permissive on health only; must not be flagged as vulnerable" },
+    { "category": "prototype pollution", "endpoint": "/", "note": "No client-side prototype pollution sinks" }
+  ],
+  "allowedExtraCategories": [
+    "info-disclosure"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "target": "bwapp",
+  "description": "bWAPP – 100+ web vulnerabilities across PHP endpoints. Focus set used here covers the low-severity default configuration.",
+  "baseUrl": "http://bwapp.example",
+  "expectedFindings": [
+    { "category": "sqli", "endpoint": "/sqli_1.php", "parameter": "title", "minSeverity": "high" },
+    { "category": "xss", "endpoint": "/xss_get.php", "parameter": "firstname", "minSeverity": "medium" },
+    { "category": "command injection", "endpoint": "/commandi.php", "parameter": "target", "minSeverity": "critical" },
+    { "category": "path traversal", "endpoint": "/directory_traversal_1.php", "parameter": "page", "minSeverity": "high" },
+    { "category": "redirect", "endpoint": "/unvalidated_redir_fwd_1.php", "parameter": "redirect", "minSeverity": "low" },
+    { "category": "xxe", "endpoint": "/xxe-1.php", "minSeverity": "high" }
+  ]
+}

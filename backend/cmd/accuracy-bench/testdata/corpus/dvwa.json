@@ -1,0 +1,13 @@
+{
+  "target": "dvwa",
+  "description": "Damn Vulnerable Web Application – classic PHP training target. Covers SQLi, XSS variants, command injection, file inclusion.",
+  "baseUrl": "http://dvwa.example",
+  "expectedFindings": [
+    { "category": "sqli", "endpoint": "/vulnerabilities/sqli/", "parameter": "id", "minSeverity": "high" },
+    { "category": "xss", "endpoint": "/vulnerabilities/xss_r/", "parameter": "name", "minSeverity": "medium", "description": "Reflected XSS" },
+    { "category": "xss", "endpoint": "/vulnerabilities/xss_s/", "parameter": "mtxMessage", "minSeverity": "medium", "description": "Stored XSS in guestbook" },
+    { "category": "command injection", "endpoint": "/vulnerabilities/exec/", "parameter": "ip", "minSeverity": "critical" },
+    { "category": "path traversal", "endpoint": "/vulnerabilities/fi/", "parameter": "page", "minSeverity": "high" },
+    { "category": "csrf", "endpoint": "/vulnerabilities/csrf/", "minSeverity": "medium" }
+  ]
+}

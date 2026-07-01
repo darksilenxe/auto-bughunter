@@ -1114,6 +1114,65 @@ Optional gate flags make this CI-friendly:
 - `-max-candidate-early-stops` (integer ceiling)
 - `-require-candidate-not-worse` (fails on baseline regression)
 
+## Accuracy benchmark harness
+
+`backend/cmd/accuracy-bench` is the ground-truth measurement pipeline for
+scanner precision and recall. It grades a corpus of benchmark manifests
+against actual scan output and emits per-category TP / FP / FN /
+precision / recall / F1 plus the mean pre-report verification pass rate.
+
+The corpus lives in `backend/cmd/accuracy-bench/testdata/corpus/`:
+
+- Vulnerable training targets: `juice-shop`, `dvwa`, `webgoat`, `crapi`,
+  `vampi`, `bwapp`.
+- Negative controls (no known vulns; anchor the false-positive rate):
+  `clean-spa`, `clean-json-api`.
+
+Each `Manifest` lists:
+
+- `expectedFindings` — vulnerabilities that must be reported (matched by
+  normalized `category` + `endpoint` + optional `parameter` + optional
+  `minSeverity`). A miss is counted as a false negative.
+- `safeEndpoints` — endpoint+category pairs that must not be reported. A
+  hit is a false positive.
+- `allowedExtraCategories` — categories exempt from FP accounting.
+
+A finding in a category with no expected entries and no matching
+`safeEndpoints` is treated as "out of scope" for that target, so
+introducing a new probe does not retroactively regress every historical
+benchmark.
+
+Typical usage:
+
+```bash
+go run ./backend/cmd/accuracy-bench \
+    -corpus  backend/cmd/accuracy-bench/testdata/corpus \
+    -actuals backend/cmd/accuracy-bench/testdata/actuals \
+    -output-json out/report.json \
+    -output-md   out/report.md
+```
+
+Baseline delta gating (used by the nightly workflow and by probe PRs):
+
+```bash
+go run ./backend/cmd/accuracy-bench \
+    -corpus  backend/cmd/accuracy-bench/testdata/corpus \
+    -actuals backend/cmd/accuracy-bench/testdata/actuals \
+    -baseline path/to/previous-report.json \
+    -delta-output-md out/delta.md \
+    -fail-on-regression -tolerance 0.02
+```
+
+The `.github/workflows/qa-accuracy.yml` workflow runs nightly, builds the
+CLI, grades the checked-in fixtures and uploads `report.json` +
+`report.md` as artifacts. Real per-run actuals from ephemeral vulnerable
+targets are a Phase 0 follow-up.
+
+**Gate for probe PRs:** every change that touches an `active_*.go` or
+`*_probe.go` file should attach an accuracy-bench delta report showing
+that no category regressed beyond the tolerance vs the previous
+baseline.
+
 ## Notes
 
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.

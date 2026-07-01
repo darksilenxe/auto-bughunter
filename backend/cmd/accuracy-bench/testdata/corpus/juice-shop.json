@@ -1,0 +1,15 @@
+{
+  "target": "juice-shop",
+  "description": "OWASP Juice Shop – deliberately vulnerable modern JS SPA with a REST API. Covers auth, injection, XSS and business-logic classes.",
+  "baseUrl": "https://juice-shop.example",
+  "expectedFindings": [
+    { "category": "sqli", "endpoint": "/rest/user/login", "parameter": "email", "minSeverity": "high", "description": "Admin login bypass via SQLi in email field" },
+    { "category": "xss", "endpoint": "/#/search", "parameter": "q", "minSeverity": "medium", "description": "Reflected XSS in the search fragment (DOM sink)" },
+    { "category": "idor", "endpoint": "/api/Users", "minSeverity": "high", "description": "User list disclosure without proper authorization" },
+    { "category": "jwt", "endpoint": "/rest/user/login", "minSeverity": "medium", "description": "JWT algorithm confusion / weak signature acceptance" },
+    { "category": "path traversal", "endpoint": "/ftp", "minSeverity": "high", "description": "Directory traversal through the legacy FTP-style folder" }
+  ],
+  "safeEndpoints": [
+    { "category": "clickjacking", "endpoint": "/api/Users", "note": "JSON API responses must not trip clickjacking probes" }
+  ]
+}

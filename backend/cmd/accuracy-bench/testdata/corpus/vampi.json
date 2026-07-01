@@ -1,0 +1,14 @@
+{
+  "target": "vampi",
+  "description": "VAmPI – Vulnerable API. Covers BOLA, broken authentication, mass assignment.",
+  "baseUrl": "http://vampi.example:5000",
+  "expectedFindings": [
+    { "category": "idor", "endpoint": "/users/v1/{username}", "minSeverity": "high", "description": "BOLA on user detail" },
+    { "category": "mass assignment", "endpoint": "/users/v1/register", "parameter": "admin", "minSeverity": "high" },
+    { "category": "jwt", "endpoint": "/users/v1/login", "minSeverity": "medium" },
+    { "category": "sqli", "endpoint": "/books/v1/{title}", "minSeverity": "high" }
+  ],
+  "safeEndpoints": [
+    { "category": "clickjacking", "endpoint": "/users/v1/login", "note": "Pure JSON API — no X-Frame-Options needed" }
+  ]
+}
