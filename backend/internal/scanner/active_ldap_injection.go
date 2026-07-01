@@ -31,10 +31,11 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 	}
 
 	type hit struct {
-		url       string
-		param     string
-		payload   string
-		signature string
+		url          string
+		param        string
+		payload      string
+		signature    string
+		responseHdr  http.Header
 	}
 	var hits []hit
 	attempts := 0
@@ -81,12 +82,19 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				// Phase 1 shape gate: LDAP signatures echoed inside a
+				// binary asset (image/PDF/etc.) are almost always coincidental
+				// byte sequences, not attacker-controlled error surfaces.
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 				if sig := matchAnyLower(string(respBody), ldapErrorSignatures); sig != "" || ldapLooksLikeBypass(baselineStatus, baselineLen, resp.StatusCode, len(respBody), string(respBody)) {
 					if sig == "" {
 						sig = "authentication bypass heuristic"
 					}
-					hits = append(hits, hit{url: probeURL, param: param, payload: payload, signature: sig})
+					hits = append(hits, hit{url: probeURL, param: param, payload: payload, signature: sig, responseHdr: respHeader})
 					break
 				}
 			}
@@ -99,8 +107,53 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 		return nil
 	}
 	first := hits[0]
+
+	// Phase 1 differential re-verify: fire the same request once with a
+	// benign non-metacharacter value. If the LDAP signature still appears
+	// (or the "bypass" heuristic still fires), the observation is baseline
+	// noise — not a payload-specific injection signal. Suppresses the
+	// class of false positive where the endpoint always emits an LDAP
+	// error page regardless of input.
+	execDifferential := func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+		u, perr := url.Parse(first.url)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		q := u.Query()
+		q.Set(first.param, altPayload)
+		u.RawQuery = q.Encode()
+		dreq, derr := http.NewRequestWithContext(dctx, http.MethodGet, u.String(), nil)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		ApplyAuthProfile(dreq, input.AuthProfile)
+		dresp, dcerr := s.doRequestWithRetry(dctx, dreq, input.Options)
+		if dcerr != nil {
+			return nil, nil, dcerr
+		}
+		body, _ := io.ReadAll(io.LimitReader(dresp.Body, 256*1024))
+		return dresp, body, nil
+	}
+	lowerSig := strings.ToLower(first.signature)
+	oracle := func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+		// Same signal-detection heuristic as the primary probe: an LDAP
+		// error signature substring in the body counts as the oracle firing.
+		return strings.Contains(strings.ToLower(string(body)), lowerSig) ||
+			matchAnyLower(string(body), ldapErrorSignatures) != "", nil
+	}
+	diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       "active-ldap-injection",
+		OriginalPayload: first.payload,
+		SafePayload:     "",
+		Exec:            execDifferential,
+		Oracle:          oracle,
+	})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                "active-ldap-injection",
 		Category:          "injection",
 		Severity:          model.SeverityHigh,
@@ -121,9 +174,12 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 			"payload":        first.payload,
 			"signature":      first.signature,
 			"curlReproducer": curl,
+			"responseShape":  ClassifyResponseShape(first.responseHdr).String(),
 		},
 		BusinessTags: []string{"authentication", "directory-services"},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	return []model.Finding{finding}
 }
 
 func ldapQueryURL(base *url.URL, param, value string) string {

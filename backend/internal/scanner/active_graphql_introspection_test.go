@@ -88,3 +88,48 @@ func TestIsGraphQLIntrospectionResponse(t *testing.T) {
 		t.Fatal("empty body must not match")
 	}
 }
+
+// TestRunActiveGraphQLIntrospectionProbe_SkipsNonJSONResponses verifies the
+// Phase 1 JSON-shape gate: an HTML error page that happens to mention
+// `__schema` / `queryType` must not be treated as introspection evidence.
+func TestRunActiveGraphQLIntrospectionProbe_SkipsNonJSONResponses(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><body>Blocked: __schema queryType access denied</body></html>`))
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	in := RunInput{
+		Target:  target.URL,
+		Options: model.ScanOptions{SeedRuntimeEndpoints: []string{target.URL + "/graphql"}},
+	}
+	findings := svc.runActiveGraphQLIntrospectionProbe(context.Background(), in, "")
+	if len(findings) != 0 {
+		t.Fatalf("non-JSON response must be skipped by the shape gate, got %d findings", len(findings))
+	}
+}
+
+// TestRunActiveGraphQLIntrospectionProbe_EmitsResponseShapeTag verifies the
+// Phase 1 shape tag is present on the emitted finding for downstream
+// evidence normalisation.
+func TestRunActiveGraphQLIntrospectionProbe_EmitsResponseShapeTag(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"__schema":{"queryType":{"name":"Query"}}}}`))
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	in := RunInput{
+		Target:  target.URL,
+		Options: model.ScanOptions{SeedRuntimeEndpoints: []string{target.URL + "/graphql"}},
+	}
+	findings := svc.runActiveGraphQLIntrospectionProbe(context.Background(), in, "")
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if got := findings[0].EvidenceFields["responseShape"]; got != ShapeJSON.String() {
+		t.Fatalf("expected responseShape=%q, got %q", ShapeJSON.String(), got)
+	}
+}

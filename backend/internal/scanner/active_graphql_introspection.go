@@ -84,7 +84,16 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 			continue
 		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+		respHeader := resp.Header
 		_ = resp.Body.Close()
+		// Phase 1 shape gate: introspection is defined to return JSON.
+		// A non-JSON response (HTML error page, WAF block, static asset)
+		// that happens to contain the "__schema" / "querytype" substrings
+		// is not evidence of an enabled introspection endpoint. Requiring
+		// a JSON-shaped body eliminates that class of false positive.
+		if !IsJSONShape(respHeader) {
+			continue
+		}
 		if isGraphQLIntrospectionResponse(string(respBody)) {
 			hits = append(hits, hit{url: probeURL})
 		}
@@ -125,6 +134,7 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 			"reproStep":      "POST the introspection query and inspect __schema in the JSON response",
 			"endpoint":       first.url,
 			"curlReproducer": curl,
+			"responseShape":  ShapeJSON.String(),
 		},
 	}}
 }
