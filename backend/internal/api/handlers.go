@@ -3101,6 +3101,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := time.Now().UTC()
+	preReport := scanner.GetVerificationMetrics()
 	lagSum := 0.0
 	lagCount := 0
 	maxLag := 0.0
@@ -3361,6 +3362,16 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 				}
 				return 0
 			}(),
+			"preReportTotal":             float64(preReport.Total),
+			"preReportVerified":          float64(preReport.Verified),
+			"preReportSuppressed":        float64(preReport.Suppressed),
+			"preReportDowngraded":        float64(preReport.Downgraded),
+			"preReportPoCReplayed":       float64(preReport.PoCReplayed),
+			"preReportPoCSucceeded":      float64(preReport.PoCSucceeded),
+			"preReportVerifiedRate":      roundTo2(preReport.VerifiedRate),
+			"preReportSuppressedRate":    roundTo2(preReport.SuppressedRate),
+			"preReportPoCSuccessRate":    roundTo2(preReport.PoCSuccessRate),
+			"preReportAverageConfidence": roundTo2(preReport.AverageConfidence),
 		},
 	})
 }
@@ -6231,6 +6242,13 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 	for i := range out {
 		out[i] = enforceMinimumEvidenceFields(out[i])
 	}
+	// Shadow-mode pre-report verification: run each enriched finding through
+	// the shared verifier so operators can observe pre-report metrics
+	// (verified / suppressed / downgraded rates) via /api/automation/metrics
+	// even before individual probes migrate to authoring `VerifyCandidate`.
+	// This pass never mutates the finding — probes remain the source of truth
+	// for emission decisions.
+	shadowPreReportVerify(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Severity != out[j].Severity {
 			return severityRank(out[i].Severity) > severityRank(out[j].Severity)
@@ -6238,6 +6256,70 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 		return out[i].Title < out[j].Title
 	})
 	return out
+}
+
+// shadowPreReportVerify runs each finding through the shared pre-report
+// verifier without modifying the finding. It derives evidence signals from
+// the finding's existing evidence fields so per-probe metrics accumulate
+// even for probes that have not yet been migrated to author VerifyCandidate
+// directly.
+func shadowPreReportVerify(findings []model.Finding) {
+	for _, f := range findings {
+		signals := deriveShadowSignals(f)
+		probe := f.EvidenceFields["probeName"]
+		if strings.TrimSpace(probe) == "" {
+			probe = "shadow:" + strings.ToLower(strings.TrimSpace(f.Category))
+		}
+		// Copy so the verifier's in-place mutation of evidence fields does
+		// not touch the emitted finding.
+		copyF := f
+		if copyF.EvidenceFields != nil {
+			ef := make(map[string]string, len(copyF.EvidenceFields))
+			for k, v := range copyF.EvidenceFields {
+				ef[k] = v
+			}
+			copyF.EvidenceFields = ef
+		}
+		scanner.SubmitVerifiedFinding(context.Background(), scanner.VerifyCandidate{
+			Finding:               copyF,
+			Signals:               signals,
+			AllowNoReplayEmission: true,
+			ProbeName:             probe,
+		})
+	}
+}
+
+func deriveShadowSignals(f model.Finding) []scanner.EvidenceSignal {
+	var sigs []scanner.EvidenceSignal
+	ef := f.EvidenceFields
+	if ef == nil {
+		return sigs
+	}
+	if strings.TrimSpace(ef["oobInteraction"]) != "" {
+		sigs = append(sigs, scanner.EvidenceOASTHit)
+	}
+	if strings.TrimSpace(ef["timingDifferentialMs"]) != "" {
+		sigs = append(sigs, scanner.EvidenceTimingDelta)
+	}
+	if strings.TrimSpace(ef["responseBodySnippet"]) != "" || strings.TrimSpace(ef["bodyDelta"]) != "" {
+		sigs = append(sigs, scanner.EvidenceBodyDelta)
+	}
+	if strings.TrimSpace(ef["statusDelta"]) != "" {
+		sigs = append(sigs, scanner.EvidenceStatusDelta)
+	}
+	if strings.TrimSpace(ef["reflectedOrigin"]) != "" || strings.TrimSpace(ef["reflectedMarker"]) != "" {
+		sigs = append(sigs, scanner.EvidenceReflection)
+	}
+	if strings.TrimSpace(ef["xFrameOptions"]) != "" || strings.TrimSpace(ef["headerDelta"]) != "" {
+		sigs = append(sigs, scanner.EvidenceHeaderDelta)
+	}
+	if strings.TrimSpace(ef["errorSignature"]) != "" {
+		sigs = append(sigs, scanner.EvidenceErrorSignal)
+	}
+	if strings.TrimSpace(f.PoC) != "" {
+		sigs = append(sigs, scanner.EvidenceSinkObserved)
+	}
+	return sigs
 }
 
 // enforceMinimumEvidenceFields checks whether a finding has the minimum
