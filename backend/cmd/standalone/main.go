@@ -146,6 +146,11 @@ func parseStandaloneRuntimeConfig(args []string) (standaloneRuntimeConfig, error
 				enableAllGoRuntimeTools(&cfg)
 			}
 		},
+		"force-full-scan": func(v bool) {
+			if v {
+				enableAllGoRuntimeTools(&cfg)
+			}
+		},
 	}
 	for i := 0; i < len(args); i++ {
 		name, value, hasValue, ok := parseFlagArg(args, i)
@@ -390,6 +395,7 @@ type scanFlagValues struct {
 	passiveOnly               bool
 	aggressive                bool
 	fullScan                  bool
+	forceFullScan             bool
 	allGoTools                bool
 	allowDestructive          bool
 	useNuclei                 bool
@@ -442,6 +448,7 @@ func addScanFlags(fs *flag.FlagSet, values *scanFlagValues, timeout *time.Durati
 	fs.BoolVar(&values.passiveOnly, "passive-only", false, "enable passive-only scan mode")
 	fs.BoolVar(&values.aggressive, "aggressive-exploitation", false, "enable aggressive exploitation mode")
 	fs.BoolVar(&values.fullScan, "full-scan", false, "enable all supported standalone scan integrations")
+	fs.BoolVar(&values.forceFullScan, "force-full-scan", false, "force an active full website scan from the supplied target or input request")
 	fs.BoolVar(&values.allGoTools, "all-go-tools", false, "enable all Go-based standalone scan integrations")
 	fs.BoolVar(&values.allowDestructive, "allow-destructive", false, "allow destructive checks for this standalone run")
 	fs.BoolVar(&values.useNuclei, "use-nuclei", false, "enable Nuclei integration")
@@ -529,13 +536,16 @@ func applyScanFlagValues(req *model.ScanRequest, values scanFlagValues) {
 	if values.passiveOnly {
 		req.Options.PassiveOnly = true
 	}
+	if values.forceFullScan {
+		req.Options.PassiveOnly = false
+	}
 	if values.aggressive {
 		req.Options.AggressiveExploitation = true
 	}
-	if values.allGoTools || values.fullScan {
+	if values.allGoTools || values.fullScan || values.forceFullScan {
 		enableAllGoScanOptions(&req.Options)
 	}
-	if values.fullScan {
+	if values.fullScan || values.forceFullScan {
 		req.Options.UseZAPBaselineIntegration = true
 		req.Options.UseXSSMapIntegration = true
 	}
@@ -1275,6 +1285,7 @@ Flags:
   -passive-only                  Enable passive-only scan mode
   -aggressive-exploitation       Enable deeper exploitation paths
   -full-scan                     Enable all supported standalone scan integrations
+  -force-full-scan               Force an active full website scan from the supplied target or input request
   -all-go-tools                  Enable all Go-based standalone scan integrations
   -allow-destructive             Allow destructive checks for this standalone run
   -use-nuclei                    Enable Nuclei integration

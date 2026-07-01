@@ -484,9 +484,12 @@ go run ./cmd/standalone scan run \
   -format text
 ```
 
+To force an active full-website scan even when the input request or defaults are
+passive-only, replace `-full-scan` with `-force-full-scan`.
+
 For a Go-only toolchain preset, replace `-full-scan` with `-all-go-tools`.
 `-allow-destructive` is required for destructive native Go checks such as
-Nikto and SQLMap, and for XSSMap when `-full-scan` is used.
+Nikto and SQLMap, and for XSSMap when `-full-scan` or `-force-full-scan` is used.
 
 Submit a richer automated scan request from JSON and fetch it later:
 

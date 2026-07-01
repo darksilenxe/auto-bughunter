@@ -54,11 +54,49 @@ func TestParseStandaloneRuntimeConfigEnablesGoToolPreset(t *testing.T) {
 	}
 }
 
+func TestParseStandaloneRuntimeConfigEnablesForceFullScanPreset(t *testing.T) {
+	cfg, err := parseStandaloneRuntimeConfig([]string{"scan", "run", "-force-full-scan"})
+	if err != nil {
+		t.Fatalf("parseStandaloneRuntimeConfig returned error: %v", err)
+	}
+	if !cfg.EnableSubfinder || !cfg.EnableAmass || !cfg.EnableNikto || !cfg.EnableSQLMap || !cfg.EnableGobuster {
+		t.Fatalf("expected force full scan preset to enable integrations, got %#v", cfg)
+	}
+}
+
 func TestBuildScanRequestBodyAppliesFullScanFlags(t *testing.T) {
 	inputDir := t.TempDir()
 	inputPath := filepath.Join(inputDir, "scan-request.json")
 	if err := os.WriteFile(inputPath, []byte(`{"target":"https://old.example","options":{"passiveOnly":true}}`), 0o644); err != nil {
 		t.Fatalf("write input: %v", err)
+	}
+
+	func TestBuildScanRequestBodyForceFullScanOverridesPassiveOnly(t *testing.T) {
+		inputDir := t.TempDir()
+		inputPath := filepath.Join(inputDir, "scan-request.json")
+		if err := os.WriteFile(inputPath, []byte(`{"target":"https://old.example","options":{"passiveOnly":true}}`), 0o644); err != nil {
+			t.Fatalf("write input: %v", err)
+		}
+
+		body, err := buildScanRequestBody(scanFlagValues{
+			inputPath:      inputPath,
+			target:         "https://override.example",
+			forceFullScan:  true,
+		})
+		if err != nil {
+			t.Fatalf("buildScanRequestBody returned error: %v", err)
+		}
+
+		var req model.ScanRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		if req.Options.PassiveOnly {
+			t.Fatalf("expected force full scan to disable passive-only mode, got %#v", req.Options)
+		}
+		if !req.Options.UseZAPBaselineIntegration || !req.Options.UseXSSMapIntegration || !req.Options.UseSubfinderIntegration {
+			t.Fatalf("expected force full scan to enable full-scan integrations, got %#v", req.Options)
+		}
 	}
 
 	body, err := buildScanRequestBody(scanFlagValues{
