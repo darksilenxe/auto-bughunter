@@ -9,6 +9,7 @@ import { ToastProvider } from "./components/Toast";
 import AgentConsole from "./pages/AgentConsole";
 import AgentActivity from "./pages/AgentActivity";
 import AttackGraph from "./pages/AttackGraph";
+import Accuracy from "./pages/Accuracy";
 import Dashboard from "./pages/Dashboard";
 import Findings from "./pages/Findings";
 import IDE from "./pages/IDE";
@@ -60,6 +61,7 @@ export default function App() {
               <Route path="/probe-coverage" element={<ProbeCoverage />} />
               <Route path="/scan-timeline"  element={<ScanTimeline />} />
               <Route path="/surface-map"    element={<SurfaceMap />} />
+              <Route path="/accuracy"       element={<Accuracy />} />
             </Routes>
           </ErrorBoundary>
         </main>
