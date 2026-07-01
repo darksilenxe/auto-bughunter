@@ -76,6 +76,8 @@ func (c *Client) AdviseAgent(
 		"- When in doubt, include a check rather than skipping it (false negatives are worse than redundancy).\n" +
 		"- Bias toward checks that match tech-stack signals in the blackboard or categories already " +
 		"partially signalled by prior findings (e.g. near-miss or WAF-blocked).\n" +
+		"- When a 'knowledgeGuidance' field is present, use its curated HackTricks / PayloadsAllTheThings " +
+		"techniques and payload ideas to prioritize the checks and focus endpoints that are most likely to pay off.\n" +
 		"Reply with strict JSON only: " +
 		`{"thinking":string,"priorityChecks":[string],"skipChecks":[string],"focusEndpoints":[string],"rationale":string}`
 
@@ -86,6 +88,16 @@ func (c *Client) AdviseAgent(
 		"priorFindings":   findingSummary,
 		"blackboard":      strings.TrimSpace(blackboard),
 		"instructions":    instructions,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"agent-advice",
+		agentAdviceKnowledgeQuery(agentName, target, availableChecks, findings, blackboard),
+		knowledgeCategoriesForAgentAdvice(availableChecks, findings),
+		4,
+		1200,
+	); guidance != "" {
+		payload["knowledgeGuidance"] = guidance
 	}
 
 	userJSON, err := json.Marshal(payload)

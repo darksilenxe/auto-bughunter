@@ -162,6 +162,17 @@ func (c *Client) Reflect(
 		"coverageMap":  coverageMap,
 		"instructions": baseReflectInstructions,
 	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"probe-reflection",
+		reflectKnowledgeQuery(target, findings, probeResults),
+		probeKnowledgeCategories(findings, probeResults),
+		5,
+		1200,
+	); guidance != "" {
+		payload["knowledgeGuidance"] = guidance
+		payload["instructions"] = baseReflectInstructions + " When a 'knowledgeGuidance' field is present, use its curated HackTricks / PayloadsAllTheThings payload families and bypass ideas to refine the next-round hints."
+	}
 
 	userJSON, err := json.Marshal(payload)
 	if err != nil {

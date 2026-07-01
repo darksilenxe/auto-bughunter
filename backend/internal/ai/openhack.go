@@ -100,13 +100,23 @@ func (c *Client) RunOpenHackExpert(ctx context.Context, systemPrompt, expertID s
 		"outputContract":       openHackExpertSchema,
 		"instructions":         openHackExpertInstructions,
 	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"openhack-expert",
+		openHackKnowledgeQuery("openhack-expert", finding),
+		knowledgeCategoriesForFinding(finding),
+		4,
+		1200,
+	); guidance != "" {
+		userPayload["knowledgeGuidance"] = guidance
+	}
 	body, err := json.Marshal(userPayload)
 	if err != nil {
 		return OpenHackExpertAssessment{}
 	}
 
 	messages := []Message{
-		{Role: "system", Content: systemPrompt + "\n\n" + openHackExpertReminder},
+		{Role: "system", Content: systemPrompt + "\n\n" + openHackExpertReminder + " Use any provided knowledgeGuidance field as curated HackTricks / PayloadsAllTheThings support for severity, proof obligations, and follow-up probes."},
 		{Role: "user", Content: string(body)},
 	}
 	content, err := c.planningComplete(ctx, messages, 0.2, true)
@@ -150,12 +160,22 @@ func (c *Client) RunOpenHackTriage(ctx context.Context, systemPrompt string, fin
 		"outputContract": openHackTriageSchema,
 		"instructions":   openHackTriageInstructions,
 	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"openhack-triage",
+		openHackKnowledgeQuery("openhack-triage", finding),
+		knowledgeCategoriesForFinding(finding),
+		4,
+		1200,
+	); guidance != "" {
+		userPayload["knowledgeGuidance"] = guidance
+	}
 	body, err := json.Marshal(userPayload)
 	if err != nil {
 		return OpenHackTriageDecision{}
 	}
 	messages := []Message{
-		{Role: "system", Content: systemPrompt + "\n\n" + openHackTriageReminder},
+		{Role: "system", Content: systemPrompt + "\n\n" + openHackTriageReminder + " Use any provided knowledgeGuidance field as curated HackTricks / PayloadsAllTheThings support when judging evidence quality and remediation direction."},
 		{Role: "user", Content: string(body)},
 	}
 	content, err := c.planningComplete(ctx, messages, 0.2, true)
