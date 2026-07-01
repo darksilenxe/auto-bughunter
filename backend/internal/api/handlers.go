@@ -3102,6 +3102,8 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	}
 	now := time.Now().UTC()
 	preReport := scanner.GetVerificationMetrics()
+	clusterMetrics := scanner.GetClusterMetrics()
+	diffMetrics := scanner.GetDifferentialMetrics()
 	lagSum := 0.0
 	lagCount := 0
 	maxLag := 0.0
@@ -3372,6 +3374,16 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			"preReportSuppressedRate":    roundTo2(preReport.SuppressedRate),
 			"preReportPoCSuccessRate":    roundTo2(preReport.PoCSuccessRate),
 			"preReportAverageConfidence": roundTo2(preReport.AverageConfidence),
+			"clusterTotalIn":             float64(clusterMetrics.TotalIn),
+			"clusterTotalOut":            float64(clusterMetrics.TotalOut),
+			"clusterClustered":           float64(clusterMetrics.Clustered),
+			"clusterRatio":               roundTo2(clusterMetrics.Ratio),
+			"differentialTotal":          float64(diffMetrics.Total),
+			"differentialConfirmed":      float64(diffMetrics.Confirmed),
+			"differentialFPStripped":     float64(diffMetrics.FPStripped),
+			"differentialFPBenign":       float64(diffMetrics.FPBenign),
+			"differentialExecErrors":     float64(diffMetrics.ExecErrors),
+			"differentialConfirmedRate":  roundTo2(diffMetrics.ConfirmedRate),
 		},
 	})
 }
@@ -6242,6 +6254,13 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 	for i := range out {
 		out[i] = enforceMinimumEvidenceFields(out[i])
 	}
+	// Phase 1 clustering: fold findings that share
+	// (category, host, normalized-path, param, evidence-hash) into a single
+	// survivor. The strongest evidence is kept and siblings are attached to
+	// the survivor's EvidenceFields (`clusterId`, `clusterSize`,
+	// `clusterSiblings`). Process-wide cluster metrics are surfaced via
+	// GetClusterMetrics → AutomationMetrics.Extra.
+	out = scanner.ClusterFindings(out)
 	// Shadow-mode pre-report verification: run each enriched finding through
 	// the shared verifier so operators can observe pre-report metrics
 	// (verified / suppressed / downgraded rates) via /api/automation/metrics

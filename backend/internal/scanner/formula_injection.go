@@ -62,32 +62,41 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 				continue
 			}
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
-			if strings.Contains(string(respBody), formulaMarker) {
-				curl := buildCurlReproducer(http.MethodGet, probeURL, input.AuthProfile, "", "")
-				return []model.Finding{{
-					ID:                "formula-injection",
-					Category:          "injection",
-					Severity:          model.SeverityMedium,
-					Title:             "Spreadsheet formula injection via untrusted reflected value",
-					Description:       "A spreadsheet-style formula marker beginning with '=' was reflected intact. If this value is later exported to CSV/XLSX and opened in spreadsheet software, it can execute attacker-controlled formulas or data-exfiltration primitives.",
-					Evidence:          fmt.Sprintf("Probe %s reflected marker %q on parameter %q", probeURL, formulaMarker, param),
-					Recommendation:    "Prefix spreadsheet-exported values that begin with =, +, -, or @ with a single quote, or otherwise neutralize formula execution before generating CSV/XLSX output.",
-					Confidence:        0.84,
-					AffectedURL:       probeURL,
-					AffectedParameter: param,
-					CWE:               "CWE-1236",
-					OWASPCategory:     "A03:2021 - Injection",
-					Sources:           []string{"active-scanner"},
-					ReproductionSteps: []string{fmt.Sprintf("Send GET %s", probeURL), fmt.Sprintf("Observe the exact marker %q in the response/export path.", formulaMarker)},
-					PoC:               curl,
-					EvidenceFields: map[string]string{
-						"validationType": "active-probe",
-						"payload":        formulaMarker,
-						"curlReproducer": curl,
-					},
-				}}
+			// Phase 1 FP-reduction: reflection into binary responses
+			// (images, PDFs, archives) is a pattern-match artefact and
+			// cannot be exploited by any CSV/XLSX export downstream.
+			if IsBinaryShape(respHeader) {
+				continue
 			}
+			if !strings.Contains(string(respBody), formulaMarker) {
+				continue
+			}
+			curl := buildCurlReproducer(http.MethodGet, probeURL, input.AuthProfile, "", "")
+			return []model.Finding{{
+				ID:                "formula-injection",
+				Category:          "injection",
+				Severity:          model.SeverityMedium,
+				Title:             "Spreadsheet formula injection via untrusted reflected value",
+				Description:       "A spreadsheet-style formula marker beginning with '=' was reflected intact. If this value is later exported to CSV/XLSX and opened in spreadsheet software, it can execute attacker-controlled formulas or data-exfiltration primitives.",
+				Evidence:          fmt.Sprintf("Probe %s reflected marker %q on parameter %q", probeURL, formulaMarker, param),
+				Recommendation:    "Prefix spreadsheet-exported values that begin with =, +, -, or @ with a single quote, or otherwise neutralize formula execution before generating CSV/XLSX output.",
+				Confidence:        0.84,
+				AffectedURL:       probeURL,
+				AffectedParameter: param,
+				CWE:               "CWE-1236",
+				OWASPCategory:     "A03:2021 - Injection",
+				Sources:           []string{"active-scanner"},
+				ReproductionSteps: []string{fmt.Sprintf("Send GET %s", probeURL), fmt.Sprintf("Observe the exact marker %q in the response/export path.", formulaMarker)},
+				PoC:               curl,
+				EvidenceFields: map[string]string{
+					"validationType": "active-probe",
+					"payload":        formulaMarker,
+					"curlReproducer": curl,
+					"responseShape":  ClassifyResponseShape(respHeader).String(),
+				},
+			}}
 		}
 	}
 	return nil
