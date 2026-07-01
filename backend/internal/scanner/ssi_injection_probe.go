@@ -148,7 +148,11 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, ssiBodyLimit))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if !IsHTMLShape(respHeader) {
+					continue
+				}
 				respStr := string(respBody)
 
 				if !strings.Contains(respStr, p.marker) {
@@ -161,6 +165,18 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 					continue
 				}
 
+				baselines, berr := s.phase1QueryBaselines(ctx, probeURL.String(), param, "safe", true, input, ssiBodyLimit)
+				if berr == nil && phase1BaselineContains(baselines, p.marker) {
+					continue
+				}
+				diffOutcome := phase1DifferentialQuery(ctx, s, input, "ssi-injection", probeURL.String(), param, p.payload, "safe", ssiBodyLimit,
+					func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+						return strings.Contains(string(body), p.marker), nil
+					})
+				if diffOutcome.Ran && !diffOutcome.Confirmed {
+					continue
+				}
+
 				emitted[fid] = true
 				severity := model.SeverityHigh
 				if p.label == "exec-echo" || p.label == "include-passwd" {
@@ -168,7 +184,8 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 				}
 
 				curl := buildCurlReproducer(http.MethodGet, probeURL.String(), input.AuthProfile, "", "")
-				findings = append(findings, model.Finding{
+				refCtx := ClassifyReflectionContext(respStr, p.marker)
+				finding := model.Finding{
 					ID:       fid,
 					Category: "injection",
 					Severity: severity,
@@ -202,14 +219,18 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 					},
 					PoC: curl,
 					EvidenceFields: map[string]string{
-						"validationType": "active-probe",
-						"ssiLabel":       p.label,
-						"param":          param,
-						"payload":        p.payload,
-						"marker":         p.marker,
-						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+						"validationType":    "active-probe",
+						"ssiLabel":          p.label,
+						"param":             param,
+						"payload":           p.payload,
+						"marker":            p.marker,
+						"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
+						"responseShape":     ClassifyResponseShape(respHeader).String(),
+						"reflectionContext": refCtx.String(),
 					},
-				})
+				}
+				AttachDifferentialEvidence(&finding, diffOutcome)
+				findings = append(findings, finding)
 				break // one finding per endpoint+param
 			}
 		}
@@ -222,14 +243,14 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 // and whose raw payload is NOT verbatim in the body (confirming evaluation).
 // Exported for test use.
 func detectSSIMarker(body string) *struct{ label, marker string } {
-for _, p := range ssiPayloads {
-if strings.Contains(body, p.marker) {
-// If the full payload is present verbatim, SSI was not processed.
-if p.label != "echo-docroot" && strings.Contains(body, p.payload) {
-continue
-}
-return &struct{ label, marker string }{label: p.label, marker: p.marker}
-}
-}
-return nil
+	for _, p := range ssiPayloads {
+		if strings.Contains(body, p.marker) {
+			// If the full payload is present verbatim, SSI was not processed.
+			if p.label != "echo-docroot" && strings.Contains(body, p.payload) {
+				continue
+			}
+			return &struct{ label, marker string }{label: p.label, marker: p.marker}
+		}
+	}
+	return nil
 }

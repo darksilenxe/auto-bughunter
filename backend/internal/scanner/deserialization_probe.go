@@ -35,10 +35,10 @@ var phpObjectPattern = regexp.MustCompile(`O:\d+:"[A-Za-z_\\][A-Za-z0-9_\\]*":\d
 // pythonPickleMarkers are byte patterns common in pickle streams.
 // 0x80 0x02 is the SHORT_BINUNICODE opcode prefix for protocol 2+.
 var pythonPickleMarkers = []string{
-	"\x80\x02",  // protocol 2
-	"\x80\x03",  // protocol 3
-	"\x80\x04",  // protocol 4
-	"cbuiltins\n", // pickle GLOBAL opcode
+	"\x80\x02",      // protocol 2
+	"\x80\x03",      // protocol 3
+	"\x80\x04",      // protocol 4
+	"cbuiltins\n",   // pickle GLOBAL opcode
 	"cos\nsystem\n", // classic gadget
 }
 
@@ -131,16 +131,52 @@ func (s *Service) RunDeserializationProbe(
 				continue
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, deserializationBodyLimit))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
+			if IsBinaryShape(respHeader) {
+				continue
+			}
 			bodyStr := string(body)
 
 			indicator, lang := detectDeserializationSignal(bodyStr, probe.label)
 			if indicator == "" {
 				continue
 			}
+			baselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+				return phase1POSTSample(bctx, s, ep, probe.contentType, "safe", RunInput{AuthProfile: auth, Options: options}, deserializationBodyLimit)
+			})
+			if berr == nil && phase1BaselineContains(baselines, indicator) {
+				continue
+			}
+			diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+				ProbeName:       "deserialization-probe",
+				OriginalPayload: probe.body,
+				SafePayload:     "safe",
+				Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+					req, err := http.NewRequestWithContext(dctx, http.MethodPost, ep, strings.NewReader(altPayload))
+					if err != nil {
+						return nil, nil, err
+					}
+					ApplyAuthProfile(req, auth)
+					req.Header.Set("Content-Type", probe.contentType)
+					resp, err := s.doRequestWithRetry(dctx, req, options)
+					if err != nil || resp == nil {
+						return nil, nil, err
+					}
+					body, _ := io.ReadAll(io.LimitReader(resp.Body, deserializationBodyLimit))
+					return resp, body, nil
+				},
+				Oracle: func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+					got, _ := detectDeserializationSignal(string(body), probe.label)
+					return got != "", nil
+				},
+			})
+			if diffOutcome.Ran && !diffOutcome.Confirmed {
+				continue
+			}
 
 			emitted[fid] = true
-			findings = append(findings, model.Finding{
+			finding := model.Finding{
 				ID:       fid,
 				Category: "injection",
 				Severity: model.SeverityHigh,
@@ -178,8 +214,11 @@ func (s *Service) RunDeserializationProbe(
 					"indicator":      indicator,
 					"probeLabel":     probe.label,
 					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+					"responseShape":  ClassifyResponseShape(respHeader).String(),
 				},
-			})
+			}
+			AttachDifferentialEvidence(&finding, diffOutcome)
+			findings = append(findings, finding)
 		}
 
 		// Passive check: scan the existing response body for serialization markers
@@ -193,7 +232,11 @@ func (s *Service) RunDeserializationProbe(
 				resp, err := s.doRequestWithRetry(ctx, req, options)
 				if err == nil && resp != nil {
 					body, _ := io.ReadAll(io.LimitReader(resp.Body, deserializationBodyLimit))
+					respHeader := resp.Header
 					_ = resp.Body.Close()
+					if IsBinaryShape(respHeader) {
+						continue
+					}
 					if indicator, lang := detectDeserializationSignal(string(body), ""); indicator != "" {
 						emitted[fid] = true
 						findings = append(findings, model.Finding{
@@ -208,7 +251,7 @@ func (s *Service) RunDeserializationProbe(
 									"which an attacker can study to craft a gadget-chain exploit.",
 								ep, lang,
 							),
-							Evidence:      fmt.Sprintf("GET %s → HTTP %d; contains: %s", ep, resp.StatusCode, indicator),
+							Evidence: fmt.Sprintf("GET %s → HTTP %d; contains: %s", ep, resp.StatusCode, indicator),
 							Recommendation: "Avoid serializing internal objects into API responses. Use plain JSON/XML. " +
 								"If serialization is required, sign and validate all serialized blobs.",
 							Confidence:    0.70,

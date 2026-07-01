@@ -46,8 +46,8 @@ var cmdInjectionParams = []string{
 // They are ordered from least detectable (time-based) to most detectable
 // (output-based). Only safe, non-destructive commands are used (id, echo).
 var cmdInjectionPayloads = []struct {
-	label    string
-	value    string
+	label     string
+	value     string
 	timeBased bool
 }{
 	// Output-based: inject echo of unique marker via common separators.
@@ -117,8 +117,7 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 			continue
 		}
 
-		// Measure baseline latency for time-based detection.
-		baselineLatency := s.measureBaselineLatency(ctx, raw, input)
+		baselineControls, _ := s.phase1QueryBaselines(ctx, raw, "abh_cmdi_control", "safe", true, input, cmdInjectionBodyLimit)
 
 		for _, param := range cmdInjectionParams {
 			if attempts >= cmdInjectionMaxAttempts {
@@ -158,13 +157,28 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, cmdInjectionBodyLimit))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 
 				// Output-based detection.
 				if !payload.timeBased && strings.Contains(string(respBody), cmdInjectionOutputMarker) {
+					if phase1BaselineContains(baselineControls, cmdInjectionOutputMarker) {
+						continue
+					}
+					diffOutcome := phase1DifferentialQuery(ctx, s, input, "command-injection", probeURL.String(), param, payload.value, "127.0.0.1", cmdInjectionBodyLimit,
+						func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+							return strings.Contains(string(body), cmdInjectionOutputMarker), nil
+						})
+					if diffOutcome.Ran && !diffOutcome.Confirmed {
+						continue
+					}
 					emitted[fid] = true
 					curl := buildCurlReproducer(http.MethodGet, probeURL.String(), input.AuthProfile, "", "")
-					findings = append(findings, model.Finding{
+					refCtx := ClassifyReflectionContext("<body>"+string(respBody)+"</body>", cmdInjectionOutputMarker)
+					finding := model.Finding{
 						ID:       fid,
 						Category: "injection",
 						Severity: model.SeverityCritical,
@@ -197,20 +211,37 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 						},
 						PoC: curl,
 						EvidenceFields: map[string]string{
-							"validationType": "active-probe",
-							"technique":      payload.label,
-							"param":          param,
-							"payload":        payload.value,
-							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+							"validationType":    "active-probe",
+							"technique":         payload.label,
+							"param":             param,
+							"payload":           payload.value,
+							"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
+							"responseShape":     ClassifyResponseShape(respHeader).String(),
+							"reflectionContext": refCtx.String(),
 						},
-					})
+					}
+					AttachDifferentialEvidence(&finding, diffOutcome)
+					emittedFinding, ok := phase1SubmitVerified(ctx, finding, "command-injection", []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved}, "command-injection")
+					if !ok {
+						continue
+					}
+					findings = append(findings, emittedFinding)
 					break
 				}
 
 				// Time-based detection.
-				if payload.timeBased && elapsed >= cmdInjectionTimeThreshold && elapsed >= baselineLatency+cmdInjectionTimeThreshold/2 {
+				if payload.timeBased && elapsed >= cmdInjectionTimeThreshold && phase1TimingExceeds(elapsed, baselineControls.First.Duration, baselineControls.Second.Duration) {
+					diffOutcome := phase1DifferentialQuery(ctx, s, input, "command-injection", probeURL.String(), param, payload.value, "127.0.0.1", cmdInjectionBodyLimit,
+						func(dctx context.Context, alt string, _ *http.Response, _ []byte) (bool, error) {
+							start := time.Now()
+							_, err := s.phase1GETSample(dctx, mustPhase1QueryURL(probeURL.String(), param, alt), input, cmdInjectionBodyLimit)
+							return time.Since(start) >= cmdInjectionTimeThreshold, err
+						})
+					if diffOutcome.Ran && !diffOutcome.Confirmed {
+						continue
+					}
 					emitted[fid] = true
-					findings = append(findings, model.Finding{
+					finding := model.Finding{
 						ID:       fid,
 						Category: "injection",
 						Severity: model.SeverityHigh,
@@ -220,11 +251,11 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 								"when the %q parameter received a sleep-based injection payload (%q). "+
 								"This pattern is consistent with blind OS command injection where the server executes "+
 								"the injected sleep command before returning the response.",
-							raw, elapsed.Milliseconds(), baselineLatency.Milliseconds(), param, payload.value,
+							raw, elapsed.Milliseconds(), baselineControls.First.Duration.Milliseconds(), param, payload.value,
 						),
 						Evidence: fmt.Sprintf(
 							"GET %s → elapsed %dms (baseline: %dms, threshold: %dms)",
-							probeURL.String(), elapsed.Milliseconds(), baselineLatency.Milliseconds(), cmdInjectionTimeThreshold.Milliseconds(),
+							probeURL.String(), elapsed.Milliseconds(), baselineControls.First.Duration.Milliseconds(), cmdInjectionTimeThreshold.Milliseconds(),
 						),
 						Recommendation: "Never pass user-supplied input to shell commands. Use language-native APIs " +
 							"without a shell. Validate all input against strict allowlists and use parameterised " +
@@ -240,15 +271,22 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 							fmt.Sprintf("Observe response delay ≥ %ds confirming sleep execution.", cmdInjectionTimeSleepSeconds),
 						},
 						EvidenceFields: map[string]string{
-							"validationType":  "active-probe",
-							"technique":       payload.label,
-							"param":           param,
-							"payload":         payload.value,
-							"elapsedMs":       fmt.Sprintf("%d", elapsed.Milliseconds()),
-							"baselineMs":      fmt.Sprintf("%d", baselineLatency.Milliseconds()),
-							"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
+							"validationType": "active-probe",
+							"technique":      payload.label,
+							"param":          param,
+							"payload":        payload.value,
+							"elapsedMs":      fmt.Sprintf("%d", elapsed.Milliseconds()),
+							"baselineMs":     phase1FormatBaselineMs(baselineControls),
+							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+							"responseShape":  ClassifyResponseShape(respHeader).String(),
 						},
-					})
+					}
+					AttachDifferentialEvidence(&finding, diffOutcome)
+					emittedFinding, ok := phase1SubmitVerified(ctx, finding, "command-injection", []EvidenceSignal{EvidenceTimingDelta, EvidenceSinkObserved}, "command-injection")
+					if !ok {
+						continue
+					}
+					findings = append(findings, emittedFinding)
 					break
 				}
 			}
@@ -339,7 +377,7 @@ func (s *Service) probeCommandInjectionOAST(ctx context.Context, target string, 
 				"network access, enabling exfiltration, reverse shells, and lateral movement.",
 			target,
 		),
-		Evidence:    fmt.Sprintf("OAST callback received from %s: %d hit(s)", target, len(hits)),
+		Evidence: fmt.Sprintf("OAST callback received from %s: %d hit(s)", target, len(hits)),
 		Recommendation: "Never pass user-supplied input to shell commands. Use language-native APIs " +
 			"without a shell interpreter. Apply strict input allowlist validation and subprocess argument escaping.",
 		Confidence:    0.95,
@@ -358,5 +396,5 @@ func (s *Service) probeCommandInjectionOAST(ctx context.Context, target string, 
 // checkOutputMarker returns true when body contains the OS command injection
 // output marker, confirming execution. Extracted for testability.
 func checkOutputMarker(body string) bool {
-return strings.Contains(body, cmdInjectionOutputMarker)
+	return strings.Contains(body, cmdInjectionOutputMarker)
 }

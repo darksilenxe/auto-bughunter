@@ -174,7 +174,9 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 	type hit struct {
 		url       string
 		param     string
+		payload   string
 		signature string
+		header    http.Header
 	}
 	var hits []hit
 	attempts := 0
@@ -235,9 +237,13 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 				if sig := matchSQLErrorSignatureFrom(string(respBody), techPrioritizedSQLiSignatures(input.DetectedTech)); sig != "" {
-					hits = append(hits, hit{url: probeURL, param: p, signature: sig})
+					hits = append(hits, hit{url: probeURL, param: p, payload: existing + payload, signature: sig, header: respHeader})
 					matched = true
 					break
 				}
@@ -265,7 +271,20 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 	}
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
-	return []model.Finding{{
+	baselines, berr := s.phase1QueryBaselines(ctx, first.url, first.param, "1", true, input, 256*1024)
+	if berr == nil && phase1BaselineContains(baselines, first.signature) {
+		return nil
+	}
+
+	diffOutcome := phase1DifferentialQuery(ctx, s, input, "active-sqli", first.url, first.param, first.payload, "1", 256*1024,
+		func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+			return matchSQLErrorSignatureFrom(string(body), techPrioritizedSQLiSignatures(input.DetectedTech)) != "", nil
+		})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
+	finding := model.Finding{
 		ID:                "active-sqli-error-based",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -287,8 +306,15 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 			"errorSignature":  first.signature,
 			"injectedPayload": sqliBenignPayload,
 			"curlReproducer":  curl,
+			"responseShape":   ClassifyResponseShape(first.header).String(),
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	emitted, ok := phase1SubmitVerified(ctx, finding, "sqli", []EvidenceSignal{EvidenceErrorSignal, EvidenceSinkObserved, EvidenceReflection}, "active-sqli")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // sqliDynamicParams returns any parameter names surfaced by the Phase 2

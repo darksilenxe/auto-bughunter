@@ -129,6 +129,9 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 		url       string
 		technique string
 		evidence  string
+		payload   string
+		signal    string
+		header    http.Header
 	}
 
 	var hits []hit
@@ -183,6 +186,7 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 				hits = append(hits, hit{
 					url:       triggerURL,
 					technique: "oast-out-of-band",
+					payload:   oastPayload,
 					evidence: fmt.Sprintf(
 						"Inbound %s %s from %s at %s — XML parser resolved the external entity and fetched the OAST callback URL %s (probed endpoints: %s)",
 						h.Method, h.Path, h.RemoteAddr,
@@ -223,12 +227,19 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if !IsXMLShape(respHeader) {
+					continue
+				}
 				if sig, matched := matchPathTraversalSignature(string(respBody)); matched {
 					hits = append(hits, hit{
 						url:       ep,
 						technique: "reflected-file-read",
 						evidence:  fmt.Sprintf("filesystem file content %q observed in response", sig),
+						payload:   payload,
+						signal:    sig,
+						header:    respHeader,
 					})
 					break
 				}
@@ -260,12 +271,19 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 				continue
 			}
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
+			if !IsXMLShape(respHeader) {
+				continue
+			}
 			if sig := matchXXEErrorSignature(string(respBody)); sig != "" {
 				hits = append(hits, hit{
 					url:       ep,
 					technique: "error-based",
 					evidence:  fmt.Sprintf("XML parser error signature %q observed in response", sig),
+					payload:   xxeErrorPayload,
+					signal:    sig,
+					header:    respHeader,
 				})
 				break
 			}
@@ -285,7 +303,46 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 		"Escalate using a parameter entity exfiltration chain to read arbitrary files or interact with internal network services.",
 	}
 
-	return []model.Finding{{
+	var diffOutcome DifferentialReVerifyOutcome
+	if first.technique != "oast-out-of-band" {
+		baselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+			return phase1POSTSample(bctx, s, first.url, "application/xml", `<?xml version="1.0"?><abh_probe>safe</abh_probe>`, input, 256*1024)
+		})
+		if berr == nil && phase1BaselineContains(baselines, first.signal) {
+			return nil
+		}
+		diffOutcome = DifferentialReVerify(ctx, DifferentialReVerifyInput{
+			ProbeName:       "active-xxe",
+			OriginalPayload: first.payload,
+			SafePayload:     `<?xml version="1.0"?><abh_probe>safe</abh_probe>`,
+			Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+				req, err := http.NewRequestWithContext(dctx, http.MethodPost, first.url, strings.NewReader(altPayload))
+				if err != nil {
+					return nil, nil, err
+				}
+				req.Header.Set("Content-Type", "application/xml")
+				ApplyAuthProfile(req, input.AuthProfile)
+				resp, err := s.doRequestWithRetry(dctx, req, input.Options)
+				if err != nil || resp == nil {
+					return nil, nil, err
+				}
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				return resp, body, nil
+			},
+			Oracle: func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+				if first.technique == "reflected-file-read" {
+					_, matched := matchPathTraversalSignature(string(body))
+					return matched, nil
+				}
+				return matchXXEErrorSignature(string(body)) != "", nil
+			},
+		})
+		if diffOutcome.Ran && !diffOutcome.Confirmed {
+			return nil
+		}
+	}
+
+	finding := model.Finding{
 		ID:                "active-xxe",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -306,8 +363,21 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 			"evidenceDetail": first.evidence,
 			"reproStep":      "POST the XXE payload with Content-Type: application/xml and observe file content or OAST callback",
 			"curlReproducer": curl,
+			"responseShape":  ClassifyResponseShape(first.header).String(),
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	signals := []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved, EvidenceBodyDelta}
+	if first.technique == "oast-out-of-band" {
+		signals = []EvidenceSignal{EvidenceOASTHit, EvidenceSinkObserved}
+	} else if first.technique == "error-based" {
+		signals = append(signals, EvidenceErrorSignal)
+	}
+	emitted, ok := phase1SubmitVerified(ctx, finding, "xxe", signals, "active-xxe")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // collectXXECandidates returns candidate POST URLs for the XXE probe. It

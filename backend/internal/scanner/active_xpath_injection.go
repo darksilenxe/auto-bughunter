@@ -30,6 +30,14 @@ func (s *Service) runActiveXPathInjectionProbe(ctx context.Context, input RunInp
 		candidates = []string{input.Target}
 	}
 
+	type hit struct {
+		url       string
+		param     string
+		payload   string
+		signature string
+		header    http.Header
+	}
+	var hits []hit
 	attempts := 0
 	for _, raw := range candidates {
 		if attempts >= xpathMaxAttempts {
@@ -66,35 +74,59 @@ func (s *Service) runActiveXPathInjectionProbe(ctx context.Context, input RunInp
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if !IsXMLShape(respHeader) {
+					continue
+				}
 				if sig := matchAnyLower(string(respBody), xpathErrorSignatures); sig != "" {
-					curl := buildCurlReproducer(http.MethodGet, probeURL, input.AuthProfile, "", "")
-					return []model.Finding{{
-						ID:                "active-xpath-injection",
-						Category:          "injection",
-						Severity:          model.SeverityHigh,
-						Title:             "XPath injection confirmed via active probe",
-						Description:       "Supplying XPath metacharacters triggered an XPath parser or XML-processing error, indicating user input is being concatenated into an XPath expression without proper escaping.",
-						Evidence:          fmt.Sprintf("Probe %s triggered %q on parameter %q", probeURL, sig, param),
-						Recommendation:    "Avoid string-building XPath expressions from user input. Use parameterized XPath APIs or strict allowlists and escape untrusted input before it reaches XPath or XSLT evaluation.",
-						Confidence:        0.88,
-						AffectedURL:       probeURL,
-						AffectedParameter: param,
-						CWE:               "CWE-643",
-						OWASPCategory:     "A03:2021 - Injection",
-						Sources:           []string{"active-scanner"},
-						ReproductionSteps: []string{fmt.Sprintf("Send GET %s", probeURL), fmt.Sprintf("Observe the XPath signal %q in the response.", sig)},
-						PoC:               curl,
-						EvidenceFields: map[string]string{
-							"validationType": "active-probe",
-							"payload":        payload,
-							"signature":      sig,
-							"curlReproducer": curl,
-						},
-					}}
+					hits = append(hits, hit{url: probeURL, param: param, payload: payload, signature: sig, header: respHeader})
+					goto doneProbes
 				}
 			}
 		}
 	}
-	return nil
+doneProbes:
+	if len(hits) == 0 {
+		return nil
+	}
+	first := hits[0]
+	baselines, berr := s.phase1QueryBaselines(ctx, first.url, first.param, "guest", true, input, 256*1024)
+	if berr == nil && phase1BaselineContains(baselines, first.signature) {
+		return nil
+	}
+	diffOutcome := phase1DifferentialQuery(ctx, s, input, "active-xpath-injection", first.url, first.param, first.payload, "guest", 256*1024,
+		func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+			return matchAnyLower(string(body), xpathErrorSignatures) != "", nil
+		})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
+	finding := model.Finding{
+		ID:                "active-xpath-injection",
+		Category:          "injection",
+		Severity:          model.SeverityHigh,
+		Title:             "XPath injection confirmed via active probe",
+		Description:       "Supplying XPath metacharacters triggered an XPath parser or XML-processing error, indicating user input is being concatenated into an XPath expression without proper escaping.",
+		Evidence:          fmt.Sprintf("Probe %s triggered %q on parameter %q", first.url, first.signature, first.param),
+		Recommendation:    "Avoid string-building XPath expressions from user input. Use parameterized XPath APIs or strict allowlists and escape untrusted input before it reaches XPath or XSLT evaluation.",
+		Confidence:        0.88,
+		AffectedURL:       first.url,
+		AffectedParameter: first.param,
+		CWE:               "CWE-643",
+		OWASPCategory:     "A03:2021 - Injection",
+		Sources:           []string{"active-scanner"},
+		ReproductionSteps: []string{fmt.Sprintf("Send GET %s", first.url), fmt.Sprintf("Observe the XPath signal %q in the response.", first.signature)},
+		PoC:               curl,
+		EvidenceFields: map[string]string{
+			"validationType": "active-probe",
+			"payload":        first.payload,
+			"signature":      first.signature,
+			"curlReproducer": curl,
+			"responseShape":  ClassifyResponseShape(first.header).String(),
+		},
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	return []model.Finding{finding}
 }

@@ -33,6 +33,10 @@ References landed so far:
 - `active_xss.go` — first full four-control migration
   (shape tag + reflection-context escape gate + two-control baseline
   + `SubmitVerifiedFinding` + `DifferentialReVerify`).
+- Batch A injection probes landed: `active_sqli.go`, `active_ssti.go`,
+  `active_xpath_injection.go`, `active_path_traversal.go`, `active_xxe.go`,
+  `command_injection_probe.go`, `deserialization_probe.go`,
+  `smtp_injection_probe.go`, and `ssi_injection_probe.go`.
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -41,22 +45,22 @@ References landed so far:
 | `active_ldap_injection.go` | ✅ | ➖ | ✅ | ✅ | Binary-shape bail-out, `responseShape` tag, and `DifferentialReVerify` (benign-payload oracle strips static-error-page FPs). Category "injection" has no proof-policy rules so `SubmitVerifiedFinding` is intentionally skipped. |
 | `active_nosqli.go` | ✅ | ➖ | ✅ | ✅ | Full Phase 1 migration: binary-shape bail-out, `SubmitVerifiedFinding` with canonicalised "nosqli" category (external label `input-validation` preserved), 3 evidence signals to meet strict-emission minimum, and `DifferentialReVerify` that strips static-error-page false positives. |
 | `active_open_redirect.go` | ➖ | ✅ | ✅ | ✅ | Full Phase 1 migration: `CaptureTwoControlBaselines` suppresses static off-host redirects, `DifferentialReVerify` (benign-path oracle) suppresses reflection-into-Location noise, `SubmitVerifiedFinding` with canonical "open_redirect" alias (external "input-validation" preserved) and 3 evidence signals. |
-| `active_path_traversal.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Add binary bail-out (`IsBinaryShape`); differential re-verify High/Critical. |
+| `active_path_traversal.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out + `responseShape`, clean filename baselines, differential benign filename replay, and `SubmitVerifiedFinding` with canonical `path_traversal` (external label preserved). |
 | `active_prompt_injection.go` | ✅ | ➖ | ➖ | ✅ | Full Phase 1 migration (verify skipped — no proof-policy for "prompt-injection"): `IsBinaryShape` bail-out and `responseShape` tag on direct-hit response, `DifferentialReVerify` (benign "hello" oracle) suppresses cached/static echoes of `PWNMARKER7731`. Indirect (stored) path unchanged. |
 | `active_prototype_pollution.go` | ✅ | ➖ | ➖ | ✅ | Full Phase 1 migration (verify skipped — no proof-policy for "prototype-pollution"): `IsBinaryShape` bail-out and `responseShape` tag on follow-up response, `DifferentialReVerify` on both query-string and JSON-body branches (benign payload replay confirms marker is not statically echoed). |
-| `active_sqli.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Binary bail-out; control baseline for timing; differential re-verify for time-based signal. |
-| `active_ssti.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Reflection-context aware payload selection; differential re-verify for arithmetic markers. |
-| `active_xpath_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | XML-shape gate for XPath error surfaces. |
+| `active_sqli.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out + `responseShape`, benign parameter baselines, differential benign replay, and `SubmitVerifiedFinding` with canonical `sqli` (external label preserved). |
+| `active_ssti.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + evaluated-marker reflection context, benign template baselines, differential benign replay, and `SubmitVerifiedFinding` with canonical `ssti` (external label preserved). |
+| `active_xpath_injection.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate, benign XPath baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `active_xss.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: response-shape tag, `ClassifyReflectionContext` + `PayloadEscapesContext` gate for High/Critical, two-control baseline, `SubmitVerifiedFinding`, and `DifferentialReVerify`. |
-| `active_xxe.go` | ⚠️ | ➖ | ✅ | ⚠️ | Require `IsXMLShape` on the probed endpoint's response. |
+| `active_xxe.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate on reflected/error responses, benign XML baselines, differential benign XML replay, and `SubmitVerifiedFinding` with canonical `xxe` (external label preserved). |
 | `browser_storage_probe.go` | ➖ | ➖ | ➖ | ⚠️ | Browser-side observation; verify High findings. |
 | `clickjacking_probe.go` | ✅ | ➖ | ⚠️ | ⚠️ | HTML gate present; add differential baseline (framed vs unframed control). |
 | `cloud_storage_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Bucket enumeration — add response-shape evidence tag. |
-| `command_injection_probe.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | Binary bail-out; differential re-verify time-based signal. |
+| `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + marker context, two-control latency/body baselines, differential output/timing replay, and `SubmitVerifiedFinding` with `AllowNoReplayEmission` (no proof-policy coverage for `command-injection`). |
 | `cross_domain_policy_probe.go` | ⚠️ | ➖ | ➖ | ➖ | Require XML shape on `crossdomain.xml`. |
 | `csrf_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Add control (token-stripped) request to establish baseline. |
 | `dangling_markup.go` | ✅ | ✅ | ⚠️ | ⚠️ | Migrated in this PR as reference template. |
-| `deserialization_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Binary bail-out; differential re-verify. |
+| `deserialization_probe.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out on active/passive responses, benign serialized-body baselines, and differential benign-body replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | DNS observation, no probe body. |
 | `dom_xss_probe.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | HTML gate + reflection classifier for the injected fragment. |
 | `file_upload_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Response-shape tag; differential (allowed vs blocked baseline). |
@@ -75,8 +79,8 @@ References landed so far:
 | `saml_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | XML-shape gate on SAML responses. |
 | `security_headers_probe.go` | ➖ | ➖ | ✅ | ➖ | Header-only, no reflection. |
 | `session_lifecycle_probe.go` | ➖ | ➖ | ✅ | ⚠️ | Verify High findings. |
-| `smtp_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | CRLF classifier via `ContextHeader`; differential re-verify. |
-| `ssi_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | HTML-shape gate + arithmetic marker differential. |
+| `smtp_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + SMTP marker context, clean form baselines, and differential clean-address replay; no proof-policy category and error finding is Medium, so `SubmitVerifiedFinding` remains skipped. |
+| `ssi_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | HTML response-shape gate, SSI marker context, clean parameter baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `tls_config_probe.go` | ➖ | ➖ | ➖ | ➖ | TLS handshake, no body. |
 | `ui_simulation_probe.go` | ➖ | ➖ | ➖ | ➖ | Instrumented browser interaction. |
 | `verbose_error_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Binary bail-out; differential (benign-marker) verify. |
