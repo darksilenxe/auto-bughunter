@@ -848,10 +848,28 @@ func (c *Client) Hypothesize(ctx context.Context, target string, findings []mode
 			"a payload hint (e.g. \"' OR 1=1 --\", \"<script>\", \"/../etc/passwd\"), " +
 			"category (one of: sqli|xss|open_redirect|ssrf|cors|auth_bypass|idor|ssti|business_logic), " +
 			"and a rationale. Only propose hypotheses verifiable by a deterministic scanner oracle. " +
+			"When a 'knowledgeGuidance' field is present, prefer the curated HackTricks / PayloadsAllTheThings " +
+			"payloads and verification ideas that fit the observed surface. " +
 			"Reply with strict JSON only: " +
 			"{\"hypotheses\":[{\"id\":string,\"endpoint\":string,\"method\":string,\"paramName\":string,\"payloadHint\":string,\"category\":string,\"rationale\":string}]}",
 	}
-	userJSON, err := json.Marshal(hreq)
+	reqPayload := map[string]any{
+		"target":       hreq.Target,
+		"findings":     hreq.Findings,
+		"endpoints":    hreq.Endpoints,
+		"instructions": hreq.Instructions,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"hypothesis-generation",
+		hypothesisKnowledgeQuery(target, findings, endpoints),
+		knowledgeCategoriesForFindings(findings),
+		5,
+		1200,
+	); guidance != "" {
+		reqPayload["knowledgeGuidance"] = guidance
+	}
+	userJSON, err := json.Marshal(reqPayload)
 	if err != nil {
 		return localReasonerHypotheses(target, findings, endpoints)
 	}
@@ -1247,7 +1265,24 @@ func (c *Client) AdaptTechniqueCommands(ctx context.Context, templates []string,
 		FindingEvidence: findingEvidence,
 		Templates:       templates,
 	}
-	userJSON, err := json.Marshal(reqBody)
+	reqPayload := map[string]any{
+		"target":           reqBody.Target,
+		"finding_title":    reqBody.FindingTitle,
+		"finding_evidence": reqBody.FindingEvidence,
+		"templates":        reqBody.Templates,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"technique-adaptation",
+		techniqueAdaptationKnowledgeQuery(target, findingTitle, findingEvidence),
+		nil,
+		4,
+		1500,
+	); guidance != "" {
+		reqPayload["knowledgeGuidance"] = guidance
+		systemPrompt += " When a 'knowledgeGuidance' field is present in the request, use its curated HackTricks / PayloadsAllTheThings payloads and procedural notes to refine the command arguments."
+	}
+	userJSON, err := json.Marshal(reqPayload)
 	if err != nil {
 		return nil
 	}
@@ -1317,10 +1352,22 @@ func (c *Client) SynthesizeChains(ctx context.Context, target string, findingSet
 			"novel multi-step attack chains NOT already represented in the findings. " +
 			"Focus on chaining 2–4 findings together to achieve a higher-impact outcome than any individual finding. " +
 			"Prefer business outcomes that match the supplied impact_goals and impact_playbooks. " +
+			"When a 'knowledgeGuidance' field is present, use its curated HackTricks / PayloadsAllTheThings " +
+			"chaining ideas, payloads, and bypasses when they fit the evidence. " +
 			"For each chain: assign a short machine-readable id, a one-line title, ordered exploitation steps (3–6), " +
 			"a one-sentence impact statement, list the source finding IDs involved, and a confidence score (0.0–1.0). " +
 			"Reply with strict JSON only: " +
 			`{"chains":[{"id":string,"title":string,"steps":[string],"impact":string,"sourceIds":[string],"confidence":number}]}`,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"chain-synthesis",
+		chainSynthesisKnowledgeQuery(target, findingSet, goals),
+		knowledgeCategoriesForFindingSet(findingSet),
+		5,
+		1200,
+	); guidance != "" {
+		userPayload["knowledgeGuidance"] = guidance
 	}
 	userJSON, err := json.Marshal(userPayload)
 	if err != nil {

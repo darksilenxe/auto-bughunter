@@ -7,6 +7,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 )
+
 // ReflectionResult is the structured output of a single pentest-loop reflection
 // step. The AI (or local reasoner) analyses what has been tried so far and
 // proposes concrete adjustments for the next iteration.
@@ -161,6 +162,17 @@ func (c *Client) Reflect(
 		"probeResults": probesSummary,
 		"coverageMap":  coverageMap,
 		"instructions": baseReflectInstructions,
+	}
+	if guidance := c.retrieveKnowledgeGuidance(
+		ctx,
+		"probe-reflection",
+		reflectKnowledgeQuery(target, findings, probeResults),
+		probeKnowledgeCategories(findings, probeResults),
+		5,
+		1200,
+	); guidance != "" {
+		payload["knowledgeGuidance"] = guidance
+		payload["instructions"] = baseReflectInstructions + " When a 'knowledgeGuidance' field is present, use its curated HackTricks / PayloadsAllTheThings payload families and bypass ideas to refine the next-round hints."
 	}
 
 	userJSON, err := json.Marshal(payload)
