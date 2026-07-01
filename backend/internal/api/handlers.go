@@ -3101,6 +3101,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	now := time.Now().UTC()
+	preReport := scanner.GetVerificationMetrics()
 	lagSum := 0.0
 	lagCount := 0
 	maxLag := 0.0
@@ -3361,6 +3362,16 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 				}
 				return 0
 			}(),
+			"preReportTotal":             float64(preReport.Total),
+			"preReportVerified":          float64(preReport.Verified),
+			"preReportSuppressed":        float64(preReport.Suppressed),
+			"preReportDowngraded":        float64(preReport.Downgraded),
+			"preReportPoCReplayed":       float64(preReport.PoCReplayed),
+			"preReportPoCSucceeded":      float64(preReport.PoCSucceeded),
+			"preReportVerifiedRate":      roundTo2(preReport.VerifiedRate),
+			"preReportSuppressedRate":    roundTo2(preReport.SuppressedRate),
+			"preReportPoCSuccessRate":    roundTo2(preReport.PoCSuccessRate),
+			"preReportAverageConfidence": roundTo2(preReport.AverageConfidence),
 		},
 	})
 }
