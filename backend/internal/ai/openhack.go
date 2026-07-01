@@ -95,10 +95,10 @@ func (c *Client) RunOpenHackExpert(ctx context.Context, systemPrompt, expertID s
 	}
 
 	userPayload := map[string]any{
-		"expertId":             strings.TrimSpace(expertID),
-		"finding":              compactFinding(finding),
-		"outputContract":       openHackExpertSchema,
-		"instructions":         openHackExpertInstructions,
+		"expertId":       strings.TrimSpace(expertID),
+		"finding":        compactFinding(finding),
+		"outputContract": openHackExpertSchema,
+		"instructions":   openHackExpertInstructions,
 	}
 	if guidance := c.retrieveKnowledgeGuidance(
 		ctx,

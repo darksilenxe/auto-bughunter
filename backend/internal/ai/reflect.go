@@ -7,6 +7,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 )
+
 // ReflectionResult is the structured output of a single pentest-loop reflection
 // step. The AI (or local reasoner) analyses what has been tried so far and
 // proposes concrete adjustments for the next iteration.

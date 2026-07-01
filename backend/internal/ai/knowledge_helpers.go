@@ -149,7 +149,7 @@ func openHackKnowledgeQuery(stage string, finding model.Finding) string {
 }
 
 func findingTitlesForKnowledge(findings []model.Finding, max int) []string {
-	out := make([]string, 0, minInt(max, len(findings)))
+	out := make([]string, 0, minKnowledgeInt(max, len(findings)))
 	for _, f := range findings {
 		title := strings.TrimSpace(f.Title)
 		if title == "" {
@@ -178,7 +178,7 @@ func truncateKnowledgeText(value string, max int) string {
 	return value[:max] + "…"
 }
 
-func minInt(a, b int) int {
+func minKnowledgeInt(a, b int) int {
 	if a < b {
 		return a
 	}
