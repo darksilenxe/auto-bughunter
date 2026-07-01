@@ -37,6 +37,9 @@ References landed so far:
   `active_xpath_injection.go`, `active_path_traversal.go`, `active_xxe.go`,
   `command_injection_probe.go`, `deserialization_probe.go`,
   `smtp_injection_probe.go`, and `ssi_injection_probe.go`.
+- Batch B reflection / response-shape probes landed:
+  `dangling_markup.go`, `formula_injection.go`, `verbose_error_probe.go`,
+  `cross_domain_policy_probe.go`, and `xssi_jsonp_probe.go`.
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -57,14 +60,14 @@ References landed so far:
 | `clickjacking_probe.go` | ✅ | ➖ | ⚠️ | ⚠️ | HTML gate present; add differential baseline (framed vs unframed control). |
 | `cloud_storage_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Bucket enumeration — add response-shape evidence tag. |
 | `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + marker context, two-control latency/body baselines, differential output/timing replay, and `SubmitVerifiedFinding` with `AllowNoReplayEmission` (no proof-policy coverage for `command-injection`). |
-| `cross_domain_policy_probe.go` | ⚠️ | ➖ | ➖ | ➖ | Require XML shape on `crossdomain.xml`. |
+| `cross_domain_policy_probe.go` | ✅ | ➖ | ➖ | ➖ | XML shape gate on well-known policy paths; findings tag `responseShape`. |
 | `csrf_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Add control (token-stripped) request to establish baseline. |
-| `dangling_markup.go` | ✅ | ✅ | ⚠️ | ⚠️ | Migrated in this PR as reference template. |
+| `dangling_markup.go` | ✅ | ✅ | ✅ | ✅ | Batch B: HTML shape gate + reflection-context sink gate, control-value baseline, and differential benign replay confirm the marker is payload-controlled. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
 | `deserialization_probe.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out on active/passive responses, benign serialized-body baselines, and differential benign-body replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | DNS observation, no probe body. |
 | `dom_xss_probe.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | HTML gate + reflection classifier for the injected fragment. |
 | `file_upload_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Response-shape tag; differential (allowed vs blocked baseline). |
-| `formula_injection.go` | ✅ | ➖ | ⚠️ | ⚠️ | Migrated in this PR (binary bail-out + response-shape tag). |
+| `formula_injection.go` | ✅ | ✅ | ✅ | ✅ | Batch B: binary bail-out + `responseShape` tag, reflection-context evidence, benign parameter baseline, and differential benign replay strip static echoes of the `=` marker. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
 | `http_methods_probe.go` | ➖ | ➖ | ✅ | ⚠️ | Header-only probe. |
 | `jwt_advanced_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Auth-token probe; add differential (unsigned vs signed control). |
 | `jwt_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Same as above. |
@@ -83,9 +86,9 @@ References landed so far:
 | `ssi_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | HTML response-shape gate, SSI marker context, clean parameter baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `tls_config_probe.go` | ➖ | ➖ | ➖ | ➖ | TLS handshake, no body. |
 | `ui_simulation_probe.go` | ➖ | ➖ | ➖ | ➖ | Instrumented browser interaction. |
-| `verbose_error_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Binary bail-out; differential (benign-marker) verify. |
+| `verbose_error_probe.go` | ✅ | ➖ | ✅ | ✅ | Batch B: binary bail-out on 4xx/5xx bodies with `responseShape` tag, and a clean-request baseline that suppresses endpoints whose static error page already matches the signature. |
 | `websocket_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | WebSocket frame classifier + baseline. |
-| `xssi_jsonp_probe.go` | ⚠️ | ➖ | ➖ | ⚠️ | JSON/JavaScript-shape gate. |
+| `xssi_jsonp_probe.go` | ✅ | ➖ | ➖ | ➖ | Batch B: JavaScript/JSON shape gate on both the JSONP callback probe and the top-level array probe; findings tag `responseShape`. |
 
 ## What landed in this PR
 
