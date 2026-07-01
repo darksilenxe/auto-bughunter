@@ -206,7 +206,7 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 	curl := buildCurlReproducer(http.MethodGet, primary.url, input.AuthProfile, "", "")
 	curl = curl + " -H " + shellQuote("Origin: "+primary.origin)
 	rec := "Validate the Origin header against a strict allow-list before echoing it. Never combine Access-Control-Allow-Credentials: true with a reflected or `null` origin."
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                idForCORSFinding(primary),
 		Category:          "cors_redirect",
 		Severity:          severity,
@@ -230,8 +230,51 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 			"credentialsAllowed":  fmt.Sprintf("%v", primary.credentialed),
 			"jsonAPIEndpoint":     fmt.Sprintf("%v", primary.jsonAPI),
 			"curlReproducer":      curl,
+			"responseShape":       shapeTagForCORSHit(primary),
 		},
-	}}
+	}
+
+	// Phase 1 pre-report verification. Temporarily canonicalise the
+	// category to "cors" so the proof-policy engine evaluates the correct
+	// ruleset; the external category label is preserved on the emitted
+	// finding. Signals: origin reflection is a header delta, and the ACAO
+	// echo is the reflected marker itself.
+	signals := []EvidenceSignal{EvidenceHeaderDelta, EvidenceReflection}
+	if primary.credentialed {
+		signals = append(signals, EvidenceSinkObserved)
+	}
+	originalCategory := finding.Category
+	finding.Category = "cors"
+	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:               finding,
+		Signals:               signals,
+		AllowNoReplayEmission: true,
+		ProbeName:             "active-cors",
+	})
+	if verifyOutcome.Suppressed {
+		return nil
+	}
+	emitted := verifyOutcome.EmittedFinding
+	emitted.Category = originalCategory
+	return []model.Finding{emitted}
+}
+
+// shapeTagForCORSHit returns the response-shape label recorded on the
+// emitted finding for downstream evidence normalisation. The probe already
+// classified the endpoint as JSON vs HTML during the baseline request.
+func shapeTagForCORSHit(h struct {
+	url          string
+	origin       string
+	allowOrigin  string
+	allowCreds   bool
+	nullVariant  bool
+	credentialed bool
+	jsonAPI      bool
+}) string {
+	if h.jsonAPI {
+		return ShapeJSON.String()
+	}
+	return ShapeHTML.String()
 }
 
 func idForCORSFinding(h struct {

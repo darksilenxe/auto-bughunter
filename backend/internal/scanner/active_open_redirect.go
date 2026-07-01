@@ -152,6 +152,83 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 	}
 
 	first := hits[0]
+
+	// Phase 1 control baseline: fetch the same endpoint with the redirect
+	// parameter stripped. If the Location header already points off-host
+	// in the baseline, the target unconditionally emits a static redirect
+	// destination and this is not an attacker-controlled sink.
+	baselineFetch := func(bctx context.Context) (BaselineSample, error) {
+		bu, perr := url.Parse(first.url)
+		if perr != nil {
+			return BaselineSample{}, perr
+		}
+		bq := bu.Query()
+		bq.Del(first.param)
+		bu.RawQuery = bq.Encode()
+		br, berr := http.NewRequestWithContext(bctx, http.MethodGet, bu.String(), nil)
+		if berr != nil {
+			return BaselineSample{}, berr
+		}
+		ApplyAuthProfile(br, input.AuthProfile)
+		bresp, bcerr := noFollow.Do(br)
+		if bcerr != nil || bresp == nil {
+			return BaselineSample{}, bcerr
+		}
+		defer bresp.Body.Close()
+		return BaselineSample{
+			Status: bresp.StatusCode,
+			Header: bresp.Header,
+			Body:   bresp.Header.Get("Location"),
+		}, nil
+	}
+	if baselines, berr := CaptureTwoControlBaselines(ctx, baselineFetch); berr == nil {
+		if isOpenRedirectLocation(baselines.First.Body, openRedirectMarker) ||
+			isOpenRedirectLocation(baselines.Second.Body, openRedirectMarker) {
+			// Static off-host redirect present without our payload —
+			// suppress to avoid false-positive on shared logout/exit URLs.
+			return nil
+		}
+	}
+
+	// Phase 1 differential re-verify: substitute the canary host with a
+	// benign on-host path. If the Location still contains the canary
+	// marker the target is echoing baseline noise rather than the payload.
+	execDifferential := func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+		du, perr := url.Parse(first.url)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		dq := du.Query()
+		dq.Set(first.param, altPayload)
+		du.RawQuery = dq.Encode()
+		dreq, derr := http.NewRequestWithContext(dctx, http.MethodGet, du.String(), nil)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		ApplyAuthProfile(dreq, input.AuthProfile)
+		dresp, dcerr := noFollow.Do(dreq)
+		if dcerr != nil || dresp == nil {
+			return nil, nil, dcerr
+		}
+		defer dresp.Body.Close()
+		return dresp, []byte(dresp.Header.Get("Location")), nil
+	}
+	oracle := func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+		// Signal fires when the canary marker still appears in the
+		// Location header for a benign payload — that is the FP case.
+		return isOpenRedirectLocation(string(body), openRedirectMarker), nil
+	}
+	diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       "active-open-redirect",
+		OriginalPayload: "https://" + openRedirectMarker,
+		SafePayload:     "/",
+		Exec:            execDifferential,
+		Oracle:          oracle,
+	})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
 	urls := make([]string, 0, len(hits))
 	for _, h := range hits {
 		urls = append(urls, fmt.Sprintf("%s (param=%s, Location=%s)", h.url, h.param, h.location))
@@ -162,7 +239,7 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 		"Replace the canary host with any attacker-controlled URL to confirm impact (e.g. credential-phishing landing page).",
 	}
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                "active-open-redirect",
 		Category:          "input-validation",
 		Severity:          model.SeverityMedium,
@@ -183,8 +260,28 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 			"reproStep":           "Replay the listed URL and inspect the Location response header",
 			"redirectDestination": first.location,
 			"curlReproducer":      curl,
+			"reflectionContext":   ContextURL.String(),
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+
+	// Phase 1 pre-report verification. Canonicalise category to
+	// "open_redirect" for proof-policy evaluation, restore label on emit.
+	signals := []EvidenceSignal{EvidenceHeaderDelta, EvidenceReflection, EvidenceStatusDelta}
+	originalCategory := finding.Category
+	finding.Category = "open_redirect"
+	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:               finding,
+		Signals:               signals,
+		AllowNoReplayEmission: true,
+		ProbeName:             "active-open-redirect",
+	})
+	if verifyOutcome.Suppressed {
+		return nil
+	}
+	emitted := verifyOutcome.EmittedFinding
+	emitted.Category = originalCategory
+	return []model.Finding{emitted}
 }
 
 // isOpenRedirectLocation returns true when `location` resolves to a host

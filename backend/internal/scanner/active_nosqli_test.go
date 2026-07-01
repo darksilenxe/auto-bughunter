@@ -161,3 +161,63 @@ func TestIsLikelyAuthEndpoint(t *testing.T) {
 		t.Fatal("expected /api/products not to match")
 	}
 }
+
+// TestRunActiveNoSQLiProbe_SuppressesStaticErrorPage verifies the Phase 1
+// differential re-verify strips false positives where the endpoint always
+// emits a NoSQL error signature regardless of input.
+func TestRunActiveNoSQLiProbe_SuppressesStaticErrorPage(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always return a NoSQL error signature — this is baseline noise,
+		// not payload-specific. Differential re-verify must strip it.
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"MongoError: unknown top level operator: $ne"}`))
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveNoSQLiProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 0 {
+		t.Fatalf("static error page should be stripped by differential re-verify, got %d findings", len(findings))
+	}
+}
+
+// TestRunActiveNoSQLiProbe_EmitsPreReportVerifierStamps verifies the Phase 1
+// pre-report verification path stamps the emitted finding with
+// verifiedBy=active-nosqli and preserves the external "input-validation"
+// category label.
+func TestRunActiveNoSQLiProbe_EmitsPreReportVerifierStamps(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for key := range r.URL.Query() {
+			if strings.Contains(key, "[$") {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"message":"MongoError: unknown top level operator: $ne"}`))
+				return
+			}
+		}
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveNoSQLiProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 NoSQLi finding, got %d", len(findings))
+	}
+	f := findings[0]
+	if f.Category != "input-validation" {
+		t.Fatalf("expected external category %q preserved, got %q", "input-validation", f.Category)
+	}
+	if got := f.EvidenceFields["preReport.verifiedBy"]; got != "active-nosqli@v1" {
+		t.Fatalf("expected preReport.verifiedBy=active-nosqli@v1, got %q", got)
+	}
+	// nosqli is a strict-emission category with MinCoverage=1.0; the
+	// finding's rich description should satisfy the proof-policy rules
+	// and the three provided evidence signals should meet the min.
+	if got := f.EvidenceFields["preReport.verified"]; got != "true" {
+		t.Fatalf("expected preReport.verified=true, got %q (reason=%q)", got, f.EvidenceFields["preReport.reason"])
+	}
+}
+
+// Silence unused-import warnings for the json package (kept for parity with
+// existing tests that construct JSON bodies).
+var _ = json.Marshal
