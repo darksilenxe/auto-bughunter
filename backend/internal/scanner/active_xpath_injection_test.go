@@ -12,6 +12,7 @@ import (
 
 func TestRunActiveXPathInjectionProbe_FindsVulnerability(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
 		for _, value := range r.URL.Query() {
 			if strings.Contains(value[0], "' or '1'='1") {
 				w.WriteHeader(http.StatusInternalServerError)

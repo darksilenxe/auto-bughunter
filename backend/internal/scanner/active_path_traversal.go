@@ -104,6 +104,7 @@ func (s *Service) runActivePathTraversalProbe(ctx context.Context, input RunInpu
 		payload   string
 		label     string
 		signature string
+		header    http.Header
 	}
 
 	var hits []hit
@@ -144,7 +145,11 @@ func (s *Service) runActivePathTraversalProbe(ctx context.Context, input RunInpu
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 
 				if sig, matched := matchPathTraversalSignature(string(respBody)); matched {
 					hits = append(hits, hit{
@@ -153,6 +158,7 @@ func (s *Service) runActivePathTraversalProbe(ctx context.Context, input RunInpu
 						payload:   pl.payload,
 						label:     pl.label,
 						signature: sig,
+						header:    respHeader,
 					})
 					// Found a confirmed hit; stop probing further.
 					goto doneProbes
@@ -180,7 +186,20 @@ doneProbes:
 	}
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
-	return []model.Finding{{
+	baselines, berr := s.phase1QueryBaselines(ctx, first.url, first.param, "index.html", true, input, 256*1024)
+	if berr == nil && phase1BaselineContains(baselines, first.signature) {
+		return nil
+	}
+	diffOutcome := phase1DifferentialQuery(ctx, s, input, "active-path-traversal", first.url, first.param, first.payload, "index.html", 256*1024,
+		func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+			_, matched := matchPathTraversalSignature(string(body))
+			return matched, nil
+		})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
+	finding := model.Finding{
 		ID:                "active-path-traversal",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -203,8 +222,15 @@ doneProbes:
 			"fileSignature":   first.signature,
 			"reproStep":       "Replay the listed URL and confirm system-file content appears in the response body",
 			"curlReproducer":  curl,
+			"responseShape":   ClassifyResponseShape(first.header).String(),
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	emitted, ok := phase1SubmitVerified(ctx, finding, "path_traversal", []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved, EvidenceBodyDelta}, "active-path-traversal")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // matchPathTraversalSignature scans respBody for any known file-content

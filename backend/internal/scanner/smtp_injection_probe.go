@@ -149,7 +149,11 @@ func (s *Service) runSMTPInjectionProbe(ctx context.Context, input RunInput, bod
 					continue
 				}
 				bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 				respBody := string(bodyBytes)
 
 				fid := "smtp-injection-" + param + "-" + hhSlug(ep)
@@ -160,8 +164,53 @@ func (s *Service) runSMTPInjectionProbe(ctx context.Context, input RunInput, bod
 				// Check for SMTP error strings in the response.
 				matched := matchSMTPErrors(respBody)
 				if matched != "" {
+					baselineInput := RunInput{AuthProfile: input.AuthProfile, Options: input.Options}
+					baselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+						clean := url.Values{}
+						clean.Set(param, "user@example.com")
+						clean.Set("name", "test")
+						clean.Set("message", "test message")
+						return phase1POSTSample(bctx, s, ep, "application/x-www-form-urlencoded", clean.Encode(), baselineInput, 1<<16)
+					})
+					if berr == nil && phase1BaselineContains(baselines, matched) {
+						continue
+					}
+					diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+						ProbeName:       "smtp-injection-probe",
+						OriginalPayload: injected,
+						SafePayload:     "user@example.com",
+						Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+							vals := url.Values{}
+							vals.Set(param, altPayload)
+							vals.Set("name", "test")
+							vals.Set("message", "test message")
+							req, err := http.NewRequestWithContext(dctx, http.MethodPost, ep, strings.NewReader(vals.Encode()))
+							if err != nil {
+								return nil, nil, err
+							}
+							req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+							ApplyAuthProfile(req, input.AuthProfile)
+							resp, err := s.doRequestWithRetry(dctx, req, input.Options)
+							if err != nil || resp == nil {
+								return nil, nil, err
+							}
+							body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+							return resp, body, nil
+						},
+						Oracle: func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+							return matchSMTPErrors(string(body)) != "", nil
+						},
+					})
+					if diffOutcome.Ran && !diffOutcome.Confirmed {
+						continue
+					}
 					emitted[fid] = true
-					findings = append(findings, buildSMTPFinding(ep, param, injected, matched, "error-based", fid))
+					finding := buildSMTPFinding(ep, param, injected, matched, "error-based", fid)
+					finding.EvidenceFields["responseShape"] = ClassifyResponseShape(respHeader).String()
+					refCtx := ClassifyReflectionContext("<body>"+respBody+"</body>", matched)
+					finding.EvidenceFields["reflectionContext"] = refCtx.String()
+					AttachDifferentialEvidence(&finding, diffOutcome)
+					findings = append(findings, finding)
 					break // no need to try more payloads for this param/endpoint pair
 				}
 			}
@@ -260,11 +309,11 @@ func buildSMTPFinding(ep, param, payload, matchedSig, detectionMethod, fid strin
 // matchSMTPErrors checks body for SMTP error signature strings and returns
 // the first match, or "" if none. Extracted for testability.
 func matchSMTPErrors(body string) string {
-lower := strings.ToLower(body)
-for _, sig := range smtpErrorSignatures {
-if strings.Contains(lower, sig) {
-return sig
-}
-}
-return ""
+	lower := strings.ToLower(body)
+	for _, sig := range smtpErrorSignatures {
+		if strings.Contains(lower, sig) {
+			return sig
+		}
+	}
+	return ""
 }

@@ -129,6 +129,9 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 		param   string
 		engine  string
 		payload string
+		expect  string
+		header  http.Header
+		refCtx  ReflectionContext
 	}
 	var hits []hit
 	attempts := 0
@@ -175,9 +178,18 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
-				if isSSTIEvaluation(string(respBody), payload.payload, payload.expect) {
-					hits = append(hits, hit{url: probeURL, param: p, engine: payload.engine, payload: payload.payload})
+				if IsBinaryShape(respHeader) {
+					continue
+				}
+				respStr := string(respBody)
+				if isSSTIEvaluation(respStr, payload.payload, payload.expect) {
+					refCtx := ClassifyReflectionContext(respStr, payload.expect)
+					if refCtx == ContextUnknown {
+						continue
+					}
+					hits = append(hits, hit{url: probeURL, param: p, engine: payload.engine, payload: payload.payload, expect: payload.expect, header: respHeader, refCtx: refCtx})
 					break
 				}
 			}
@@ -199,7 +211,20 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 		"Confirm code execution scope by escalating to engine-specific payloads (e.g. {{config}} on Jinja2, ${T(java.lang.Runtime)} on SpEL).",
 	}
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
-	return []model.Finding{{
+	baselines, berr := s.phase1QueryBaselines(ctx, first.url, first.param, "guest", true, input, 256*1024)
+	if berr == nil && phase1BaselineContains(baselines, first.expect) {
+		return nil
+	}
+
+	diffOutcome := phase1DifferentialQuery(ctx, s, input, "active-ssti", first.url, first.param, first.payload, "guest", 256*1024,
+		func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+			return isSSTIEvaluation(string(body), first.payload, first.expect), nil
+		})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
+	finding := model.Finding{
 		ID:                "active-ssti-arithmetic",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -216,13 +241,21 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 		ReproductionSteps: steps,
 		PoC:               curl,
 		EvidenceFields: map[string]string{
-			"validationType":  "active-probe",
-			"reproStep":       "Replay the listed URL and confirm `49` appears in the response without the literal payload",
-			"templateEngine":  first.engine,
-			"injectedPayload": first.payload,
-			"curlReproducer":  curl,
+			"validationType":    "active-probe",
+			"reproStep":         "Replay the listed URL and confirm `49` appears in the response without the literal payload",
+			"templateEngine":    first.engine,
+			"injectedPayload":   first.payload,
+			"curlReproducer":    curl,
+			"responseShape":     ClassifyResponseShape(first.header).String(),
+			"reflectionContext": first.refCtx.String(),
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	emitted, ok := phase1SubmitVerified(ctx, finding, "ssti", []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved, EvidenceBodyDelta}, "active-ssti")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // isSSTIEvaluation returns true when the body contains the expected

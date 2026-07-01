@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +16,8 @@ import (
 func TestRunActiveXXEProbe_ReflectedFileRead(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ct := r.Header.Get("Content-Type")
-		if r.Method == http.MethodPost && strings.Contains(ct, "xml") {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodPost && strings.Contains(ct, "xml") && strings.Contains(string(body), "DOCTYPE") {
 			// Simulate an XML parser that reflects the resolved entity.
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = w.Write([]byte("<result>root:x:0:0:root:/root:/bin/bash\n</result>"))
@@ -47,7 +49,9 @@ func TestRunActiveXXEProbe_ReflectedFileRead(t *testing.T) {
 func TestRunActiveXXEProbe_ErrorBased(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ct := r.Header.Get("Content-Type")
-		if r.Method == http.MethodPost && strings.Contains(ct, "xml") {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodPost && strings.Contains(ct, "xml") && strings.Contains(string(body), "abh_xxe_nonexistent") {
+			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"error":"XMLSyntaxError: SAXParseException: entity not found"}`))
 			return
@@ -101,10 +105,10 @@ func TestRunActiveXXEProbe_PassiveOnlyDisables(t *testing.T) {
 func TestMatchXXEErrorSignature(t *testing.T) {
 	cases := map[string]string{
 		// "saxparseexception" comes before "entity not found" in the list.
-		`SAXParseException: entity not found at line 3`:  "saxparseexception",
-		`org.xml.sax.SAXException: malformed`:            "org.xml.sax",
-		`<html>200 OK, nothing interesting here</html>`:  "",
-		``:                                               "",
+		`SAXParseException: entity not found at line 3`: "saxparseexception",
+		`org.xml.sax.SAXException: malformed`:           "org.xml.sax",
+		`<html>200 OK, nothing interesting here</html>`: "",
+		``: "",
 		`XMLSyntaxError: SAXParseException: parse error`: "saxparseexception",
 		`entity not found in document`:                   "entity not found",
 	}
