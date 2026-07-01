@@ -74,6 +74,14 @@ func (s *Service) runDanglingMarkupProbe(ctx context.Context, input RunInput, bo
 			if !strings.Contains(string(respBody), danglingMarkupPayload) {
 				continue
 			}
+			// Phase 1 FP-reduction (base): re-issue with a benign value
+			// to confirm the payload marker is not part of the static
+			// baseline (e.g. cached template that always renders the
+			// param value verbatim).
+			baselines, berr := s.phase1QueryBaselines(ctx, probeURL, param, "abh_benign_baseline", true, input, 256*1024)
+			if berr == nil && phase1BaselineContains(baselines, danglingMarkupPayload) {
+				continue
+			}
 			// Phase 1 FP-reduction: classify reflection context and only
 			// emit when the payload landed in an HTML text or attribute
 			// position where a partial <img tag actually creates a
@@ -89,8 +97,20 @@ func (s *Service) runDanglingMarkupProbe(ctx context.Context, input RunInput, bo
 			default:
 				continue
 			}
+			// Phase 1 FP-reduction (verify): confirm the payload marker
+			// reflection is payload-controlled by replaying with a
+			// benign string. A confirmed differential means the marker
+			// only appears when we send the crafted payload.
+			diffOutcome := phase1DifferentialQuery(ctx, s, input, "dangling-markup", probeURL, param, danglingMarkupPayload, "abh_benign_baseline", 256*1024,
+				func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+					return strings.Contains(string(body), danglingMarkupPayload), nil
+				},
+			)
+			if diffOutcome.Ran && !diffOutcome.Confirmed {
+				continue
+			}
 			curl := buildCurlReproducer(http.MethodGet, probeURL, input.AuthProfile, "", "")
-			return []model.Finding{{
+			finding := model.Finding{
 				ID:                "dangling-markup-injection",
 				Category:          "injection",
 				Severity:          model.SeverityMedium,
@@ -119,7 +139,9 @@ func (s *Service) runDanglingMarkupProbe(ctx context.Context, input RunInput, bo
 					"oracleName":         "dangling_markup",
 					"oracleVersion":      "v1",
 				},
-			}}
+			}
+			AttachDifferentialEvidence(&finding, diffOutcome)
+			return []model.Finding{finding}
 		}
 	}
 	return nil

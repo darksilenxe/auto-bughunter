@@ -120,11 +120,19 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 				continue
 			}
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, xssiBodyLimit))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
 			respStr := string(respBody)
 
-			ct := strings.ToLower(resp.Header.Get("Content-Type"))
-			isJS := strings.Contains(ct, "javascript") || strings.Contains(ct, "json")
+			// Phase 1 FP-reduction: JSONP responses must arrive as
+			// JavaScript or JSON. HTML/binary responses that happen to
+			// contain the probe callback string (e.g. inside a docs
+			// page or an error template) would produce false positives.
+			shape := ClassifyResponseShape(respHeader)
+			if shape != ShapeJavaScript && shape != ShapeJSON {
+				continue
+			}
+			isJS := shape == ShapeJavaScript || shape == ShapeJSON
 
 			// Confirm JSONP: response wraps data in our probe callback function.
 			if strings.HasPrefix(strings.TrimSpace(respStr), probeCallback+"(") ||
@@ -169,6 +177,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 						"probeCallback":   probeCallback,
 						"contentType":     resp.Header.Get("Content-Type"),
 						"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
+						"responseShape":   shape.String(),
 					},
 				})
 				break // one finding per endpoint is sufficient
@@ -204,6 +213,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 						"validationType": "active-probe",
 						"contentType":    resp.Header.Get("Content-Type"),
 						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+						"responseShape":  shape.String(),
 					},
 				})
 			}
@@ -222,15 +232,24 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 				continue
 			}
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, xssiBodyLimit))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
 			respStr := string(respBody)
 
-			ct := strings.ToLower(resp.Header.Get("Content-Type"))
-			isJSOrJSON := strings.Contains(ct, "javascript") || strings.Contains(ct, "json")
+			// Phase 1 FP-reduction: only classify array-shaped bodies
+			// when the response is served as JavaScript/JSON. HTML
+			// bodies that happen to start with '[' are not XSSI sinks.
+			shape := ClassifyResponseShape(respHeader)
+			if shape != ShapeJavaScript && shape != ShapeJSON {
+				continue
+			}
+			ct := strings.ToLower(respHeader.Get("Content-Type"))
 
-			if isJSOrJSON && xssiArrayPattern.MatchString(respStr) {
-				// Array-style XSSI is a meaningful risk when the endpoint is
-				// served with JavaScript content type (not application/json).
+			if xssiArrayPattern.MatchString(respStr) && shape == ShapeJavaScript {
+				// Array-style XSSI is a meaningful risk only when the
+				// endpoint is served with JavaScript content type
+				// (application/json responses are XSSI-safe in modern
+				// browsers).
 				if strings.Contains(ct, "javascript") {
 					emitted[fidArr] = true
 					findings = append(findings, model.Finding{
@@ -261,6 +280,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 							"validationType": "active-probe",
 							"contentType":    resp.Header.Get("Content-Type"),
 							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+							"responseShape":  shape.String(),
 						},
 					})
 				}

@@ -73,8 +73,30 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 			if !strings.Contains(string(respBody), formulaMarker) {
 				continue
 			}
+			// Phase 1 FP-reduction (base): re-issue the same request with
+			// a benign parameter value to prove the marker was not part
+			// of the static baseline (banner, cached template, JS
+			// literal reflecting param keys, ...).
+			baselines, berr := s.phase1QueryBaselines(ctx, probeURL, param, "abh_benign_baseline", true, input, 256*1024)
+			if berr == nil && phase1BaselineContains(baselines, formulaMarker) {
+				continue
+			}
+			// Phase 1 FP-reduction (verify): confirm the marker reflection
+			// is payload-controlled and not a static echo of the parameter
+			// name/value by replaying with a benign value. If the benign
+			// replay also returns the marker, the signal is baseline noise.
+			diffOutcome := phase1DifferentialQuery(ctx, s, input, "formula-injection", probeURL, param, formulaMarker, "abh_benign_baseline", 256*1024,
+				func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+					return strings.Contains(string(body), formulaMarker), nil
+				},
+			)
+			if diffOutcome.Ran && !diffOutcome.Confirmed {
+				continue
+			}
+			shape := ClassifyResponseShape(respHeader).String()
+			ctxKind := ClassifyReflectionContext(string(respBody), formulaMarker).String()
 			curl := buildCurlReproducer(http.MethodGet, probeURL, input.AuthProfile, "", "")
-			return []model.Finding{{
+			finding := model.Finding{
 				ID:                "formula-injection",
 				Category:          "injection",
 				Severity:          model.SeverityMedium,
@@ -91,18 +113,21 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 				ReproductionSteps: []string{fmt.Sprintf("Send GET %s", probeURL), fmt.Sprintf("Observe the exact marker %q in the response/export path.", formulaMarker)},
 				PoC:               curl,
 				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"payload":        formulaMarker,
-					"curlReproducer": curl,
-					"method":         http.MethodGet,
-					"url":            probeURL,
-					"param":          param,
-					"payloadClass":   "formula-injection",
-					"responseShape":  ClassifyResponseShape(respHeader).String(),
-					"oracleName":     "formula_injection",
-					"oracleVersion":  "v1",
+					"validationType":    "active-probe",
+					"payload":           formulaMarker,
+					"curlReproducer":    curl,
+					"method":            http.MethodGet,
+					"url":               probeURL,
+					"param":             param,
+					"payloadClass":      "formula-injection",
+					"responseShape":     shape,
+					"reflectionContext": ctxKind,
+					"oracleName":        "formula_injection",
+					"oracleVersion":     "v1",
 				},
-			}}
+			}
+			AttachDifferentialEvidence(&finding, diffOutcome)
+			return []model.Finding{finding}
 		}
 	}
 	return nil

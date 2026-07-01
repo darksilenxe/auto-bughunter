@@ -138,15 +138,31 @@ func (s *Service) runVerboseErrorProbe(ctx context.Context, input RunInput, body
 				continue
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, verboseErrorBodyLimit))
+			respHeader := resp.Header
 			_ = resp.Body.Close()
 
 			if resp.StatusCode < 400 {
+				continue
+			}
+			// Phase 1 FP-reduction: binary response bodies (images,
+			// PDFs, archives) cannot meaningfully leak framework
+			// diagnostics — a regex hit is a byte-pattern coincidence,
+			// not a real error page.
+			if IsBinaryShape(respHeader) {
 				continue
 			}
 
 			bodyStr := string(body)
 			for _, sig := range errorLeakSignatures {
 				if sig.pattern.MatchString(bodyStr) {
+					// Phase 1 FP-reduction (base): re-issue the same
+					// endpoint with a benign request and confirm the
+					// signature does not fire on the clean baseline.
+					// This suppresses endpoints that always render a
+					// framework error page regardless of input.
+					if baselineHasVerboseErrorSignature(ctx, s, input, raw, probe.method, probe.contentType, probe.param, sig.pattern) {
+						continue
+					}
 					excerpt := extractExcerpt(bodyStr, sig.pattern, 200)
 					emitted[fid] = true
 					findings = append(findings, model.Finding{
@@ -185,6 +201,7 @@ func (s *Service) runVerboseErrorProbe(ctx context.Context, input RunInput, body
 							"signatureLabel": sig.label,
 							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 							"excerpt":        excerpt,
+							"responseShape":  ClassifyResponseShape(respHeader).String(),
 						},
 					})
 					break // one finding per endpoint+probe is sufficient
@@ -194,6 +211,53 @@ func (s *Service) runVerboseErrorProbe(ctx context.Context, input RunInput, body
 	}
 
 	return findings
+}
+
+// baselineHasVerboseErrorSignature re-issues the endpoint without any
+// malformed payload and returns true when the same error signature
+// already fires on the clean baseline (indicating the response is a
+// static error page, not payload-triggered disclosure). Any network
+// failure is treated as "no baseline signal" so the primary finding is
+// not incorrectly suppressed.
+func baselineHasVerboseErrorSignature(
+	ctx context.Context,
+	s *Service,
+	input RunInput,
+	raw string,
+	method string,
+	contentType string,
+	param string,
+	pattern *regexp.Regexp,
+) bool {
+	base, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	var req *http.Request
+	if method == "GET" && param != "" {
+		q := url.Values{}
+		q.Set(param, "abh_benign_baseline")
+		probeURL := url.URL{Scheme: base.Scheme, Host: base.Host, Path: base.Path, RawQuery: q.Encode()}
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
+	} else {
+		// Baseline for POST probes: send a well-formed empty JSON body
+		// so the endpoint responds without triggering a parser error.
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, raw, strings.NewReader(`{}`))
+		if err == nil && contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+	}
+	if err != nil || req == nil {
+		return false
+	}
+	ApplyAuthProfile(req, input.AuthProfile)
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	if err != nil || resp == nil {
+		return false
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, verboseErrorBodyLimit))
+	_ = resp.Body.Close()
+	return pattern.MatchString(string(body))
 }
 
 // extractExcerpt returns a short excerpt (up to maxLen bytes) of the first

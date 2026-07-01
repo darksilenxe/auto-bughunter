@@ -106,22 +106,45 @@ func (s *Service) runCrossDomainPolicyProbe(ctx context.Context, input RunInput)
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, crossDomainBodyLimit))
+		respHeader := resp.Header
 		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK || len(body) == 0 {
 			continue
 		}
 
+		// Phase 1 FP-reduction: crossdomain.xml / clientaccesspolicy.xml
+		// must be served as XML. When the well-known path returns HTML
+		// (typically a SPA index or 404 page rendered with HTTP 200),
+		// the payload is not a policy file and simple string matches on
+		// domain="*" would produce false positives.
+		if !IsXMLShape(respHeader) {
+			continue
+		}
+
 		bodyStr := string(body)
+		shape := ClassifyResponseShape(respHeader).String()
 
 		switch policyPath.path {
 		case "/crossdomain.xml":
-			findings = append(findings, analyzeCrossDomainXML(policyURL, bodyStr)...)
+			findings = append(findings, tagCrossDomainShape(analyzeCrossDomainXML(policyURL, bodyStr), shape)...)
 		case "/clientaccesspolicy.xml":
-			findings = append(findings, analyzeClientAccessPolicy(policyURL, bodyStr)...)
+			findings = append(findings, tagCrossDomainShape(analyzeClientAccessPolicy(policyURL, bodyStr), shape)...)
 		}
 	}
 
+	return findings
+}
+
+// tagCrossDomainShape stamps the response-shape evidence field on every
+// finding so downstream metrics can attribute Phase 1 gate coverage.
+func tagCrossDomainShape(findings []model.Finding, shape string) []model.Finding {
+	for i := range findings {
+		if findings[i].EvidenceFields == nil {
+			findings[i].EvidenceFields = map[string]string{}
+		}
+		findings[i].EvidenceFields["responseShape"] = shape
+	}
 	return findings
 }
 
