@@ -111,6 +111,19 @@ scanner→target traffic is a property of the target, not of this tool.
 
 ## Features
 
+- Accuracy master plan: per-probe rollout of false-positive and
+  false-negative controls is tracked in
+  [`backend/internal/scanner/PHASE1_AUDIT.md`](backend/internal/scanner/PHASE1_AUDIT.md)
+  (FP reduction — response-shape gate, reflection context, control
+  baseline, pre-report verify),
+  [`backend/internal/scanner/PHASE2_AUDIT.md`](backend/internal/scanner/PHASE2_AUDIT.md)
+  (FN reduction — surface inventory, hidden-parameter discovery, gap
+  detector), and
+  [`backend/internal/scanner/PHASE3_AUDIT.md`](backend/internal/scanner/PHASE3_AUDIT.md)
+  (typed evidence schema + oracle stamping). Per-scan metrics surface
+  through `GET /api/automation/metrics` under the `Extra.*` keys —
+  `surface*`, `paramDiscovery*`, `evidence*`, and `calibration*`
+  (Phase 4 confidence calibration).
 - Asynchronous scan jobs with multi-agent orchestration
 - PostgreSQL-backed scan persistence
 - Optional Neo4j-backed attack-graph persistence for visualization replay

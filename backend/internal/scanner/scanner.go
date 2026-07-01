@@ -377,6 +377,35 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 	seedRuntimeEndpointsFromSession(&input)
 
+	// Phase 2: build the per-scan SurfaceInventory from crawl links and
+	// runtime XHR endpoints, then run a small hidden-parameter miner on
+	// the baseline target so downstream probes (see runActiveSQLiProbe)
+	// can consult miner-surfaced names via input.Session. The inventory
+	// is stored on the session for the end-of-scan gap detector.
+	inv := NewSurfaceInventory()
+	inv.Add(http.MethodGet, input.Target, nil, SurfaceSourceCrawl)
+	for _, u := range extractRuntimeEndpoints(input.Target, bodyText, input.Scope, 32) {
+		inv.Add(http.MethodGet, u, nil, SurfaceSourceCrawl)
+	}
+	for _, ep := range browserEndpoints {
+		method := ep.Method
+		if strings.TrimSpace(method) == "" {
+			method = http.MethodGet
+		}
+		inv.Add(method, ep.URL, nil, SurfaceSourceRuntimeXHR)
+	}
+	input.Session.SetSurfaceInventory(inv)
+	if !input.Options.PassiveOnly {
+		if cands, err := s.DiscoverHiddenParams(ctx, input.Target, nil, 12); err == nil && len(cands) > 0 {
+			names := make([]string, 0, len(cands))
+			for _, c := range cands {
+				names = append(names, c.Parameter)
+			}
+			input.Session.AddDiscoveredParams(input.Target, names)
+			inv.Add(http.MethodGet, input.Target, names, SurfaceSourceParamDiscover)
+		}
+	}
+
 	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
 	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
 	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
@@ -445,6 +474,10 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	integrationFindings := s.runOptionalIntegrations(ctx, input)
 	findings = append(findings, integrationFindings...)
+
+	// Phase 2: end-of-scan surface-gap detection. Updates process-wide
+	// SurfaceCoverageMetrics that AutomationMetrics.Extra surfaces.
+	DetectSurfaceGaps(input.Session.SurfaceInventory())
 
 	return findings, nil
 }

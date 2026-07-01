@@ -164,6 +164,13 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 		})
 	}
 
+	// Phase 2 reference wiring: consult the SurfaceInventory (built in
+	// Run()) for parameters discovered on each candidate endpoint —
+	// param_discovery may have surfaced hidden names not in the
+	// built-in sqliProbeParams list. Discovered names take priority
+	// so hidden parameters get exercised before the generic list.
+	dynamicParams := sqliDynamicParams(input.Session)
+
 	type hit struct {
 		url       string
 		param     string
@@ -179,7 +186,11 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, p := range sqliProbeParams {
+		// Phase 2 reference wiring: prepend param-discovery names for this
+		// endpoint so hidden parameters get exercised before the built-in
+		// list. Duplicates against sqliProbeParams are dropped.
+		probeParams := sqliMergedProbeParams(dynamicParams, raw)
+		for _, p := range probeParams {
 			if attempts >= sqliMaxAttempts {
 				break
 			}
@@ -217,6 +228,9 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, p)
 				if err != nil || resp == nil {
 					continue
 				}
@@ -275,6 +289,44 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 			"curlReproducer":  curl,
 		},
 	}}
+}
+
+// sqliDynamicParams returns any parameter names surfaced by the Phase 2
+// hidden-parameter miner for the current session. Returns an empty list
+// (never nil) when no miner data is available.
+func sqliDynamicParams(sess *ScanSession) []string {
+	if sess == nil {
+		return nil
+	}
+	return sess.AllDiscoveredParams()
+}
+
+// sqliMergedProbeParams returns the parameter list for a single
+// candidate endpoint. Discovered parameter names come first (so they
+// are exercised within the sqliMaxAttempts budget), then the built-in
+// sqliProbeParams list with any duplicates dropped.
+func sqliMergedProbeParams(dynamic []string, rawURL string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(dynamic)+len(sqliProbeParams))
+	for _, p := range dynamic {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, p := range sqliProbeParams {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 // matchSQLErrorSignature returns the first signature substring observed in

@@ -1281,10 +1281,17 @@ type probeSignalBatch struct {
 }
 
 type probeSignalRecord struct {
-	Category   string `json:"category"`
-	Outcome    string `json:"outcome"`
-	StatusCode int    `json:"statusCode"`
-	Endpoint   string `json:"endpoint"`
+	Category              string `json:"category"`
+	Outcome               string `json:"outcome"`
+	StatusCode            int    `json:"statusCode"`
+	Endpoint              string `json:"endpoint"`
+	// Phase 4 optional signals — backward-compatible with earlier
+	// ml-service builds because Pydantic tolerates extra fields.
+	EvidenceValid         bool   `json:"evidenceValid,omitempty"`
+	DifferentialConfirmed bool   `json:"differentialConfirmed,omitempty"`
+	SurfaceGapReason      string `json:"surfaceGapReason,omitempty"`
+	OracleName            string `json:"oracleName,omitempty"`
+	OracleVersion         string `json:"oracleVersion,omitempty"`
 }
 
 type calibrateResponse struct {

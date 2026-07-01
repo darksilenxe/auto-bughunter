@@ -399,6 +399,16 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 	cand.Finding.EvidenceFields["preReport.reason"] = outcome.Reason
 	cand.Finding.EvidenceFields["preReport.evidenceHits"] = fmt.Sprintf("%d/%d", outcome.EvidenceHits, outcome.EvidenceRequired)
 	cand.Finding.EvidenceFields["preReport.policyCoverage"] = fmt.Sprintf("%.2f", outcome.Policy.Coverage)
+	// Phase 3: mark the finding with a machine-readable oracle stamp so
+	// evidence_normalizer.go can populate EvidenceRecord.VerifiedBy.
+	// Findings without a verifier stamp are eligible for downgrade
+	// under strict-mode reporting.
+	oracle := cand.ProbeName
+	if oracle == "" {
+		oracle = "unknown"
+	}
+	cand.Finding.EvidenceFields["preReport.verifiedBy"] = fmt.Sprintf("%s@v1", oracle)
+	cand.Finding.EvidenceFields["verifiedBy"] = fmt.Sprintf("%s@v1", oracle)
 	if outcome.PoCReplayed {
 		cand.Finding.EvidenceFields["preReport.pocReplayed"] = fmt.Sprintf("%v", outcome.PoCSuccess)
 	}

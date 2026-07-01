@@ -3104,6 +3104,10 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	preReport := scanner.GetVerificationMetrics()
 	clusterMetrics := scanner.GetClusterMetrics()
 	diffMetrics := scanner.GetDifferentialMetrics()
+	surfaceMetrics := scanner.GetSurfaceCoverageMetrics()
+	paramMetrics := scanner.GetParamDiscoveryMetrics()
+	evidenceMetrics := scanner.GetEvidenceMetrics()
+	calibrationMetrics := scanner.GetCalibrationApplyMetrics()
 	lagSum := 0.0
 	lagCount := 0
 	maxLag := 0.0
@@ -3384,6 +3388,29 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			"differentialFPBenign":       float64(diffMetrics.FPBenign),
 			"differentialExecErrors":     float64(diffMetrics.ExecErrors),
 			"differentialConfirmedRate":  roundTo2(diffMetrics.ConfirmedRate),
+			"surfaceTotal":               float64(surfaceMetrics.InventoryTotal),
+			"surfaceProbed":              float64(surfaceMetrics.ProbedUnique),
+			"surfaceCoverageRatio":       roundTo2(surfaceMetrics.CoverageRatio),
+			"surfaceGapUnprobed":         float64(surfaceMetrics.GapUnprobed),
+			"surfaceGapParamMissing":     float64(surfaceMetrics.GapParamMissing),
+			"surfaceGapMethodMissing":    float64(surfaceMetrics.GapMethodMissing),
+			"paramDiscoveryCandidates":   float64(paramMetrics.Candidates),
+			"paramDiscoveryConfirmed":    float64(paramMetrics.Confirmed),
+			"evidenceValid":              float64(evidenceMetrics.Valid),
+			"evidenceIncomplete":         float64(evidenceMetrics.Incomplete),
+			"evidenceValidRatio":         roundTo2(evidenceMetrics.ValidRatio),
+			"evidenceMissingUrl":         float64(evidenceMetrics.MissingByField["url"]),
+			"evidenceMissingMethod":      float64(evidenceMetrics.MissingByField["method"]),
+			"evidenceMissingParam":       float64(evidenceMetrics.MissingByField["param"]),
+			"evidenceMissingPayloadClass":      float64(evidenceMetrics.MissingByField["payloadClass"]),
+			"evidenceMissingReflectionContext": float64(evidenceMetrics.MissingByField["reflectionContext"]),
+			"evidenceMissingResponseShape":     float64(evidenceMetrics.MissingByField["responseShape"]),
+			"evidenceMissingOracleName":        float64(evidenceMetrics.MissingByField["oracleName"]),
+			"calibrationApplied":               float64(calibrationMetrics.Applied),
+			"calibrationSkipped":               float64(calibrationMetrics.Skipped),
+			"calibrationPromoted":              float64(calibrationMetrics.Promoted),
+			"calibrationDemoted":               float64(calibrationMetrics.Demoted),
+			"calibrationMeanPosterior":         roundTo2(calibrationMetrics.MeanPosterior),
 		},
 	})
 }
@@ -6253,6 +6280,12 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 	// confidence level as fully evidenced findings.
 	for i := range out {
 		out[i] = enforceMinimumEvidenceFields(out[i])
+	}
+	// Phase 3: normalize each finding's evidence into a typed
+	// EvidenceRecord and tag EvidenceFields["evidenceQuality"]. Metrics
+	// accumulate into scanner.GetEvidenceMetrics for automation.
+	for i := range out {
+		out[i] = scanner.NormalizeEvidence(out[i])
 	}
 	// Phase 1 clustering: fold findings that share
 	// (category, host, normalized-path, param, evidence-hash) into a single
