@@ -39,7 +39,7 @@ References landed so far:
 | `active_cors.go` | ✅ | ➖ | ✅ | ✅ | Full Phase 1 migration: baseline no-Origin control, `SubmitVerifiedFinding` with canonicalised "cors" category (external label `cors_redirect` preserved on emitted finding), `EvidenceHeaderDelta` + `EvidenceReflection` signals, `responseShape` tag. |
 | `active_graphql_introspection.go` | ✅ | ➖ | ➖ | ➖ | JSON-shape gate on introspection response + `responseShape` tag; category "api" has no proof-policy rules, so verify is intentionally not routed. |
 | `active_ldap_injection.go` | ✅ | ➖ | ✅ | ✅ | Binary-shape bail-out, `responseShape` tag, and `DifferentialReVerify` (benign-payload oracle strips static-error-page FPs). Category "injection" has no proof-policy rules so `SubmitVerifiedFinding` is intentionally skipped. |
-| `active_nosqli.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | Add JSON-shape gate; differential re-verify for confirmed cases. |
+| `active_nosqli.go` | ✅ | ➖ | ✅ | ✅ | Full Phase 1 migration: binary-shape bail-out, `SubmitVerifiedFinding` with canonicalised "nosqli" category (external label `input-validation` preserved), 3 evidence signals to meet strict-emission minimum, and `DifferentialReVerify` that strips static-error-page false positives. |
 | `active_open_redirect.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Use `ContextURL` classifier; require `PayloadEscapesContext(ContextURL, payload)`. |
 | `active_path_traversal.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Add binary bail-out (`IsBinaryShape`); differential re-verify High/Critical. |
 | `active_prompt_injection.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | JSON-shape gate for LLM APIs; reflection classifier for echoed prompts. |

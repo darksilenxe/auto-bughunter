@@ -195,7 +195,13 @@ func (s *Service) runActiveNoSQLiProbe(ctx context.Context, input RunInput, body
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+				respHeader := resp.Header
 				_ = resp.Body.Close()
+				// Phase 1 binary bail-out: byte patterns in a binary body
+				// (image/PDF/font) are not evidence of NoSQL error surfaces.
+				if IsBinaryShape(respHeader) {
+					continue
+				}
 
 				// Error-string detection.
 				if sig := matchNoSQLErrorSignature(string(respBody)); sig != "" {
@@ -272,7 +278,11 @@ doneQueryProbes:
 						continue
 					}
 					respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+					respHeader := resp.Header
 					_ = resp.Body.Close()
+					if IsBinaryShape(respHeader) {
+						continue
+					}
 
 					if sig := matchNoSQLErrorSignature(string(respBody)); sig != "" {
 						curl := buildCurlReproducer(
@@ -322,6 +332,56 @@ doneJSONProbes:
 		urls = append(urls, fmt.Sprintf("%s (param=%s, technique=%s)", h.url, h.param, h.technique))
 	}
 
+	// Phase 1 differential re-verify: send the same request with a benign
+	// scalar value in place of the operator payload. If the same NoSQL
+	// error signature or length delta still fires, the signal is baseline
+	// noise (permanently broken endpoint), not payload-specific injection.
+	execDifferential := func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+		// Reproduce the primary hit's request shape with the parameter
+		// value replaced by the differential payload. For query-string
+		// probes the injected key is `<param>[$op]` — strip the operator
+		// suffix so the benign value lands in the plain parameter.
+		u, perr := url.Parse(first.url)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		plainParam := first.param
+		if idx := strings.Index(plainParam, "["); idx > 0 {
+			plainParam = plainParam[:idx]
+		}
+		q := u.Query()
+		q.Del(first.param)
+		q.Set(plainParam, altPayload)
+		u.RawQuery = q.Encode()
+		dreq, derr := http.NewRequestWithContext(dctx, http.MethodGet, u.String(), nil)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		ApplyAuthProfile(dreq, input.AuthProfile)
+		dresp, dcerr := s.doRequestWithRetry(dctx, dreq, input.Options)
+		if dcerr != nil {
+			return nil, nil, dcerr
+		}
+		body, _ := io.ReadAll(io.LimitReader(dresp.Body, 64*1024))
+		return dresp, body, nil
+	}
+	oracle := func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+		// Fire the oracle if the same NoSQL error signature surfaces for
+		// a benign payload — that is the false-positive signal we want
+		// to strip.
+		return matchNoSQLErrorSignature(string(body)) != "", nil
+	}
+	diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       "active-nosqli",
+		OriginalPayload: first.param,
+		SafePayload:     "",
+		Exec:            execDifferential,
+		Oracle:          oracle,
+	})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
 	steps := []string{
@@ -331,7 +391,7 @@ doneJSONProbes:
 		"Escalate to authentication-bypass testing by injecting {\"$ne\": \"x\"} into the password field of the login endpoint.",
 	}
 
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                "active-nosqli",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -348,13 +408,39 @@ doneJSONProbes:
 		ReproductionSteps: steps,
 		PoC:               curl,
 		EvidenceFields: map[string]string{
-			"validationType":  "active-probe",
-			"technique":       first.technique,
-			"evidenceDetail":  first.evidence,
-			"reproStep":       "Replay the listed URL/body and observe a NoSQL error or enlarged result set",
-			"curlReproducer":  curl,
+			"validationType": "active-probe",
+			"technique":      first.technique,
+			"evidenceDetail": first.evidence,
+			"reproStep":      "Replay the listed URL/body and observe a NoSQL error or enlarged result set",
+			"curlReproducer": curl,
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+
+	// Phase 1 pre-report verification. Temporarily canonicalise the
+	// category to "nosqli" so proofpolicy evaluates the correct ruleset
+	// (the label "input-validation" has no canonical alias). Restore the
+	// external category on the emitted finding.
+	signals := []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}
+	if strings.Contains(first.technique, "error") {
+		signals = append(signals, EvidenceErrorSignal)
+	} else {
+		signals = append(signals, EvidenceStatusDelta)
+	}
+	originalCategory := finding.Category
+	finding.Category = "nosqli"
+	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:               finding,
+		Signals:               signals,
+		AllowNoReplayEmission: true,
+		ProbeName:             "active-nosqli",
+	})
+	if verifyOutcome.Suppressed {
+		return nil
+	}
+	emitted := verifyOutcome.EmittedFinding
+	emitted.Category = originalCategory
+	return []model.Finding{emitted}
 }
 
 // matchNoSQLErrorSignature returns the first error substring found in the
