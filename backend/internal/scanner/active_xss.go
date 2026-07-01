@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/scope"
@@ -115,8 +116,9 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 	}
 
 	type hit struct {
-		url   string
-		param string
+		url     string
+		param   string
+		context ReflectionContext
 	}
 	var hits []hit
 	attempts := 0
@@ -176,6 +178,16 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 				if !isHTMLContextReflection(string(respBody), payload) {
 					continue
 				}
+				// Phase 1 reflection-context gate: require the payload to
+				// escape the syntactic context in which it landed before
+				// treating the reflection as exploitable. A payload
+				// reflected into a JS-string context without the required
+				// break-out, or into a URL attribute without a dangerous
+				// scheme, is not evidence of an executable XSS sink.
+				refCtx := ClassifyReflectionContext(string(respBody), payload)
+				if refCtx == ContextUnknown || !PayloadEscapesContext(refCtx, payload) {
+					continue
+				}
 				// Primary reflection confirmed. Issue a second probe with a
 				// structurally different marker to rule out accidental matches
 				// caused by error messages or debug output containing the
@@ -209,7 +221,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 					// emit a finding on the basis of one payload alone.
 					break
 				}
-				hits = append(hits, hit{url: probeURL, param: p})
+				hits = append(hits, hit{url: probeURL, param: p, context: refCtx})
 				matched = true
 				break
 			}
@@ -226,6 +238,48 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		return nil
 	}
 
+	// Phase 1 control baseline: capture two clean fetches of the probed
+	// URL with the reflective parameter stripped. If the target's clean
+	// baseline already contains the marker string, the reflection is a
+	// static-content artefact rather than user-controlled injection.
+	first := hits[0]
+	baselineFetch := func(bctx context.Context) (BaselineSample, error) {
+		u, perr := url.Parse(first.url)
+		if perr != nil {
+			return BaselineSample{}, perr
+		}
+		q := u.Query()
+		q.Del(first.param)
+		u.RawQuery = q.Encode()
+		br, berr := http.NewRequestWithContext(bctx, http.MethodGet, u.String(), nil)
+		if berr != nil {
+			return BaselineSample{}, berr
+		}
+		ApplyAuthProfile(br, input.AuthProfile)
+		start := time.Now()
+		bresp, bcerr := s.doRequestWithRetry(bctx, br, input.Options)
+		dur := time.Since(start)
+		if bcerr != nil || bresp == nil {
+			return BaselineSample{}, bcerr
+		}
+		bb, _ := io.ReadAll(io.LimitReader(bresp.Body, 512*1024))
+		_ = bresp.Body.Close()
+		return BaselineSample{
+			Status:   bresp.StatusCode,
+			Header:   bresp.Header,
+			Body:     string(bb),
+			Duration: dur,
+		}, nil
+	}
+	baselines, berr := CaptureTwoControlBaselines(ctx, baselineFetch)
+	if berr == nil {
+		// Suppress if the marker is present in the clean baseline — the
+		// target renders the string regardless of user input.
+		if strings.Contains(baselines.First.Body, xssMarker) || strings.Contains(baselines.Second.Body, xssMarker) {
+			return nil
+		}
+	}
+
 	urls := make([]string, 0, len(hits))
 	params := make([]string, 0, len(hits))
 	seenParam := map[string]struct{}{}
@@ -237,7 +291,6 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		}
 	}
 
-	first := hits[0]
 	steps := []string{
 		fmt.Sprintf("Send GET %s", first.url),
 		fmt.Sprintf("Inspect the response body and confirm the literal payload %q appears unescaped (no HTML entity encoding) in an HTML context.", xssMarker),
@@ -245,7 +298,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 	}
 	curl := buildCurlReproducer(http.MethodGet, first.url, input.AuthProfile, "", "")
 
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                "active-xss-reflected",
 		Category:          "input-validation",
 		Severity:          model.SeverityHigh,
@@ -262,11 +315,90 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		ReproductionSteps: steps,
 		PoC:               curl,
 		EvidenceFields: map[string]string{
-			"validationType": "active-probe",
-			"reproStep":      "Replay the listed URL and confirm the marker appears unescaped in the HTML body",
-			"curlReproducer": curl,
+			"validationType":    "active-probe",
+			"reproStep":         "Replay the listed URL and confirm the marker appears unescaped in the HTML body",
+			"curlReproducer":    curl,
+			"reflectionContext": first.context.String(),
 		},
-	}}
+	}
+
+	// Tag the response shape observed for the primary hit so evidence
+	// normalisation and strict-mode reporting can attribute the sink.
+	if u, perr := url.Parse(first.url); perr == nil {
+		primaryReq, rerr := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if rerr == nil {
+			ApplyAuthProfile(primaryReq, input.AuthProfile)
+			if primaryResp, rerr := s.doRequestWithRetry(ctx, primaryReq, input.Options); rerr == nil && primaryResp != nil {
+				finding.EvidenceFields["responseShape"] = ClassifyResponseShape(primaryResp.Header).String()
+				_, _ = io.Copy(io.Discard, primaryResp.Body)
+				_ = primaryResp.Body.Close()
+			}
+		}
+	}
+	if _, ok := finding.EvidenceFields["responseShape"]; !ok {
+		// Fall back to the shared classifier's HTML-shape assumption; the
+		// primary probe already required an HTML-like content type.
+		finding.EvidenceFields["responseShape"] = ShapeHTML.String()
+	}
+
+	// Phase 1 differential re-verify: fire the same request twice, once
+	// with the parameter's original (empty) value and once with a benign
+	// random alphanumeric payload of comparable length. If the original
+	// xssMarker still appears in either response, the target is echoing
+	// baseline noise and the exploit is not payload-specific.
+	execDifferential := func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+		u, perr := url.Parse(first.url)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		q := u.Query()
+		q.Set(first.param, altPayload)
+		u.RawQuery = q.Encode()
+		dreq, derr := http.NewRequestWithContext(dctx, http.MethodGet, u.String(), nil)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		ApplyAuthProfile(dreq, input.AuthProfile)
+		dresp, dcerr := s.doRequestWithRetry(dctx, dreq, input.Options)
+		if dcerr != nil {
+			return nil, nil, dcerr
+		}
+		body, _ := io.ReadAll(io.LimitReader(dresp.Body, 512*1024))
+		return dresp, body, nil
+	}
+	oracle := func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+		return strings.Contains(string(body), xssMarker), nil
+	}
+	diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       "active-xss",
+		OriginalPayload: xssMarker,
+		SafePayload:     "",
+		Exec:            execDifferential,
+		Oracle:          oracle,
+	})
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+
+	// Route the High-severity candidate through the shared pre-report
+	// verifier. Temporarily canonicalise the category to "xss" so the
+	// proof-policy engine evaluates the correct ruleset; the external
+	// category label is preserved on the emitted finding.
+	originalCategory := finding.Category
+	finding.Category = "xss"
+	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:               finding,
+		Signals:               []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved},
+		AllowNoReplayEmission: true,
+		ProbeName:             "active-xss",
+	})
+	if verifyOutcome.Suppressed {
+		return nil
+	}
+	emitted := verifyOutcome.EmittedFinding
+	emitted.Category = originalCategory
+	return []model.Finding{emitted}
 }
 
 // isHTMLContextReflection returns true when the marker appears literally in

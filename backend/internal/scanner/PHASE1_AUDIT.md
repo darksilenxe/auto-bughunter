@@ -25,6 +25,15 @@ counted by `GetClusterMetrics()` → `AutomationMetrics.Extra.clusterRatio`.
 Snapshot generated 2026-07-01. Regenerate with the audit one-liner in
 the appendix.
 
+References landed so far:
+
+- `dangling_markup.go` and `formula_injection.go` — original Phase 1
+  reference migrations (shape gate + reflection-context / binary
+  bail-out).
+- `active_xss.go` — first full four-control migration
+  (shape tag + reflection-context escape gate + two-control baseline
+  + `SubmitVerifiedFinding` + `DifferentialReVerify`).
+
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
 | `active_cors.go` | ✅ | ➖ | ✅ | ⚠️ | Content-gate + control baseline in place; route High/Critical through `SubmitVerifiedFinding`. |
@@ -38,7 +47,7 @@ the appendix.
 | `active_sqli.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Binary bail-out; control baseline for timing; differential re-verify for time-based signal. |
 | `active_ssti.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Reflection-context aware payload selection; differential re-verify for arithmetic markers. |
 | `active_xpath_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | XML-shape gate for XPath error surfaces. |
-| `active_xss.go` | ✅ | ⚠️ | ⚠️ | ⚠️ | HTML-shape gate present; upgrade to `ClassifyReflectionContext` + `PayloadEscapesContext` for High/Critical. |
+| `active_xss.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: response-shape tag, `ClassifyReflectionContext` + `PayloadEscapesContext` gate for High/Critical, two-control baseline, `SubmitVerifiedFinding`, and `DifferentialReVerify`. |
 | `active_xxe.go` | ⚠️ | ➖ | ✅ | ⚠️ | Require `IsXMLShape` on the probed endpoint's response. |
 | `browser_storage_probe.go` | ➖ | ➖ | ➖ | ⚠️ | Browser-side observation; verify High findings. |
 | `clickjacking_probe.go` | ✅ | ➖ | ⚠️ | ⚠️ | HTML gate present; add differential baseline (framed vs unframed control). |
