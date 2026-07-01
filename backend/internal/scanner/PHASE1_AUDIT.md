@@ -36,7 +36,7 @@ References landed so far:
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
-| `active_cors.go` | ✅ | ➖ | ✅ | ⚠️ | Content-gate + control baseline in place; route High/Critical through `SubmitVerifiedFinding`. |
+| `active_cors.go` | ✅ | ➖ | ✅ | ✅ | Full Phase 1 migration: baseline no-Origin control, `SubmitVerifiedFinding` with canonicalised "cors" category (external label `cors_redirect` preserved on emitted finding), `EvidenceHeaderDelta` + `EvidenceReflection` signals, `responseShape` tag. |
 | `active_graphql_introspection.go` | ➖ | ➖ | ⚠️ | ⚠️ | Introspection response is JSON; add JSON-shape gate for reporting. |
 | `active_ldap_injection.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | Add reflection classifier for LDAP error echoes; verify High findings. |
 | `active_nosqli.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | Add JSON-shape gate; differential re-verify for confirmed cases. |

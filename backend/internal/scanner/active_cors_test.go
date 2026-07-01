@@ -116,3 +116,39 @@ func TestRunActiveCORSProbe_DowngradesNonCredentialedJSONAPIToInfo(t *testing.T)
 		t.Fatalf("expected json-api finding ID, got %q", f.ID)
 	}
 }
+
+// TestRunActiveCORSProbe_EmitsPreReportVerifierStamps verifies that the
+// credentialed reflection path routes through SubmitVerifiedFinding and
+// attaches the shared verifier evidence fields (Phase 1 four-control
+// migration).
+func TestRunActiveCORSProbe_EmitsPreReportVerifierStamps(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	findings := svc.runActiveCORSProbe(context.Background(), RunInput{Target: target.URL}, "")
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 CORS finding, got %d", len(findings))
+	}
+	f := findings[0]
+	if got := f.EvidenceFields["preReport.verified"]; got != "true" {
+		t.Fatalf("expected preReport.verified=true, got %q", got)
+	}
+	if got := f.EvidenceFields["preReport.verifiedBy"]; got != "active-cors@v1" {
+		t.Fatalf("expected preReport.verifiedBy=active-cors@v1, got %q", got)
+	}
+	if got := f.EvidenceFields["responseShape"]; got == "" {
+		t.Fatalf("expected responseShape to be set, got empty")
+	}
+	// Category label must be preserved on the emitted finding even though
+	// the verifier evaluated the "cors" canonical category.
+	if f.Category != "cors_redirect" {
+		t.Fatalf("expected category cors_redirect on emitted finding, got %q", f.Category)
+	}
+}
