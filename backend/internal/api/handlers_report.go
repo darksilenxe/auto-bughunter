@@ -66,6 +66,13 @@ func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.Sca
 			continue
 		}
 		if f.Confidence >= threshold {
+			// Phase 3: strict mode additionally suppresses findings
+			// whose typed evidence record failed schema validation.
+			// Governance/verified findings are already exempted above.
+			if f.EvidenceFields != nil && f.EvidenceFields["evidenceQuality"] == "incomplete" {
+				suppressed++
+				continue
+			}
 			filtered = append(filtered, f)
 			continue
 		}

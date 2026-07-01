@@ -110,8 +110,14 @@ func (s *Service) runDanglingMarkupProbe(ctx context.Context, input RunInput, bo
 					"validationType":     "active-probe",
 					"payload":            danglingMarkupPayload,
 					"curlReproducer":     curl,
+					"method":             http.MethodGet,
+					"url":                probeURL,
+					"param":              param,
+					"payloadClass":       "html-injection",
 					"responseShape":      ClassifyResponseShape(respHeader).String(),
 					"reflectionContext":  ctxKind.String(),
+					"oracleName":         "dangling_markup",
+					"oracleVersion":      "v1",
 				},
 			}}
 		}

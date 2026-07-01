@@ -105,6 +105,19 @@ class ProbeRecordInput(BaseModel):
     outcome: str = ""  # confirmed | waf_blocked | near_miss | server_error | no_signal | error
     statusCode: int = 0
     endpoint: str = ""
+    # Phase 4 optional evidence-quality signals (backward-compatible:
+    # older Go clients simply don't set these). They influence the
+    # Bayesian prior — evidence-valid records nudge the posterior
+    # toward the observed outcome; incomplete-evidence records are
+    # weighted less confidently.
+    evidenceValid: bool = False
+    differentialConfirmed: bool = False
+    surfaceGapReason: str = ""
+    oracleName: str = ""
+    oracleVersion: str = ""
+
+    class Config:
+        extra = "allow"  # tolerate any future field additions
 
 
 class CalibrateProbeSignalsRequest(BaseModel):
@@ -404,7 +417,27 @@ def _compute_calibration(records: List[ProbeRecordInput]) -> CalibrateProbeSigna
             blended = signal_fraction
 
         # Map blended ∈ [0,1] → multiplier ∈ [0.5, 1.5]
-        multiplier = round(0.5 + blended, 4)
+        multiplier = 0.5 + blended
+
+        # Phase 4: nudge the multiplier by the average evidence-quality
+        # signal for this category. evidenceValid + differentialConfirmed
+        # count as positive evidence; a dominant surfaceGapReason of
+        # "not_probed" pulls the multiplier down because the category is
+        # observed under low coverage.
+        cat_records = [r for r in records if r.category == cat]
+        if cat_records:
+            valid_share = sum(1 for r in cat_records if getattr(r, "evidenceValid", False)) / len(cat_records)
+            diff_share = sum(1 for r in cat_records if getattr(r, "differentialConfirmed", False)) / len(cat_records)
+            gap_penalty = sum(1 for r in cat_records if getattr(r, "surfaceGapReason", "") == "not_probed") / len(cat_records)
+            multiplier += 0.10 * valid_share
+            multiplier += 0.15 * diff_share
+            multiplier -= 0.05 * gap_penalty
+        # Clamp back into the documented [0.5, 1.5] band.
+        if multiplier < 0.5:
+            multiplier = 0.5
+        if multiplier > 1.5:
+            multiplier = 1.5
+        multiplier = round(multiplier, 4)
 
         details.append(CategoryCalibration(
             category=cat,

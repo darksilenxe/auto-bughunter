@@ -94,7 +94,13 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 					"validationType": "active-probe",
 					"payload":        formulaMarker,
 					"curlReproducer": curl,
+					"method":         http.MethodGet,
+					"url":            probeURL,
+					"param":          param,
+					"payloadClass":   "formula-injection",
 					"responseShape":  ClassifyResponseShape(respHeader).String(),
+					"oracleName":     "formula_injection",
+					"oracleVersion":  "v1",
 				},
 			}}
 		}

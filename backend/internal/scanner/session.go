@@ -65,6 +65,17 @@ type ScanSession struct {
 	TokenStore          *TokenStore
 	mu                  sync.Mutex
 	discoveredEndpoints []DiscoveredEndpoint
+	// discoveredParams maps "<host><normalized-path>" → parameter
+	// names surfaced by the Phase 2 hidden-parameter miner. Probes
+	// consult this map before falling back to their built-in param
+	// wordlist so miner findings actually get exercised.
+	discoveredParams map[string]map[string]struct{}
+	// surfaceInventory is the per-scan Phase 2 SurfaceInventory. It is
+	// populated by scanner.Run() from crawl links and runtime XHR
+	// endpoints, and consulted by probes and by the end-of-scan gap
+	// detector. May be nil for callers that create a session outside
+	// scanner.Run(); every use site is nil-safe.
+	surfaceInventory *SurfaceInventory
 }
 
 // NewScanSession creates a ScanSession backed by a stdlib cookie jar.
@@ -208,6 +219,129 @@ func (s *ScanSession) AddDiscoveredEndpoint(ep DiscoveredEndpoint) {
 	}
 	s.discoveredEndpoints = append(s.discoveredEndpoints, ep)
 }
+
+// AddDiscoveredParams stores parameter names discovered by the Phase 2
+// hidden-parameter miner for a given URL. Probes call
+// DiscoveredParamsFor(url) to consult this list before falling back to
+// their built-in wordlists.
+func (s *ScanSession) AddDiscoveredParams(rawURL string, params []string) {
+	if s == nil || rawURL == "" || len(params) == 0 {
+		return
+	}
+	key := discoveredParamsKey(rawURL)
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.discoveredParams == nil {
+		s.discoveredParams = map[string]map[string]struct{}{}
+	}
+	if s.discoveredParams[key] == nil {
+		s.discoveredParams[key] = map[string]struct{}{}
+	}
+	for _, p := range params {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		s.discoveredParams[key][p] = struct{}{}
+	}
+}
+
+// DiscoveredParamsFor returns the parameter names miners have surfaced
+// for the given URL, deduped and in stable (alphabetical) order.
+func (s *ScanSession) DiscoveredParamsFor(rawURL string) []string {
+	if s == nil {
+		return nil
+	}
+	key := discoveredParamsKey(rawURL)
+	if key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := s.discoveredParams[key]
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sortStrings(out)
+	return out
+}
+
+// AllDiscoveredParams returns every parameter name discovered by the
+// hidden-parameter miner across all URLs in this session, deduped and
+// in stable order. Useful for probes that want to try miner-surfaced
+// names on arbitrary candidate endpoints.
+func (s *ScanSession) AllDiscoveredParams() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]struct{}{}
+	for _, set := range s.discoveredParams {
+		for k := range set {
+			seen[k] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sortStrings(out)
+	return out
+}
+
+// SetSurfaceInventory installs the Phase 2 SurfaceInventory on the
+// session so probes and the end-of-scan gap detector share the same
+// canonical inventory. Safe to call once per session.
+func (s *ScanSession) SetSurfaceInventory(inv *SurfaceInventory) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.surfaceInventory = inv
+}
+
+// SurfaceInventory returns the per-session SurfaceInventory or nil if
+// none has been installed.
+func (s *ScanSession) SurfaceInventory() *SurfaceInventory {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.surfaceInventory
+}
+
+func discoveredParamsKey(rawURL string) string {
+	host := hostOf(rawURL)
+	if host == "" {
+		return ""
+	}
+	return host + normalizePath(rawURL)
+}
+
+// sortStrings is a tiny helper that avoids adding a sort import at
+// every call site. It sorts in place, ascending.
+func sortStrings(v []string) {
+	// simple insertion sort — lists here are tiny (< a few dozen).
+	for i := 1; i < len(v); i++ {
+		for j := i; j > 0 && v[j-1] > v[j]; j-- {
+			v[j-1], v[j] = v[j], v[j-1]
+		}
+	}
+}
+
 
 // DiscoveredURLs returns unique URLs observed during XHR interception in
 // the order they were discovered.
