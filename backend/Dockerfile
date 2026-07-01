@@ -50,6 +50,10 @@ WORKDIR /app
 
 COPY --from=build /out/server /app/server
 
+# Bundle the accuracy-bench corpus so the in-app Accuracy page can grade
+# scans against the same manifests the nightly CI workflow uses.
+COPY cmd/accuracy-bench/testdata/corpus /app/accuracy-corpus
+
 # Sidecar shims — these live on $PATH so the existing `exec.LookPath(...)`
 # code in the Go scanner keeps finding `nuclei`, `zap-baseline.py`, etc.
 # without any backend code changes. They forward stdin/stdout/stderr/exit
@@ -62,7 +66,8 @@ RUN find /usr/local/bin -type f -exec sed -i 's/\r$//' {} + && \
 # protocol on port 9222. The Go scanner picks this up via CHROME_REMOTE_URL
 # (see backend/internal/scanner/browser.go).
 ENV CHROME_REMOTE_URL=http://chromium:9222 \
-    PORT=8080
+    PORT=8080 \
+    ACCURACY_CORPUS_DIR=/app/accuracy-corpus
 EXPOSE 8080
 
 CMD ["/app/server"]

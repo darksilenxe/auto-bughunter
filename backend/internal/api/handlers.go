@@ -447,6 +447,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/automation/policy-profile-defaults", s.handlePolicyProfileDefaults)
 	mux.HandleFunc("/api/automation/policy-audit", s.handleAutomationPolicyAudit)
 	mux.HandleFunc("/api/automation/metrics", s.handleAutomationMetrics)
+	mux.HandleFunc("/api/accuracy/corpus", s.handleAccuracyCorpus)
+	mux.HandleFunc("/api/accuracy/run", s.handleAccuracyRun)
 	mux.HandleFunc("/api/automation/rebalance", s.handleAutomationRebalance)
 	mux.HandleFunc("/api/automation/operator-feedback", s.handleAutomationOperatorFeedback)
 	mux.HandleFunc("/api/burp/parse", s.handleBurpParse)

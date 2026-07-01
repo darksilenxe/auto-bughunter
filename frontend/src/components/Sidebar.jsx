@@ -15,6 +15,7 @@ const NAV = [
   { path: "/probe-coverage", label: "Probe Coverage", icon: "◈" },
   { path: "/scan-timeline", label: "Scan Timeline", icon: "▦" },
   { path: "/surface-map", label: "Surface Map", icon: "⊕" },
+  { path: "/accuracy", label: "Accuracy Bench", icon: "◉" },
   { path: "/references", label: "Knowledge Base", icon: "☰" },
   { path: "/settings", label: "Environment", icon: "⚙" },
 ];
