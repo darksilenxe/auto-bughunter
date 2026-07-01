@@ -1,0 +1,43 @@
+{
+  "target": "juice-shop",
+  "preReportVerificationPassRate": 1.0,
+  "findings": [
+    {
+      "id": "finding-jshop-sqli-login",
+      "category": "sqli",
+      "severity": "critical",
+      "title": "SQL injection in login email parameter",
+      "affectedUrl": "https://juice-shop.example/rest/user/login",
+      "affectedParameter": "email"
+    },
+    {
+      "id": "finding-jshop-xss-search",
+      "category": "xss",
+      "severity": "high",
+      "title": "Reflected XSS in search fragment",
+      "affectedUrl": "https://juice-shop.example/#/search",
+      "affectedParameter": "q"
+    },
+    {
+      "id": "finding-jshop-idor-users",
+      "category": "idor",
+      "severity": "high",
+      "title": "Unauthorized user list disclosure",
+      "affectedUrl": "https://juice-shop.example/api/Users"
+    },
+    {
+      "id": "finding-jshop-jwt-login",
+      "category": "jwt",
+      "severity": "high",
+      "title": "JWT algorithm confusion accepted",
+      "affectedUrl": "https://juice-shop.example/rest/user/login"
+    },
+    {
+      "id": "finding-jshop-lfi-ftp",
+      "category": "path traversal",
+      "severity": "high",
+      "title": "Directory traversal via legacy FTP folder",
+      "affectedUrl": "https://juice-shop.example/ftp"
+    }
+  ]
+}

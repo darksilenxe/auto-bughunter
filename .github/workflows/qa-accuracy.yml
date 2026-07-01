@@ -1,0 +1,74 @@
+name: QA - Accuracy benchmark (nightly)
+
+# Nightly accuracy harness for the vulnerability scanner.
+#
+# This workflow is intentionally *not* wired into PR triggers — it is the
+# ground-truth measurement pipeline, not a fast lint gate. Its job is to
+# grade the checked-in benchmark corpus against actual scan-result fixtures
+# (or, once vulnerable targets are deployed, actual scans produced during
+# this run) and publish a JSON + Markdown report as workflow artifacts so
+# regressions can be inspected commit-by-commit.
+#
+# Triggers:
+#   * Scheduled (nightly at 04:00 UTC)
+#   * Manual (workflow_dispatch) with an optional -tolerance override
+#
+# Follow-up (planned but not part of this workflow yet):
+#   * Deploy the vulnerable targets referenced by the corpus into ephemeral
+#     containers and run the scanner against them to produce real actuals.
+#   * Compare against the previous run's report (downloaded via
+#     actions/download-artifact) with -fail-on-regression to gate merges.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tolerance:
+        description: 'Regression tolerance (0..1, e.g. 0.02 = 2pp)'
+        required: false
+        default: '0.02'
+  schedule:
+    - cron: '0 4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-accuracy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Grade benchmark corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+      - name: Unit tests for accuracy package
+        run: go test ./internal/accuracybench/... ./cmd/accuracy-bench/...
+      - name: Build accuracy-bench CLI
+        run: go build -o /tmp/accuracy-bench ./cmd/accuracy-bench
+      - name: Grade checked-in fixtures
+        run: |
+          mkdir -p /tmp/accuracy-out
+          /tmp/accuracy-bench \
+            -corpus cmd/accuracy-bench/testdata/corpus \
+            -actuals cmd/accuracy-bench/testdata/actuals \
+            -output-json /tmp/accuracy-out/report.json \
+            -output-md /tmp/accuracy-out/report.md
+      - name: Show report summary
+        run: cat /tmp/accuracy-out/report.md
+      - name: Upload accuracy report
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-report
+          path: /tmp/accuracy-out
+          retention-days: 90

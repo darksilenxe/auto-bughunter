@@ -1,0 +1,15 @@
+{
+  "target": "clean-json-api",
+  "description": "Reference clean JSON API. No known vulnerabilities. Anchors the FP rate for API-only probes (CORS, IDOR heuristics, mass-assignment guesses, JSON reflection XSS).",
+  "baseUrl": "https://clean-api.example",
+  "expectedFindings": [],
+  "safeEndpoints": [
+    { "category": "xss", "endpoint": "/v1/users", "note": "application/json response; XSS probes must bail out" },
+    { "category": "xss", "endpoint": "/v1/orders", "note": "application/json response; XSS probes must bail out" },
+    { "category": "clickjacking", "endpoint": "/v1/users", "note": "JSON API — X-Frame-Options is irrelevant" },
+    { "category": "clickjacking", "endpoint": "/v1/orders", "note": "JSON API — X-Frame-Options is irrelevant" },
+    { "category": "cors", "endpoint": "/v1/users", "note": "CORS is credentials:false and Origin echoed only for allowlisted origins" },
+    { "category": "idor", "endpoint": "/v1/users/{id}", "note": "Authorization enforced; heuristic IDOR probe must respect 403 baseline" },
+    { "category": "mass assignment", "endpoint": "/v1/users", "parameter": "role", "note": "Field ignored server-side but returns 200; probe must not conclude success from status alone" }
+  ]
+}

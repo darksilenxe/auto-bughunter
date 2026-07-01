@@ -1,0 +1,12 @@
+{
+  "target": "webgoat",
+  "description": "OWASP WebGoat – Java training target covering deserialization, SSRF, XXE, IDOR, JWT.",
+  "baseUrl": "http://webgoat.example:8080/WebGoat",
+  "expectedFindings": [
+    { "category": "ssrf", "endpoint": "/SSRF/task1", "parameter": "url", "minSeverity": "high" },
+    { "category": "xxe", "endpoint": "/xxe/simple", "minSeverity": "high" },
+    { "category": "idor", "endpoint": "/IDOR/profile/{id}", "minSeverity": "high" },
+    { "category": "jwt", "endpoint": "/JWT/decode", "minSeverity": "medium" },
+    { "category": "sqli", "endpoint": "/SqlInjection/attack5a", "parameter": "account", "minSeverity": "high" }
+  ]
+}

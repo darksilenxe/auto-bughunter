@@ -1,0 +1,16 @@
+{
+  "target": "crapi",
+  "description": "OWASP crAPI – deliberately vulnerable API-first target covering the API Top-10 (BOLA, mass assignment, excessive data exposure).",
+  "baseUrl": "http://crapi.example",
+  "expectedFindings": [
+    { "category": "idor", "endpoint": "/identity/api/v2/user/dashboard", "minSeverity": "high", "description": "BOLA on user dashboard" },
+    { "category": "idor", "endpoint": "/workshop/api/mechanic/mechanic_report", "parameter": "report_id", "minSeverity": "high" },
+    { "category": "mass assignment", "endpoint": "/workshop/api/shop/orders/{id}", "parameter": "status", "minSeverity": "high" },
+    { "category": "ssrf", "endpoint": "/workshop/api/merchant/contact_mechanic", "parameter": "mechanic_api", "minSeverity": "high" },
+    { "category": "jwt", "endpoint": "/identity/api/auth/login", "minSeverity": "medium", "description": "JWT signature confusion" }
+  ],
+  "safeEndpoints": [
+    { "category": "xss", "endpoint": "/identity/api/auth/login", "note": "JSON API; XSS probes must not fire on JSON reflection" },
+    { "category": "clickjacking", "endpoint": "/identity/api/v2/user/dashboard", "note": "JSON API endpoints must not report missing X-Frame-Options" }
+  ]
+}
