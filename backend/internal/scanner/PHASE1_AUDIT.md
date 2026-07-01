@@ -40,10 +40,10 @@ References landed so far:
 | `active_graphql_introspection.go` | ✅ | ➖ | ➖ | ➖ | JSON-shape gate on introspection response + `responseShape` tag; category "api" has no proof-policy rules, so verify is intentionally not routed. |
 | `active_ldap_injection.go` | ✅ | ➖ | ✅ | ✅ | Binary-shape bail-out, `responseShape` tag, and `DifferentialReVerify` (benign-payload oracle strips static-error-page FPs). Category "injection" has no proof-policy rules so `SubmitVerifiedFinding` is intentionally skipped. |
 | `active_nosqli.go` | ✅ | ➖ | ✅ | ✅ | Full Phase 1 migration: binary-shape bail-out, `SubmitVerifiedFinding` with canonicalised "nosqli" category (external label `input-validation` preserved), 3 evidence signals to meet strict-emission minimum, and `DifferentialReVerify` that strips static-error-page false positives. |
-| `active_open_redirect.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Use `ContextURL` classifier; require `PayloadEscapesContext(ContextURL, payload)`. |
+| `active_open_redirect.go` | ➖ | ✅ | ✅ | ✅ | Full Phase 1 migration: `CaptureTwoControlBaselines` suppresses static off-host redirects, `DifferentialReVerify` (benign-path oracle) suppresses reflection-into-Location noise, `SubmitVerifiedFinding` with canonical "open_redirect" alias (external "input-validation" preserved) and 3 evidence signals. |
 | `active_path_traversal.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Add binary bail-out (`IsBinaryShape`); differential re-verify High/Critical. |
-| `active_prompt_injection.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | JSON-shape gate for LLM APIs; reflection classifier for echoed prompts. |
-| `active_prototype_pollution.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Require `IsJSONShape`; differential re-verify. |
+| `active_prompt_injection.go` | ✅ | ➖ | ➖ | ✅ | Full Phase 1 migration (verify skipped — no proof-policy for "prompt-injection"): `IsBinaryShape` bail-out and `responseShape` tag on direct-hit response, `DifferentialReVerify` (benign "hello" oracle) suppresses cached/static echoes of `PWNMARKER7731`. Indirect (stored) path unchanged. |
+| `active_prototype_pollution.go` | ✅ | ➖ | ➖ | ✅ | Full Phase 1 migration (verify skipped — no proof-policy for "prototype-pollution"): `IsBinaryShape` bail-out and `responseShape` tag on follow-up response, `DifferentialReVerify` on both query-string and JSON-body branches (benign payload replay confirms marker is not statically echoed). |
 | `active_sqli.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Binary bail-out; control baseline for timing; differential re-verify for time-based signal. |
 | `active_ssti.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Reflection-context aware payload selection; differential re-verify for arithmetic markers. |
 | `active_xpath_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | XML-shape gate for XPath error surfaces. |

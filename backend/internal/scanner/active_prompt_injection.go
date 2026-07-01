@@ -116,11 +116,12 @@ func (s *Service) runActivePromptInjectionProbe(ctx context.Context, input RunIn
 	}
 
 	type hit struct {
-		url     string
-		param   string
-		label   string
-		payload string
-		direct  bool
+		url         string
+		param       string
+		label       string
+		payload     string
+		direct      bool
+		respHeaders http.Header
 	}
 	var hits []hit
 	attempts := 0
@@ -150,14 +151,22 @@ func (s *Service) runActivePromptInjectionProbe(ctx context.Context, input RunIn
 					continue
 				}
 				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
+				respHeaders := resp.Header.Clone()
 				_ = resp.Body.Close()
+				// Phase 1 shape gate: LLM chat APIs return text/HTML/JSON.
+				// Binary responses (images, downloads) that happen to
+				// contain the marker byte sequence are not prompt injections.
+				if IsBinaryShape(respHeaders) {
+					continue
+				}
 				if strings.Contains(string(respBody), promptInjectionTrigger) {
 					hits = append(hits, hit{
-						url:     probeURL,
-						param:   p,
-						label:   pld.label,
-						payload: pld.payload,
-						direct:  true,
+						url:         probeURL,
+						param:       p,
+						label:       pld.label,
+						payload:     pld.payload,
+						direct:      true,
+						respHeaders: respHeaders,
 					})
 					goto doneDirectScan
 				}
@@ -272,6 +281,43 @@ doneDirectScan:
 		injectionType = "indirect (stored)"
 	}
 
+	// Phase 1 differential re-verify (direct hits only). Send a benign
+	// payload that does NOT contain the trigger; if the trigger still
+	// appears in the response the target is echoing static/cached content
+	// that already contained PWNMARKER7731 rather than following our
+	// injected instruction.
+	var diffOutcome DifferentialReVerifyOutcome
+	if first.direct {
+		execDifferential := func(dctx context.Context, benign string) (*http.Response, []byte, error) {
+			du := appendQueryParamSimple(strings.SplitN(first.url, "?", 2)[0], first.param, benign)
+			dreq, derr := http.NewRequestWithContext(dctx, http.MethodGet, du, nil)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			ApplyAuthProfile(dreq, input.AuthProfile)
+			dresp, dcerr := s.doRequestWithRetry(dctx, dreq, input.Options)
+			if dcerr != nil || dresp == nil {
+				return nil, nil, dcerr
+			}
+			defer dresp.Body.Close()
+			b, _ := io.ReadAll(io.LimitReader(dresp.Body, 128*1024))
+			return dresp, b, nil
+		}
+		oracle := func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+			return strings.Contains(string(body), promptInjectionTrigger), nil
+		}
+		diffOutcome = DifferentialReVerify(ctx, DifferentialReVerifyInput{
+			ProbeName:       "active-prompt-injection",
+			OriginalPayload: first.payload,
+			SafePayload:     "hello",
+			Exec:            execDifferential,
+			Oracle:          oracle,
+		})
+		if diffOutcome.Ran && !diffOutcome.Confirmed {
+			return nil
+		}
+	}
+
 	urls := make([]string, 0, len(hits))
 	for _, h := range hits {
 		urls = append(urls, fmt.Sprintf("%s (param=%s, label=%s)", h.url, h.param, h.label))
@@ -291,7 +337,11 @@ doneDirectScan:
 		cwe = "CWE-77" // command injection via injected instruction
 	}
 
-	return []model.Finding{{
+	shapeTag := ""
+	if first.respHeaders != nil {
+		shapeTag = ClassifyResponseShape(first.respHeaders).String()
+	}
+	finding := model.Finding{
 		ID:                "active-prompt-injection",
 		Category:          "prompt-injection",
 		Severity:          severity,
@@ -308,12 +358,15 @@ doneDirectScan:
 		ReproductionSteps: steps,
 		PoC:               curl,
 		EvidenceFields: map[string]string{
-			"validationType":  "active-probe",
-			"injectionType":   injectionType,
-			"trigger":         promptInjectionTrigger,
-			"owaspReference":  "https://genai.owasp.org/llm-top-10/",
+			"validationType": "active-probe",
+			"injectionType":  injectionType,
+			"trigger":        promptInjectionTrigger,
+			"owaspReference": "https://genai.owasp.org/llm-top-10/",
+			"responseShape":  shapeTag,
 		},
-	}}
+	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	return []model.Finding{finding}
 }
 
 // appendQueryParam appends a key=value pair to a URL's query string.
