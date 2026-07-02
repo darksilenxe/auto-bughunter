@@ -51,7 +51,7 @@ Snapshot generated 2026-07-01.
 | `cloud_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Bucket enumeration, not URL-surface. |
 | `command_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for OS-command sinks (`host`, `ip`, `cmd`). |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | ➖ | ➖ | Fixed-path `crossdomain.xml`. |
-| `csrf_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Record probed key for the state-changing endpoint set. |
+| `csrf_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes SurfaceInventory (POST/PUT/PATCH/DELETE) and records probed keys per (method, url). Bypass matrix covers empty-value, method-override, duplicate-token, default-token. |
 | `dangling_markup.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Phase 1 reference; Phase 3 reference is the priority here. |
 | `deserialization_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for `session=`, `token=`, `data=` style sinks. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | Certificate metadata; no HTTP surface. |

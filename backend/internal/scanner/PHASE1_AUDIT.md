@@ -40,6 +40,12 @@ References landed so far:
 - Batch B reflection / response-shape probes landed:
   `dangling_markup.go`, `formula_injection.go`, `verbose_error_probe.go`,
   `cross_domain_policy_probe.go`, and `xssi_jsonp_probe.go`.
+- `csrf_probe.go` — Phase 2 FN-reduction migration
+  (SurfaceInventory + method/content-type/token-carrier/Origin matrix,
+  bypass variants for empty-value / method-override / duplicate-token /
+  default-token, unauthenticated baseline + two-control replay +
+  `SubmitVerifiedFinding`). `csrf` is now a canonical proof-policy
+  category.
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -61,7 +67,7 @@ References landed so far:
 | `cloud_storage_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Bucket enumeration — add response-shape evidence tag. |
 | `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + marker context, two-control latency/body baselines, differential output/timing replay, and `SubmitVerifiedFinding` with `AllowNoReplayEmission` (no proof-policy coverage for `command-injection`). |
 | `cross_domain_policy_probe.go` | ✅ | ➖ | ➖ | ➖ | XML shape gate on well-known policy paths; findings tag `responseShape`. |
-| `csrf_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Add control (token-stripped) request to establish baseline. |
+| `csrf_probe.go` | ➖ | ➖ | ✅ | ✅ | Unauth baseline suppresses public endpoints; two-control replay rejects flakes; routes through `SubmitVerifiedFinding` (csrf is a canonical proof-policy category). |
 | `dangling_markup.go` | ✅ | ✅ | ✅ | ✅ | Batch B: HTML shape gate + reflection-context sink gate, control-value baseline, and differential benign replay confirm the marker is payload-controlled. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
 | `deserialization_probe.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out on active/passive responses, benign serialized-body baselines, and differential benign-body replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | DNS observation, no probe body. |
