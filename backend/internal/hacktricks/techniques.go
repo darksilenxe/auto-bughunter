@@ -608,19 +608,6 @@ var catalog = []Technique{
 			},
 		},
 	},
-	// ── ReDoS ─────────────────────────────────────────────────────────────────
-	{
-		Category:      "redos",
-		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/regular-expression-denial-of-service-redos.html",
-		Description:   "Time a catastrophic-backtracking regex trigger against a validated parameter.",
-		CommandTemplates: []CommandTemplate{
-			{
-				Binary:       "curl",
-				ArgsTemplate: []string{"-sk", "-w", "time_total: %{time_total}\\n", "-o", "/dev/null", "{{TARGET}}?{{PARAM}}=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"},
-				Description:  "Measure response latency for a nested-quantifier ReDoS trigger string",
-			},
-		},
-	},
 	// ── Zip Slip ──────────────────────────────────────────────────────────────
 	{
 		Category:      "zip_slip",

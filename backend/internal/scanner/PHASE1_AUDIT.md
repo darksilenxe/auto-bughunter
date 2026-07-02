@@ -48,10 +48,10 @@ References landed so far:
   category.
 - PayloadsAllTheThings/HackTricks technique-gap batch landed:
   `zip_slip_probe.go`, `xslt_injection_probe.go`, `dns_rebinding_probe.go`,
-  `dom_clobbering_probe.go`, `rate_limit_probe.go`, and `redos_probe.go` —
+  `dom_clobbering_probe.go`, and `rate_limit_probe.go` —
   new active probes covering previously-uncovered PATT/HackTricks
   categories (Zip Slip, XSLT Injection, SSRF DNS Rebinding, DOM
-  Clobbering, dedicated Brute Force/Rate Limit, and ReDoS). See
+  Clobbering, and dedicated Brute Force/Rate Limit). See
   `frontend/src/lib/webVulnerabilityCoverage.js`,
   `security-knowledge/sources/corpus_sources.json`, and
   `backend/internal/hacktricks/techniques.go` for the matching
@@ -97,7 +97,6 @@ References landed so far:
 | `password_reset_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Differential (reset-token stripped vs benign control). |
 | `postmessage_probe.go` | ✅ | ⚠️ | ➖ | ⚠️ | Browser postMessage; classify origin echo context. |
 | `rate_limit_probe.go` | ➖ | ➖ | ➖ | ➖ | Bounded request-burst throttling check (429/423/Retry-After/lockout signal) across password-reset/registration/OTP/coupon endpoints; control-absence finding, mirrors `login_probe.go`'s brute-force check convention (no `SubmitVerifiedFinding` — same as that reference). |
-| `redos_probe.go` | ➖ | ➖ | ✅ | ✅ | Catastrophic-backtracking trigger strings, two-control timing baseline (`phase1TimingExceeds`), `DifferentialReVerify` timing oracle, and `SubmitVerifiedFinding` (category `redos`, no canonical proof-policy alias yet). |
 | `reverse_tabnabbing_probe.go` | ✅ | ➖ | ➖ | ➖ | HTML shape only. |
 | `saml_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | XML-shape gate on SAML responses. |
 | `security_headers_probe.go` | ➖ | ➖ | ✅ | ➖ | Header-only, no reflection. |

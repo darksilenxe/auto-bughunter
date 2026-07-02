@@ -450,7 +450,6 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runDNSRebindingProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runDOMClobberingProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runRateLimitProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runReDoSProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runCommandInjectionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runSSIInjectionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runCrossDomainPolicyProbe(ctx, input)...)

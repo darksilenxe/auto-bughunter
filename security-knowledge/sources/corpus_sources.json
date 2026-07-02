@@ -947,27 +947,6 @@
         "enabled": true
       },
       "fullText": true
-    },
-    {
-      "id": "hacktricks-redos",
-      "title": "HackTricks \u2014 Regular Expression Denial of Service (ReDoS)",
-      "url": "https://hacktricks.wiki/en/pentesting-web/regular-expression-denial-of-service-redos.html",
-      "sourceType": "hacktricks",
-      "license": "source-url-only",
-      "topic": "catastrophic backtracking regex denial of service",
-      "vulnerabilityClass": "regular expression denial of service",
-      "technique": "nested-quantifier trigger strings measured against differential timing baselines",
-      "keywords": [
-        "redos",
-        "catastrophic backtracking",
-        "regex dos",
-        "cwe-1333"
-      ],
-      "passage": "Curated note: probe validation-style parameters (email, search, username) with classic catastrophic-backtracking trigger strings and compare latency against two control baselines; a large, reproducible timing spike indicates an exponential-backtracking validation regex.",
-      "websiteImport": {
-        "enabled": true
-      },
-      "fullText": true
     }
   ],
   "bulkImports": [
