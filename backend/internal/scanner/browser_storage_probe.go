@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
@@ -42,22 +43,33 @@ const storageCollectJS = `
 
 // sensitiveStorageKeyPatterns are key name patterns that suggest the storage
 // entry contains sensitive data (tokens, credentials, PII).
+//
+// Bare generic terms like "key", "user", "email", and "address" were removed
+// from this list: real-world apps routinely persist non-sensitive UI state
+// under keys such as "cache_key", "user_theme", "contact_email", or
+// "ip_address", and flagging every one of those as a security finding was a
+// significant source of false positives during deterministic (non-AI)
+// scanning. The remaining patterns target names that are only ever used for
+// authentication/credential material or clearly regulated PII.
 var sensitiveStorageKeyPatterns = []string{
 	"token", "auth", "session", "access_token", "id_token", "refresh_token",
-	"jwt", "bearer", "password", "passwd", "secret", "key", "credential",
-	"cookie", "user", "email", "phone", "ssn", "dob", "address",
+	"jwt", "bearer", "password", "passwd", "secret", "api_key", "apikey",
+	"private_key", "credential", "cookie", "ssn", "dob",
 	"payment", "card", "ccnum", "cvv",
 }
 
-// sensitiveStorageValuePatterns are patterns in storage *values* that suggest
-// sensitive content (e.g. JWT format, base64-encoded blobs).
-var sensitiveStorageValuePatterns = []string{
-	"eyJ",     // base64-encoded JSON (JWT header)
-	"Bearer ", // OAuth bearer token
-	"sk-",     // API key prefixes
-	"ghp_",    // GitHub PAT
-	"xox",     // Slack token
-}
+// jwtStructurePattern matches the three dot-separated base64url segments of
+// an actual JSON Web Token (header.payload.signature). A bare "eyJ" prefix
+// check previously matched *any* base64-encoded JSON blob (any base64'd
+// `{"...` string starts with "eyJ"), which produced frequent false positives
+// for non-token data. Requiring the full three-segment structure confirms
+// the value is plausibly a real JWT before it is reported as High severity.
+var jwtStructurePattern = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{2,}`)
+
+// apiKeyPrefixPattern matches well-known API key/token prefixes followed by
+// a plausibly long opaque identifier, to avoid flagging short/incidental
+// substrings that merely happen to contain the prefix text.
+var apiKeyPrefixPattern = regexp.MustCompile(`(?:sk-|ghp_|xox[baprs]-)[A-Za-z0-9_-]{10,}`)
 
 // RunBrowserStorageProbe is an active probe covering WSTG-CLNT-12. It uses the
 // headless Chromium instance to enumerate localStorage, sessionStorage, and
@@ -191,48 +203,66 @@ func analyzeStorageJSON(ep, storageJSON string, emitted map[string]bool) []model
 		}
 	}
 
-	// Check values.
-	for _, pattern := range sensitiveStorageValuePatterns {
-		fid := "browser-storage-value-" + strings.ReplaceAll(pattern, " ", "_") + "-" + hhSlug(ep)
+	// Check values. Each check requires a structural match (not just a bare
+	// substring) so that incidental prefix collisions in unrelated base64 or
+	// opaque strings are not reported as high-confidence credential leaks.
+	type valueCheck struct {
+		id      string
+		label   string
+		matched string
+	}
+	var valueChecks []valueCheck
+	if loc := jwtStructurePattern.FindString(storageJSON); loc != "" {
+		valueChecks = append(valueChecks, valueCheck{id: "jwt", label: "JWT (header.payload.signature)", matched: loc})
+	}
+	if loc := apiKeyPrefixPattern.FindString(storageJSON); loc != "" {
+		valueChecks = append(valueChecks, valueCheck{id: "api-key", label: "API key/token", matched: loc})
+	}
+	if idx := strings.Index(storageJSON, "Bearer "); idx != -1 {
+		rest := strings.TrimSpace(storageJSON[idx+len("Bearer "):])
+		if end := strings.IndexAny(rest, `"',}`); end >= 12 {
+			valueChecks = append(valueChecks, valueCheck{id: "bearer", label: "OAuth bearer token", matched: "Bearer " + rest[:end]})
+		}
+	}
+
+	for _, chk := range valueChecks {
+		fid := "browser-storage-value-" + chk.id + "-" + hhSlug(ep)
 		if emitted[fid] {
 			continue
 		}
-		if strings.Contains(storageJSON, pattern) {
-			emitted[fid] = true
-			findings = append(findings, model.Finding{
-				ID:       fid,
-				Category: "client-side",
-				Severity: model.SeverityHigh,
-				Title:    fmt.Sprintf("High-confidence sensitive value in browser storage — matches %q prefix", pattern),
-				Description: fmt.Sprintf(
-					"The page %s stores a value in localStorage or sessionStorage that matches the "+
-						"%q prefix pattern, strongly suggesting a JWT, API key, or authentication token "+
-						"is stored in client-side storage. This is directly exploitable by any XSS "+
-						"vulnerability on the same origin.",
-					ep, pattern,
-				),
-				Evidence:    fmt.Sprintf("Storage value matching prefix %q detected at %s", pattern, ep),
-				Recommendation: "Move authentication tokens from localStorage to HttpOnly cookies. " +
-					"If localStorage must be used for non-authentication data, ensure all pages on " +
-					"the origin have a strict CSP to prevent XSS exfiltration.",
-				Confidence:    0.82,
-				AffectedURL:   ep,
-				CWE:           "CWE-312",
-				OWASPCategory: "A02:2021 - Cryptographic Failures",
-				Sources:       []string{"active-scanner", "browser-storage", "headless-browser"},
-				ReproductionSteps: []string{
-					fmt.Sprintf("Open %s in a browser after logging in.", ep),
-					"Open DevTools → Application → Local Storage / Session Storage.",
-					fmt.Sprintf("Observe value starting with %q.", pattern),
-				},
-				BusinessTags: []string{"browser-storage", "jwt", "client-side"},
-				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"valuePattern":   pattern,
-					"pageURL":        ep,
-				},
-			})
-		}
+		emitted[fid] = true
+		findings = append(findings, model.Finding{
+			ID:       fid,
+			Category: "client-side",
+			Severity: model.SeverityHigh,
+			Title:    fmt.Sprintf("High-confidence sensitive value in browser storage — %s detected", chk.label),
+			Description: fmt.Sprintf(
+				"The page %s stores a value in localStorage or sessionStorage that structurally matches "+
+					"a %s, strongly suggesting an authentication token is stored in client-side storage. "+
+					"This is directly exploitable by any XSS vulnerability on the same origin.",
+				ep, chk.label,
+			),
+			Evidence:    fmt.Sprintf("Storage value matching %s structure detected at %s", chk.label, ep),
+			Recommendation: "Move authentication tokens from localStorage to HttpOnly cookies. " +
+				"If localStorage must be used for non-authentication data, ensure all pages on " +
+				"the origin have a strict CSP to prevent XSS exfiltration.",
+			Confidence:    0.82,
+			AffectedURL:   ep,
+			CWE:           "CWE-312",
+			OWASPCategory: "A02:2021 - Cryptographic Failures",
+			Sources:       []string{"active-scanner", "browser-storage", "headless-browser"},
+			ReproductionSteps: []string{
+				fmt.Sprintf("Open %s in a browser after logging in.", ep),
+				"Open DevTools → Application → Local Storage / Session Storage.",
+				fmt.Sprintf("Observe the %s value.", chk.label),
+			},
+			BusinessTags: []string{"browser-storage", "jwt", "client-side"},
+			EvidenceFields: map[string]string{
+				"validationType": "active-probe",
+				"valuePattern":   chk.label,
+				"pageURL":        ep,
+			},
+		})
 	}
 
 	return findings

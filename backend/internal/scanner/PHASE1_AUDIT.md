@@ -72,7 +72,7 @@ References landed so far:
 | `active_xpath_injection.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate, benign XPath baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `active_xss.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: response-shape tag, `ClassifyReflectionContext` + `PayloadEscapesContext` gate for High/Critical, two-control baseline, `SubmitVerifiedFinding`, and `DifferentialReVerify`. |
 | `active_xxe.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate on reflected/error responses, benign XML baselines, differential benign XML replay, and `SubmitVerifiedFinding` with canonical `xxe` (external label preserved). |
-| `browser_storage_probe.go` | ➖ | ➖ | ➖ | ⚠️ | Browser-side observation; verify High findings. |
+| `browser_storage_probe.go` | ➖ | ➖ | ➖ | ⚠️ | Browser-side observation; verify High findings still TODO. FP fix landed: dropped overly-broad bare key patterns (`key`, `user`, `email`, `address` matched routine non-sensitive UI state) and replaced the bare `eyJ` prefix / prefix-only value checks with structural matchers (`jwtStructurePattern`, `apiKeyPrefixPattern`) so plain base64-encoded JSON is no longer misreported as a leaked JWT. |
 | `clickjacking_probe.go` | ✅ | ➖ | ⚠️ | ⚠️ | HTML gate present; add differential baseline (framed vs unframed control). |
 | `cloud_storage_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Bucket enumeration — add response-shape evidence tag. |
 | `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + marker context, two-control latency/body baselines, differential output/timing replay, and `SubmitVerifiedFinding` with `AllowNoReplayEmission` (no proof-policy coverage for `command-injection`). |

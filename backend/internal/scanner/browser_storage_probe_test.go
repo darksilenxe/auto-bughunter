@@ -44,6 +44,36 @@ func TestAnalyzeStorageJSON_CleanStorage(t *testing.T) {
 	}
 }
 
+// TestAnalyzeStorageJSON_NonSensitiveGenericKeys guards against a previous
+// false-positive source: bare "key", "user", "email", and "address" patterns
+// matched routine, non-sensitive UI state (cache keys, display usernames,
+// contact emails, IP addresses) and were removed from the key-pattern list.
+func TestAnalyzeStorageJSON_NonSensitiveGenericKeys(t *testing.T) {
+	ep := "https://example.com"
+	storageJSON := `{"localStorage":{"cache_key":"v3","user_theme":"dark","contact_email":"a@b.com","ip_address":"1.2.3.4"},"sessionStorage":{},"indexedDB":[]}`
+	emitted := map[string]bool{}
+	findings := analyzeStorageJSON(ep, storageJSON, emitted)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings for non-sensitive generic keys, got %d: %+v", len(findings), findings)
+	}
+}
+
+// TestAnalyzeStorageJSON_Base64JSONIsNotJWT guards against a previous
+// false-positive source: any base64-encoded JSON blob starts with "eyJ" (the
+// base64 encoding of `{"`), so a bare prefix check flagged non-token data as
+// a High-severity JWT leak. Only a genuine three-segment JWT should match.
+func TestAnalyzeStorageJSON_Base64JSONIsNotJWT(t *testing.T) {
+	ep := "https://example.com"
+	// base64("{"locale":"en-US","theme":"dark"}") - a plain base64-encoded
+	// JSON blob with no dot-separated segments, so it is not a JWT.
+	storageJSON := `{"localStorage":{"prefs":"eyJsb2NhbGUiOiJlbi1VUyIsInRoZW1lIjoiZGFyayJ9"},"sessionStorage":{},"indexedDB":[]}`
+	emitted := map[string]bool{}
+	findings := analyzeStorageJSON(ep, storageJSON, emitted)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings for non-JWT base64 JSON blob, got %d: %+v", len(findings), findings)
+	}
+}
+
 func TestAnalyzeStorageJSON_Deduplication(t *testing.T) {
 	ep := "https://example.com"
 	storageJSON := `{"localStorage":{"auth_token":"abc"},"sessionStorage":{},"indexedDB":[]}`
