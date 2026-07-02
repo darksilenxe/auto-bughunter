@@ -93,15 +93,20 @@ func (s *Service) runJWTProbe(ctx context.Context, input RunInput) []model.Findi
 		})
 	}
 
+	baselines, ok := s.captureJWTAuthenticatedBaselines(ctx, input, raw)
+	if !ok {
+		return nil
+	}
+
 	var findings []model.Finding
 
 	// Test 1: alg:none confusion.
-	if f := s.testJWTAlgNone(ctx, input, raw, payload); f != nil {
+	if f := s.testJWTAlgNone(ctx, input, raw, payload, baselines); f != nil {
 		findings = append(findings, *f)
 	}
 
 	// Test 2 and 3: Weak secret brute-force and privilege escalation.
-	if f := s.testJWTWeakSecret(ctx, input, raw, payload); f != nil {
+	if f := s.testJWTWeakSecret(ctx, input, raw, payload, baselines); f != nil {
 		findings = append(findings, *f)
 	}
 
@@ -199,27 +204,39 @@ func buildJWT(hdr, payload map[string]interface{}, secret string) (string, error
 	return msg + "." + sig, nil
 }
 
-// sendWithJWT issues a GET to the target with the given token in the
-// Authorization header and returns the response status code and body.
-func (s *Service) sendWithJWT(ctx context.Context, input RunInput, token string) (int, []byte, error) {
+// sendWithJWTResponse issues a GET to the target with the given token in the
+// Authorization header and returns the raw response plus body bytes.
+func (s *Service) sendWithJWTResponse(ctx context.Context, input RunInput, token string) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
 	ApplyAuthProfile(req, input.AuthProfile)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := s.doRequestWithSession(ctx, req, input.Options, input.Session)
 	if err != nil || resp == nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, jwtBodyLimit))
-	_ = resp.Body.Close()
+	return resp, body, nil
+}
+
+// sendWithJWT issues a GET to the target with the given token in the
+// Authorization header and returns the response status code and body.
+func (s *Service) sendWithJWT(ctx context.Context, input RunInput, token string) (int, []byte, error) {
+	resp, body, err := s.sendWithJWTResponse(ctx, input, token)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil || resp == nil {
+		return 0, nil, err
+	}
 	return resp.StatusCode, body, nil
 }
 
 // testJWTAlgNone creates a token with header {"alg":"none"} and an empty
 // signature and tests whether the server accepts it.
-func (s *Service) testJWTAlgNone(ctx context.Context, input RunInput, original string, payload map[string]interface{}) *model.Finding {
+func (s *Service) testJWTAlgNone(ctx context.Context, input RunInput, original string, payload map[string]interface{}, baselines BaselineControls) *model.Finding {
 	noneHdr := map[string]interface{}{"alg": "none", "typ": "JWT"}
 	forged, err := buildJWT(noneHdr, payload, "")
 	if err != nil {
@@ -231,14 +248,18 @@ func (s *Service) testJWTAlgNone(ctx context.Context, input RunInput, original s
 		return nil
 	}
 
-	status, _, err := s.sendWithJWT(ctx, input, forged)
+	status, body, err := s.sendWithJWT(ctx, input, forged)
 	if err != nil {
 		return nil
 	}
-	if status < 200 || status >= 300 {
+	if !jwtResponseMatchesAuthenticatedBaseline(status, body, baselines) {
 		return nil
 	}
-	return &model.Finding{
+	diffOutcome := s.jwtDifferentialReVerify(ctx, input, "jwt-probe", original, forged, baselines)
+	if diffOutcome.Ran && !diffOutcome.Confirmed {
+		return nil
+	}
+	finding := model.Finding{
 		ID:       "jwt-alg-none",
 		Category: "authentication",
 		Severity: model.SeverityCritical,
@@ -260,17 +281,20 @@ func (s *Service) testJWTAlgNone(ctx context.Context, input RunInput, original s
 		Sources:       []string{"active-scanner", "jwt-probe"},
 		BusinessTags:  []string{"jwt", "authentication", "alg-none"},
 		EvidenceFields: map[string]string{
-			"validationType": "active-probe",
-			"forgedToken":    truncateString(forged, 120),
-			"responseStatus": fmt.Sprintf("%d", status),
+			"validationType":     "active-probe",
+			"forgedToken":        truncateString(forged, 120),
+			"responseStatus":     fmt.Sprintf("%d", status),
+			"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
 		},
 	}
+	AttachDifferentialEvidence(&finding, diffOutcome)
+	return &finding
 }
 
 // testJWTWeakSecret tries to re-sign the payload with each entry in
 // jwtWeakSecrets. When a guessed secret produces a token the server accepts,
 // the probe optionally escalates privileges (role/isAdmin/userId) and reports.
-func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, original string, payload map[string]interface{}) *model.Finding {
+func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, original string, payload map[string]interface{}, baselines BaselineControls) *model.Finding {
 	hs256Hdr := map[string]interface{}{"alg": "HS256", "typ": "JWT"}
 
 	for _, secret := range jwtWeakSecrets {
@@ -282,11 +306,15 @@ func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, origina
 			continue
 		}
 
-		status, _, err := s.sendWithJWT(ctx, input, resigned)
+		status, body, err := s.sendWithJWT(ctx, input, resigned)
 		if err != nil {
 			continue
 		}
-		if status < 200 || status >= 300 {
+		if !jwtResponseMatchesAuthenticatedBaseline(status, body, baselines) {
+			continue
+		}
+		diffOutcome := s.jwtDifferentialReVerify(ctx, input, "jwt-probe", original, resigned, baselines)
+		if diffOutcome.Ran && !diffOutcome.Confirmed {
 			continue
 		}
 
@@ -327,7 +355,7 @@ func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, origina
 			}
 		}
 
-		return &model.Finding{
+		finding := model.Finding{
 			ID:          "jwt-weak-secret",
 			Category:    "authentication",
 			Severity:    severity,
@@ -352,11 +380,80 @@ func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, origina
 					}
 					return secret[:2] + strings.Repeat("*", len(secret)-2)
 				}(),
-				"responseStatus": fmt.Sprintf("%d", status),
+				"responseStatus":     fmt.Sprintf("%d", status),
+				"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
 			},
 		}
+		AttachDifferentialEvidence(&finding, diffOutcome)
+		return &finding
 	}
 	return nil
+}
+
+func (s *Service) captureJWTAuthenticatedBaselines(ctx context.Context, input RunInput, token string) (BaselineControls, bool) {
+	baselines, err := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+		status, body, err := s.sendWithJWT(bctx, input, token)
+		if err != nil {
+			return BaselineSample{}, err
+		}
+		return BaselineSample{Status: status, Body: string(body)}, nil
+	})
+	if err != nil {
+		return BaselineControls{}, false
+	}
+	if baselines.First.Status < 200 || baselines.First.Status >= 300 {
+		return BaselineControls{}, false
+	}
+	if baselines.Second.Status != 0 && (baselines.Second.Status < 200 || baselines.Second.Status >= 300) {
+		return BaselineControls{}, false
+	}
+	return baselines, true
+}
+
+func jwtResponseMatchesAuthenticatedBaseline(status int, body []byte, baselines BaselineControls) bool {
+	if status < 200 || status >= 300 {
+		return false
+	}
+	if baselines.StatusStable && baselines.First.Status != 0 && status != baselines.First.Status {
+		return false
+	}
+	normalized := NormalizeResponseBody(string(body))
+	if normalized == baselines.First.Body || (baselines.Second.Body != "" && normalized == baselines.Second.Body) {
+		return true
+	}
+	minDelta := absInt(len(normalized) - len(baselines.First.Body))
+	if baselines.Second.Body != "" {
+		if d := absInt(len(normalized) - len(baselines.Second.Body)); d < minDelta {
+			minDelta = d
+		}
+	}
+	return !ExceedsControlVariance(float64(minDelta), float64(baselines.BodyByteVariance))
+}
+
+func jwtInvalidControlToken(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return token + ".control"
+	}
+	parts[2] = "abhinvalidsig"
+	return strings.Join(parts, ".")
+}
+
+func (s *Service) jwtDifferentialReVerify(ctx context.Context, input RunInput, probeName, originalToken, forgedToken string, baselines BaselineControls) DifferentialReVerifyOutcome {
+	return DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       probeName,
+		OriginalPayload: forgedToken,
+		SafePayload:     jwtInvalidControlToken(originalToken),
+		Exec: func(dctx context.Context, altToken string) (*http.Response, []byte, error) {
+			return s.sendWithJWTResponse(dctx, input, altToken)
+		},
+		Oracle: func(_ context.Context, _ string, resp *http.Response, body []byte) (bool, error) {
+			if resp == nil {
+				return false, nil
+			}
+			return jwtResponseMatchesAuthenticatedBaseline(resp.StatusCode, body, baselines), nil
+		},
+	})
 }
 
 // clonePayload makes a shallow copy of a JWT payload map.

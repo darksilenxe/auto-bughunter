@@ -95,24 +95,68 @@ func (s *Service) runCloudStorageProbe(ctx context.Context, input RunInput, body
 		}
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<17)) // 128 KB
 		_ = resp.Body.Close()
+		resp.Body = http.NoBody
 		respBodyLower := strings.ToLower(string(bodyBytes))
-
-		if resp.StatusCode != http.StatusOK {
+		responseShape := ClassifyResponseShape(resp.Header)
+		if !isCloudStorageListingResponse(b.Provider, resp.StatusCode, resp.Header, respBodyLower) {
 			continue
 		}
 
-		// Only flag when the response body confirms it's a bucket listing.
-		isListing := strings.Contains(respBodyLower, s3ListBucketMarker) ||
-			strings.Contains(respBodyLower, "<contents>") ||
-			strings.Contains(respBodyLower, "<?xml version") && strings.Contains(respBodyLower, "<name>")
+		controlName := cloudStorageControlBucketName(b)
+		controlBaselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+			controlBucket := b
+			controlBucket.Name = controlName
+			creq, err := http.NewRequestWithContext(bctx, http.MethodGet, controlBucket.listURL(), nil)
+			if err != nil {
+				return BaselineSample{}, err
+			}
+			cresp, err := s.doRequestWithRetry(bctx, creq, input.Options)
+			if err != nil || cresp == nil {
+				return BaselineSample{}, err
+			}
+			cb, _ := io.ReadAll(io.LimitReader(cresp.Body, 1<<17))
+			_ = cresp.Body.Close()
+			return BaselineSample{Status: cresp.StatusCode, Header: cresp.Header, Body: string(cb)}, nil
+		})
+		if berr == nil {
+			if isCloudStorageListingResponse(b.Provider, controlBaselines.First.Status, controlBaselines.First.Header, strings.ToLower(controlBaselines.First.Body)) ||
+				isCloudStorageListingResponse(b.Provider, controlBaselines.Second.Status, controlBaselines.Second.Header, strings.ToLower(controlBaselines.Second.Body)) {
+				continue
+			}
+		}
 
-		if !isListing && b.Provider != "azure" {
-			// For Azure, a 200 on the container listing URL is sufficient.
+		diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+			ProbeName:       "cloud-storage-probe",
+			OriginalPayload: b.Name,
+			SafePayload:     controlName,
+			Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+				altBucket := b
+				altBucket.Name = altPayload
+				dreq, err := http.NewRequestWithContext(dctx, http.MethodGet, altBucket.listURL(), nil)
+				if err != nil {
+					return nil, nil, err
+				}
+				dresp, err := s.doRequestWithRetry(dctx, dreq, input.Options)
+				if err != nil || dresp == nil {
+					return nil, nil, err
+				}
+				db, _ := io.ReadAll(io.LimitReader(dresp.Body, 1<<17))
+				_ = dresp.Body.Close()
+				dresp.Body = http.NoBody
+				return dresp, db, nil
+			},
+			Oracle: func(_ context.Context, _ string, dresp *http.Response, dbody []byte) (bool, error) {
+				if dresp == nil {
+					return false, nil
+				}
+				return isCloudStorageListingResponse(b.Provider, dresp.StatusCode, dresp.Header, strings.ToLower(string(dbody))), nil
+			},
+		})
+		if diffOutcome.Ran && !diffOutcome.Confirmed {
 			continue
 		}
 
-		emitted[fid] = true
-		findings = append(findings, model.Finding{
+		finding := model.Finding{
 			ID:       fid,
 			Category: "cloud",
 			Severity: model.SeverityHigh,
@@ -149,8 +193,12 @@ func (s *Service) runCloudStorageProbe(ctx context.Context, input RunInput, body
 				"bucketName":     b.Name,
 				"provider":       b.Provider,
 				"listingURL":     probeURL,
+				"responseShape":  responseShape.String(),
 			},
-		})
+		}
+		AttachDifferentialEvidence(&finding, diffOutcome)
+		emitted[fid] = true
+		findings = append(findings, finding)
 	}
 
 	return findings
@@ -228,4 +276,58 @@ func extractCloudBuckets(body string) []cloudBucket {
 		results = append(results, b)
 	}
 	return results
+}
+
+func isCloudStorageListingResponse(provider string, status int, header http.Header, bodyLower string) bool {
+	if status != http.StatusOK || bodyLower == "" {
+		return false
+	}
+	shape := ClassifyResponseShape(header)
+	if shape == ShapeBinary || shape == ShapeJSON || shape == ShapeJavaScript || shape == ShapeCSS {
+		return false
+	}
+	switch provider {
+	case "s3", "gcs":
+		if shape != ShapeXML && shape != ShapeUnknown {
+			return false
+		}
+		return strings.Contains(bodyLower, s3ListBucketMarker) ||
+			strings.Contains(bodyLower, "<contents>") ||
+			(strings.Contains(bodyLower, "<?xml version") && strings.Contains(bodyLower, "<name>"))
+	case "azure":
+		if shape != ShapeXML && shape != ShapeUnknown {
+			return false
+		}
+		return strings.Contains(bodyLower, "<enumerationresults") ||
+			strings.Contains(bodyLower, "<blobs>") ||
+			(strings.Contains(bodyLower, "<?xml version") && strings.Contains(bodyLower, "<name>"))
+	default:
+		return false
+	}
+}
+
+func cloudStorageControlBucketName(b cloudBucket) string {
+	var cleaned strings.Builder
+	for _, r := range strings.ToLower(b.Name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			cleaned.WriteRune(r)
+		case b.Provider != "azure" && (r == '-' || r == '.'):
+			cleaned.WriteRune('-')
+		}
+	}
+	base := strings.Trim(cleaned.String(), "-.")
+	if base == "" {
+		base = "bucket"
+	}
+	if b.Provider == "azure" {
+		if len(base) > 12 {
+			base = base[:12]
+		}
+		return "abhctl" + base + "9"
+	}
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	return base + "-abh-control"
 }

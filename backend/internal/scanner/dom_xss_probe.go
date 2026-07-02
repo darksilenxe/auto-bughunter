@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
@@ -110,9 +111,19 @@ func (s *Service) RunDOMXSSProbe(
 	type baseline struct {
 		title string
 		body  string
+		shape ResponseShape
 	}
 	endpointBaselines := make(map[string]baseline, len(candidates))
+	filteredCandidates := make([]string, 0, len(candidates))
+	probeInput := RunInput{AuthProfile: auth, Options: options}
 	for _, ep := range candidates {
+		sample, err := s.phase1GETSample(ctx, ep, probeInput, 4096)
+		if err != nil {
+			continue
+		}
+		if IsBinaryShape(sample.Header) || !IsHTMLShape(sample.Header) {
+			continue
+		}
 		blCtx, blCancel := chromedpContext(ctx)
 		var blTitle, blBody string
 		_ = chromedp.Run(blCtx,
@@ -121,11 +132,16 @@ func (s *Service) RunDOMXSSProbe(
 			chromedp.InnerHTML("body", &blBody, chromedp.ByQuery),
 		)
 		blCancel()
-		endpointBaselines[ep] = baseline{title: blTitle, body: blBody}
+		endpointBaselines[ep] = baseline{title: blTitle, body: blBody, shape: ClassifyResponseShape(sample.Header)}
+		filteredCandidates = append(filteredCandidates, ep)
 	}
+	candidates = filteredCandidates
 
 	for _, ep := range candidates {
 		bl := endpointBaselines[ep]
+		if strings.Contains(bl.title, domXSSPayloadMarker) || strings.Contains(bl.body, domXSSPayloadMarker) {
+			continue
+		}
 		for _, payload := range domXSSPayloads {
 			fid := "dom-xss-" + payload.label + "-" + raceSlug(ep)
 			if emitted[fid] {
@@ -133,6 +149,7 @@ func (s *Service) RunDOMXSSProbe(
 			}
 
 			targetURL := ep + payload.hash
+			payloadFragment := domXSSPayloadFragment(payload.hash)
 
 			// Build a fresh chromedp context per navigation using the shared
 			// helper that handles both local binary and remote sidecar.
@@ -151,36 +168,18 @@ func (s *Service) RunDOMXSSProbe(
 			}
 
 			markerInTitle := strings.Contains(titleVal, domXSSPayloadMarker)
-			markerInBody := strings.Contains(bodyText, domXSSPayloadMarker)
 			markerInConsole := false
-
-			if !markerInTitle && !markerInBody && !markerInConsole {
+			reflectionCtx, markerInBody := domXSSDangerousReflection(bodyText, domXSSPayloadMarker, payloadFragment)
+			if !markerInBody {
 				continue
 			}
-
-			// Control check: if the marker was already present in the
-			// baseline navigation (no crafted fragment), the SPA is
-			// rendering the fragment as a route label or 404 message — this
-			// is not a DOM XSS sink. Only flag when the marker is absent in
-			// the baseline but present after fragment injection.
-			if markerInTitle && strings.Contains(bl.title, domXSSPayloadMarker) {
-				markerInTitle = false
-			}
-			if markerInBody && strings.Contains(bl.body, domXSSPayloadMarker) {
-				markerInBody = false
-			}
-			if !markerInTitle && !markerInBody && !markerInConsole {
-				continue
-			}
-
-			emitted[fid] = true
 
 			evidence := fmt.Sprintf(
 				"Endpoint: %s | Hash payload: %s | Marker in title: %t | Marker in body: %t | Marker in console: %t",
 				ep, payload.hash, markerInTitle, markerInBody, markerInConsole,
 			)
 
-			findings = append(findings, model.Finding{
+			finding := model.Finding{
 				ID:       fid,
 				Category: "input-validation",
 				Severity: model.SeverityHigh,
@@ -216,18 +215,94 @@ func (s *Service) RunDOMXSSProbe(
 				},
 				BusinessTags: []string{"dom-xss", "client-side", "input-validation"},
 				EvidenceFields: map[string]string{
-					"validationType":  "active-probe",
-					"domSource":       payload.source,
-					"markerInTitle":   fmt.Sprintf("%t", markerInTitle),
-					"markerInBody":    fmt.Sprintf("%t", markerInBody),
-					"markerInConsole": fmt.Sprintf("%t", markerInConsole),
-					"targetURL":       targetURL,
+					"validationType":    "active-probe",
+					"domSource":         payload.source,
+					"markerInTitle":     fmt.Sprintf("%t", markerInTitle),
+					"markerInBody":      fmt.Sprintf("%t", markerInBody),
+					"markerInConsole":   fmt.Sprintf("%t", markerInConsole),
+					"targetURL":         targetURL,
+					"responseShape":     bl.shape.String(),
+					"reflectionContext": reflectionCtx.String(),
 				},
-			})
+			}
+
+			if RequiresUnconditionalVerification(finding.Severity) {
+				diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+					ProbeName:       "dom-xss-probe",
+					OriginalPayload: payloadFragment,
+					SafePayload:     "domxss-safe-control",
+					Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+						altCtx, altCancel := chromedpContext(dctx)
+						defer altCancel()
+						var altTitle, altBody string
+						err := chromedp.Run(altCtx,
+							chromedp.Navigate(ep+"#"+altPayload),
+							chromedp.Title(&altTitle),
+							chromedp.InnerHTML("body", &altBody, chromedp.ByQuery),
+						)
+						if err != nil {
+							return nil, nil, err
+						}
+						return &http.Response{Header: http.Header{}}, encodeDOMXSSObservation(altTitle, altBody), nil
+					},
+					Oracle: func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+						obsTitle, obsBody := decodeDOMXSSObservation(body)
+						return domXSSOriginalSignalPresent(obsTitle, obsBody, domXSSPayloadMarker, payloadFragment), nil
+					},
+				})
+				if diffOutcome.Ran && !diffOutcome.Confirmed {
+					continue
+				}
+				AttachDifferentialEvidence(&finding, diffOutcome)
+			}
+
+			emittedFinding, ok := phase1SubmitVerified(ctx, finding, "xss", []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved}, "dom-xss-probe")
+			if !ok {
+				continue
+			}
+			emitted[fid] = true
+			findings = append(findings, emittedFinding)
 		}
 	}
 
 	return findings
+}
+
+const domXSSObservationSeparator = "\n<!--abh-domxss-separator-->\n"
+
+func domXSSPayloadFragment(hash string) string {
+	return strings.TrimPrefix(hash, "#")
+}
+
+func domXSSDangerousReflection(body, marker, payload string) (ReflectionContext, bool) {
+	if body == "" || marker == "" || payload == "" || !strings.Contains(body, marker) {
+		return ContextUnknown, false
+	}
+	ctx := ClassifyReflectionContext(body, marker)
+	if ctx == ContextUnknown || !PayloadEscapesContext(ctx, payload) {
+		return ctx, false
+	}
+	return ctx, true
+}
+
+func domXSSOriginalSignalPresent(title, body, marker, payload string) bool {
+	if strings.Contains(title, marker) {
+		return true
+	}
+	_, ok := domXSSDangerousReflection(body, marker, payload)
+	return ok
+}
+
+func encodeDOMXSSObservation(title, body string) []byte {
+	return []byte(title + domXSSObservationSeparator + body)
+}
+
+func decodeDOMXSSObservation(body []byte) (string, string) {
+	parts := strings.SplitN(string(body), domXSSObservationSeparator, 2)
+	if len(parts) != 2 {
+		return "", string(body)
+	}
+	return parts[0], parts[1]
 }
 
 func describeDOMXSSLocations(title, body, console bool) string {

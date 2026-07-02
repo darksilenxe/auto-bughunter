@@ -24,9 +24,13 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 		if handshakeURL == "" || !scope.IsURLInScope(handshakeURL, input.Scope) {
 			continue
 		}
-		status, _, headers, ok := s.websocketHandshake(ctx, input, handshakeURL, true)
-		if ok && status == http.StatusSwitchingProtocols {
-			return []model.Finding{{
+		status, _, headers, ok := s.websocketHandshake(ctx, input, handshakeURL, true, true, "https://evil.example.com")
+		if ok && isValidWebSocketUpgrade(status, headers) {
+			ctrlStatus, _, ctrlHeaders, ctrlOK := s.websocketHandshake(ctx, input, handshakeURL, true, false, "")
+			if ctrlOK && isValidWebSocketUpgrade(ctrlStatus, ctrlHeaders) {
+				continue
+			}
+			finding := model.Finding{
 				ID:                "cswsh-detected",
 				Category:          "websocket",
 				Severity:          model.SeverityHigh,
@@ -40,13 +44,27 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 				OWASPCategory:     "A01:2021 - Broken Access Control",
 				Sources:           []string{"active-scanner"},
 				ReproductionSteps: []string{fmt.Sprintf("Send a WebSocket upgrade request to %s with Origin: https://evil.example.com", handshakeURL), "Observe the 101 Switching Protocols response."},
-				EvidenceFields:    map[string]string{"validationType": "active-probe"},
-			}}
+				EvidenceFields: map[string]string{
+					"validationType": "active-probe",
+					"controlStatus":  fmt.Sprintf("%d", ctrlStatus),
+				},
+			}
+			emitted, ok := s.submitWebSocketFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
+				replayStatus, _, replayHeaders, replayOK := s.websocketHandshake(rctx, input, handshakeURL, true, true, "https://evil.example.com")
+				return replayOK && isValidWebSocketUpgrade(replayStatus, replayHeaders), fmt.Sprintf("evil-origin upgrade replay -> HTTP %d (%s)", replayStatus, cacheHeaderSummary(replayHeaders)), nil
+			}, []EvidenceSignal{EvidenceHeaderDelta, EvidenceSinkObserved})
+			if ok {
+				return []model.Finding{emitted}
+			}
 		}
 		if hasAnyAuthMaterial(input.AuthProfile) {
-			status, _, _, ok = s.websocketHandshake(ctx, input, handshakeURL, false)
-			if ok && status == http.StatusSwitchingProtocols {
-				return []model.Finding{{
+			status, _, headers, ok = s.websocketHandshake(ctx, input, handshakeURL, false, true, "")
+			if ok && isValidWebSocketUpgrade(status, headers) {
+				ctrlStatus, _, ctrlHeaders, ctrlOK := s.websocketHandshake(ctx, input, handshakeURL, false, false, "")
+				if ctrlOK && isValidWebSocketUpgrade(ctrlStatus, ctrlHeaders) {
+					continue
+				}
+				finding := model.Finding{
 					ID:             "websocket-no-auth",
 					Category:       "websocket",
 					Severity:       model.SeverityHigh,
@@ -59,14 +77,45 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 					CWE:            "CWE-1385",
 					OWASPCategory:  "A01:2021 - Broken Access Control",
 					Sources:        []string{"active-scanner"},
-				}}
+					EvidenceFields: map[string]string{
+						"validationType": "active-probe",
+						"controlStatus":  fmt.Sprintf("%d", ctrlStatus),
+					},
+				}
+				emitted, ok := s.submitWebSocketFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
+					replayStatus, _, replayHeaders, replayOK := s.websocketHandshake(rctx, input, handshakeURL, false, true, "")
+					return replayOK && isValidWebSocketUpgrade(replayStatus, replayHeaders), fmt.Sprintf("unauthenticated upgrade replay -> HTTP %d (%s)", replayStatus, cacheHeaderSummary(replayHeaders)), nil
+				}, []EvidenceSignal{EvidenceHeaderDelta, EvidenceSinkObserved})
+				if ok {
+					return []model.Finding{emitted}
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func (s *Service) websocketHandshake(ctx context.Context, input RunInput, raw string, authenticated bool) (int, []byte, http.Header, bool) {
+func (s *Service) submitWebSocketFinding(ctx context.Context, finding model.Finding, replay PoCReplayFunc, signals []EvidenceSignal) (model.Finding, bool) {
+	out := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:   finding,
+		Signals:   signals,
+		PoCReplay: replay,
+		ProbeName: "websocket-probe",
+	})
+	if out.Suppressed {
+		return model.Finding{}, false
+	}
+	return out.EmittedFinding, true
+}
+
+func isValidWebSocketUpgrade(status int, headers http.Header) bool {
+	if status != http.StatusSwitchingProtocols {
+		return false
+	}
+	return strings.Contains(strings.ToLower(headers.Get("Connection")), "upgrade") && strings.EqualFold(strings.TrimSpace(headers.Get("Upgrade")), "websocket")
+}
+
+func (s *Service) websocketHandshake(ctx context.Context, input RunInput, raw string, authenticated, upgrade bool, origin string) (int, []byte, http.Header, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return 0, nil, nil, false
@@ -74,11 +123,15 @@ func (s *Service) websocketHandshake(ctx context.Context, input RunInput, raw st
 	if authenticated {
 		ApplyAuthProfile(req, input.AuthProfile)
 	}
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Origin", "https://evil.example.com")
+	if upgrade {
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		req.Header.Set("Sec-WebSocket-Version", "13")
+	}
+	if strings.TrimSpace(origin) != "" {
+		req.Header.Set("Origin", origin)
+	}
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 	if err != nil || resp == nil {
 		return 0, nil, nil, false

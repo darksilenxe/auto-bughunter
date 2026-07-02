@@ -120,20 +120,8 @@ func (s *Service) RunOAuthProbe(
 			if !scope.IsURLInScope(probeURL, scanScope) {
 				continue
 			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-			if err != nil {
-				continue
-			}
-			ApplyAuthProfile(req, auth)
-			resp, err := s.doRequestWithRetry(ctx, req, options)
-			if err != nil || resp == nil {
-				continue
-			}
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
-			_ = resp.Body.Close()
-
-			// A 200/302 response that does not contain an error indicator is suspicious.
-			if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) {
+			candidateObs, baselines, suspicious := oauthRedirectBypassesBaseline(ctx, s, ep, mutated, legitimateCallback, auth, options)
+			if suspicious {
 				emitted[fid] = true
 				findings = append(findings, oauthFinding(
 					fid,
@@ -141,12 +129,12 @@ func (s *Service) RunOAuthProbe(
 					model.SeverityHigh,
 					"OAuth redirect_uri bypass — "+test.label,
 					fmt.Sprintf(
-						"GET %s returned HTTP %d without an error for redirect_uri=%q. "+
+						"GET %s returned HTTP %d without an error for redirect_uri=%q, and the response differed from two benign redirect_uri control baselines. "+
 							"Technique: %s. "+
 							"An attacker can craft an authorization link with a poisoned redirect_uri, "+
 							"causing the authorization code or access token to be delivered to an "+
 							"attacker-controlled server, enabling full account takeover.",
-						probeURL, resp.StatusCode, mutated, test.technique,
+						probeURL, candidateObs.status, mutated, test.technique,
 					),
 					"CWE-601",
 					[]string{
@@ -156,9 +144,11 @@ func (s *Service) RunOAuthProbe(
 						"Exchange the code for a token at the /token endpoint using the attacker's client_secret.",
 					},
 					map[string]string{
-						"mutatedRedirectURI": mutated,
-						"technique":         test.label,
-						"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
+						"mutatedRedirectURI":  mutated,
+						"technique":           test.label,
+						"responseStatus":      fmt.Sprintf("%d", candidateObs.status),
+						"controlStatus":       fmt.Sprintf("%d", baselines.First.Status),
+						"controlBodyVariance": fmt.Sprintf("%d", baselines.BodyByteVariance),
 					},
 				))
 			}
@@ -337,6 +327,65 @@ func buildOAuthAuthorizeURL(ep, redirectURI, state, responseType, scope_, codeCh
 // oauthResponseHasError returns true when the response body contains an OAuth
 // error indicator, which means the server correctly rejected the manipulated
 // request.
+type oauthAuthorizeObservation struct {
+	status   int
+	location string
+	body     string
+}
+
+func oauthFetchAuthorizeObservation(ctx context.Context, s *Service, probeURL string, auth model.ScanAuthProfile, options model.ScanOptions) (oauthAuthorizeObservation, error) {
+	if strings.TrimSpace(probeURL) == "" {
+		return oauthAuthorizeObservation{}, fmt.Errorf("empty probe url")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+	if err != nil {
+		return oauthAuthorizeObservation{}, err
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		if err == nil {
+			err = fmt.Errorf("nil response")
+		}
+		return oauthAuthorizeObservation{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
+	return oauthAuthorizeObservation{status: resp.StatusCode, location: resp.Header.Get("Location"), body: string(body)}, nil
+}
+
+func oauthRedirectBypassesBaseline(ctx context.Context, s *Service, authorizeEndpoint, candidateRedirectURI, benignRedirectURI string, auth model.ScanAuthProfile, options model.ScanOptions) (oauthAuthorizeObservation, BaselineControls, bool) {
+	candidateURL := buildOAuthAuthorizeURL(authorizeEndpoint, candidateRedirectURI, "state_value_abc", "code", "openid", "")
+	if strings.TrimSpace(candidateURL) == "" {
+		return oauthAuthorizeObservation{}, BaselineControls{}, false
+	}
+	fetchBaseline := func(fetchCtx context.Context) (BaselineSample, error) {
+		controlURL := buildOAuthAuthorizeURL(authorizeEndpoint, benignRedirectURI, "state_value_abc", "code", "openid", "")
+		obs, err := oauthFetchAuthorizeObservation(fetchCtx, s, controlURL, auth, options)
+		if err != nil {
+			return BaselineSample{}, err
+		}
+		return BaselineSample{Status: obs.status, Header: http.Header{"Location": []string{obs.location}}, Body: obs.location + "\n" + obs.body}, nil
+	}
+	baselines, err := CaptureTwoControlBaselines(ctx, fetchBaseline)
+	if err != nil {
+		return oauthAuthorizeObservation{}, BaselineControls{}, false
+	}
+	candidateObs, err := oauthFetchAuthorizeObservation(ctx, s, candidateURL, auth, options)
+	if err != nil {
+		return oauthAuthorizeObservation{}, baselines, false
+	}
+	if !is2xxOrRedirect(candidateObs.status) || oauthResponseHasError(candidateObs.body) {
+		return candidateObs, baselines, false
+	}
+	candidateBody := NormalizeResponseBody(candidateObs.location + "\n" + candidateObs.body)
+	observedDelta := float64(absInt(len(candidateBody) - len(baselines.First.Body)))
+	statusDiff := !baselines.StatusStable || candidateObs.status != baselines.First.Status
+	locationDiff := candidateObs.location != baselines.First.Header.Get("Location")
+	bodyDiff := ExceedsControlVariance(observedDelta, float64(baselines.BodyByteVariance))
+	return candidateObs, baselines, statusDiff || locationDiff || bodyDiff
+}
+
 func oauthResponseHasError(body string) bool {
 	lower := strings.ToLower(body)
 	for _, kw := range []string{
@@ -371,14 +420,14 @@ func oauthFinding(
 		ef[k] = v
 	}
 	return model.Finding{
-		ID:          id,
-		Category:    "access-control",
-		Severity:    severity,
-		Title:       title,
+		ID:       id,
+		Category: "access-control",
+		Severity: severity,
+		Title:    title,
 		Description: "The OAuth/OIDC authorization server accepted a manipulated authorization initiation request. " +
 			"This class of vulnerability enables authorization-code theft, account takeover, and CSRF attacks " +
 			"against users who interact with the application's OAuth flow.",
-		Evidence:       evidence,
+		Evidence: evidence,
 		Recommendation: "Enforce exact-match redirect_uri allowlisting — never accept wildcard, path-traversal, or unregistered URIs. " +
 			"Require the state parameter on every authorization request and validate it on the callback. " +
 			"Enforce PKCE (RFC 7636) for all public clients.",

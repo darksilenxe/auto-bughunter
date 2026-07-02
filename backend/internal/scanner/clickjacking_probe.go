@@ -1,7 +1,9 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -16,7 +18,7 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 	// browser. JSON/XML API responses used by SPAs cannot be embedded in a
 	// meaningful iframe — skip them to avoid false positives on API endpoints
 	// that are legitimately missing X-Frame-Options.
-	if !isHTMLLikeContentType(respHeader) {
+	if !IsHTMLShape(respHeader) {
 		return nil
 	}
 	xfo := strings.ToUpper(strings.TrimSpace(respHeader.Get("X-Frame-Options")))
@@ -26,8 +28,18 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 	if clickjackingProtectedByCSP(respHeader.Get("Content-Security-Policy")) {
 		return nil
 	}
+	baselineSummary := ""
+	if s != nil {
+		control, summary, err := s.clickjackingFramingControl(context.Background(), input)
+		if err == nil {
+			baselineSummary = summary
+			if !control {
+				return nil
+			}
+		}
+	}
 	poc := fmt.Sprintf(`<html><body><iframe src="%s" width="1200" height="900" style="opacity:0.01;position:absolute;top:0;left:0;border:0"></iframe></body></html>`, input.Target)
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:             "clickjacking-missing-protection",
 		Category:       "clickjacking",
 		Severity:       model.SeverityMedium,
@@ -50,8 +62,78 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 			"validationType": "safe-observation",
 			"xFrameOptions":  respHeader.Get("X-Frame-Options"),
 			"csp":            respHeader.Get("Content-Security-Policy"),
+			"responseShape":  ClassifyResponseShape(respHeader).String(),
 		},
-	}}
+	}
+	if baselineSummary != "" {
+		finding.EvidenceFields["framingControl"] = baselineSummary
+	}
+	outcome := SubmitVerifiedFinding(context.Background(), VerifyCandidate{
+		Finding:               finding,
+		Signals:               []EvidenceSignal{EvidenceHeaderDelta, EvidenceSinkObserved},
+		AllowNoReplayEmission: true,
+		ProbeName:             "clickjacking-probe",
+	})
+	if outcome.Suppressed {
+		return nil
+	}
+	return []model.Finding{outcome.EmittedFinding}
+}
+
+func (s *Service) clickjackingFramingControl(ctx context.Context, input RunInput) (bool, string, error) {
+	if strings.TrimSpace(input.Target) == "" {
+		return true, "", nil
+	}
+	unframed, err := s.clickjackingFetchVariant(ctx, input, false)
+	if err != nil {
+		return false, "", err
+	}
+	framed, err := s.clickjackingFetchVariant(ctx, input, true)
+	if err != nil {
+		return false, "", err
+	}
+	summary := fmt.Sprintf("unframed=%d/%q/%q framed=%d/%q/%q",
+		unframed.Status,
+		strings.TrimSpace(unframed.Header.Get("X-Frame-Options")),
+		strings.TrimSpace(unframed.Header.Get("Content-Security-Policy")),
+		framed.Status,
+		strings.TrimSpace(framed.Header.Get("X-Frame-Options")),
+		strings.TrimSpace(framed.Header.Get("Content-Security-Policy")),
+	)
+	if unframed.Status != framed.Status {
+		return true, summary, nil
+	}
+	if strings.TrimSpace(unframed.Header.Get("X-Frame-Options")) != strings.TrimSpace(framed.Header.Get("X-Frame-Options")) {
+		return true, summary, nil
+	}
+	if strings.TrimSpace(unframed.Header.Get("Content-Security-Policy")) != strings.TrimSpace(framed.Header.Get("Content-Security-Policy")) {
+		return true, summary, nil
+	}
+	return NormalizeResponseBody(unframed.Body) != NormalizeResponseBody(framed.Body), summary, nil
+}
+
+func (s *Service) clickjackingFetchVariant(ctx context.Context, input RunInput, framed bool) (BaselineSample, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.Target, nil)
+	if err != nil {
+		return BaselineSample{}, err
+	}
+	ApplyAuthProfile(req, input.AuthProfile)
+	if framed {
+		req.Header.Set("Sec-Fetch-Dest", "iframe")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+	} else {
+		req.Header.Set("Sec-Fetch-Dest", "document")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	if err != nil || resp == nil {
+		return BaselineSample{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	return BaselineSample{Status: resp.StatusCode, Header: resp.Header, Body: string(body)}, nil
 }
 
 func clickjackingProtectedByCSP(csp string) bool {

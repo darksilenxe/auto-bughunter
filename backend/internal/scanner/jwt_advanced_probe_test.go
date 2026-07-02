@@ -23,6 +23,13 @@ func buildTestJWT(hdr, pay map[string]interface{}) string {
 	return tok
 }
 
+func jwtAdvancedAcceptsProbeToken(token, original string) bool {
+	if token == "" || token == jwtInvalidControlToken(original) || !isJWT(token) {
+		return false
+	}
+	return true
+}
+
 // TestJWTAdvancedProbe_PassiveOnly ensures the probe is a no-op in passive mode.
 func TestJWTAdvancedProbe_PassiveOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,14 +86,13 @@ func TestJWTAdvancedProbe_KIDPathTraversal_Accepted(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}})
 			return
 		}
-		// Accept any JWT — kid path traversal not detected.
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "******") {
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if jwtAdvancedAcceptsProbeToken(token, tok) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"user":"admin"}`))
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -126,9 +132,13 @@ func TestJWTAdvancedProbe_ExpTampering_Accepted(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}})
 			return
 		}
-		// Accept any token — no expiry validation.
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if jwtAdvancedAcceptsProbeToken(token, tok) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -168,9 +178,13 @@ func TestJWTAdvancedProbe_MissingIssAud_Accepted(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}})
 			return
 		}
-		// Accept any token — no iss/aud validation.
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if jwtAdvancedAcceptsProbeToken(token, tok) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -237,5 +251,32 @@ func TestJWTAdvancedProbe_RejectsModifiedToken(t *testing.T) {
 		if strings.Contains(f.ID, "exp") || strings.Contains(f.ID, "iss") || strings.Contains(f.ID, "aud") {
 			t.Fatalf("unexpected claims-tampering finding when server rejects modification: %+v", f)
 		}
+	}
+}
+
+func TestJWTAdvancedProbe_SuppressesWhenInvalidControlAccepted(t *testing.T) {
+	tok := buildTestJWT(
+		map[string]interface{}{"alg": "HS256"},
+		map[string]interface{}{"sub": "1", "iss": "test", "aud": "api", "exp": 9999999999},
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/jwks.json" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"public":true}`))
+	}))
+	defer srv.Close()
+	findings := NewService(Config{}).RunJWTAdvancedProbe(
+		context.Background(), srv.URL,
+		newJWTAdvancedScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{Headers: map[string]string{"Authorization": "Bearer " + tok}},
+		func(model.ScanEvent) {},
+	)
+	if len(findings) != 0 {
+		t.Fatalf("expected controls to suppress advanced JWT findings, got %+v", findings)
 	}
 }

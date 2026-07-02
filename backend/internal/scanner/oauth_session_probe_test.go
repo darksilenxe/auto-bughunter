@@ -66,8 +66,11 @@ func TestOAuthSessionProbe_AuthCodeReplay_Rejected(t *testing.T) {
 func TestOAuthSessionProbe_AuthCodeReplay_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Always return success — simulates a server that doesn't track used codes.
-		json.NewEncoder(w).Encode(map[string]string{"access_token": "tok123", "token_type": "bearer"})
+		if err := r.ParseForm(); err == nil && r.Form.Get("code") == "abh-probe-code-replay-test" {
+			json.NewEncoder(w).Encode(map[string]string{"access_token": "tok123", "token_type": "bearer"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -136,12 +139,15 @@ func TestOAuthSessionProbe_ImplicitFlow_Accepted(t *testing.T) {
 func TestOAuthSessionProbe_RefreshTokenReplay_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Always succeeds — no rotation enforced.
-		json.NewEncoder(w).Encode(map[string]string{
-			"access_token":  "newtok",
-			"refresh_token": "oldrefresh",
-			"token_type":    "bearer",
-		})
+		if err := r.ParseForm(); err == nil && r.Form.Get("refresh_token") == "refresh_abc" {
+			json.NewEncoder(w).Encode(map[string]string{
+				"access_token":  "newtok",
+				"refresh_token": "oldrefresh",
+				"token_type":    "bearer",
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -151,7 +157,7 @@ func TestOAuthSessionProbe_RefreshTokenReplay_Accepted(t *testing.T) {
 		model.ScanOptions{},
 		model.ScanAuthProfile{
 			Headers: map[string]string{
-				"Authorization": "******",
+				"Authorization":   "******",
 				"X-Refresh-Token": "refresh_abc",
 			},
 		},

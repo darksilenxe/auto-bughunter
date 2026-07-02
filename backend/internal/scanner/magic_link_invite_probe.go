@@ -113,7 +113,14 @@ func (s *Service) RunMagicLinkProbe(
 			if token == "" {
 				continue
 			}
-			// Token appeared in the response body — it should only be emailed.
+			consumeEPs := magicLinkBuildConsumeURLs(base, ep, token, scanScope)
+			consumeStatus := magicLinkConsumeToken(ctx, s, consumeEPs, token, auth, options)
+			controlToken := magicLinkInvalidControlToken(token)
+			controlStatus := magicLinkConsumeToken(ctx, s, magicLinkBuildConsumeURLs(base, ep, controlToken, scanScope), controlToken, auth, options)
+			if consumeStatus == 0 || (controlStatus >= 200 && controlStatus < 400) {
+				continue
+			}
+			// Token appeared in the response body and was accepted while an invalid control was rejected.
 			lowEntropy := magicLinkTokenIsLowEntropy(token)
 			severity := model.SeverityHigh
 			extraNote := ""
@@ -123,24 +130,27 @@ func (s *Service) RunMagicLinkProbe(
 			}
 			emitted[fid] = true
 			findings = append(findings, model.Finding{
-				ID:          fid,
-				Category:    "authentication",
-				Severity:    severity,
-				Title:       "Magic link token disclosed in API response",
-				Description: "The passwordless authentication endpoint returned a magic-link token directly in the HTTP response body instead of delivering it exclusively via email. Any party who can intercept the API response (logs, proxies, shared caches) can use the token to authenticate as the target user." + extraNote,
-				Evidence:    fmt.Sprintf("POST %s → HTTP %d with token %q in response body", ep, status, truncateString(token, 20)),
+				ID:             fid,
+				Category:       "authentication",
+				Severity:       severity,
+				Title:          "Magic link token disclosed in API response",
+				Description:    "The passwordless authentication endpoint returned a magic-link token directly in the HTTP response body instead of delivering it exclusively via email. The disclosed token was accepted by a consume endpoint while a clearly invalid control token was rejected. Any party who can intercept the API response (logs, proxies, shared caches) can use the token to authenticate as the target user." + extraNote,
+				Evidence:       fmt.Sprintf("POST %s → HTTP %d with token %q in response body; consume endpoint accepted disclosed token with HTTP %d and rejected invalid control with HTTP %d", ep, status, truncateString(token, 20), consumeStatus, controlStatus),
 				Recommendation: "Never return authentication tokens in API responses. Send them only to the registered email address. Tokens must be single-use, short-lived (≤15 minutes), and cryptographically random (≥128 bits).",
-				Confidence:    0.88,
-				AffectedURL:   ep,
-				CWE:           "CWE-330",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "magic-link-probe"},
-				BusinessTags:  []string{"magic-link", "passwordless", "token-disclosure"},
+				Confidence:     0.88,
+				AffectedURL:    ep,
+				CWE:            "CWE-330",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "magic-link-probe"},
+				BusinessTags:   []string{"magic-link", "passwordless", "token-disclosure"},
 				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"tokenPrefix":    truncateString(token, 16),
-					"lowEntropy":     fmt.Sprintf("%v", lowEntropy),
-					"responseStatus": fmt.Sprintf("%d", status),
+					"validationType":       "active-probe",
+					"tokenPrefix":          truncateString(token, 16),
+					"lowEntropy":           fmt.Sprintf("%v", lowEntropy),
+					"responseStatus":       fmt.Sprintf("%d", status),
+					"consumeStatus":        fmt.Sprintf("%d", consumeStatus),
+					"controlTokenRejected": "true",
+					"controlStatus":        fmt.Sprintf("%d", controlStatus),
 				},
 			})
 			break
@@ -160,28 +170,33 @@ func (s *Service) RunMagicLinkProbe(
 			status1 := magicLinkConsumeToken(ctx, s, consumeEPs, token, auth, options)
 			status2 := magicLinkConsumeToken(ctx, s, consumeEPs, token, auth, options)
 
+			controlToken := magicLinkInvalidControlToken(token)
+			controlStatus := magicLinkConsumeToken(ctx, s, magicLinkBuildConsumeURLs(base, ep, controlToken, scanScope), controlToken, auth, options)
 			if status1 > 0 && status2 > 0 &&
 				status1 >= 200 && status1 < 400 &&
-				status2 >= 200 && status2 < 400 {
+				status2 >= 200 && status2 < 400 &&
+				!(controlStatus >= 200 && controlStatus < 400) {
 				emitted[fid] = true
 				findings = append(findings, model.Finding{
-					ID:          fid,
-					Category:    "authentication",
-					Severity:    model.SeverityHigh,
-					Title:       "Magic link token accepted on second use — single-use not enforced",
-					Description: "The same magic-link token was accepted on two consecutive authentication requests without being invalidated after the first use. Tokens must be single-use; reuse allows an attacker who intercepts the link (e.g., from browser history or email forwarding) to establish an additional authenticated session.",
-					Evidence:    fmt.Sprintf("Token %q used at consume endpoint — first HTTP %d, second HTTP %d (both accepted)", truncateString(token, 16), status1, status2),
+					ID:             fid,
+					Category:       "authentication",
+					Severity:       model.SeverityHigh,
+					Title:          "Magic link token accepted on second use — single-use not enforced",
+					Description:    "The same magic-link token was accepted on two consecutive authentication requests without being invalidated after the first use, while a clearly invalid control token was rejected. Tokens must be single-use; reuse allows an attacker who intercepts the link (e.g., from browser history or email forwarding) to establish an additional authenticated session.",
+					Evidence:       fmt.Sprintf("Token %q used at consume endpoint — first HTTP %d, second HTTP %d (both accepted); invalid control token → HTTP %d", truncateString(token, 16), status1, status2, controlStatus),
 					Recommendation: "Invalidate magic-link tokens immediately after their first successful use. Store a used-token hash and reject any second submission within the validity window.",
-					Confidence:    0.82,
-					AffectedURL:   ep,
-					CWE:           "CWE-294",
-					OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-					Sources:       []string{"active-scanner", "magic-link-probe"},
-					BusinessTags:  []string{"magic-link", "token-replay"},
+					Confidence:     0.82,
+					AffectedURL:    ep,
+					CWE:            "CWE-294",
+					OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+					Sources:        []string{"active-scanner", "magic-link-probe"},
+					BusinessTags:   []string{"magic-link", "token-replay"},
 					EvidenceFields: map[string]string{
-						"validationType": "active-probe",
-						"firstStatus":    fmt.Sprintf("%d", status1),
-						"secondStatus":   fmt.Sprintf("%d", status2),
+						"validationType":       "active-probe",
+						"firstStatus":          fmt.Sprintf("%d", status1),
+						"secondStatus":         fmt.Sprintf("%d", status2),
+						"controlTokenRejected": "true",
+						"controlStatus":        fmt.Sprintf("%d", controlStatus),
 					},
 				})
 				break
@@ -199,27 +214,31 @@ func (s *Service) RunMagicLinkProbe(
 			}
 			// Try to accept the invite with a different email.
 			differentEmail := "abh-probe-attacker@abh-scanner.invalid"
-			if accepted, status := magicLinkAcceptInvite(ctx, s, base, token, differentEmail, auth, options); accepted {
+			accepted, status := magicLinkAcceptInvite(ctx, s, base, token, differentEmail, auth, options)
+			controlAccepted, controlStatus := magicLinkAcceptInvite(ctx, s, base, magicLinkInvalidControlToken(token), differentEmail, auth, options)
+			if accepted && !controlAccepted {
 				emitted[fid] = true
 				findings = append(findings, model.Finding{
-					ID:          fid,
-					Category:    "authentication",
-					Severity:    model.SeverityHigh,
-					Title:       "Invite token not bound to invitee — token accepted for different email",
-					Description: "An invitation token was accepted with an email address different from the one it was issued for. Invite tokens must be cryptographically bound to the intended recipient; otherwise an attacker who intercepts a token can accept the invite under their own identity.",
-					Evidence:    fmt.Sprintf("Invite token for %q accepted for %q at HTTP %d", "abh-probe-invited@abh-scanner.invalid", differentEmail, status),
+					ID:             fid,
+					Category:       "authentication",
+					Severity:       model.SeverityHigh,
+					Title:          "Invite token not bound to invitee — token accepted for different email",
+					Description:    "An invitation token was accepted with an email address different from the one it was issued for, while a clearly invalid control token was rejected. Invite tokens must be cryptographically bound to the intended recipient; otherwise an attacker who intercepts a token can accept the invite under their own identity.",
+					Evidence:       fmt.Sprintf("Invite token for %q accepted for %q at HTTP %d; invalid control token → HTTP %d", "abh-probe-invited@abh-scanner.invalid", differentEmail, status, controlStatus),
 					Recommendation: "Bind invite tokens to the target email address at issuance. Validate that the email provided during acceptance matches the one stored with the token. Reject mismatched claims.",
-					Confidence:    0.80,
-					AffectedURL:   ep,
-					CWE:           "CWE-287",
-					OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-					Sources:       []string{"active-scanner", "magic-link-probe"},
-					BusinessTags:  []string{"invite", "token-binding"},
+					Confidence:     0.80,
+					AffectedURL:    ep,
+					CWE:            "CWE-287",
+					OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+					Sources:        []string{"active-scanner", "magic-link-probe"},
+					BusinessTags:   []string{"invite", "token-binding"},
 					EvidenceFields: map[string]string{
-						"validationType": "active-probe",
-						"invitedEmail":   "abh-probe-invited@abh-scanner.invalid",
-						"attackerEmail":  differentEmail,
-						"acceptStatus":   fmt.Sprintf("%d", status),
+						"validationType":       "active-probe",
+						"invitedEmail":         "abh-probe-invited@abh-scanner.invalid",
+						"attackerEmail":        differentEmail,
+						"acceptStatus":         fmt.Sprintf("%d", status),
+						"controlTokenRejected": "true",
+						"controlStatus":        fmt.Sprintf("%d", controlStatus),
 					},
 				})
 				break
@@ -341,6 +360,20 @@ func magicLinkConsumeToken(ctx context.Context, s *Service, consumeEPs []string,
 	return 0
 }
 
+func magicLinkInvalidControlToken(token string) string {
+	control := strings.ReplaceAll(RandomMarker(), "_", "")
+	if len(token) <= 0 {
+		return control
+	}
+	for len(control) < len(token) {
+		control += "x"
+	}
+	if len(control) > len(token) {
+		control = control[:len(token)]
+	}
+	return control
+}
+
 // magicLinkRequestInviteToken posts to an invite endpoint and returns any token
 // in the response body.
 func magicLinkRequestInviteToken(ctx context.Context, s *Service, ep, email string, auth model.ScanAuthProfile, options model.ScanOptions) string {
@@ -439,19 +472,19 @@ func magicLinkTestLinkCSRF(ctx context.Context, s *Service, ep string, auth mode
 
 	if !csrfRejected && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return &model.Finding{
-			ID:          "account-link-csrf",
-			Category:    "authentication",
-			Severity:    model.SeverityHigh,
-			Title:       "Account-linking endpoint missing CSRF protection",
-			Description: "The account-linking endpoint accepted a POST request without a CSRF token. An attacker can craft a malicious page that silently links the victim's account to an attacker-controlled social identity, enabling full account takeover if the attacker can subsequently initiate an OAuth login with that identity.",
-			Evidence:    fmt.Sprintf("POST %s without CSRF token → HTTP %d", ep, resp.StatusCode),
+			ID:             "account-link-csrf",
+			Category:       "authentication",
+			Severity:       model.SeverityHigh,
+			Title:          "Account-linking endpoint missing CSRF protection",
+			Description:    "The account-linking endpoint accepted a POST request without a CSRF token. An attacker can craft a malicious page that silently links the victim's account to an attacker-controlled social identity, enabling full account takeover if the attacker can subsequently initiate an OAuth login with that identity.",
+			Evidence:       fmt.Sprintf("POST %s without CSRF token → HTTP %d", ep, resp.StatusCode),
 			Recommendation: "Require a synchronizer CSRF token on all account-linking endpoints. Validate the OAuth state parameter. Bind linking operations to the authenticated session.",
-			Confidence:    0.72,
-			AffectedURL:   ep,
-			CWE:           "CWE-352",
-			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-			Sources:       []string{"active-scanner", "magic-link-probe"},
-			BusinessTags:  []string{"account-linking", "csrf", "oauth"},
+			Confidence:     0.72,
+			AffectedURL:    ep,
+			CWE:            "CWE-352",
+			OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+			Sources:        []string{"active-scanner", "magic-link-probe"},
+			BusinessTags:   []string{"account-linking", "csrf", "oauth"},
 			EvidenceFields: map[string]string{
 				"validationType": "active-probe",
 				"csrfTokenSent":  "false",
@@ -477,47 +510,61 @@ func magicLinkTestTokenEnumeration(ctx context.Context, s *Service, base *url.UR
 			if !scope.IsURLInScope(probe, scanScope) {
 				continue
 			}
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe, nil)
-			if err != nil {
+			accepted, status := magicLinkTokenProbeAccepted(ctx, s, probe, auth, options)
+			if !accepted {
 				continue
 			}
-			ApplyAuthProfile(req, auth)
-			resp, err := s.doRequestWithRetry(ctx, req, options)
-			if err != nil || resp == nil {
+			controlToken := magicLinkInvalidControlToken(tokenVal)
+			controlAccepted, controlStatus := magicLinkTokenProbeAccepted(ctx, s, epBase+controlToken, auth, options)
+			if controlAccepted {
 				continue
 			}
-			rb, _ := io.ReadAll(io.LimitReader(resp.Body, magicLinkBodyLimit))
-			_ = resp.Body.Close()
-			lower := strings.ToLower(string(rb))
-			// A 200/redirect without explicit "invalid token" indicates it might be valid.
-			if (resp.StatusCode >= 200 && resp.StatusCode < 300) &&
-				!strings.Contains(lower, "invalid") &&
-				!strings.Contains(lower, "expired") &&
-				!strings.Contains(lower, "not found") {
-				return &model.Finding{
-					ID:          "invite-token-enumerable",
-					Category:    "authentication",
-					Severity:    model.SeverityMedium,
-					Title:       "Invite token appears guessable or enumerable",
-					Description: fmt.Sprintf("A short, sequential invite token value %q was accepted without error at %s. If tokens are not cryptographically random with sufficient entropy, an attacker can enumerate them and accept invitations intended for other users.", tokenVal, probe),
-					Evidence:    fmt.Sprintf("GET %s → HTTP %d (no invalid-token rejection)", probe, resp.StatusCode),
-					Recommendation: "Generate invite tokens using a cryptographically secure random number generator with at least 128 bits of entropy. Avoid sequential or predictable tokens.",
-					Confidence:    0.65,
-					AffectedURL:   ep,
-					CWE:           "CWE-330",
-					OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-					Sources:       []string{"active-scanner", "magic-link-probe"},
-					BusinessTags:  []string{"invite", "token-enumeration"},
-					EvidenceFields: map[string]string{
-						"validationType": "active-probe",
-						"guessedToken":   tokenVal,
-						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
-					},
-				}
+			return &model.Finding{
+				ID:             "invite-token-enumerable",
+				Category:       "authentication",
+				Severity:       model.SeverityMedium,
+				Title:          "Invite token appears guessable or enumerable",
+				Description:    fmt.Sprintf("A short, sequential invite token value %q was accepted without error at %s, while a clearly invalid control token was rejected. If tokens are not cryptographically random with sufficient entropy, an attacker can enumerate them and accept invitations intended for other users.", tokenVal, probe),
+				Evidence:       fmt.Sprintf("GET %s → HTTP %d (accepted); invalid control token → HTTP %d", probe, status, controlStatus),
+				Recommendation: "Generate invite tokens using a cryptographically secure random number generator with at least 128 bits of entropy. Avoid sequential or predictable tokens.",
+				Confidence:     0.65,
+				AffectedURL:    ep,
+				CWE:            "CWE-330",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "magic-link-probe"},
+				BusinessTags:   []string{"invite", "token-enumeration"},
+				EvidenceFields: map[string]string{
+					"validationType":       "active-probe",
+					"guessedToken":         tokenVal,
+					"responseStatus":       fmt.Sprintf("%d", status),
+					"controlTokenRejected": "true",
+					"controlStatus":        fmt.Sprintf("%d", controlStatus),
+				},
 			}
 		}
 	}
 	return nil
+}
+
+func magicLinkTokenProbeAccepted(ctx context.Context, s *Service, probe string, auth model.ScanAuthProfile, options model.ScanOptions) (bool, int) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe, nil)
+	if err != nil {
+		return false, 0
+	}
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return false, 0
+	}
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, magicLinkBodyLimit))
+	_ = resp.Body.Close()
+	lower := strings.ToLower(string(rb))
+	accepted := (resp.StatusCode >= 200 && resp.StatusCode < 300) &&
+		!strings.Contains(lower, "invalid") &&
+		!strings.Contains(lower, "expired") &&
+		!strings.Contains(lower, "not found") &&
+		!strings.Contains(lower, "error")
+	return accepted, resp.StatusCode
 }
 
 // magicLinkDiscoverEndpoints returns in-scope endpoints from path and seed lists.

@@ -104,23 +104,24 @@ func (s *Service) RunMFAProbe(
 
 	var findings []model.Finding
 	emitted := map[string]bool{}
+	mfaWrongCodeRejected := mfaAnyEndpointRejectsWrongCode(ctx, s, mfaEPs, auth, options)
 
 	// ── Probe 1: Surface discovery ─────────────────────────────────────────
 	if len(mfaEPs) > 0 {
 		findings = append(findings, model.Finding{
-			ID:          "mfa-surface-discovered",
-			Category:    "authentication",
-			Severity:    model.SeverityInfo,
-			Title:       fmt.Sprintf("MFA/OTP surface discovered: %d endpoints", len(mfaEPs)),
-			Description: "Multi-factor authentication or OTP verification endpoints were found. These are tested for brute-force protection, single-use enforcement, and bypass vulnerabilities.",
-			Evidence:    strings.Join(mfaEPs, ", "),
+			ID:             "mfa-surface-discovered",
+			Category:       "authentication",
+			Severity:       model.SeverityInfo,
+			Title:          fmt.Sprintf("MFA/OTP surface discovered: %d endpoints", len(mfaEPs)),
+			Description:    "Multi-factor authentication or OTP verification endpoints were found. These are tested for brute-force protection, single-use enforcement, and bypass vulnerabilities.",
+			Evidence:       strings.Join(mfaEPs, ", "),
 			Recommendation: "Ensure MFA endpoints enforce rate limiting, OTP single-use invalidation, and do not allow direct resource access without a completed MFA challenge.",
-			Confidence:   0.95,
-			AffectedURL:  target,
-			CWE:          "CWE-307",
-			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-			Sources:      []string{"active-scanner", "mfa-probe"},
-			BusinessTags: []string{"mfa", "otp", "2fa"},
+			Confidence:     0.95,
+			AffectedURL:    target,
+			CWE:            "CWE-307",
+			OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+			Sources:        []string{"active-scanner", "mfa-probe"},
+			BusinessTags:   []string{"mfa", "otp", "2fa"},
 		})
 	}
 
@@ -186,7 +187,8 @@ func (s *Service) RunMFAProbe(
 
 			lowerBody := strings.ToLower(string(body))
 			// If the resource returns 200 and no MFA-challenge signal, MFA is bypassable.
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+			if mfaWrongCodeRejected &&
+				resp.StatusCode >= 200 && resp.StatusCode < 300 &&
 				!strings.Contains(lowerBody, "mfa") &&
 				!strings.Contains(lowerBody, "otp") &&
 				!strings.Contains(lowerBody, "2fa") &&
@@ -209,7 +211,7 @@ func (s *Service) RunMFAProbe(
 						"Access: " + ep,
 						"Observe that the resource is returned without an MFA challenge.",
 					},
-					map[string]string{"sensitiveEndpoint": ep, "responseStatus": fmt.Sprintf("%d", resp.StatusCode)},
+					map[string]string{"sensitiveEndpoint": ep, "responseStatus": fmt.Sprintf("%d", resp.StatusCode), "wrongCodeControlRejected": fmt.Sprintf("%v", mfaWrongCodeRejected)},
 				))
 				break
 			}
@@ -285,7 +287,7 @@ func (s *Service) RunMFAProbe(
 						continue
 					}
 					_ = resp2.Body.Close()
-					if resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
+					if mfaWrongCodeRejected && resp2.StatusCode >= 200 && resp2.StatusCode < 300 {
 						emitted[fid] = true
 						findings = append(findings, mfaFinding(
 							fid, ep, model.SeverityHigh,
@@ -304,9 +306,10 @@ func (s *Service) RunMFAProbe(
 								"Observe that the resource is returned without requiring MFA completion.",
 							},
 							map[string]string{
-								"enrollmentEndpoint": ep,
-								"sensitiveEndpoint":  protectedEP,
-								"sensitiveStatus":    fmt.Sprintf("%d", resp2.StatusCode),
+								"enrollmentEndpoint":       ep,
+								"sensitiveEndpoint":        protectedEP,
+								"sensitiveStatus":          fmt.Sprintf("%d", resp2.StatusCode),
+								"wrongCodeControlRejected": fmt.Sprintf("%v", mfaWrongCodeRejected),
 							},
 						))
 						break
@@ -341,7 +344,8 @@ func (s *Service) RunMFAProbe(
 				_ = resp.Body.Close()
 				lowerBody := strings.ToLower(string(body))
 
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+				if mfaWrongCodeRejected &&
+					resp.StatusCode >= 200 && resp.StatusCode < 300 &&
 					!strings.Contains(lowerBody, "unauthorized") &&
 					!strings.Contains(lowerBody, "invalid") {
 					emitted[fid] = true
@@ -362,7 +366,7 @@ func (s *Service) RunMFAProbe(
 							"In a new browser session (no session cookie), submit the cookie to: " + ep,
 							"Observe that MFA is bypassed.",
 						},
-						map[string]string{"cookieName": deviceCookie, "responseStatus": fmt.Sprintf("%d", resp.StatusCode)},
+						map[string]string{"cookieName": deviceCookie, "responseStatus": fmt.Sprintf("%d", resp.StatusCode), "wrongCodeControlRejected": fmt.Sprintf("%v", mfaWrongCodeRejected)},
 					))
 					break
 				}
@@ -396,7 +400,8 @@ func (s *Service) RunMFAProbe(
 
 				lowerBody := strings.ToLower(string(respBody))
 				// 200/204 without a step-up challenge signal = no step-up required.
-				if (resp.StatusCode == 200 || resp.StatusCode == 204) &&
+				if mfaWrongCodeRejected &&
+					(resp.StatusCode == 200 || resp.StatusCode == 204) &&
 					!strings.Contains(lowerBody, "step_up") &&
 					!strings.Contains(lowerBody, "stepup") &&
 					!strings.Contains(lowerBody, "mfa_required") &&
@@ -420,9 +425,10 @@ func (s *Service) RunMFAProbe(
 							"Observe that the operation proceeds without an MFA or re-auth challenge.",
 						},
 						map[string]string{
-							"method":         method,
-							"endpoint":       ep,
-							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+							"method":                   method,
+							"endpoint":                 ep,
+							"responseStatus":           fmt.Sprintf("%d", resp.StatusCode),
+							"wrongCodeControlRejected": fmt.Sprintf("%v", mfaWrongCodeRejected),
 						},
 					))
 					break
@@ -444,13 +450,13 @@ func mfaFinding(id, endpoint string, severity model.Severity, title, evidence, c
 		ef[k] = v
 	}
 	return model.Finding{
-		ID:             id,
-		Category:       "authentication",
-		Severity:       severity,
-		Title:          title,
-		Description:    "A multi-factor authentication control was found to be absent, bypassable, or insufficiently enforced.",
-		Evidence:       evidence,
-		Recommendation: "Enforce rate limiting and account lockout on OTP endpoints. Ensure OTP codes are single-use and expire after one validation attempt. Bind device-trust tokens to the user session. Require step-up re-authentication for sensitive operations.",
+		ID:                id,
+		Category:          "authentication",
+		Severity:          severity,
+		Title:             title,
+		Description:       "A multi-factor authentication control was found to be absent, bypassable, or insufficiently enforced.",
+		Evidence:          evidence,
+		Recommendation:    "Enforce rate limiting and account lockout on OTP endpoints. Ensure OTP codes are single-use and expire after one validation attempt. Bind device-trust tokens to the user session. Require step-up re-authentication for sensitive operations.",
 		Confidence:        0.80,
 		AffectedURL:       endpoint,
 		CWE:               cwe,
@@ -537,57 +543,74 @@ func mfaTestOTPBruteForce(ctx context.Context, s *Service, ep string, auth model
 // mfaTestOTPReuse checks if the same OTP code is accepted twice.
 func mfaTestOTPReuse(ctx context.Context, s *Service, ep string, auth model.ScanAuthProfile, options model.ScanOptions) *model.Finding {
 	// We use a synthetic code; if the server accepts the same code twice (e.g.,
-	// returns 200 on both without a "used" / "invalid" error), report it.
+	// returns 200 on both without a "used" / "invalid" error), report it only
+	// when a definitely-wrong control code is rejected.
 	code := "123456"
-	body := map[string]string{"code": code, "otp": code}
-	bodyJSON, _ := json.Marshal(body)
-
-	sendOTP := func() (int, string) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(bodyJSON))
-		if err != nil {
-			return 0, ""
-		}
-		req.Header.Set("Content-Type", "application/json")
-		ApplyAuthProfile(req, auth)
-		resp, err := s.doRequestWithRetry(ctx, req, options)
-		if err != nil || resp == nil {
-			return 0, ""
-		}
-		rb, _ := io.ReadAll(io.LimitReader(resp.Body, mfaBodyLimit))
-		_ = resp.Body.Close()
-		return resp.StatusCode, string(rb)
-	}
-
-	status1, body1 := sendOTP()
-	status2, body2 := sendOTP()
+	status1, body1 := mfaSubmitCode(ctx, s, ep, code, auth, options)
+	status2, body2 := mfaSubmitCode(ctx, s, ep, code, auth, options)
+	controlStatus, controlBody := mfaSubmitCode(ctx, s, ep, "000000", auth, options)
 
 	// Only flag if both return 200 and neither body indicates rejection.
 	if status1 == 200 && status2 == 200 &&
 		!mfaResponseIndicatesOTPError(body1) &&
-		!mfaResponseIndicatesOTPError(body2) {
+		!mfaResponseIndicatesOTPError(body2) &&
+		(controlStatus == 0 || mfaResponseIndicatesOTPError(controlBody) || controlStatus >= 400) {
 		return &model.Finding{
-			ID:          "mfa-otp-reuse",
-			Category:    "authentication",
-			Severity:    model.SeverityMedium,
-			Title:       "MFA OTP code accepted on second submission (single-use not enforced)",
-			Description: "The MFA endpoint accepted the same one-time code on two consecutive submissions without returning an error or invalidating the code. OTP codes must be invalidated immediately after their first use.",
-			Evidence:    fmt.Sprintf("POST %s with code=%q → first HTTP %d, second HTTP %d (both accepted)", ep, code, status1, status2),
+			ID:             "mfa-otp-reuse",
+			Category:       "authentication",
+			Severity:       model.SeverityMedium,
+			Title:          "MFA OTP code accepted on second submission (single-use not enforced)",
+			Description:    "The MFA endpoint accepted the same one-time code on two consecutive submissions without returning an error or invalidating the code, while a definitely-wrong control code was rejected. OTP codes must be invalidated immediately after their first use.",
+			Evidence:       fmt.Sprintf("POST %s with code=%q → first HTTP %d, second HTTP %d (both accepted); wrong-code control → HTTP %d", ep, code, status1, status2, controlStatus),
 			Recommendation: "Invalidate OTP codes immediately upon first successful validation. Store used codes in a short-lived cache keyed by (session, code) and reject duplicate submissions within the validity window.",
-			Confidence:    0.75,
-			AffectedURL:   ep,
-			CWE:           "CWE-294",
-			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-			Sources:       []string{"active-scanner", "mfa-probe"},
-			BusinessTags:  []string{"mfa", "otp", "replay"},
+			Confidence:     0.75,
+			AffectedURL:    ep,
+			CWE:            "CWE-294",
+			OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+			Sources:        []string{"active-scanner", "mfa-probe"},
+			BusinessTags:   []string{"mfa", "otp", "replay"},
 			EvidenceFields: map[string]string{
-				"validationType": "active-probe",
-				"firstStatus":    fmt.Sprintf("%d", status1),
-				"secondStatus":   fmt.Sprintf("%d", status2),
-				"code":           code,
+				"validationType":           "active-probe",
+				"firstStatus":              fmt.Sprintf("%d", status1),
+				"secondStatus":             fmt.Sprintf("%d", status2),
+				"code":                     code,
+				"wrongCodeControlRejected": "true",
+				"controlStatus":            fmt.Sprintf("%d", controlStatus),
 			},
 		}
 	}
 	return nil
+}
+
+func mfaSubmitCode(ctx context.Context, s *Service, ep, code string, auth model.ScanAuthProfile, options model.ScanOptions) (int, string) {
+	body := map[string]string{"code": code, "otp": code, "token": code}
+	bodyJSON, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return 0, ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	ApplyAuthProfile(req, auth)
+	resp, err := s.doRequestWithRetry(ctx, req, options)
+	if err != nil || resp == nil {
+		return 0, ""
+	}
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, mfaBodyLimit))
+	_ = resp.Body.Close()
+	return resp.StatusCode, string(rb)
+}
+
+func mfaAnyEndpointRejectsWrongCode(ctx context.Context, s *Service, endpoints []string, auth model.ScanAuthProfile, options model.ScanOptions) bool {
+	for _, ep := range endpoints {
+		status, body := mfaSubmitCode(ctx, s, ep, "000000", auth, options)
+		if status == 0 {
+			continue
+		}
+		if status >= 400 || status == http.StatusTooManyRequests || status == http.StatusLocked || mfaResponseIndicatesOTPError(body) {
+			return true
+		}
+	}
+	return false
 }
 
 // mfaTestBackupCodeBruteForce checks if the backup code endpoint lacks rate limiting.

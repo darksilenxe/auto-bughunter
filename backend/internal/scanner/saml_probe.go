@@ -17,6 +17,14 @@ import (
 // samlBodyLimit caps per-probe response reads for the SAML probe.
 const samlBodyLimit = 128 * 1024
 
+const samlControlResponse = `<?xml version="1.0" encoding="UTF-8"?><abh:Control xmlns:abh="https://auto-bughunter.invalid/control">control</abh:Control>`
+
+type samlPostResult struct {
+	status int
+	body   string
+	header http.Header
+}
+
 // samlACSPaths are well-known SAML Assertion Consumer Service (ACS) and
 // metadata endpoints.
 var samlACSPaths = []string{
@@ -147,6 +155,10 @@ func (s *Service) RunSAMLProbe(
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, samlBodyLimit))
 		_ = resp.Body.Close()
 
+		if IsBinaryShape(resp.Header) || !IsXMLShape(resp.Header) {
+			continue
+		}
+		shape := ClassifyResponseShape(resp.Header).String()
 		bodyStr := string(body)
 		if resp.StatusCode == 200 && strings.Contains(bodyStr, "X509Certificate") {
 			cert := samlExtractCert(bodyStr)
@@ -172,6 +184,7 @@ func (s *Service) RunSAMLProbe(
 				EvidenceFields: map[string]string{
 					"metadataEndpoint": ep,
 					"certPrefix":       truncateString(cert, 40),
+					"responseShape":    shape,
 				},
 			})
 		}
@@ -264,27 +277,38 @@ func (s *Service) RunSAMLProbe(
 
 			if r1 != nil && r2 != nil {
 				if samlLooksAccepted(r2.status, r2.body) && !samlLooksRejected(r2.body) {
+					diffOutcome, suppress := s.samlControlDifferential(ctx, ep, "", auth, options, "saml-probe", r2)
+					if suppress {
+						continue
+					}
+					shape := "unknown"
+					if r2.header != nil {
+						shape = ClassifyResponseShape(r2.header).String()
+					}
 					emitted[fid] = true
-					findings = append(findings, model.Finding{
-						ID:          fid,
-						Category:    "authentication",
-						Severity:    model.SeverityHigh,
-						Title:       "SAML assertion replay not prevented",
-						Description: "The ACS endpoint accepted a SAML assertion with an already-used AssertionID on a second POST request. A compliant SP must track consumed assertion IDs and reject replays within the NotOnOrAfter window to prevent session hijacking via captured assertions.",
-						Evidence:    fmt.Sprintf("POST %s with AssertionID %q → first HTTP %d, second HTTP %d (not rejected)", ep, assertionID, r1.status, r2.status),
+					finding := model.Finding{
+						ID:             fid,
+						Category:       "authentication",
+						Severity:       model.SeverityHigh,
+						Title:          "SAML assertion replay not prevented",
+						Description:    "The ACS endpoint accepted a SAML assertion with an already-used AssertionID on a second POST request. A compliant SP must track consumed assertion IDs and reject replays within the NotOnOrAfter window to prevent session hijacking via captured assertions.",
+						Evidence:       fmt.Sprintf("POST %s with AssertionID %q → first HTTP %d, second HTTP %d (not rejected)", ep, assertionID, r1.status, r2.status),
 						Recommendation: "Implement an assertion replay cache that records used AssertionID values until their NotOnOrAfter timestamp expires. Reject any assertion whose ID appears in the cache.",
-						Confidence:    0.78,
-						AffectedURL:   ep,
-						CWE:           "CWE-294",
-						OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-						Sources:       []string{"active-scanner", "saml-probe"},
-						BusinessTags:  []string{"saml", "session-replay", "golden-saml"},
+						Confidence:     0.78,
+						AffectedURL:    ep,
+						CWE:            "CWE-294",
+						OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+						Sources:        []string{"active-scanner", "saml-probe"},
+						BusinessTags:   []string{"saml", "session-replay", "golden-saml"},
 						EvidenceFields: map[string]string{
 							"assertionID":   assertionID,
 							"firstStatus":   fmt.Sprintf("%d", r1.status),
 							"secondStatus":  fmt.Sprintf("%d", r2.status),
+							"responseShape": shape,
 						},
-					})
+					}
+					AttachDifferentialEvidence(&finding, diffOutcome)
+					findings = append(findings, finding)
 					break
 				}
 			}
@@ -411,32 +435,74 @@ func (s *Service) RunSAMLProbe(
 			if r == nil {
 				continue
 			}
+			if IsBinaryShape(r.header) || !IsXMLShape(r.header) {
+				continue
+			}
+			shape := ClassifyResponseShape(r.header).String()
 			lowerBody := strings.ToLower(r.body)
 			// Look for file-read signals in the response.
 			xxeSignals := []string{"root:x:", "/bin/sh", "daemon:", "/etc/passwd", "xxe-canary"}
+			safeResponse := buildSAMLResponseUnsigned(responseID+"-safe", assertionID+"-safe", issueInstant, notOnOrAfter, entityID, ep, "safe-control@example.com")
+			baselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+				ctrl := samlPostResponse(bctx, s, ep, safeResponse, "", auth, options)
+				if ctrl == nil {
+					return BaselineSample{}, fmt.Errorf("saml xxe control failed")
+				}
+				return BaselineSample{Status: ctrl.status, Body: ctrl.body}, nil
+			})
 			for _, sig := range xxeSignals {
 				if strings.Contains(lowerBody, sig) {
+					if berr == nil && (strings.Contains(strings.ToLower(baselines.First.Body), sig) || strings.Contains(strings.ToLower(baselines.Second.Body), sig)) {
+						break
+					}
+					diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+						ProbeName:       "saml-probe",
+						OriginalPayload: xxeResponse,
+						SafePayload:     safeResponse,
+						Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+							ctrl := samlPostResponse(dctx, s, ep, altPayload, "", auth, options)
+							if ctrl == nil {
+								return nil, nil, fmt.Errorf("saml xxe differential failed")
+							}
+							return &http.Response{StatusCode: ctrl.status, Header: ctrl.header}, []byte(ctrl.body), nil
+						},
+						Oracle: func(_ context.Context, _ string, _ *http.Response, body []byte) (bool, error) {
+							lower := strings.ToLower(string(body))
+							for _, candidateSig := range xxeSignals {
+								if strings.Contains(lower, candidateSig) {
+									return true, nil
+								}
+							}
+							return false, nil
+						},
+					})
+					if diffOutcome.Ran && !diffOutcome.Confirmed {
+						break
+					}
 					emitted[fid] = true
-					findings = append(findings, model.Finding{
-						ID:          fid,
-						Category:    "authentication",
-						Severity:    model.SeverityCritical,
-						Title:       "SAML XXE — XML external entity injection via SAML assertion",
-						Description: "The SAML ACS endpoint's XML parser processed an external entity declaration injected into the SAML Response. The response body contained file-read signals (" + sig + "), confirming the server-side XML parser resolved the entity reference. An attacker can read arbitrary files from the server, perform server-side request forgery, or cause denial of service.",
-						Evidence:    fmt.Sprintf("POST %s with XXE payload → HTTP %d, body contained %q", ep, r.status, sig),
+					finding := model.Finding{
+						ID:             fid,
+						Category:       "authentication",
+						Severity:       model.SeverityCritical,
+						Title:          "SAML XXE — XML external entity injection via SAML assertion",
+						Description:    "The SAML ACS endpoint's XML parser processed an external entity declaration injected into the SAML Response. The response body contained file-read signals (" + sig + "), confirming the server-side XML parser resolved the entity reference. An attacker can read arbitrary files from the server, perform server-side request forgery, or cause denial of service.",
+						Evidence:       fmt.Sprintf("POST %s with XXE payload → HTTP %d, body contained %q", ep, r.status, sig),
 						Recommendation: "Disable XML external entity processing (XXE) in the SAML library configuration. Use a safe XML parser that ignores or rejects DOCTYPE declarations. Many languages provide a flag such as FEATURE_SECURE_PROCESSING or DISALLOW_DOCTYPE_DECL.",
-						Confidence:    0.90,
-						AffectedURL:   ep,
-						CWE:           "CWE-611",
-						OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-						Sources:       []string{"active-scanner", "saml-probe"},
-						BusinessTags:  []string{"saml", "xxe", "golden-saml"},
+						Confidence:     0.90,
+						AffectedURL:    ep,
+						CWE:            "CWE-611",
+						OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+						Sources:        []string{"active-scanner", "saml-probe"},
+						BusinessTags:   []string{"saml", "xxe", "golden-saml"},
 						EvidenceFields: map[string]string{
 							"acsEndpoint":    ep,
 							"xxeSignal":      sig,
 							"responseStatus": fmt.Sprintf("%d", r.status),
+							"responseShape":  shape,
 						},
-					})
+					}
+					AttachDifferentialEvidence(&finding, diffOutcome)
+					findings = append(findings, finding)
 					break
 				}
 			}
@@ -466,12 +532,21 @@ func (s *Service) testSAMLPost(
 		return nil
 	}
 	if samlLooksAccepted(r.status, r.body) && !samlLooksRejected(r.body) {
+		diffOutcome, suppress := s.samlControlDifferential(ctx, ep, relayState, auth, options, "saml-probe", r)
+		if suppress {
+			return nil
+		}
+		shape := "unknown"
+		if r.header != nil {
+			shape = ClassifyResponseShape(r.header).String()
+		}
 		ef := map[string]string{
 			"validationType": "active-probe",
 			"acsEndpoint":    ep,
 			"responseStatus": fmt.Sprintf("%d", r.status),
+			"responseShape":  shape,
 		}
-		return &model.Finding{
+		finding := model.Finding{
 			ID:                findingID,
 			Category:          "authentication",
 			Severity:          severity,
@@ -488,12 +563,14 @@ func (s *Service) testSAMLPost(
 			BusinessTags:      []string{"saml", "golden-saml", "federation"},
 			EvidenceFields:    ef,
 		}
+		AttachDifferentialEvidence(&finding, diffOutcome)
+		return &finding
 	}
 	return nil
 }
 
 // samlPostResponse POSTs a base64-encoded SAMLResponse to the ACS endpoint.
-func samlPostResponse(ctx context.Context, s *Service, ep, samlResponse, relayState string, auth model.ScanAuthProfile, options model.ScanOptions) *oauthPostFormResult {
+func samlPostResponse(ctx context.Context, s *Service, ep, samlResponse, relayState string, auth model.ScanAuthProfile, options model.ScanOptions) *samlPostResult {
 	encoded := base64.StdEncoding.EncodeToString([]byte(samlResponse))
 	vals := url.Values{"SAMLResponse": {encoded}}
 	if relayState != "" {
@@ -511,7 +588,60 @@ func samlPostResponse(ctx context.Context, s *Service, ep, samlResponse, relaySt
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, samlBodyLimit))
 	_ = resp.Body.Close()
-	return &oauthPostFormResult{status: resp.StatusCode, body: string(body)}
+	return &samlPostResult{status: resp.StatusCode, body: string(body), header: resp.Header}
+}
+
+func samlEquivalentToCandidate(status int, body string, candidate *samlPostResult, controlVariance int) bool {
+	if candidate == nil || status != candidate.status {
+		return false
+	}
+	normalized := NormalizeResponseBody(body)
+	target := NormalizeResponseBody(candidate.body)
+	if normalized == target {
+		return true
+	}
+	delta := absInt(len(normalized) - len(target))
+	return !ExceedsControlVariance(float64(delta), float64(controlVariance))
+}
+
+func (s *Service) samlControlDifferential(ctx context.Context, ep, relayState string, auth model.ScanAuthProfile, options model.ScanOptions, probeName string, candidate *samlPostResult) (DifferentialReVerifyOutcome, bool) {
+	controlVariance := 0
+	baselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+		ctrl := samlPostResponse(bctx, s, ep, samlControlResponse, relayState, auth, options)
+		if ctrl == nil {
+			return BaselineSample{}, fmt.Errorf("saml control baseline failed")
+		}
+		return BaselineSample{Status: ctrl.status, Body: ctrl.body}, nil
+	})
+	if berr == nil {
+		controlVariance = baselines.BodyByteVariance
+		if samlEquivalentToCandidate(baselines.First.Status, baselines.First.Body, candidate, controlVariance) ||
+			samlEquivalentToCandidate(baselines.Second.Status, baselines.Second.Body, candidate, controlVariance) {
+			return DifferentialReVerifyOutcome{}, true
+		}
+	}
+	out := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+		ProbeName:       probeName,
+		OriginalPayload: candidate.body,
+		SafePayload:     samlControlResponse,
+		Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+			ctrl := samlPostResponse(dctx, s, ep, altPayload, relayState, auth, options)
+			if ctrl == nil {
+				return nil, nil, fmt.Errorf("saml control differential failed")
+			}
+			return &http.Response{StatusCode: ctrl.status, Header: ctrl.header}, []byte(ctrl.body), nil
+		},
+		Oracle: func(_ context.Context, _ string, resp *http.Response, body []byte) (bool, error) {
+			if resp == nil {
+				return false, nil
+			}
+			return samlEquivalentToCandidate(resp.StatusCode, string(body), candidate, controlVariance), nil
+		},
+	})
+	if out.Ran && !out.Confirmed {
+		return out, true
+	}
+	return out, false
 }
 
 // samlLooksAccepted returns true when a SAML ACS response looks like it

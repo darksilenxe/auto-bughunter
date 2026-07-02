@@ -48,6 +48,9 @@ func TestProbeOptionsMethod_DangerousMethodReported(t *testing.T) {
 	if !hasDangerousTrace {
 		t.Fatal("expected CWE-16 finding for TRACE method")
 	}
+	if findings[0].EvidenceFields["preReport.verified"] != "true" {
+		t.Fatalf("expected verifier metadata on OPTIONS finding, got %+v", findings[0].EvidenceFields)
+	}
 }
 
 func TestProbeOptionsMethod_SafeMethodsNoFinding(t *testing.T) {

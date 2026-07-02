@@ -16,6 +16,16 @@ func newSAMLScope(baseURL string) model.ScanScope {
 	return scope.Normalize(baseURL, model.ScanScope{IncludeHosts: []string{"127.0.0.1"}})
 }
 
+func decodeSAMLResponse(encoded string) string {
+	decoded, _ := base64.StdEncoding.DecodeString(encoded)
+	return string(decoded)
+}
+
+func isProbeSAMLPayload(encoded string) bool {
+	decoded := decodeSAMLResponse(encoded)
+	return strings.Contains(decoded, "<samlp:Response") || strings.Contains(decoded, "<!DOCTYPE foo")
+}
+
 // TestSAMLProbe_PassiveOnly ensures the probe is a no-op in passive mode.
 func TestSAMLProbe_PassiveOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -72,9 +82,14 @@ func TestSAMLProbe_SurfaceDiscovered(t *testing.T) {
 func TestSAMLProbe_UnsignedAssertion_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "saml") && r.Method == http.MethodPost {
-			// ACS accepts everything — no signature check.
-			if r.PostFormValue("SAMLResponse") != "" {
-				http.Redirect(w, r, "/dashboard", http.StatusFound)
+			// ACS accepts probe SAML payloads but rejects control payloads.
+			if encoded := r.PostFormValue("SAMLResponse"); encoded != "" {
+				if isProbeSAMLPayload(encoded) {
+					http.Redirect(w, r, "/dashboard", http.StatusFound)
+					return
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("invalid saml"))
 				return
 			}
 		}
@@ -137,9 +152,18 @@ func TestSAMLProbe_UnsignedAssertion_Rejected(t *testing.T) {
 // ACS accepts the same SAMLResponse ID twice.
 func TestSAMLProbe_AssertionReplay_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Accept every request — no replay detection, no signature validation.
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"success"}`))
+		if encoded := r.PostFormValue("SAMLResponse"); encoded != "" {
+			if isProbeSAMLPayload(encoded) {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"success"}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("invalid saml"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -198,5 +222,27 @@ func TestSAMLProbe_CertificateExposure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected certificate-exposure finding; got: %+v", findings)
+	}
+}
+
+func TestSAMLProbe_MetadataCertExposureRequiresXMLShape(t *testing.T) {
+	xmlBody := `<?xml version="1.0"?><EntityDescriptor><ds:X509Certificate>RkFLRUNFUlQ=</ds:X509Certificate></EntityDescriptor>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(xmlBody))
+	}))
+	defer srv.Close()
+	findings := NewService(Config{}).RunSAMLProbe(
+		context.Background(), srv.URL,
+		newSAMLScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{},
+		func(model.ScanEvent) {},
+	)
+	for _, f := range findings {
+		if f.ID == "saml-metadata-cert-exposure" {
+			t.Fatalf("expected XML shape gate to suppress metadata cert finding, got %+v", f)
+		}
 	}
 }

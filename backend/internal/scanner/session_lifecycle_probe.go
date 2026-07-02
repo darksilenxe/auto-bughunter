@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/proofpolicy"
 	"auto-bughunter/backend/internal/scope"
 )
 
@@ -130,25 +131,31 @@ func (s *Service) RunSessionLifecycleProbe(
 				newCookie := sessionAttemptLoginAndGetCookie(ctx, s, ep, auth, options)
 				if newCookie != "" && newCookie == preLoginCookie {
 					emitted[fid] = true
-					findings = append(findings, model.Finding{
-						ID:          fid,
-						Category:    "authentication",
-						Severity:    model.SeverityHigh,
-						Title:       "Session identifier not rotated after login",
-						Description: "The session cookie value was identical before and after authentication. The server did not issue a new session identifier upon login, leaving the session vulnerable to fixation attacks where an attacker pre-sets a known session ID and hijacks the authenticated session.",
-						Evidence:    fmt.Sprintf("Session cookie value unchanged before/after login at %s: %q", ep, truncateString(preLoginCookie, 30)),
+					candidate := model.Finding{
+						ID:             fid,
+						Category:       "authentication",
+						Severity:       model.SeverityHigh,
+						Title:          "Session identifier not rotated after login",
+						Description:    "The session cookie value was identical before and after authentication. The server did not issue a new session identifier upon login, leaving the session vulnerable to fixation attacks where an attacker pre-sets a known session ID and hijacks the authenticated session.",
+						Evidence:       fmt.Sprintf("Session cookie value unchanged before/after login at %s: %q", ep, truncateString(preLoginCookie, 30)),
 						Recommendation: "Regenerate the session identifier immediately upon successful authentication. Invalidate the pre-login session and issue a new, cryptographically random session token.",
-						Confidence:    0.85,
-						AffectedURL:   ep,
-						CWE:           "CWE-384",
-						OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-						Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-						BusinessTags:  []string{"session-fixation", "session-rotation"},
+						Confidence:     0.85,
+						AffectedURL:    ep,
+						CWE:            "CWE-384",
+						OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+						Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+						BusinessTags:   []string{"session-fixation", "session-rotation"},
 						EvidenceFields: map[string]string{
 							"validationType":  "active-probe",
 							"preLoginCookie":  truncateString(preLoginCookie, 30),
 							"postLoginCookie": truncateString(newCookie, 30),
 						},
+					}
+					findings = sessionLifecycleAppendFinding(ctx, findings, candidate, nil, func(replayCtx context.Context) (bool, string, error) {
+						replayedCookie := sessionAttemptLoginAndGetCookie(replayCtx, s, ep, auth, options)
+						success := replayedCookie != "" && replayedCookie == preLoginCookie
+						transcript := fmt.Sprintf("POST %s with pre-login cookie → Set-Cookie %q", ep, truncateString(replayedCookie, 30))
+						return success, transcript, nil
 					})
 					break
 				}
@@ -228,26 +235,60 @@ func (s *Service) RunSessionLifecycleProbe(
 						!strings.Contains(lowerBody, "login") &&
 						!strings.Contains(lowerBody, "sign in") {
 						emitted[fid] = true
-						findings = append(findings, model.Finding{
-							ID:          fid,
-							Category:    "authentication",
-							Severity:    model.SeverityHigh,
-							Title:       "Session not invalidated server-side after logout",
-							Description: "After calling the logout endpoint, the original session token was replayed and the server returned a successful (2xx) response. Server-side session state was not destroyed on logout, meaning a stolen session token remains valid indefinitely after the user logs out.",
-							Evidence:    fmt.Sprintf("POST/GET %s (logout) → then GET %s with original token → HTTP %d", logoutEP, protectedEP, resp2.StatusCode),
+						candidate := model.Finding{
+							ID:             fid,
+							Category:       "authentication",
+							Severity:       model.SeverityHigh,
+							Title:          "Session not invalidated server-side after logout",
+							Description:    "After calling the logout endpoint, the original session token was replayed and the server returned a successful (2xx) response. Server-side session state was not destroyed on logout, meaning a stolen session token remains valid indefinitely after the user logs out.",
+							Evidence:       fmt.Sprintf("POST/GET %s (logout) → then GET %s with original token → HTTP %d", logoutEP, protectedEP, resp2.StatusCode),
 							Recommendation: "Destroy server-side session state immediately when the logout endpoint is called. Invalidate all related tokens and cookies. Redirect to the login page.",
-							Confidence:    0.82,
-							AffectedURL:   logoutEP,
-							CWE:           "CWE-613",
-							OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-							Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-							BusinessTags:  []string{"session-invalidation", "logout"},
+							Confidence:     0.82,
+							AffectedURL:    logoutEP,
+							CWE:            "CWE-613",
+							OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+							Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+							BusinessTags:   []string{"session-invalidation", "logout"},
 							EvidenceFields: map[string]string{
-								"validationType":  "active-probe",
-								"logoutEndpoint":  logoutEP,
-								"replayEndpoint":  protectedEP,
-								"replayStatus":    fmt.Sprintf("%d", resp2.StatusCode),
+								"validationType": "active-probe",
+								"logoutEndpoint": logoutEP,
+								"replayEndpoint": protectedEP,
+								"replayStatus":   fmt.Sprintf("%d", resp2.StatusCode),
 							},
+						}
+						findings = sessionLifecycleAppendFinding(ctx, findings, candidate, nil, func(replayCtx context.Context) (bool, string, error) {
+							replayReq, err := http.NewRequestWithContext(replayCtx, http.MethodPost, logoutEP, nil)
+							if err != nil {
+								return false, "", err
+							}
+							ApplyAuthProfile(replayReq, auth)
+							replayLogoutResp, err := s.doRequestWithRetry(replayCtx, replayReq, options)
+							if err != nil || replayLogoutResp == nil {
+								return false, "", err
+							}
+							_ = replayLogoutResp.Body.Close()
+							replayProtectedReq, err := http.NewRequestWithContext(replayCtx, http.MethodGet, protectedEP, nil)
+							if err != nil {
+								return false, "", err
+							}
+							if bearerToken != "" {
+								replayProtectedReq.Header.Set("Authorization", "Bearer "+bearerToken)
+							} else if sessionCookie != "" {
+								replayProtectedReq.AddCookie(&http.Cookie{Name: "session", Value: sessionCookie})
+							}
+							replayProtectedResp, err := s.doRequestWithRetry(replayCtx, replayProtectedReq, options)
+							if err != nil || replayProtectedResp == nil {
+								return false, "", err
+							}
+							defer replayProtectedResp.Body.Close()
+							replayBody, _ := io.ReadAll(io.LimitReader(replayProtectedResp.Body, sessionLifecycleBodyLimit))
+							lowerReplayBody := strings.ToLower(string(replayBody))
+							success := replayProtectedResp.StatusCode >= 200 && replayProtectedResp.StatusCode < 300 &&
+								!strings.Contains(lowerReplayBody, "unauthorized") &&
+								!strings.Contains(lowerReplayBody, "login") &&
+								!strings.Contains(lowerReplayBody, "sign in")
+							transcript := fmt.Sprintf("POST %s → GET %s with original credential → HTTP %d", logoutEP, protectedEP, replayProtectedResp.StatusCode)
+							return success, transcript, nil
 						})
 						break
 					}
@@ -304,19 +345,19 @@ func (s *Service) RunSessionLifecycleProbe(
 							!strings.Contains(lowerBody, "unauthorized") {
 							emitted[fid] = true
 							findings = append(findings, model.Finding{
-								ID:          fid,
-								Category:    "authentication",
-								Severity:    model.SeverityMedium,
-								Title:       "Active sessions not invalidated on password change",
-								Description: "After changing the account password, the original access token remained valid and the server returned a successful response. Changing a password should invalidate all existing sessions to prevent an attacker who has stolen a session from retaining access.",
-								Evidence:    fmt.Sprintf("POST %s (password change) → GET %s with original token → HTTP %d", pwEP, protectedEP, resp2.StatusCode),
+								ID:             fid,
+								Category:       "authentication",
+								Severity:       model.SeverityMedium,
+								Title:          "Active sessions not invalidated on password change",
+								Description:    "After changing the account password, the original access token remained valid and the server returned a successful response. Changing a password should invalidate all existing sessions to prevent an attacker who has stolen a session from retaining access.",
+								Evidence:       fmt.Sprintf("POST %s (password change) → GET %s with original token → HTTP %d", pwEP, protectedEP, resp2.StatusCode),
 								Recommendation: "Invalidate all active sessions and tokens immediately when a password change is processed. Force re-authentication with the new credentials.",
-								Confidence:    0.78,
-								AffectedURL:   pwEP,
-								CWE:           "CWE-613",
-								OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-								Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-								BusinessTags:  []string{"session-invalidation", "password-change"},
+								Confidence:     0.78,
+								AffectedURL:    pwEP,
+								CWE:            "CWE-613",
+								OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+								Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+								BusinessTags:   []string{"session-invalidation", "password-change"},
 								EvidenceFields: map[string]string{
 									"validationType": "active-probe",
 									"passwordEP":     pwEP,
@@ -346,19 +387,19 @@ func (s *Service) RunSessionLifecycleProbe(
 			if cookie1 != "" && cookie2 != "" && cookie1 != cookie2 {
 				emitted[fid] = true
 				findings = append(findings, model.Finding{
-					ID:          fid,
-					Category:    "authentication",
-					Severity:    model.SeverityInfo,
-					Title:       "Concurrent sessions allowed — no session limit enforced",
-					Description: "Two simultaneous login sessions were established for the same account without invalidating the first. Depending on the application's risk tolerance, concurrent sessions may increase the window for session hijacking after credential compromise.",
-					Evidence:    fmt.Sprintf("Two logins at %s returned distinct session tokens", ep),
+					ID:             fid,
+					Category:       "authentication",
+					Severity:       model.SeverityInfo,
+					Title:          "Concurrent sessions allowed — no session limit enforced",
+					Description:    "Two simultaneous login sessions were established for the same account without invalidating the first. Depending on the application's risk tolerance, concurrent sessions may increase the window for session hijacking after credential compromise.",
+					Evidence:       fmt.Sprintf("Two logins at %s returned distinct session tokens", ep),
 					Recommendation: "Consider limiting concurrent sessions for sensitive applications. At minimum, provide users with session management UI to view and revoke active sessions.",
-					Confidence:    0.70,
-					AffectedURL:   ep,
-					CWE:           "CWE-613",
-					OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-					Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-					BusinessTags:  []string{"session-management", "concurrent-sessions"},
+					Confidence:     0.70,
+					AffectedURL:    ep,
+					CWE:            "CWE-613",
+					OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+					Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+					BusinessTags:   []string{"session-management", "concurrent-sessions"},
 					EvidenceFields: map[string]string{
 						"validationType": "active-probe",
 						"sessionCount":   "2",
@@ -373,6 +414,24 @@ func (s *Service) RunSessionLifecycleProbe(
 
 // sessionAnalyzeCookieHeaders inspects Set-Cookie headers and emits findings
 // for missing Secure, HttpOnly, SameSite, and overly broad Domain.
+func sessionLifecycleAppendFinding(ctx context.Context, findings []model.Finding, cand model.Finding, signals []EvidenceSignal, replay PoCReplayFunc) []model.Finding {
+	if !RequiresUnconditionalVerification(cand.Severity) {
+		return append(findings, cand)
+	}
+	policyCategory := proofpolicy.EvaluateFinding(cand).Category
+	out := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:               cand,
+		Signals:               signals,
+		PoCReplay:             replay,
+		AllowNoReplayEmission: policyCategory != "",
+		ProbeName:             "session-lifecycle-probe",
+	})
+	if out.Suppressed {
+		return findings
+	}
+	return append(findings, out.EmittedFinding)
+}
+
 func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target string) []model.Finding {
 	var findings []model.Finding
 	for _, ck := range cookies {
@@ -383,19 +442,19 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 		// Probe 5: Missing Secure flag.
 		if !ck.Secure && base.Scheme == "https" {
 			findings = append(findings, model.Finding{
-				ID:          "cookie-missing-secure-flag",
-				Category:    "authentication",
-				Severity:    model.SeverityMedium,
-				Title:       fmt.Sprintf("Session cookie %q missing Secure flag", ck.Name),
-				Description: "The authentication cookie is served without the Secure attribute over an HTTPS connection. If the user's browser ever makes an HTTP request to the same host (via redirect, mixed content, or HSTS pre-load gap), the cookie will be sent in plaintext.",
-				Evidence:    fmt.Sprintf("Set-Cookie: %s (Secure flag absent)", ck.Name),
+				ID:             "cookie-missing-secure-flag",
+				Category:       "authentication",
+				Severity:       model.SeverityMedium,
+				Title:          fmt.Sprintf("Session cookie %q missing Secure flag", ck.Name),
+				Description:    "The authentication cookie is served without the Secure attribute over an HTTPS connection. If the user's browser ever makes an HTTP request to the same host (via redirect, mixed content, or HSTS pre-load gap), the cookie will be sent in plaintext.",
+				Evidence:       fmt.Sprintf("Set-Cookie: %s (Secure flag absent)", ck.Name),
 				Recommendation: "Set the Secure attribute on all authentication cookies so they are only transmitted over HTTPS.",
-				Confidence:    0.90,
-				AffectedURL:   target,
-				CWE:           "CWE-614",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-				BusinessTags:  []string{"cookie", "secure-flag"},
+				Confidence:     0.90,
+				AffectedURL:    target,
+				CWE:            "CWE-614",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+				BusinessTags:   []string{"cookie", "secure-flag"},
 				EvidenceFields: map[string]string{"cookieName": ck.Name, "secureFlagPresent": "false"},
 			})
 		}
@@ -403,19 +462,19 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 		// Probe 6: Missing HttpOnly flag.
 		if !ck.HttpOnly {
 			findings = append(findings, model.Finding{
-				ID:          "cookie-missing-httponly-flag",
-				Category:    "authentication",
-				Severity:    model.SeverityMedium,
-				Title:       fmt.Sprintf("Session cookie %q missing HttpOnly flag", ck.Name),
-				Description: "The authentication cookie lacks the HttpOnly attribute, making it accessible via JavaScript (document.cookie). Any XSS vulnerability in the application can be used to steal the session token.",
-				Evidence:    fmt.Sprintf("Set-Cookie: %s (HttpOnly flag absent)", ck.Name),
+				ID:             "cookie-missing-httponly-flag",
+				Category:       "authentication",
+				Severity:       model.SeverityMedium,
+				Title:          fmt.Sprintf("Session cookie %q missing HttpOnly flag", ck.Name),
+				Description:    "The authentication cookie lacks the HttpOnly attribute, making it accessible via JavaScript (document.cookie). Any XSS vulnerability in the application can be used to steal the session token.",
+				Evidence:       fmt.Sprintf("Set-Cookie: %s (HttpOnly flag absent)", ck.Name),
 				Recommendation: "Set the HttpOnly attribute on all authentication cookies to prevent JavaScript access.",
-				Confidence:    0.90,
-				AffectedURL:   target,
-				CWE:           "CWE-1004",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-				BusinessTags:  []string{"cookie", "httponly-flag"},
+				Confidence:     0.90,
+				AffectedURL:    target,
+				CWE:            "CWE-1004",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+				BusinessTags:   []string{"cookie", "httponly-flag"},
 				EvidenceFields: map[string]string{"cookieName": ck.Name, "httpOnlyFlagPresent": "false"},
 			})
 		}
@@ -424,19 +483,19 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 		sameSite := sameSiteString(ck.SameSite)
 		if ck.SameSite == http.SameSiteDefaultMode || ck.SameSite == http.SameSiteNoneMode {
 			findings = append(findings, model.Finding{
-				ID:          "cookie-samesite-not-enforced",
-				Category:    "authentication",
-				Severity:    model.SeverityMedium,
-				Title:       fmt.Sprintf("Session cookie %q missing or permissive SameSite attribute", ck.Name),
-				Description: fmt.Sprintf("The authentication cookie has SameSite=%q. Without SameSite=Strict or Lax, cross-site requests initiated by a malicious page will include the cookie, enabling CSRF even without a token if the server relies on cookie-based authentication alone.", sameSite),
-				Evidence:    fmt.Sprintf("Set-Cookie: %s; SameSite=%s", ck.Name, sameSite),
+				ID:             "cookie-samesite-not-enforced",
+				Category:       "authentication",
+				Severity:       model.SeverityMedium,
+				Title:          fmt.Sprintf("Session cookie %q missing or permissive SameSite attribute", ck.Name),
+				Description:    fmt.Sprintf("The authentication cookie has SameSite=%q. Without SameSite=Strict or Lax, cross-site requests initiated by a malicious page will include the cookie, enabling CSRF even without a token if the server relies on cookie-based authentication alone.", sameSite),
+				Evidence:       fmt.Sprintf("Set-Cookie: %s; SameSite=%s", ck.Name, sameSite),
 				Recommendation: "Set SameSite=Strict for session cookies where cross-site POST is not required, or SameSite=Lax as a minimum baseline.",
-				Confidence:    0.85,
-				AffectedURL:   target,
-				CWE:           "CWE-352",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-				BusinessTags:  []string{"cookie", "samesite"},
+				Confidence:     0.85,
+				AffectedURL:    target,
+				CWE:            "CWE-352",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+				BusinessTags:   []string{"cookie", "samesite"},
 				EvidenceFields: map[string]string{"cookieName": ck.Name, "sameSite": sameSite},
 			})
 		}
@@ -444,19 +503,19 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 		// Probe 8: Overly broad Domain.
 		if ck.Domain != "" && strings.HasPrefix(ck.Domain, ".") {
 			findings = append(findings, model.Finding{
-				ID:          "cookie-broad-domain-scope",
-				Category:    "authentication",
-				Severity:    model.SeverityMedium,
-				Title:       fmt.Sprintf("Session cookie %q scoped to parent domain %q", ck.Name, ck.Domain),
-				Description: fmt.Sprintf("The authentication cookie has Domain=%q, which shares it across all subdomains of %s. A subdomain under attacker control (e.g., via subdomain takeover) can read or set the session cookie.", ck.Domain, ck.Domain),
-				Evidence:    fmt.Sprintf("Set-Cookie: %s; Domain=%s", ck.Name, ck.Domain),
+				ID:             "cookie-broad-domain-scope",
+				Category:       "authentication",
+				Severity:       model.SeverityMedium,
+				Title:          fmt.Sprintf("Session cookie %q scoped to parent domain %q", ck.Name, ck.Domain),
+				Description:    fmt.Sprintf("The authentication cookie has Domain=%q, which shares it across all subdomains of %s. A subdomain under attacker control (e.g., via subdomain takeover) can read or set the session cookie.", ck.Domain, ck.Domain),
+				Evidence:       fmt.Sprintf("Set-Cookie: %s; Domain=%s", ck.Name, ck.Domain),
 				Recommendation: "Scope session cookies to the exact host (omit the Domain attribute) unless cross-subdomain sharing is intentional and all subdomains are equally trusted.",
-				Confidence:    0.80,
-				AffectedURL:   target,
-				CWE:           "CWE-565",
-				OWASPCategory: "A07:2021 - Identification and Authentication Failures",
-				Sources:       []string{"active-scanner", "session-lifecycle-probe"},
-				BusinessTags:  []string{"cookie", "domain-scope"},
+				Confidence:     0.80,
+				AffectedURL:    target,
+				CWE:            "CWE-565",
+				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
+				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
+				BusinessTags:   []string{"cookie", "domain-scope"},
 				EvidenceFields: map[string]string{"cookieName": ck.Name, "domain": ck.Domain},
 			})
 		}
@@ -483,6 +542,18 @@ func sessionExtractSessionCookie(auth model.ScanAuthProfile) string {
 			return val
 		}
 	}
+	for _, headerName := range []string{"Cookie", "cookie"} {
+		for _, part := range strings.Split(auth.Headers[headerName], ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name, value, ok := strings.Cut(part, "=")
+			if ok && sessionIsAuthCookie(name) && value != "" {
+				return value
+			}
+		}
+	}
 	return ""
 }
 
@@ -503,6 +574,7 @@ func sessionAttemptLoginAndGetCookie(ctx context.Context, s *Service, ep string,
 		return ""
 	}
 	req.Header.Set("Content-Type", "application/json")
+	ApplyAuthProfile(req, auth)
 	resp, err := s.doRequestWithRetry(ctx, req, options)
 	if err != nil || resp == nil {
 		return ""
@@ -592,16 +664,16 @@ func sessionDiscoverProtectedEndpoints(base *url.URL, seeded []string, scanScope
 
 // sameSiteString returns a human-readable string for an http.SameSite value.
 func sameSiteString(s http.SameSite) string {
-switch s {
-case http.SameSiteDefaultMode:
-return "default"
-case http.SameSiteLaxMode:
-return "Lax"
-case http.SameSiteStrictMode:
-return "Strict"
-case http.SameSiteNoneMode:
-return "None"
-default:
-return "unknown"
-}
+	switch s {
+	case http.SameSiteDefaultMode:
+		return "default"
+	case http.SameSiteLaxMode:
+		return "Lax"
+	case http.SameSiteStrictMode:
+		return "Strict"
+	case http.SameSiteNoneMode:
+		return "None"
+	default:
+		return "unknown"
+	}
 }
