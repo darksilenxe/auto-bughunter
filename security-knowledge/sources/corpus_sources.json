@@ -16,7 +16,7 @@
   "entries": [
     {
       "id": "portswigger-sqli-academy",
-      "title": "PortSwigger Web Security Academy — SQL injection",
+      "title": "PortSwigger Web Security Academy \u2014 SQL injection",
       "url": "https://portswigger.net/web-security/sql-injection",
       "sourceType": "portswigger",
       "license": "source-url-only",
@@ -36,7 +36,7 @@
     },
     {
       "id": "portswigger-xss-academy",
-      "title": "PortSwigger Web Security Academy — Cross-site scripting",
+      "title": "PortSwigger Web Security Academy \u2014 Cross-site scripting",
       "url": "https://portswigger.net/web-security/cross-site-scripting",
       "sourceType": "portswigger",
       "license": "source-url-only",
@@ -57,7 +57,7 @@
     },
     {
       "id": "portswigger-access-control",
-      "title": "PortSwigger Web Security Academy — Access control vulnerabilities",
+      "title": "PortSwigger Web Security Academy \u2014 Access control vulnerabilities",
       "url": "https://portswigger.net/web-security/access-control",
       "sourceType": "portswigger",
       "license": "source-url-only",
@@ -78,7 +78,7 @@
     },
     {
       "id": "portswigger-ssrf-academy",
-      "title": "PortSwigger Web Security Academy — SSRF",
+      "title": "PortSwigger Web Security Academy \u2014 SSRF",
       "url": "https://portswigger.net/web-security/ssrf",
       "sourceType": "portswigger",
       "license": "source-url-only",
@@ -99,7 +99,7 @@
     },
     {
       "id": "owasp-api-authz",
-      "title": "OWASP API Security Top 10 — Broken Object Level Authorization",
+      "title": "OWASP API Security Top 10 \u2014 Broken Object Level Authorization",
       "url": "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/",
       "sourceType": "owasp",
       "license": "source-url-only",
@@ -120,7 +120,7 @@
     },
     {
       "id": "owasp-logging-monitoring",
-      "title": "OWASP Top 10 — Security logging and monitoring failures",
+      "title": "OWASP Top 10 \u2014 Security logging and monitoring failures",
       "url": "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/",
       "sourceType": "owasp",
       "license": "source-url-only",
@@ -140,7 +140,7 @@
     },
     {
       "id": "cwe-79",
-      "title": "CWE-79 — Improper Neutralization of Input During Web Page Generation",
+      "title": "CWE-79 \u2014 Improper Neutralization of Input During Web Page Generation",
       "url": "https://cwe.mitre.org/data/definitions/79.html",
       "sourceType": "cwe",
       "license": "source-url-only",
@@ -160,7 +160,7 @@
     },
     {
       "id": "cwe-89",
-      "title": "CWE-89 — Improper Neutralization of Special Elements used in an SQL Command",
+      "title": "CWE-89 \u2014 Improper Neutralization of Special Elements used in an SQL Command",
       "url": "https://cwe.mitre.org/data/definitions/89.html",
       "sourceType": "cwe",
       "license": "source-url-only",
@@ -180,7 +180,7 @@
     },
     {
       "id": "hacktricks-xss",
-      "title": "HackTricks — XSS (Cross-Site Scripting)",
+      "title": "HackTricks \u2014 XSS (Cross-Site Scripting)",
       "url": "https://hacktricks.wiki/en/pentesting-web/xss-cross-site-scripting.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -204,7 +204,7 @@
     },
     {
       "id": "payloadsallthethings-xss",
-      "title": "PayloadsAllTheThings — XSS Injection",
+      "title": "PayloadsAllTheThings \u2014 XSS Injection",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSS%20Injection",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -227,7 +227,7 @@
     },
     {
       "id": "hacktricks-sqli",
-      "title": "HackTricks — SQL Injection",
+      "title": "HackTricks \u2014 SQL Injection",
       "url": "https://hacktricks.wiki/en/pentesting-web/sql-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -250,7 +250,7 @@
     },
     {
       "id": "payloadsallthethings-sqli",
-      "title": "PayloadsAllTheThings — SQL Injection",
+      "title": "PayloadsAllTheThings \u2014 SQL Injection",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -274,7 +274,7 @@
     },
     {
       "id": "hacktricks-ssrf",
-      "title": "HackTricks — SSRF (Server-Side Request Forgery)",
+      "title": "HackTricks \u2014 SSRF (Server-Side Request Forgery)",
       "url": "https://hacktricks.wiki/en/pentesting-web/ssrf-server-side-request-forgery.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -297,7 +297,7 @@
     },
     {
       "id": "payloadsallthethings-ssrf",
-      "title": "PayloadsAllTheThings — Server Side Request Forgery",
+      "title": "PayloadsAllTheThings \u2014 Server Side Request Forgery",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Request%20Forgery",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -320,7 +320,7 @@
     },
     {
       "id": "hacktricks-idor",
-      "title": "HackTricks — IDOR (Insecure Direct Object Reference)",
+      "title": "HackTricks \u2014 IDOR (Insecure Direct Object Reference)",
       "url": "https://hacktricks.wiki/en/pentesting-web/idor.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -343,7 +343,7 @@
     },
     {
       "id": "payloadsallthethings-idor",
-      "title": "PayloadsAllTheThings — Insecure Direct Object References",
+      "title": "PayloadsAllTheThings \u2014 Insecure Direct Object References",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Insecure%20Direct%20Object%20References",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -365,7 +365,7 @@
     },
     {
       "id": "hacktricks-ssti",
-      "title": "HackTricks — Server-Side Template Injection",
+      "title": "HackTricks \u2014 Server-Side Template Injection",
       "url": "https://hacktricks.wiki/en/pentesting-web/ssti-server-side-template-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -388,7 +388,7 @@
     },
     {
       "id": "payloadsallthethings-ssti",
-      "title": "PayloadsAllTheThings — Server Side Template Injection",
+      "title": "PayloadsAllTheThings \u2014 Server Side Template Injection",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -411,7 +411,7 @@
     },
     {
       "id": "hacktricks-path-traversal",
-      "title": "HackTricks — File Inclusion / Path Traversal",
+      "title": "HackTricks \u2014 File Inclusion / Path Traversal",
       "url": "https://hacktricks.wiki/en/pentesting-web/file-inclusion.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -434,7 +434,7 @@
     },
     {
       "id": "payloadsallthethings-path-traversal",
-      "title": "PayloadsAllTheThings — Directory Traversal",
+      "title": "PayloadsAllTheThings \u2014 Directory Traversal",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Directory%20Traversal",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -457,7 +457,7 @@
     },
     {
       "id": "hacktricks-xxe",
-      "title": "HackTricks — XXE (XML External Entity)",
+      "title": "HackTricks \u2014 XXE (XML External Entity)",
       "url": "https://hacktricks.wiki/en/pentesting-web/xxe-xee-xml-external-entity.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -480,7 +480,7 @@
     },
     {
       "id": "payloadsallthethings-xxe",
-      "title": "PayloadsAllTheThings — XXE Injection",
+      "title": "PayloadsAllTheThings \u2014 XXE Injection",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XXE%20Injection",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -503,7 +503,7 @@
     },
     {
       "id": "hacktricks-command-injection",
-      "title": "HackTricks — Command Injection",
+      "title": "HackTricks \u2014 Command Injection",
       "url": "https://hacktricks.wiki/en/pentesting-web/command-injection.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -526,7 +526,7 @@
     },
     {
       "id": "payloadsallthethings-command-injection",
-      "title": "PayloadsAllTheThings — Command Injection",
+      "title": "PayloadsAllTheThings \u2014 Command Injection",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Command%20Injection",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -549,7 +549,7 @@
     },
     {
       "id": "hacktricks-jwt",
-      "title": "HackTricks — JWT (JSON Web Tokens)",
+      "title": "HackTricks \u2014 JWT (JSON Web Tokens)",
       "url": "https://hacktricks.wiki/en/pentesting-web/hacking-jwt-json-web-tokens.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -572,7 +572,7 @@
     },
     {
       "id": "payloadsallthethings-jwt",
-      "title": "PayloadsAllTheThings — JSON Web Token",
+      "title": "PayloadsAllTheThings \u2014 JSON Web Token",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/JSON%20Web%20Token",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -595,7 +595,7 @@
     },
     {
       "id": "hacktricks-open-redirect",
-      "title": "HackTricks — Open Redirect",
+      "title": "HackTricks \u2014 Open Redirect",
       "url": "https://hacktricks.wiki/en/pentesting-web/open-redirect.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -617,7 +617,7 @@
     },
     {
       "id": "payloadsallthethings-open-redirect",
-      "title": "PayloadsAllTheThings — Open Redirect",
+      "title": "PayloadsAllTheThings \u2014 Open Redirect",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Open%20Redirect",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -640,7 +640,7 @@
     },
     {
       "id": "hacktricks-cors",
-      "title": "HackTricks — CORS Bypass",
+      "title": "HackTricks \u2014 CORS Bypass",
       "url": "https://hacktricks.wiki/en/pentesting-web/cors-bypass.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -663,7 +663,7 @@
     },
     {
       "id": "payloadsallthethings-cors",
-      "title": "PayloadsAllTheThings — CORS Misconfiguration",
+      "title": "PayloadsAllTheThings \u2014 CORS Misconfiguration",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/CORS%20Misconfiguration",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -686,7 +686,7 @@
     },
     {
       "id": "hacktricks-auth-bypass",
-      "title": "HackTricks — Login / Authentication Bypass",
+      "title": "HackTricks \u2014 Login / Authentication Bypass",
       "url": "https://hacktricks.wiki/en/pentesting-web/login-bypass.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -708,7 +708,7 @@
     },
     {
       "id": "hacktricks-mass-assignment",
-      "title": "HackTricks — Mass Assignment",
+      "title": "HackTricks \u2014 Mass Assignment",
       "url": "https://hacktricks.wiki/en/pentesting-web/mass-assignment.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -730,7 +730,7 @@
     },
     {
       "id": "payloadsallthethings-mass-assignment",
-      "title": "PayloadsAllTheThings — Mass Assignment",
+      "title": "PayloadsAllTheThings \u2014 Mass Assignment",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Mass%20Assignment",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -752,7 +752,7 @@
     },
     {
       "id": "hacktricks-request-smuggling",
-      "title": "HackTricks — HTTP Request Smuggling",
+      "title": "HackTricks \u2014 HTTP Request Smuggling",
       "url": "https://hacktricks.wiki/en/pentesting-web/http-request-smuggling.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -775,7 +775,7 @@
     },
     {
       "id": "payloadsallthethings-request-smuggling",
-      "title": "PayloadsAllTheThings — Request Smuggling",
+      "title": "PayloadsAllTheThings \u2014 Request Smuggling",
       "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Request%20Smuggling",
       "sourceType": "payloadsallthethings",
       "license": "source-url-only",
@@ -798,7 +798,7 @@
     },
     {
       "id": "hacktricks-subdomain-takeover",
-      "title": "HackTricks — Domain/Subdomain Takeover",
+      "title": "HackTricks \u2014 Domain/Subdomain Takeover",
       "url": "https://hacktricks.wiki/en/pentesting-web/domain-subdomain-takeover.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -820,7 +820,7 @@
     },
     {
       "id": "hacktricks-info-disclosure",
-      "title": "HackTricks — Web Vulnerabilities Methodology",
+      "title": "HackTricks \u2014 Web Vulnerabilities Methodology",
       "url": "https://hacktricks.wiki/en/pentesting-web/web-vulnerabilities-methodology.html",
       "sourceType": "hacktricks",
       "license": "source-url-only",
@@ -836,6 +836,113 @@
         "gobuster"
       ],
       "passage": "Curated note: brute-force content for backup, VCS, and config artifacts (.git, .env, *.bak); HackTricks methodology prioritizes exposed source and secrets that convert low findings into high-impact disclosure.",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "id": "payloadsallthethings-zip-slip",
+      "title": "PayloadsAllTheThings \u2014 Upload Insecure Files (Zip Slip)",
+      "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Upload%20Insecure%20Files",
+      "sourceType": "payloadsallthethings",
+      "license": "source-url-only",
+      "topic": "archive extraction path traversal payload selection",
+      "vulnerabilityClass": "zip slip",
+      "technique": "traversal archive entry names for active upload fuzzing",
+      "keywords": [
+        "zip slip",
+        "archive extraction",
+        "path traversal",
+        "file upload"
+      ],
+      "passage": "Curated note: when probing upload endpoints that accept archives, use PayloadsAllTheThings Zip Slip entry-name payloads (../ sequences inside ZIP/TAR entries) and compare against a benign control archive to detect missing entry-name sanitisation before extraction.",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "id": "payloadsallthethings-xslt-injection",
+      "title": "PayloadsAllTheThings \u2014 XSLT Injection",
+      "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/XSLT%20Injection",
+      "sourceType": "payloadsallthethings",
+      "license": "source-url-only",
+      "topic": "xslt document() injection payload selection",
+      "vulnerabilityClass": "xslt injection",
+      "technique": "document() based local file read and out-of-band payload sets for active fuzzing",
+      "keywords": [
+        "xslt",
+        "document()",
+        "stylesheet",
+        "xxe-adjacent"
+      ],
+      "passage": "Curated note: seed XSLT fuzzing with document()-based file-read and out-of-band payloads on endpoints that evaluate a user- or partially-user-controlled stylesheet, matching the payload to the fingerprinted XSLT processor (libxslt, Saxon, Xalan, .NET).",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "id": "hacktricks-dns-rebinding",
+      "title": "HackTricks \u2014 SSRF URL format bypass (DNS rebinding class)",
+      "url": "https://hacktricks.wiki/en/pentesting-web/ssrf-server-side-request-forgery/url-format-bypass.html",
+      "sourceType": "hacktricks",
+      "license": "source-url-only",
+      "topic": "ssrf allowlist bypass via loopback-resolving hostnames",
+      "vulnerabilityClass": "server-side request forgery",
+      "technique": "public hostnames resolving to loopback/internal IPs (nip.io, lvh.me class) to bypass hostname-string allowlists",
+      "keywords": [
+        "dns rebinding",
+        "ssrf",
+        "nip.io",
+        "loopback",
+        "allowlist bypass"
+      ],
+      "passage": "Curated note: when a target's SSRF guard only checks the hostname string, test with public hostnames that resolve directly to loopback/link-local/metadata IPs \u2014 this confirms the guard does not validate the resolved IP and is a precondition for full DNS-rebinding TOCTOU attacks.",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "id": "payloadsallthethings-dom-clobbering",
+      "title": "PayloadsAllTheThings \u2014 DOM Clobbering",
+      "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/DOM%20Clobbering",
+      "sourceType": "payloadsallthethings",
+      "license": "source-url-only",
+      "topic": "dom clobbering payload selection",
+      "vulnerabilityClass": "dom clobbering",
+      "technique": "named id/name element injection to overwrite window/document globals",
+      "keywords": [
+        "dom clobbering",
+        "named element",
+        "htmlcollection",
+        "window global"
+      ],
+      "passage": "Curated note: when raw HTML injection is confirmed but script tags are filtered, use DOM Clobbering markup (same-id/name anchor or form elements) to overwrite application globals/config objects read without a typeof guard \u2014 a common gadget en route to script execution.",
+      "websiteImport": {
+        "enabled": true
+      },
+      "fullText": true
+    },
+    {
+      "id": "payloadsallthethings-rate-limit",
+      "title": "PayloadsAllTheThings \u2014 Brute Force Rate Limit",
+      "url": "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Brute%20Force%20Rate%20Limit",
+      "sourceType": "payloadsallthethings",
+      "license": "source-url-only",
+      "topic": "rate-limit and brute-force methodology",
+      "vulnerabilityClass": "missing rate limiting",
+      "technique": "bounded request-burst throttling checks across sensitive endpoints",
+      "keywords": [
+        "rate limit",
+        "brute force",
+        "lockout",
+        "throttling",
+        "429"
+      ],
+      "passage": "Curated note: rate-limit checks should not stop at the login form \u2014 apply the same bounded-burst throttling test (expect 429/423/Retry-After/lockout) to password reset, registration, OTP verification, and coupon/invite redemption endpoints.",
       "websiteImport": {
         "enabled": true
       },

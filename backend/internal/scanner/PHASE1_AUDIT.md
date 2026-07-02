@@ -46,6 +46,16 @@ References landed so far:
   default-token, unauthenticated baseline + two-control replay +
   `SubmitVerifiedFinding`). `csrf` is now a canonical proof-policy
   category.
+- PayloadsAllTheThings/HackTricks technique-gap batch landed:
+  `zip_slip_probe.go`, `xslt_injection_probe.go`, `dns_rebinding_probe.go`,
+  `dom_clobbering_probe.go`, and `rate_limit_probe.go` —
+  new active probes covering previously-uncovered PATT/HackTricks
+  categories (Zip Slip, XSLT Injection, SSRF DNS Rebinding, DOM
+  Clobbering, and dedicated Brute Force/Rate Limit). See
+  `frontend/src/lib/webVulnerabilityCoverage.js`,
+  `security-knowledge/sources/corpus_sources.json`, and
+  `backend/internal/hacktricks/techniques.go` for the matching
+  reference/corpus/command-template entries.
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -71,6 +81,8 @@ References landed so far:
 | `dangling_markup.go` | ✅ | ✅ | ✅ | ✅ | Batch B: HTML shape gate + reflection-context sink gate, control-value baseline, and differential benign replay confirm the marker is payload-controlled. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
 | `deserialization_probe.go` | ✅ | ➖ | ✅ | ✅ | Binary bail-out on active/passive responses, benign serialized-body baselines, and differential benign-body replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | DNS observation, no probe body. |
+| `dns_rebinding_probe.go` | ➖ | ➖ | ➖ | ➖ | Control-request differential (safe external URL vs loopback-resolving hostname) + internal-signature match; category "input-validation" has no dedicated proof-policy rule set for this probe. |
+| `dom_clobbering_probe.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: HTML-shape gate, literal unescaped-tag reflection check, two-control baseline, `SubmitVerifiedFinding` with canonical `xss` alias (external label `dom-clobbering`-style category preserved), and `DifferentialReVerify`. |
 | `dom_xss_probe.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | HTML gate + reflection classifier for the injected fragment. |
 | `file_upload_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Response-shape tag; differential (allowed vs blocked baseline). |
 | `formula_injection.go` | ✅ | ✅ | ✅ | ✅ | Batch B: binary bail-out + `responseShape` tag, reflection-context evidence, benign parameter baseline, and differential benign replay strip static echoes of the `=` marker. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
@@ -84,6 +96,7 @@ References landed so far:
 | `oauth_session_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Same as above. |
 | `password_reset_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Differential (reset-token stripped vs benign control). |
 | `postmessage_probe.go` | ✅ | ⚠️ | ➖ | ⚠️ | Browser postMessage; classify origin echo context. |
+| `rate_limit_probe.go` | ➖ | ➖ | ➖ | ➖ | Bounded request-burst throttling check (429/423/Retry-After/lockout signal) across password-reset/registration/OTP/coupon endpoints; control-absence finding, mirrors `login_probe.go`'s brute-force check convention (no `SubmitVerifiedFinding` — same as that reference). |
 | `reverse_tabnabbing_probe.go` | ✅ | ➖ | ➖ | ➖ | HTML shape only. |
 | `saml_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | XML-shape gate on SAML responses. |
 | `security_headers_probe.go` | ➖ | ➖ | ✅ | ➖ | Header-only, no reflection. |
@@ -94,7 +107,9 @@ References landed so far:
 | `ui_simulation_probe.go` | ➖ | ➖ | ➖ | ➖ | Instrumented browser interaction. |
 | `verbose_error_probe.go` | ✅ | ➖ | ✅ | ✅ | Batch B: binary bail-out on 4xx/5xx bodies with `responseShape` tag, and a clean-request baseline that suppresses endpoints whose static error page already matches the signature. |
 | `websocket_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | WebSocket frame classifier + baseline. |
+| `xslt_injection_probe.go` | ✅ | ➖ | ✅ | ✅ | XSLT-keyword candidate discovery, OAST out-of-band `document()` dereference + reflected-file-read phases (mirrors `active_xxe.go`), benign-stylesheet baseline, differential benign replay, and `SubmitVerifiedFinding` with canonical `xxe` alias (external label preserved). |
 | `xssi_jsonp_probe.go` | ✅ | ➖ | ➖ | ➖ | Batch B: JavaScript/JSON shape gate on both the JSONP callback probe and the top-level array probe; findings tag `responseShape`. |
+| `zip_slip_probe.go` | ➖ | ➖ | ➖ | ➖ | Reuses `file_upload_probe.go`'s endpoint discovery; control archive vs traversal-entry archive differential + rejection-signature check (no filesystem-level confirmation possible from a black-box scanner). |
 
 ## What landed in this PR
 
