@@ -192,6 +192,31 @@ return hasAny(blob, "access-control-allow-credentials", "acac", "credentials", "
 strings.TrimSpace(f.EvidenceFields["credentialsAllowed"]) != ""
 }},
 },
+"csrf": {
+// Require that the finding identifies a state-changing endpoint the
+// probe exercised. Without an affected URL there is nothing to
+// reproduce.
+{name: "state_changing_endpoint", hit: func(blob string, f model.Finding) bool {
+return strings.TrimSpace(f.AffectedURL) != "" ||
+hasAny(blob, "state-changing", "state changing", "post ", "put ", "patch ", "delete ")
+}},
+// Require an explicit "token was not enforced" signal in the
+// evidence — either an absent-token acceptance or a forged-token
+// acceptance. This distinguishes real CSRF from other 2xx
+// endpoints that happen to accept authenticated writes.
+{name: "token_absence_or_forgery_accepted", hit: func(blob string, f model.Finding) bool {
+return hasAny(blob, "without a csrf token", "without csrf token", "no csrf token",
+"forged csrf", "csrf token not enforced", "csrf-missing", "same-origin", "attacker origin") ||
+strings.TrimSpace(f.EvidenceFields["tokenCarrierTested"]) != "" ||
+strings.TrimSpace(f.EvidenceFields["forgedToken"]) != ""
+}},
+// Require that the probe recorded the HTTP method it exercised so
+// the reproducer can be replayed accurately.
+{name: "http_method_recorded", hit: func(blob string, f model.Finding) bool {
+return strings.TrimSpace(f.EvidenceFields["httpMethod"]) != "" ||
+hasAny(blob, "post ", "put ", "patch ", "delete ", "state-changing")
+}},
+},
 "clickjacking": {
 // Require that the probe confirmed the response is rendered as HTML.
 // A JSON API endpoint without X-Frame-Options is not a meaningful
@@ -230,6 +255,7 @@ var categoryMinCoverage = map[string]float64{
 "path_traversal": 0.66,
 "open_redirect":  0.66,
 "cors":           0.66,
+"csrf":           0.66,
 "clickjacking":   1.0,
 "headers":        0.50,
 "wordlist":       0.50,
@@ -295,6 +321,8 @@ case "open_redirect", "unvalidated_redirect":
 return "open_redirect"
 case "cors", "cors_redirect", "cors_misconfiguration":
 return "cors"
+case "csrf", "cross_site_request_forgery":
+return "csrf"
 case "clickjacking", "ui_redress", "ui_redressing":
 return "clickjacking"
 default:

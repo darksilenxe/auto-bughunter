@@ -46,7 +46,7 @@ func TestEvaluateFindingMissingSQLiPolicySignals(t *testing.T) {
 }
 
 func TestEvaluateFindingUnsupportedCategory(t *testing.T) {
-	out := EvaluateFinding(model.Finding{Category: "csrf"})
+	out := EvaluateFinding(model.Finding{Category: "totally-fake-category"})
 	if len(out.Required) != 0 || out.Category != "" {
 		t.Fatalf("expected empty result for unsupported category, got %+v", out)
 	}

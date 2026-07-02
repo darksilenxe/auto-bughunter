@@ -278,6 +278,7 @@ var categoryEvidenceMinimum = map[string]int{
 	"path_traversal": 2,
 	"open_redirect":  2,
 	"cors":           2,
+	"csrf":           2,
 	"clickjacking":   2,
 	"headers":        1,
 	"wordlist":       1,
@@ -527,6 +528,8 @@ func canonicalCategoryLower(category string) string {
 		return "open_redirect"
 	case "cors_misconfiguration":
 		return "cors"
+	case "cross_site_request_forgery":
+		return "csrf"
 	case "ui_redress", "ui_redressing":
 		return "clickjacking"
 	case "security_headers":
