@@ -20,6 +20,41 @@ const (
 
 var prototypePollutionPaths = []string{"/api/profile", "/api/user", "/api/account", "/profile", "/account", "/user", "/register", "/update", "/edit"}
 
+// prototypePollutionBaseKeys are the query-string gadget keys probed on
+// every candidate endpoint, independent of any miner-discovered parameter
+// names.
+var prototypePollutionBaseKeys = []string{"__proto__[polluted]", "constructor[prototype][polluted]"}
+
+// prototypePollutionProbeKeys merges Phase 2 hidden-parameter miner names
+// into the pollution gadget key list (see PHASE2_AUDIT.md). Query-string
+// miners frequently surface object-shaped parameter names (e.g. "options",
+// "settings") that are the primary real-world source of `__proto__`
+// merge sinks, so each discovered name is also tried as a nested-object
+// container ahead of the top-level built-in keys.
+func prototypePollutionProbeKeys(dynamic []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(dynamic)*2+len(prototypePollutionBaseKeys))
+	add := func(k string) {
+		if _, ok := seen[k]; ok {
+			return
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	for _, p := range dynamic {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		add(p + "[__proto__][polluted]")
+		add(p + "[constructor][prototype][polluted]")
+	}
+	for _, k := range prototypePollutionBaseKeys {
+		add(k)
+	}
+	return out
+}
+
 func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input RunInput, body string) []model.Finding {
 	if input.Options.PassiveOnly {
 		return nil
@@ -32,6 +67,9 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 	if len(candidates) == 0 {
 		candidates = []string{input.Target}
 	}
+	// Phase 2 reference wiring: merge miner-discovered parameter names into
+	// the pollution gadget key list.
+	probeKeys := prototypePollutionProbeKeys(phase2DynamicParams(input.Session))
 	attempts := 0
 	for _, raw := range dedupeStrings(candidates) {
 		if attempts >= prototypePollutionMaxAttempts {
@@ -41,7 +79,7 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, param := range []string{"__proto__[polluted]", "constructor[prototype][polluted]"} {
+		for _, param := range probeKeys {
 			if attempts >= prototypePollutionMaxAttempts {
 				break
 			}
@@ -60,6 +98,9 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			attempts++
+			// Phase 2 coverage accounting: record this probe key so the
+			// surface-gap detector subtracts it from the inventory.
+			RecordProbedKey(http.MethodGet, probeURL, param)
 			if err != nil || resp == nil {
 				continue
 			}
@@ -153,6 +194,9 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 		attempts++
+		// Phase 2 coverage accounting: record this probe key so the
+		// surface-gap detector subtracts it from the inventory.
+		RecordProbedKey(http.MethodPost, raw, "__proto__")
 		if err != nil || resp == nil {
 			continue
 		}

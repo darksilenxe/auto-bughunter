@@ -33,17 +33,17 @@ Snapshot generated 2026-07-01.
 
 | Probe file | inv | param | rec | gap | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
-| `active_cors.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-only; record probed keys so origin coverage shows up. |
-| `active_graphql_introspection.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Introspection query is per-endpoint; record `POST /graphql` key. |
-| `active_ldap_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Merge miner params into LDAP payload matrix. |
-| `active_nosqli.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Merge miner params before NoSQL operator payloads. |
-| `active_open_redirect.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `next=`, `redirect=`, `url=` style params. |
-| `active_path_traversal.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Consume miner file-style params (`file`, `path`, `template`). |
-| `active_prompt_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for JSON LLM APIs. |
-| `active_prototype_pollution.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Query-string miner is the primary source of `__proto__` sinks. |
+| `active_cors.go` | ✅ | ➖ | ✅ | ⚠️ | Header-only; now records probed keys (`RecordProbedKey`) on the control and per-origin requests. |
+| `active_graphql_introspection.go` | ✅ | ➖ | ✅ | ⚠️ | Introspection query is per-endpoint; now records the `POST` probe key. |
+| `active_ldap_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: `phase2ProbeParams`/`phase2DynamicParams` merge miner params into the LDAP payload matrix; `RecordProbedKey` added. |
+| `active_nosqli.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged before NoSQL operator payloads (query-string and JSON-body phases); `RecordProbedKey` added to both. |
+| `active_open_redirect.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner surfaces `next=`, `redirect=`, `url=` style params, now merged ahead of the built-in list; `RecordProbedKey` added. |
+| `active_path_traversal.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: consumes miner file-style params (`file`, `path`, `template`); `RecordProbedKey` added. |
+| `active_prompt_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for JSON LLM APIs across the direct and OAST-callback loops; `RecordProbedKey` added. |
+| `active_prototype_pollution.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner-discovered object-shaped params are tried as `<param>[__proto__][polluted]` gadget keys (`prototypePollutionProbeKeys`); `RecordProbedKey` added to both the query-string and JSON-body branches. |
 | `active_sqli.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated in this PR as the reference template (see `sqliDynamicParams`, `sqliMergedProbeParams`, `RecordProbedKey`). |
-| `active_ssti.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Merge miner params for template-engine reflections. |
-| `active_xpath_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Merge miner params for XPath error surfaces. |
+| `active_ssti.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for template-engine reflections; `RecordProbedKey` added. |
+| `active_xpath_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for XPath error surfaces; `RecordProbedKey` added. |
 | `active_xss.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params before XSS payload matrix. |
 | `active_xxe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Endpoint-shaped; record probed key only. |
 | `browser_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Browser-side observation. |
@@ -98,6 +98,17 @@ Snapshot generated 2026-07-01.
 
 Follow the same three steps in each probe row still marked ⚠️. Header /
 cookie / transport probes only need step 3.
+
+`phase2_probe_params.go` (`phase2DynamicParams`, `phase2ProbeParams`)
+generalises steps 1-2 into a shared helper so subsequently migrated
+probes (`active_ldap_injection.go`, `active_nosqli.go`,
+`active_open_redirect.go`, `active_path_traversal.go`,
+`active_prompt_injection.go`, `active_ssti.go`,
+`active_xpath_injection.go`) do not each re-derive their own
+`*DynamicParams`/`*MergedProbeParams` pair. `active_prototype_pollution.go`
+uses a variant, `prototypePollutionProbeKeys`, that nests each
+miner-discovered name as a `<param>[__proto__][polluted]` gadget key
+instead of a flat parameter merge.
 
 ## Appendix — audit one-liner
 

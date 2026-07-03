@@ -30,6 +30,10 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 		candidates = []string{input.Target}
 	}
 
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the built-in LDAP wordlist (see PHASE2_AUDIT.md).
+	probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), ldapProbeParams)
+
 	type hit struct {
 		url          string
 		param        string
@@ -47,7 +51,7 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, param := range ldapProbeParams {
+		for _, param := range probeParams {
 			if attempts >= ldapMaxAttempts {
 				break
 			}
@@ -78,6 +82,9 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, param)
 				if err != nil || resp == nil {
 					continue
 				}

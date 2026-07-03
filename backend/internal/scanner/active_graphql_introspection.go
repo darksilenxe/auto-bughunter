@@ -80,6 +80,10 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
 		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		// Phase 2 coverage accounting: record this probe key so the
+		// surface-gap detector subtracts it from the inventory. Introspection
+		// is endpoint-shaped (no per-parameter surface), so no param name.
+		RecordProbedKey(http.MethodPost, probeURL, "")
 		if err != nil || resp == nil {
 			continue
 		}
