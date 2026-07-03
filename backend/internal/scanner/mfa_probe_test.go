@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,9 +151,14 @@ func TestMFAProbe_OTPReuse_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "mfa") || strings.Contains(r.URL.Path, "otp") ||
 			strings.Contains(r.URL.Path, "verify") {
-			// Accepts every OTP — reuse not detected.
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"verified":true}`))
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "123456") {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"verified":true}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid otp"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -187,7 +193,12 @@ func TestMFAProbe_OTPReuse_Accepted(t *testing.T) {
 // protected endpoints are accessible with a base-level token.
 func TestMFAProbe_StepUpSkip_Accessible(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// All paths return 200 — step-up not enforced.
+		if r.Method == http.MethodPost && (strings.Contains(r.URL.Path, "mfa") || strings.Contains(r.URL.Path, "otp") || strings.Contains(r.URL.Path, "verify")) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid otp"}`))
+			return
+		}
+		// Sensitive resources still return 200 — step-up not enforced.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"path":"%s"}`, r.URL.Path)))
 	}))

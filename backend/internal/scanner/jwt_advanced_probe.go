@@ -66,8 +66,32 @@ func (s *Service) RunJWTAdvancedProbe(
 		})
 	}
 
+	runInput := RunInput{
+		Target:      target,
+		Scope:       scanScope,
+		Options:     options,
+		AuthProfile: auth,
+	}
+	baselines, ok := s.captureJWTAuthenticatedBaselines(ctx, runInput, raw)
+	if !ok {
+		return nil
+	}
+
 	var findings []model.Finding
 	emitted := map[string]bool{}
+
+	appendFinding := func(fid string, forgedToken string, status int, body []byte, finding model.Finding) {
+		if !jwtResponseMatchesAuthenticatedBaseline(status, body, baselines) {
+			return
+		}
+		diffOutcome := s.jwtDifferentialReVerify(ctx, runInput, "jwt-advanced-probe", raw, forgedToken, baselines)
+		if diffOutcome.Ran && !diffOutcome.Confirmed {
+			return
+		}
+		AttachDifferentialEvidence(&finding, diffOutcome)
+		emitted[fid] = true
+		findings = append(findings, finding)
+	}
 
 	// ── Probe 1: kid path-traversal / SQL injection ────────────────────────
 	fid := "jwt-kid-injection"
@@ -84,40 +108,39 @@ func (s *Service) RunJWTAdvancedProbe(
 		for _, kp := range kidPayloads {
 			forgedHdr := clonePayload(hdr)
 			forgedHdr["kid"] = kp.kid
-			// Sign with empty secret (matches /dev/null) or the kid-injection secret.
 			token, err := buildJWT(forgedHdr, payload, "")
 			if err != nil {
 				continue
 			}
-			status, _, err := s.sendWithJWT(ctx, RunInput{
-				Target:      target,
-				AuthProfile: auth,
-				Options:     options,
-			}, token)
+			status, body, err := s.sendWithJWT(ctx, runInput, token)
 			if err != nil {
 				continue
 			}
-			if status >= 200 && status < 300 {
-				emitted[fid] = true
-				findings = append(findings, jwtAdvancedFinding(
-					fid, target, model.SeverityHigh,
-					"JWT kid header injection — server accepted manipulated key ID",
-					fmt.Sprintf(
-						"A JWT with kid=%q was accepted by %s (HTTP %d). "+
-							"Technique: %s. "+
-							"The server appears to use the kid header to locate the signing key "+
-							"without safe path/query validation, enabling key injection.",
-						kp.kid, target, status, kp.technique,
-					),
-					"CWE-22",
-					[]string{
-						"Craft a JWT with kid set to a path-traversal or SQL injection payload.",
-						"Sign the token with an empty secret (or the SQL-injected secret).",
-						"Send the token to: " + target,
-						"Observe that the server accepts the forged token.",
-					},
-					map[string]string{"kid": kp.kid, "technique": kp.technique},
-				))
+			finding := jwtAdvancedFinding(
+				fid, target, model.SeverityHigh,
+				"JWT kid header injection — server accepted manipulated key ID",
+				fmt.Sprintf(
+					"A JWT with kid=%q was accepted by %s (HTTP %d). "+
+						"Technique: %s. "+
+						"The server appears to use the kid header to locate the signing key "+
+						"without safe path/query validation, enabling key injection.",
+					kp.kid, target, status, kp.technique,
+				),
+				"CWE-22",
+				[]string{
+					"Craft a JWT with kid set to a path-traversal or SQL injection payload.",
+					"Sign the token with an empty secret (or the SQL-injected secret).",
+					"Send the token to: " + target,
+					"Observe that the server accepts the forged token.",
+				},
+				map[string]string{
+					"kid":                kp.kid,
+					"technique":          kp.technique,
+					"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
+				},
+			)
+			appendFinding(fid, token, status, body, finding)
+			if emitted[fid] {
 				break
 			}
 		}
@@ -126,57 +149,47 @@ func (s *Service) RunJWTAdvancedProbe(
 	// ── Probe 2: jku / jwks_url header injection ───────────────────────────
 	fid = "jwt-jku-injection"
 	if !emitted[fid] {
-		// Check if OAST is configured; if so use the OAST URL, otherwise use a
-		// clearly synthetic attacker domain as a signal-based test.
 		attackerJWKS := "https://abh-probe-jwks.attacker.example.com/.well-known/jwks.json"
 		for _, hdrKey := range []string{"jku", "x5u", "jwks_url"} {
 			forgedHdr := clonePayload(hdr)
 			forgedHdr[hdrKey] = attackerJWKS
-			// Use same payload, alg:none (no real signature needed to test
-			// whether the server fetches the URL).
 			forgedHdr["alg"] = "none"
 			token, err := buildJWT(forgedHdr, payload, "")
 			if err != nil {
 				continue
 			}
-			// We send the token; if the server returns 200 it may have fetched
-			// the attacker JWKS (we can only detect the SSRF side-effect here).
-			status, body, err := s.sendWithJWT(ctx, RunInput{
-				Target:      target,
-				AuthProfile: auth,
-				Options:     options,
-			}, token)
+			status, body, err := s.sendWithJWT(ctx, runInput, token)
 			if err != nil {
 				continue
 			}
-			// A 200 response with a jku/alg:none forged token is strong evidence.
-			if status >= 200 && status < 300 {
-				emitted[fid] = true
-				findings = append(findings, jwtAdvancedFinding(
-					fid, target, model.SeverityCritical,
-					"JWT jku/x5u header injection — server trusts attacker-supplied JWKS URL",
-					fmt.Sprintf(
-						"A JWT with %s=%q (and alg:none) was accepted by %s (HTTP %d). "+
-							"The server may have fetched the attacker-controlled JWKS URL "+
-							"to retrieve the verification key, allowing the attacker to sign "+
-							"arbitrary JWTs with their own key and have them accepted.",
-						hdrKey, attackerJWKS, target, status,
-					),
-					"CWE-347",
-					[]string{
-						"Host a JWKS document at an attacker-controlled URL.",
-						"Craft a JWT with jku pointing to that URL.",
-						"Sign the token with the corresponding private key.",
-						"Present the token to: " + target,
-						"Observe that the server fetches the JWKS and accepts the forged token.",
-					},
-					map[string]string{
-						"headerKey":      hdrKey,
-						"attackerJWKS":   attackerJWKS,
-						"responseStatus": fmt.Sprintf("%d", status),
-						"bodySnippet":    truncateString(string(body), 80),
-					},
-				))
+			finding := jwtAdvancedFinding(
+				fid, target, model.SeverityCritical,
+				"JWT jku/x5u header injection — server trusts attacker-supplied JWKS URL",
+				fmt.Sprintf(
+					"A JWT with %s=%q (and alg:none) was accepted by %s (HTTP %d). "+
+						"The server may have fetched the attacker-controlled JWKS URL "+
+						"to retrieve the verification key, allowing the attacker to sign "+
+						"arbitrary JWTs with their own key and have them accepted.",
+					hdrKey, attackerJWKS, target, status,
+				),
+				"CWE-347",
+				[]string{
+					"Host a JWKS document at an attacker-controlled URL.",
+					"Craft a JWT with jku pointing to that URL.",
+					"Sign the token with the corresponding private key.",
+					"Present the token to: " + target,
+					"Observe that the server fetches the JWKS and accepts the forged token.",
+				},
+				map[string]string{
+					"headerKey":          hdrKey,
+					"attackerJWKS":       attackerJWKS,
+					"responseStatus":     fmt.Sprintf("%d", status),
+					"bodySnippet":        truncateString(string(body), 80),
+					"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
+				},
+			)
+			appendFinding(fid, token, status, body, finding)
+			if emitted[fid] {
 				break
 			}
 		}
@@ -187,21 +200,15 @@ func (s *Service) RunJWTAdvancedProbe(
 	if !emitted[fid] {
 		publicKey := jwtFetchPublicKey(ctx, s, target, options, auth)
 		if publicKey != "" {
-			// Sign the payload with the public key as an HMAC-SHA256 secret.
 			hs256Hdr := clonePayload(hdr)
 			hs256Hdr["alg"] = "HS256"
 			delete(hs256Hdr, "kid")
 			delete(hs256Hdr, "jku")
 			token, err := buildJWT(hs256Hdr, payload, publicKey)
 			if err == nil {
-				status, _, err := s.sendWithJWT(ctx, RunInput{
-					Target:      target,
-					AuthProfile: auth,
-					Options:     options,
-				}, token)
-				if err == nil && status >= 200 && status < 300 {
-					emitted[fid] = true
-					findings = append(findings, jwtAdvancedFinding(
+				status, body, err := s.sendWithJWT(ctx, runInput, token)
+				if err == nil {
+					finding := jwtAdvancedFinding(
 						fid, target, model.SeverityHigh,
 						"JWT RS256→HS256 algorithm confusion — public key accepted as HMAC secret",
 						fmt.Sprintf(
@@ -220,10 +227,12 @@ func (s *Service) RunJWTAdvancedProbe(
 							"Observe that the server accepts the forged token.",
 						},
 						map[string]string{
-							"algorithm":      "HS256 (with RSA public key as secret)",
-							"responseStatus": fmt.Sprintf("%d", status),
+							"algorithm":          "HS256 (with RSA public key as secret)",
+							"responseStatus":     fmt.Sprintf("%d", status),
+							"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
 						},
-					))
+					)
+					appendFinding(fid, token, status, body, finding)
 				}
 			}
 		}
@@ -232,20 +241,13 @@ func (s *Service) RunJWTAdvancedProbe(
 	// ── Probe 4: exp far-future tampering ─────────────────────────────────
 	fid = "jwt-exp-not-validated"
 	if !emitted[fid] {
-		// Remove exp entirely to see if the server enforces it.
 		noExpPayload := clonePayload(payload)
 		delete(noExpPayload, "exp")
-		// Use the original algorithm header.
 		token, err := buildJWT(hdr, noExpPayload, "")
 		if err == nil && token != raw {
-			status, _, err := s.sendWithJWT(ctx, RunInput{
-				Target:      target,
-				AuthProfile: auth,
-				Options:     options,
-			}, token)
-			if err == nil && status >= 200 && status < 300 {
-				emitted[fid] = true
-				findings = append(findings, jwtAdvancedFinding(
+			status, body, err := s.sendWithJWT(ctx, runInput, token)
+			if err == nil {
+				finding := jwtAdvancedFinding(
 					fid, target, model.SeverityMedium,
 					"JWT accepted without expiry (exp) claim",
 					fmt.Sprintf(
@@ -260,25 +262,23 @@ func (s *Service) RunJWTAdvancedProbe(
 						"Send the modified token to: " + target,
 						"Observe that the server accepts the token.",
 					},
-					map[string]string{"expClaimPresent": "false", "responseStatus": fmt.Sprintf("%d", status)},
-				))
+					map[string]string{
+						"expClaimPresent":    "false",
+						"responseStatus":     fmt.Sprintf("%d", status),
+						"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
+					},
+				)
+				appendFinding(fid, token, status, body, finding)
 			}
 		}
-
-		// Also try setting exp 10 years in the future.
 		if !emitted[fid] {
 			farFuturePayload := clonePayload(payload)
 			farFuturePayload["exp"] = float64(time.Now().Add(10 * 365 * 24 * time.Hour).Unix())
 			token2, err := buildJWT(hdr, farFuturePayload, "")
 			if err == nil && token2 != raw {
-				status2, _, err := s.sendWithJWT(ctx, RunInput{
-					Target:      target,
-					AuthProfile: auth,
-					Options:     options,
-				}, token2)
-				if err == nil && status2 >= 200 && status2 < 300 {
-					emitted[fid] = true
-					findings = append(findings, jwtAdvancedFinding(
+				status2, body2, err := s.sendWithJWT(ctx, runInput, token2)
+				if err == nil {
+					finding := jwtAdvancedFinding(
 						fid, target, model.SeverityMedium,
 						"JWT accepted with exp set 10 years in the future",
 						fmt.Sprintf(
@@ -294,10 +294,12 @@ func (s *Service) RunJWTAdvancedProbe(
 							"Observe that the server accepts the implausibly long-lived token.",
 						},
 						map[string]string{
-							"expValue":       "10 years from now",
-							"responseStatus": fmt.Sprintf("%d", status2),
+							"expValue":           "10 years from now",
+							"responseStatus":     fmt.Sprintf("%d", status2),
+							"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
 						},
-					))
+					)
+					appendFinding(fid, token2, status2, body2, finding)
 				}
 			}
 		}
@@ -311,14 +313,9 @@ func (s *Service) RunJWTAdvancedProbe(
 		delete(noIssAudPayload, "aud")
 		token, err := buildJWT(hdr, noIssAudPayload, "")
 		if err == nil && token != raw {
-			status, _, err := s.sendWithJWT(ctx, RunInput{
-				Target:      target,
-				AuthProfile: auth,
-				Options:     options,
-			}, token)
-			if err == nil && status >= 200 && status < 300 {
-				emitted[fid] = true
-				findings = append(findings, jwtAdvancedFinding(
+			status, body, err := s.sendWithJWT(ctx, runInput, token)
+			if err == nil {
+				finding := jwtAdvancedFinding(
 					fid, target, model.SeverityHigh,
 					"JWT accepted without iss and aud claims — cross-service token portability possible",
 					fmt.Sprintf(
@@ -336,11 +333,13 @@ func (s *Service) RunJWTAdvancedProbe(
 						"Repeat with a token from a different service using the same signing key.",
 					},
 					map[string]string{
-						"issClaimPresent": "false",
-						"audClaimPresent": "false",
-						"responseStatus":  fmt.Sprintf("%d", status),
+						"issClaimPresent":    "false",
+						"audClaimPresent":    "false",
+						"responseStatus":     fmt.Sprintf("%d", status),
+						"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
 					},
-				))
+				)
+				appendFinding(fid, token, status, body, finding)
 			}
 		}
 	}

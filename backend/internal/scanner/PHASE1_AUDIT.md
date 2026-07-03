@@ -22,10 +22,33 @@ counted by `GetClusterMetrics()` → `AutomationMetrics.Extra.clusterRatio`.
 
 ## Audit table
 
-Snapshot generated 2026-07-01. Regenerate with the audit one-liner in
-the appendix.
+Snapshot generated 2026-07-02. Phase 1 rollout is now complete: every
+probe file that can meaningfully carry the four controls has been
+migrated. Remaining `⚠️` entries are documented, deliberate exceptions
+(e.g. `oauth_probe.go` / `oauth_session_probe.go` `state`/PKCE/nonce/
+CORS checks that remain heuristic pending a dedicated proof-policy
+category). Regenerate the table with the audit one-liner in the
+appendix.
 
 References landed so far:
+
+- Final completion batch (all remaining `⚠️` rows): `clickjacking_probe.go`
+  (framed-vs-unframed control), `postmessage_probe.go` (origin-echo
+  context classifier), `websocket_probe.go` (upgrade-response
+  classifier + plain-GET control), `http_methods_probe.go`
+  (`SubmitVerifiedFinding` on OPTIONS/TRACE/override findings),
+  `browser_storage_probe.go` (High-severity storage replay verify),
+  `cloud_storage_probe.go` (nonexistent-bucket control +
+  `DifferentialReVerify`), `dom_xss_probe.go` (full four-control
+  migration), `file_upload_probe.go` (blocked-upload baseline +
+  differential), `jwt_probe.go` / `jwt_advanced_probe.go`
+  (authenticated-baseline + invalid-token differential across all
+  tampering checks), `saml_probe.go` (XML shape gate + malformed-SAML
+  control baselines), `magic_link_invite_probe.go`, `mfa_probe.go`,
+  `oauth_probe.go`, `oauth_session_probe.go`, `password_reset_probe.go`
+  (invalid/benign-control differentials per finding), and
+  `session_lifecycle_probe.go` (`SubmitVerifiedFinding` on High
+  findings with PoC replay).
 
 - `dangling_markup.go` and `formula_injection.go` — original Phase 1
   reference migrations (shape gate + reflection-context / binary
@@ -72,9 +95,9 @@ References landed so far:
 | `active_xpath_injection.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate, benign XPath baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `active_xss.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: response-shape tag, `ClassifyReflectionContext` + `PayloadEscapesContext` gate for High/Critical, two-control baseline, `SubmitVerifiedFinding`, and `DifferentialReVerify`. |
 | `active_xxe.go` | ✅ | ➖ | ✅ | ✅ | XML response-shape gate on reflected/error responses, benign XML baselines, differential benign XML replay, and `SubmitVerifiedFinding` with canonical `xxe` (external label preserved). |
-| `browser_storage_probe.go` | ➖ | ➖ | ➖ | ⚠️ | Browser-side observation; verify High findings still TODO. FP fix landed: dropped overly-broad bare key patterns (`key`, `user`, `email`, `address` matched routine non-sensitive UI state) and replaced the bare `eyJ` prefix / prefix-only value checks with structural matchers (`jwtStructurePattern`, `apiKeyPrefixPattern`) so plain base64-encoded JSON is no longer misreported as a leaked JWT. |
-| `clickjacking_probe.go` | ✅ | ➖ | ⚠️ | ⚠️ | HTML gate present; add differential baseline (framed vs unframed control). |
-| `cloud_storage_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Bucket enumeration — add response-shape evidence tag. |
+| `browser_storage_probe.go` | ➖ | ➖ | ➖ | ✅ | High-severity storage-value findings now route through `SubmitVerifiedFinding` with a browser replay oracle that re-collects storage data and suppresses non-reproducible token/JWT/API-key observations; the earlier key/value FP reductions remain in place. |
+| `clickjacking_probe.go` | ✅ | ➖ | ✅ | ✅ | Uses `IsHTMLShape`, a framed-vs-unframed control fetch (`Sec-Fetch-Dest: iframe` vs document) to suppress static responses with identical framing behaviour, and routes surviving findings through `SubmitVerifiedFinding` under canonical `clickjacking`. |
+| `cloud_storage_probe.go` | ✅ | ➖ | ✅ | ✅ | Bucket enumeration now tags `responseShape`, suppresses generic/public-everything baselines with a deterministic nonexistent-bucket control, and differentially re-verifies that the listing signal does not reproduce on control bucket names. |
 | `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + marker context, two-control latency/body baselines, differential output/timing replay, and `SubmitVerifiedFinding` with `AllowNoReplayEmission` (no proof-policy coverage for `command-injection`). |
 | `cross_domain_policy_probe.go` | ✅ | ➖ | ➖ | ➖ | XML shape gate on well-known policy paths; findings tag `responseShape`. |
 | `csrf_probe.go` | ➖ | ➖ | ✅ | ✅ | Unauth baseline suppresses public endpoints; two-control replay rejects flakes; routes through `SubmitVerifiedFinding` (csrf is a canonical proof-policy category). |
@@ -83,30 +106,30 @@ References landed so far:
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | DNS observation, no probe body. |
 | `dns_rebinding_probe.go` | ➖ | ➖ | ➖ | ➖ | Control-request differential (safe external URL vs loopback-resolving hostname) + internal-signature match; category "input-validation" has no dedicated proof-policy rule set for this probe. |
 | `dom_clobbering_probe.go` | ✅ | ✅ | ✅ | ✅ | Full Phase 1 migration: HTML-shape gate, literal unescaped-tag reflection check, two-control baseline, `SubmitVerifiedFinding` with canonical `xss` alias (external label `dom-clobbering`-style category preserved), and `DifferentialReVerify`. |
-| `dom_xss_probe.go` | ⚠️ | ⚠️ | ✅ | ⚠️ | HTML gate + reflection classifier for the injected fragment. |
-| `file_upload_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Response-shape tag; differential (allowed vs blocked baseline). |
+| `dom_xss_probe.go` | ✅ | ✅ | ✅ | ✅ | Added HTTP HTML/binary shape gate + `responseShape` tag, required dangerous fragment reflection via `ClassifyReflectionContext`/`PayloadEscapesContext`, and routed High findings through `DifferentialReVerify` + `SubmitVerifiedFinding` with canonical `xss` proof-policy evaluation. |
+| `file_upload_probe.go` | ✅ | ➖ | ✅ | ✅ | Upload responses now tag `responseShape`, compare each candidate against a blocked-control upload baseline, and use `DifferentialReVerify` to suppress generic accepts-everything / control-acceptance false positives before emitting a finding. |
 | `formula_injection.go` | ✅ | ✅ | ✅ | ✅ | Batch B: binary bail-out + `responseShape` tag, reflection-context evidence, benign parameter baseline, and differential benign replay strip static echoes of the `=` marker. Category "injection" has no proof-policy so `SubmitVerifiedFinding` remains skipped. |
-| `http_methods_probe.go` | ➖ | ➖ | ✅ | ⚠️ | Header-only probe. |
-| `jwt_advanced_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Auth-token probe; add differential (unsigned vs signed control). |
-| `jwt_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Same as above. |
+| `http_methods_probe.go` | ➖ | ➖ | ✅ | ✅ | Existing inline local verification remains (OPTIONS/TRACE/override differentials), and findings now also route through `SubmitVerifiedFinding` with per-check PoC replays so Medium method-misconfiguration reports carry verifier metadata despite no dedicated proof-policy category. |
+| `jwt_advanced_probe.go` | ➖ | ➖ | ✅ | ✅ | Authenticated-baseline capture from the original bearer token plus invalid-token differential re-verify across kid/jku/RS256→HS256/exp/iss-aud tampering paths; only emit when forged-token responses match the authenticated baseline and invalid/random controls do not. |
+| `jwt_probe.go` | ➖ | ➖ | ✅ | ✅ | Authenticated-baseline capture from the original bearer token plus invalid-token differential re-verify for alg:none and weak-secret checks; suppresses endpoints where invalid/random tokens behave like the original authenticated request. |
 | `login_probe.go` | ➖ | ➖ | ➖ | ➖ | Auth setup, not a finding source. |
-| `magic_link_invite_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Add control baseline (invalid-token control). |
-| `mfa_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Differential (no-MFA vs MFA control). |
-| `oauth_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Differential (redirect_uri stripped vs benign control). |
-| `oauth_session_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Same as above. |
-| `password_reset_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | Differential (reset-token stripped vs benign control). |
-| `postmessage_probe.go` | ✅ | ⚠️ | ➖ | ⚠️ | Browser postMessage; classify origin echo context. |
+| `magic_link_invite_probe.go` | ➖ | ➖ | ✅ | ✅ | Token-backed findings now require the disclosed/replayed/guessed token to be accepted while a clearly invalid control token is rejected (token disclosure, reuse, invite binding, enumeration); `account-link-csrf` remains a direct acceptance check. |
+| `mfa_probe.go` | ➖ | ➖ | ✅ | ✅ | Added wrong/no-code controls: OTP-reuse now requires a definitely-wrong OTP to be rejected, and the High-severity bypass paths (direct access, enrollment, device-trust, step-up) only emit when an MFA endpoint rejects a wrong code. |
+| `oauth_probe.go` | ➖ | ➖ | ✅ | ⚠️ | `redirect_uri` manipulation now compares candidate responses against two benign `redirect_uri` baselines (`CaptureTwoControlBaselines`/`ExceedsControlVariance`) to suppress generic login-page/static responses; `state`-omission and PKCE-downgrade checks remain heuristic. |
+| `oauth_session_probe.go` | ➖ | ➖ | ✅ | ⚠️ | Added invalid-code/token controls for auth-code replay, post-revocation replay, refresh-token replay, and aud-less JWT acceptance; implicit-flow, nonce-omission, and token-endpoint CORS checks still use heuristic acceptance logic. |
+| `password_reset_probe.go` | ➖ | ➖ | ✅ | ✅ | Reset-token account-takeover findings now require the disclosed token to succeed while a valid-shaped invalid control token is rejected on the same consume endpoint; host-header-poisoning remains a separate direct reflection check. |
+| `postmessage_probe.go` | ✅ | ✅ | ➖ | ✅ | Browser postMessage findings now parse captured event payloads, suppress origin-only / `allowedOrigin`-style echoes via a bespoke context classifier, and re-run the browser capture through `SubmitVerifiedFinding` before emitting High-severity leaks. |
 | `rate_limit_probe.go` | ➖ | ➖ | ➖ | ➖ | Bounded request-burst throttling check (429/423/Retry-After/lockout signal) across password-reset/registration/OTP/coupon endpoints; control-absence finding, mirrors `login_probe.go`'s brute-force check convention (no `SubmitVerifiedFinding` — same as that reference). |
 | `reverse_tabnabbing_probe.go` | ✅ | ➖ | ➖ | ➖ | HTML shape only. |
-| `saml_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | XML-shape gate on SAML responses. |
+| `saml_probe.go` | ✅ | ➖ | ✅ | ✅ | XML/binary shape gating + `responseShape` tags on metadata/XXE parsing paths, malformed-SAML control baselines + differential re-verify for ACS acceptance findings, and safe-SAML XXE controls to suppress static/signature-agnostic responses. |
 | `security_headers_probe.go` | ➖ | ➖ | ✅ | ➖ | Header-only, no reflection. |
-| `session_lifecycle_probe.go` | ➖ | ➖ | ✅ | ⚠️ | Verify High findings. |
+| `session_lifecycle_probe.go` | ➖ | ➖ | ✅ | ✅ | High findings (`session-no-rotation-after-login`, `session-not-invalidated-on-logout`) now route through `SubmitVerifiedFinding` with PoC replay transcripts; proof-policy coverage is checked first and the verifier metadata is attached before emission. |
 | `smtp_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Binary bail-out + SMTP marker context, clean form baselines, and differential clean-address replay; no proof-policy category and error finding is Medium, so `SubmitVerifiedFinding` remains skipped. |
 | `ssi_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | HTML response-shape gate, SSI marker context, clean parameter baselines, and differential benign replay; no proof-policy category, so `SubmitVerifiedFinding` remains skipped. |
 | `tls_config_probe.go` | ➖ | ➖ | ➖ | ➖ | TLS handshake, no body. |
 | `ui_simulation_probe.go` | ➖ | ➖ | ➖ | ➖ | Instrumented browser interaction. |
 | `verbose_error_probe.go` | ✅ | ➖ | ✅ | ✅ | Batch B: binary bail-out on 4xx/5xx bodies with `responseShape` tag, and a clean-request baseline that suppresses endpoints whose static error page already matches the signature. |
-| `websocket_probe.go` | ➖ | ➖ | ⚠️ | ⚠️ | WebSocket frame classifier + baseline. |
+| `websocket_probe.go` | ➖ | ➖ | ✅ | ✅ | Adds a WebSocket-upgrade classifier (`101` + `Connection/Upgrade` headers), suppresses endpoints that also "upgrade" on a plain GET control request, and replays accepted evil-origin / unauthenticated handshakes through `SubmitVerifiedFinding`. |
 | `xslt_injection_probe.go` | ✅ | ➖ | ✅ | ✅ | XSLT-keyword candidate discovery, OAST out-of-band `document()` dereference + reflected-file-read phases (mirrors `active_xxe.go`), benign-stylesheet baseline, differential benign replay, and `SubmitVerifiedFinding` with canonical `xxe` alias (external label preserved). |
 | `xssi_jsonp_probe.go` | ✅ | ➖ | ➖ | ➖ | Batch B: JavaScript/JSON shape gate on both the JSONP callback probe and the top-level array probe; findings tag `responseShape`. |
 | `zip_slip_probe.go` | ➖ | ➖ | ➖ | ➖ | Reuses `file_upload_probe.go`'s endpoint discovery; control archive vs traversal-entry archive differential + rejection-signature check (no filesystem-level confirmation possible from a black-box scanner). |

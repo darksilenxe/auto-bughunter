@@ -114,6 +114,19 @@ func (s *Service) runHTTPMethodsProbe(ctx context.Context, input RunInput, bodyT
 	return findings
 }
 
+func (s *Service) submitHTTPMethodsFinding(ctx context.Context, finding model.Finding, replay PoCReplayFunc, signals []EvidenceSignal) (model.Finding, bool) {
+	out := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding:   finding,
+		Signals:   signals,
+		PoCReplay: replay,
+		ProbeName: "http-methods-probe",
+	})
+	if out.Suppressed {
+		return model.Finding{}, false
+	}
+	return out.EmittedFinding, true
+}
+
 // probeOptionsMethod sends OPTIONS and inspects the Allow header for dangerous
 // methods.
 func (s *Service) probeOptionsMethod(ctx context.Context, target string, input RunInput) []model.Finding {
@@ -157,7 +170,7 @@ func (s *Service) probeOptionsMethod(ctx context.Context, target string, input R
 	var out []model.Finding
 	for _, method := range dangerous {
 		fid := "http-methods-dangerous-" + strings.ToLower(method) + "-" + hhSlug(target)
-		out = append(out, model.Finding{
+		finding := model.Finding{
 			ID:       fid,
 			Category: "configuration",
 			Severity: model.SeverityMedium,
@@ -169,7 +182,7 @@ func (s *Service) probeOptionsMethod(ctx context.Context, target string, input R
 					"through the target server to internal hosts.",
 				method, target,
 			),
-			Evidence:    fmt.Sprintf("OPTIONS %s → Allow: %s", target, allowed),
+			Evidence: fmt.Sprintf("OPTIONS %s → Allow: %s", target, allowed),
 			Recommendation: "Disable TRACE and CONNECT at the web server or load-balancer level. " +
 				"For Apache: 'TraceEnable Off'. For nginx: deny TRACE/CONNECT in location blocks. " +
 				"Verify with: curl -X TRACE https://target/ -v",
@@ -188,7 +201,28 @@ func (s *Service) probeOptionsMethod(ctx context.Context, target string, input R
 				"method":         method,
 				"allowHeader":    allowed,
 			},
-		})
+		}
+		emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
+			replayReq, err := http.NewRequestWithContext(rctx, http.MethodOptions, safe.String(), nil)
+			if err != nil {
+				return false, "", err
+			}
+			ApplyAuthProfile(replayReq, input.AuthProfile)
+			replayResp, err := s.doRequestWithRetry(rctx, replayReq, input.Options)
+			if err != nil || replayResp == nil {
+				return false, "", err
+			}
+			defer replayResp.Body.Close()
+			_, _ = io.ReadAll(io.LimitReader(replayResp.Body, httpMethodsBodyLimit))
+			replayAllow := replayResp.Header.Get("Allow")
+			if replayAllow == "" {
+				replayAllow = replayResp.Header.Get("Access-Control-Allow-Methods")
+			}
+			return strings.Contains(strings.ToUpper(replayAllow), method), fmt.Sprintf("OPTIONS replay -> Allow: %s", replayAllow), nil
+		}, []EvidenceSignal{EvidenceHeaderDelta, EvidenceSinkObserved})
+		if ok {
+			out = append(out, emitted)
+		}
 	}
 	return out
 }
@@ -224,7 +258,7 @@ func (s *Service) probeTraceMethod(ctx context.Context, target string, input Run
 	}
 
 	fid := "http-methods-trace-xst-" + hhSlug(target)
-	f := model.Finding{
+	finding := model.Finding{
 		ID:       fid,
 		Category: "configuration",
 		Severity: model.SeverityMedium,
@@ -257,7 +291,25 @@ func (s *Service) probeTraceMethod(ctx context.Context, target string, input Run
 			"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 		},
 	}
-	return &f
+	emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
+		replayReq, err := http.NewRequestWithContext(rctx, "TRACE", safe.String(), nil)
+		if err != nil {
+			return false, "", err
+		}
+		replayReq.Header.Set(traceMarker, traceMarkerValue)
+		ApplyAuthProfile(replayReq, input.AuthProfile)
+		replayResp, err := s.doRequestWithRetry(rctx, replayReq, input.Options)
+		if err != nil || replayResp == nil {
+			return false, "", err
+		}
+		defer replayResp.Body.Close()
+		replayBody, _ := io.ReadAll(io.LimitReader(replayResp.Body, httpMethodsBodyLimit))
+		return replayResp.StatusCode == http.StatusOK && strings.Contains(string(replayBody), traceMarkerValue), fmt.Sprintf("TRACE replay -> HTTP %d", replayResp.StatusCode), nil
+	}, []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved})
+	if !ok {
+		return nil
+	}
+	return &emitted
 }
 
 // probeVerbOverride attempts to tunnel a DELETE request via X-HTTP-Method-Override
@@ -303,7 +355,7 @@ func (s *Service) probeVerbOverride(ctx context.Context, target string, input Ru
 		// expected but override bypasses to 200, or 403→200 access bypass).
 		if resp.StatusCode != baseStatus && (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 			fid := "http-methods-verb-override-" + strings.ToLower(strings.ReplaceAll(overrideHeader, "-", "_")) + "-" + hhSlug(target)
-			f := model.Finding{
+			finding := model.Finding{
 				ID:       fid,
 				Category: "access-control",
 				Severity: model.SeverityMedium,
@@ -339,7 +391,36 @@ func (s *Service) probeVerbOverride(ctx context.Context, target string, input Ru
 					"overrideStatus": fmt.Sprintf("%d", resp.StatusCode),
 				},
 			}
-			return &f
+			emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
+				replayBaseReq, err := http.NewRequestWithContext(rctx, http.MethodGet, safe.String(), nil)
+				if err != nil {
+					return false, "", err
+				}
+				ApplyAuthProfile(replayBaseReq, input.AuthProfile)
+				replayBaseResp, err := s.doRequestWithRetry(rctx, replayBaseReq, input.Options)
+				if err != nil || replayBaseResp == nil {
+					return false, "", err
+				}
+				defer replayBaseResp.Body.Close()
+				_, _ = io.ReadAll(io.LimitReader(replayBaseResp.Body, httpMethodsBodyLimit))
+				replayReq, err := http.NewRequestWithContext(rctx, http.MethodGet, safe.String(), nil)
+				if err != nil {
+					return false, "", err
+				}
+				ApplyAuthProfile(replayReq, input.AuthProfile)
+				replayReq.Header.Set(overrideHeader, http.MethodDelete)
+				replayResp, err := s.doRequestWithRetry(rctx, replayReq, input.Options)
+				if err != nil || replayResp == nil {
+					return false, "", err
+				}
+				defer replayResp.Body.Close()
+				_, _ = io.ReadAll(io.LimitReader(replayResp.Body, httpMethodsBodyLimit))
+				return replayResp.StatusCode != replayBaseResp.StatusCode && replayResp.StatusCode >= 200 && replayResp.StatusCode < 300,
+					fmt.Sprintf("override replay -> HTTP %d (baseline %d)", replayResp.StatusCode, replayBaseResp.StatusCode), nil
+			}, []EvidenceSignal{EvidenceStatusDelta, EvidenceSinkObserved})
+			if ok {
+				return &emitted
+			}
 		}
 	}
 	return nil

@@ -130,24 +130,60 @@ func (s *Service) RunBrowserStorageProbe(
 	emitted := map[string]bool{}
 
 	for _, ep := range candidates {
-		taskCtx, taskCancel := chromedpContext(ctx)
-		var storageJSON string
-
-		err := chromedp.Run(taskCtx,
-			chromedp.Navigate(ep),
-			chromedp.Evaluate(storageCollectJS, &storageJSON),
-		)
-		taskCancel()
-
+		storageJSON, err := s.collectBrowserStorageJSON(ctx, ep)
 		if err != nil || strings.TrimSpace(storageJSON) == "" {
 			continue
 		}
 
 		storageFindings := analyzeStorageJSON(ep, storageJSON, emitted)
-		findings = append(findings, storageFindings...)
+		for _, finding := range storageFindings {
+			if !RequiresUnconditionalVerification(finding.Severity) {
+				findings = append(findings, finding)
+				continue
+			}
+			emittedFinding, ok := s.verifyBrowserStorageFinding(ctx, ep, finding)
+			if ok {
+				findings = append(findings, emittedFinding)
+			}
+		}
 	}
 
 	return findings
+}
+
+func (s *Service) collectBrowserStorageJSON(ctx context.Context, ep string) (string, error) {
+	taskCtx, taskCancel := chromedpContext(ctx)
+	defer taskCancel()
+	var storageJSON string
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(ep),
+		chromedp.Evaluate(storageCollectJS, &storageJSON),
+	)
+	return storageJSON, err
+}
+
+func (s *Service) verifyBrowserStorageFinding(ctx context.Context, ep string, finding model.Finding) (model.Finding, bool) {
+	pattern := browserStorageReplayPattern(finding)
+	if pattern == "" {
+		return finding, true
+	}
+	out := SubmitVerifiedFinding(ctx, VerifyCandidate{
+		Finding: finding,
+		Signals: []EvidenceSignal{EvidenceSinkObserved},
+		PoCReplay: func(rctx context.Context) (bool, string, error) {
+			replayedJSON, err := s.collectBrowserStorageJSON(rctx, ep)
+			if err != nil {
+				return false, "", err
+			}
+			matched := browserStorageReplayMatches(replayedJSON, pattern)
+			return matched, fmt.Sprintf("storage replay on %s reproduced %s", ep, pattern), nil
+		},
+		ProbeName: "browser-storage-probe",
+	})
+	if out.Suppressed {
+		return model.Finding{}, false
+	}
+	return out.EmittedFinding, true
 }
 
 // analyzeStorageJSON inspects the collected storage JSON for sensitive keys
@@ -178,7 +214,7 @@ func analyzeStorageJSON(ep, storageJSON string, emitted map[string]bool) []model
 						"stored in HttpOnly cookies, not localStorage/sessionStorage.",
 					ep, pattern,
 				),
-				Evidence:    fmt.Sprintf("Storage key matching %q pattern detected at %s", pattern, ep),
+				Evidence: fmt.Sprintf("Storage key matching %q pattern detected at %s", pattern, ep),
 				Recommendation: "Do not store authentication tokens, JWTs, or session identifiers in " +
 					"localStorage or sessionStorage. Use HttpOnly, Secure, SameSite=Strict cookies for " +
 					"session management. For SPAs, use in-memory storage (JavaScript closure) for " +
@@ -242,7 +278,7 @@ func analyzeStorageJSON(ep, storageJSON string, emitted map[string]bool) []model
 					"This is directly exploitable by any XSS vulnerability on the same origin.",
 				ep, chk.label,
 			),
-			Evidence:    fmt.Sprintf("Storage value matching %s structure detected at %s", chk.label, ep),
+			Evidence: fmt.Sprintf("Storage value matching %s structure detected at %s", chk.label, ep),
 			Recommendation: "Move authentication tokens from localStorage to HttpOnly cookies. " +
 				"If localStorage must be used for non-authentication data, ensure all pages on " +
 				"the origin have a strict CSP to prevent XSS exfiltration.",
@@ -266,4 +302,27 @@ func analyzeStorageJSON(ep, storageJSON string, emitted map[string]bool) []model
 	}
 
 	return findings
+}
+
+func browserStorageReplayPattern(f model.Finding) string {
+	return strings.TrimSpace(f.EvidenceFields["valuePattern"])
+}
+
+func browserStorageReplayMatches(storageJSON, pattern string) bool {
+	switch strings.TrimSpace(pattern) {
+	case "JWT (header.payload.signature)":
+		return jwtStructurePattern.FindString(storageJSON) != ""
+	case "API key/token":
+		return apiKeyPrefixPattern.FindString(storageJSON) != ""
+	case "OAuth bearer token":
+		idx := strings.Index(storageJSON, "Bearer ")
+		if idx == -1 {
+			return false
+		}
+		rest := strings.TrimSpace(storageJSON[idx+len("Bearer "):])
+		if end := strings.IndexAny(rest, `"',}`); end >= 12 {
+			return true
+		}
+	}
+	return false
 }

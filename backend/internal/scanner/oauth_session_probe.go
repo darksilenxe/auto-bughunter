@@ -118,8 +118,17 @@ func (s *Service) RunOAuthSessionProbe(
 			// and both look identical in status, flag as candidate.
 			noError1 := !oauthTokenResponseHasError(body1Str)
 			noError2 := !oauthTokenResponseHasError(body2Str)
+			controlCode := RandomMarker()
+			controlBody := url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {controlCode},
+				"redirect_uri": {"https://abh-probe.invalid/callback"},
+				"client_id":    {"abh-probe"},
+			}
+			controlResp := oauthPostForm(ctx, s, ep, controlBody, auth, options)
+			controlAccepted := controlResp != nil && controlResp.status >= 200 && controlResp.status < 300 && !oauthTokenResponseHasError(strings.ToLower(controlResp.body))
 			if noError1 && noError2 && resp1.status == resp2.status &&
-				resp1.status >= 200 && resp1.status < 300 {
+				resp1.status >= 200 && resp1.status < 300 && !controlAccepted {
 				emitted[fid] = true
 				findings = append(findings, oauthSessionFinding(
 					fid, ep, model.SeverityHigh,
@@ -127,7 +136,7 @@ func (s *Service) RunOAuthSessionProbe(
 					fmt.Sprintf(
 						"The token endpoint %s accepted a synthetic authorization code on two "+
 							"successive requests without returning an invalid_grant error on the "+
-							"second attempt (HTTP %d both times). A correctly implemented "+
+							"second attempt (HTTP %d both times), while a clearly invalid control code was rejected. A correctly implemented "+
 							"authorization server must mark codes as consumed after the first "+
 							"exchange, preventing replay attacks.",
 						ep, resp2.status,
@@ -140,10 +149,12 @@ func (s *Service) RunOAuthSessionProbe(
 						"If the second exchange also succeeds, the server does not enforce single-use codes.",
 					},
 					map[string]string{
-						"tokenEndpoint":  ep,
-						"syntheticCode":  syntheticCode,
-						"firstStatus":    fmt.Sprintf("%d", resp1.status),
-						"secondStatus":   fmt.Sprintf("%d", resp2.status),
+						"tokenEndpoint":       ep,
+						"syntheticCode":       syntheticCode,
+						"firstStatus":         fmt.Sprintf("%d", resp1.status),
+						"secondStatus":        fmt.Sprintf("%d", resp2.status),
+						"controlCodeRejected": "true",
+						"controlStatus":       fmt.Sprintf("%d", controlResp.status),
 					},
 				))
 			}
@@ -270,7 +281,6 @@ func (s *Service) RunOAuthSessionProbe(
 	if !emitted[fid] {
 		bearerToken := oauthExtractBearerToken(auth)
 		if bearerToken != "" {
-			// Call revocation/logout endpoints.
 			revoked := false
 			for _, path := range oauthRevocationPaths {
 				revEP := base.ResolveReference(&url.URL{Path: path}).String()
@@ -283,64 +293,78 @@ func (s *Service) RunOAuthSessionProbe(
 					revoked = true
 					break
 				}
-				// Also try GET logout.
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, revEP, nil)
-				if err == nil {
-					ApplyAuthProfile(req, auth)
-					resp, err := s.doRequestWithRetry(ctx, req, options)
-					if err == nil && resp != nil {
-						_ = resp.Body.Close()
-						if resp.StatusCode == 200 || resp.StatusCode == 204 || resp.StatusCode == 302 {
-							revoked = true
-							break
-						}
+				if err != nil {
+					continue
+				}
+				ApplyAuthProfile(req, auth)
+				resp, err := s.doRequestWithRetry(ctx, req, options)
+				if err == nil && resp != nil {
+					_ = resp.Body.Close()
+					if resp.StatusCode == 200 || resp.StatusCode == 204 || resp.StatusCode == 302 {
+						revoked = true
+						break
 					}
 				}
 			}
-
 			if revoked {
-				// Replay the original token against the target.
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-				if err == nil {
-					req.Header.Set("Authorization", "Bearer "+bearerToken)
-					resp, err := s.doRequestWithRetry(ctx, req, options)
-					if err == nil && resp != nil {
-						replayBody, _ := io.ReadAll(io.LimitReader(resp.Body, oauthSessionBodyLimit))
-						_ = resp.Body.Close()
-						if resp.StatusCode >= 200 && resp.StatusCode < 300 &&
-							!strings.Contains(strings.ToLower(string(replayBody)), "unauthorized") &&
-							!strings.Contains(strings.ToLower(string(replayBody)), "invalid_token") {
-							emitted[fid] = true
-							findings = append(findings, oauthSessionFinding(
-								fid, target, model.SeverityHigh,
-								"OAuth token accepted after revocation — revocation not enforced",
-								fmt.Sprintf(
-									"An access token was submitted to a revocation/logout endpoint "+
-										"(HTTP 200/204 returned) but was subsequently accepted by the "+
-										"resource at %s (HTTP %d). "+
-										"Revoked tokens must be rejected immediately; failure to do so "+
-										"means a stolen token remains valid indefinitely after logout.",
-									target, resp.StatusCode,
-								),
-								"CWE-613",
-								[]string{
-									"Authenticate and obtain an access token.",
-									"Call the revocation/logout endpoint with the token.",
-									"Replay the token against a protected resource.",
-									"Observe that the resource still returns 200, confirming revocation is not enforced.",
-								},
-								map[string]string{
-									"validationType": "active-probe",
-									"replayStatus":   fmt.Sprintf("%d", resp.StatusCode),
-								},
-							))
-						}
-					}
+				if err != nil {
+					goto refreshProbe
+				}
+				req.Header.Set("Authorization", "Bearer "+bearerToken)
+				resp, err := s.doRequestWithRetry(ctx, req, options)
+				if err != nil || resp == nil {
+					goto refreshProbe
+				}
+				replayBody, _ := io.ReadAll(io.LimitReader(resp.Body, oauthSessionBodyLimit))
+				_ = resp.Body.Close()
+				controlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+				if err != nil {
+					goto refreshProbe
+				}
+				controlReq.Header.Set("Authorization", "Bearer "+RandomMarker())
+				controlResp, err := s.doRequestWithRetry(ctx, controlReq, options)
+				if err != nil || controlResp == nil {
+					goto refreshProbe
+				}
+				controlBody, _ := io.ReadAll(io.LimitReader(controlResp.Body, oauthSessionBodyLimit))
+				_ = controlResp.Body.Close()
+				controlAccepted := controlResp.StatusCode >= 200 && controlResp.StatusCode < 300 &&
+					!strings.Contains(strings.ToLower(string(controlBody)), "unauthorized") &&
+					!strings.Contains(strings.ToLower(string(controlBody)), "invalid_token")
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+					!strings.Contains(strings.ToLower(string(replayBody)), "unauthorized") &&
+					!strings.Contains(strings.ToLower(string(replayBody)), "invalid_token") &&
+					!controlAccepted {
+					emitted[fid] = true
+					findings = append(findings, oauthSessionFinding(
+						fid, target, model.SeverityHigh,
+						"OAuth token accepted after revocation — revocation not enforced",
+						fmt.Sprintf(
+							"An access token was submitted to a revocation/logout endpoint (HTTP 200/204 returned) but was subsequently accepted by the resource at %s (HTTP %d), while a clearly invalid bearer control was rejected. Revoked tokens must be rejected immediately; failure to do so means a stolen token remains valid indefinitely after logout.",
+							target, resp.StatusCode,
+						),
+						"CWE-613",
+						[]string{
+							"Authenticate and obtain an access token.",
+							"Call the revocation/logout endpoint with the token.",
+							"Replay the token against a protected resource.",
+							"Observe that the resource still returns 200, confirming revocation is not enforced.",
+						},
+						map[string]string{
+							"validationType":       "active-probe",
+							"replayStatus":         fmt.Sprintf("%d", resp.StatusCode),
+							"controlTokenRejected": "true",
+							"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
+						},
+					))
 				}
 			}
 		}
 	}
 
+refreshProbe:
 	// ── Probe 5: Refresh token replay ──────────────────────────────────────
 	fid = "oauth-refresh-token-replay"
 	if !emitted[fid] {
@@ -350,16 +374,23 @@ func (s *Service) RunOAuthSessionProbe(
 				body1 := url.Values{
 					"grant_type":    {"refresh_token"},
 					"refresh_token": {refreshToken},
-					"client_id":    {"abh-probe"},
+					"client_id":     {"abh-probe"},
 				}
 				r1 := oauthPostForm(ctx, s, ep, body1, auth, options)
 				r2 := oauthPostForm(ctx, s, ep, body1, auth, options)
 				if r1 != nil && r2 != nil {
 					// If both succeed (or both give the same non-revoked response)
 					// the refresh token is not single-use.
+					controlBody := url.Values{
+						"grant_type":    {"refresh_token"},
+						"refresh_token": {RandomMarker()},
+						"client_id":     {"abh-probe"},
+					}
+					controlResp := oauthPostForm(ctx, s, ep, controlBody, auth, options)
+					controlAccepted := controlResp != nil && controlResp.status >= 200 && controlResp.status < 300 && !oauthTokenResponseHasError(strings.ToLower(controlResp.body))
 					if r1.status >= 200 && r1.status < 300 &&
 						r2.status >= 200 && r2.status < 300 &&
-						!oauthTokenResponseHasError(strings.ToLower(r2.body)) {
+						!oauthTokenResponseHasError(strings.ToLower(r2.body)) && !controlAccepted {
 						emitted[fid] = true
 						findings = append(findings, oauthSessionFinding(
 							fid, ep, model.SeverityHigh,
@@ -367,7 +398,7 @@ func (s *Service) RunOAuthSessionProbe(
 							fmt.Sprintf(
 								"The token endpoint %s accepted the same refresh_token value "+
 									"twice without returning invalid_grant on the second attempt "+
-									"(HTTP %d both times). Refresh token rotation (RFC 6749 §10.4) "+
+									"(HTTP %d both times), while a clearly invalid control refresh token was rejected. Refresh token rotation (RFC 6749 §10.4) "+
 									"requires that each use of a refresh token issue a new one and "+
 									"invalidate the old, preventing replay by a token thief.",
 								ep, r2.status,
@@ -380,9 +411,11 @@ func (s *Service) RunOAuthSessionProbe(
 								"Observe that the server issues a new access token instead of returning invalid_grant.",
 							},
 							map[string]string{
-								"tokenEndpoint": ep,
-								"firstStatus":   fmt.Sprintf("%d", r1.status),
-								"secondStatus":  fmt.Sprintf("%d", r2.status),
+								"tokenEndpoint":        ep,
+								"firstStatus":          fmt.Sprintf("%d", r1.status),
+								"secondStatus":         fmt.Sprintf("%d", r2.status),
+								"controlTokenRejected": "true",
+								"controlStatus":        fmt.Sprintf("%d", controlResp.status),
 							},
 						))
 						break
@@ -432,9 +465,9 @@ func (s *Service) RunOAuthSessionProbe(
 						"Use the obtained access token to act as the victim user.",
 					},
 					map[string]string{
-						"tokenEndpoint":              ep,
-						"accessControlAllowOrigin":   acao,
-						"attackerOrigin":             "https://attacker.example.com",
+						"tokenEndpoint":            ep,
+						"accessControlAllowOrigin": acao,
+						"attackerOrigin":           "https://attacker.example.com",
 					},
 				))
 				break
@@ -450,38 +483,48 @@ func (s *Service) RunOAuthSessionProbe(
 			_, payload, _, err := parseJWT(bearerToken)
 			if err == nil {
 				if _, hasAud := payload["aud"]; !hasAud {
-					// Token has no aud claim; send it to the target to confirm acceptance.
 					req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 					if err == nil {
 						req.Header.Set("Authorization", "Bearer "+bearerToken)
 						resp, err := s.doRequestWithRetry(ctx, req, options)
 						if err == nil && resp != nil {
+							candidateStatus := resp.StatusCode
 							_ = resp.Body.Close()
-							if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-								emitted[fid] = true
-								findings = append(findings, oauthSessionFinding(
-									fid, target, model.SeverityHigh,
-									"JWT accepted without audience (aud) claim — audience validation missing",
-									fmt.Sprintf(
-										"The resource at %s accepted a JWT bearer token that contains "+
-											"no audience (aud) claim (HTTP %d). Without aud validation, "+
-											"a token issued for one service can be replayed at any other "+
-											"service that trusts the same issuer, enabling cross-service "+
-											"impersonation and privilege escalation.",
-										target, resp.StatusCode,
-									),
-									"CWE-290",
-									[]string{
-										"Obtain an access token from the authorization server.",
-										"Remove the aud claim from the JWT (or obtain a token without one).",
-										"Present the token to a different resource server that trusts the same issuer.",
-										"Observe that the resource server accepts the token.",
-									},
-									map[string]string{
-										"audClaimPresent": "false",
-										"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
-									},
-								))
+
+							controlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+							if err == nil {
+								controlReq.Header.Set("Authorization", "Bearer "+RandomMarker())
+								controlResp, err := s.doRequestWithRetry(ctx, controlReq, options)
+								if err == nil && controlResp != nil {
+									controlBody, _ := io.ReadAll(io.LimitReader(controlResp.Body, oauthSessionBodyLimit))
+									_ = controlResp.Body.Close()
+									controlAccepted := controlResp.StatusCode >= 200 && controlResp.StatusCode < 300 &&
+										!strings.Contains(strings.ToLower(string(controlBody)), "unauthorized")
+									if candidateStatus >= 200 && candidateStatus < 300 && !controlAccepted {
+										emitted[fid] = true
+										findings = append(findings, oauthSessionFinding(
+											fid, target, model.SeverityHigh,
+											"JWT accepted without audience (aud) claim — audience validation missing",
+											fmt.Sprintf(
+												"The resource at %s accepted a JWT bearer token that contains no audience (aud) claim (HTTP %d). Without aud validation, a token issued for one service can be replayed at any other service that trusts the same issuer, enabling cross-service impersonation and privilege escalation.",
+												target, candidateStatus,
+											),
+											"CWE-290",
+											[]string{
+												"Obtain an access token from the authorization server.",
+												"Remove the aud claim from the JWT (or obtain a token without one).",
+												"Present the token to a different resource server that trusts the same issuer.",
+												"Observe that the resource server accepts the token.",
+											},
+											map[string]string{
+												"audClaimPresent":      "false",
+												"responseStatus":       fmt.Sprintf("%d", candidateStatus),
+												"controlTokenRejected": "true",
+												"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
+											},
+										))
+									}
+								}
 							}
 						}
 					}
@@ -509,13 +552,13 @@ func oauthSessionFinding(
 		ef[k] = v
 	}
 	return model.Finding{
-		ID:          id,
-		Category:    "authentication",
-		Severity:    severity,
-		Title:       title,
+		ID:       id,
+		Category: "authentication",
+		Severity: severity,
+		Title:    title,
 		Description: "The OAuth/OIDC authorization server or resource server failed to enforce a token lifecycle control. " +
 			"This class of vulnerability enables session replay, token hijacking, and cross-service impersonation.",
-		Evidence:       evidence,
+		Evidence: evidence,
 		Recommendation: "Enforce single-use authorization codes with immediate invalidation after exchange. " +
 			"Require and validate the nonce claim in id_tokens for hybrid flows. " +
 			"Implement token revocation and verify revoked tokens are rejected by all resource servers. " +

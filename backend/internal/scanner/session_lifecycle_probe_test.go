@@ -37,18 +37,14 @@ func TestSessionLifecycleProbe_PassiveOnly(t *testing.T) {
 // TestSessionLifecycleProbe_SessionNotInvalidatedOnLogout verifies a High finding
 // when replaying a pre-logout session cookie to a protected endpoint still returns 200.
 func TestSessionLifecycleProbe_SessionNotInvalidatedOnLogout(t *testing.T) {
-	sessionCookie := "session=pre_logout_value"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Logout always succeeds.
 		if strings.Contains(r.URL.Path, "logout") {
 			http.SetCookie(w, &http.Cookie{Name: "session", Value: "", MaxAge: -1})
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		// Protected endpoint: accept any session cookie — no server-side invalidation.
-		if strings.Contains(r.URL.Path, "/api/") || strings.Contains(r.URL.Path, "/me") ||
-			strings.Contains(r.URL.Path, "/profile") {
-			if r.Header.Get("Cookie") != "" {
+		if strings.Contains(r.URL.Path, "/api/") || strings.Contains(r.URL.Path, "/me") || strings.Contains(r.URL.Path, "/profile") {
+			if strings.Contains(r.Header.Get("Cookie"), "session=pre_logout_value") {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"user":"alice"}`))
 				return
@@ -56,17 +52,16 @@ func TestSessionLifecycleProbe_SessionNotInvalidatedOnLogout(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		// Login sets a session cookie.
 		if strings.Contains(r.URL.Path, "login") && r.Method == http.MethodPost {
 			http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_logout_value", HttpOnly: true})
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		w.WriteHeader(http.StatusNotFound)
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_logout_value", HttpOnly: true})
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	// Pre-set the auth profile to carry the session cookie.
 	svc := NewService(Config{})
 	findings := svc.RunSessionLifecycleProbe(
 		context.Background(), srv.URL,
@@ -75,11 +70,59 @@ func TestSessionLifecycleProbe_SessionNotInvalidatedOnLogout(t *testing.T) {
 		model.ScanAuthProfile{
 			Username: "alice",
 			Password: "pass",
-			Headers:  map[string]string{"Cookie": sessionCookie},
+			Cookies:  map[string]string{"session": "pre_logout_value"},
 		},
 		func(model.ScanEvent) {},
 	)
-	_ = findings // probe may or may not trigger based on cookie detection; just verify no panic.
+	for _, f := range findings {
+		if f.ID == "session-not-invalidated-on-logout" {
+			if f.EvidenceFields["preReport.verified"] != "true" {
+				t.Fatalf("expected verified logout finding, got %+v", f.EvidenceFields)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected session-not-invalidated-on-logout finding; got: %+v", findings)
+}
+
+func TestSessionLifecycleProbe_SessionRotationFindingVerified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "login") && r.Method == http.MethodPost {
+			if strings.Contains(r.Header.Get("Cookie"), "session=pre_login_value") {
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_login_value", HttpOnly: true})
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "new-session", HttpOnly: true})
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "pre_login_value", HttpOnly: true})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	svc := NewService(Config{})
+	findings := svc.RunSessionLifecycleProbe(
+		context.Background(), srv.URL,
+		newSessionScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{
+			Username: "alice",
+			Password: "pass",
+			Cookies:  map[string]string{"session": "pre_login_value"},
+		},
+		func(model.ScanEvent) {},
+	)
+	for _, f := range findings {
+		if f.ID == "session-no-rotation-after-login" {
+			if f.EvidenceFields["preReport.verified"] != "true" {
+				t.Fatalf("expected verified rotation finding, got %+v", f.EvidenceFields)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected session-no-rotation-after-login finding; got: %+v", findings)
 }
 
 // TestSessionLifecycleProbe_CookieMissingSecureFlag verifies a Medium finding

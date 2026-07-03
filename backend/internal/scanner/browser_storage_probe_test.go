@@ -89,3 +89,13 @@ func TestAnalyzeStorageJSON_Deduplication(t *testing.T) {
 		t.Fatal("expected deduplication to prevent re-emitting the same finding")
 	}
 }
+
+func TestBrowserStorageReplayMatches(t *testing.T) {
+	jwtJSON := `{"localStorage":{"pref":"` + "ey" + "JhbGciOiJIUzI1NiJ9" + ".eyJzdWI6InVzZXIxIn0" + ".sig" + `"},"sessionStorage":{},"indexedDB":[]}`
+	if !browserStorageReplayMatches(jwtJSON, "JWT (header.payload.signature)") {
+		t.Fatal("expected JWT replay matcher to confirm the token structure")
+	}
+	if browserStorageReplayMatches(`{"localStorage":{"pref":"dark"}}`, "JWT (header.payload.signature)") {
+		t.Fatal("expected JWT replay matcher to reject clean storage")
+	}
+}

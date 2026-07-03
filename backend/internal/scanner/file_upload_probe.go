@@ -128,30 +128,46 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 				continue
 			}
 
-			body, contentType, err := buildMultipartUpload(probe.filename, probe.contentType, probe.body)
-			if err != nil {
-				continue
-			}
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, body)
-			if err != nil {
-				continue
-			}
-			req.Header.Set("Content-Type", contentType)
-			ApplyAuthProfile(req, input.AuthProfile)
-
-			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+			resp, respBody, err := s.executeUploadAttempt(ctx, ep, probe.filename, probe.contentType, probe.body, input)
 			if err != nil || resp == nil {
 				continue
 			}
-			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, fileUploadBodyLimit))
-			_ = resp.Body.Close()
 			respStr := string(respBody)
+			assessment := assessUploadResponse(resp.StatusCode, respStr)
+			if !assessment.Accepted {
+				continue
+			}
 
-			executed := matchAnyLower(respStr, uploadExecutionSignals)
-			accepted := executed != "" || matchAnyLower(respStr, uploadSuccessSignals) != ""
+			blockedControl := blockedUploadControlFilename(probe.label)
+			controlBaselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+				cresp, cbody, err := s.executeUploadAttempt(bctx, ep, blockedControl, probe.contentType, probe.body, input)
+				if err != nil || cresp == nil {
+					return BaselineSample{}, err
+				}
+				return BaselineSample{Status: cresp.StatusCode, Header: cresp.Header, Body: string(cbody)}, nil
+			})
+			if berr == nil {
+				if assessUploadResponse(controlBaselines.First.Status, controlBaselines.First.Body).Accepted ||
+					assessUploadResponse(controlBaselines.Second.Status, controlBaselines.Second.Body).Accepted {
+					continue
+				}
+			}
 
-			if !accepted && resp.StatusCode >= 400 {
+			diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+				ProbeName:       "file-upload-probe",
+				OriginalPayload: probe.filename,
+				SafePayload:     blockedControl,
+				Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+					return s.executeUploadAttempt(dctx, ep, altPayload, probe.contentType, probe.body, input)
+				},
+				Oracle: func(_ context.Context, _ string, dresp *http.Response, dbody []byte) (bool, error) {
+					if dresp == nil {
+						return false, nil
+					}
+					return assessUploadResponse(dresp.StatusCode, string(dbody)).Accepted, nil
+				},
+			})
+			if diffOutcome.Ran && !diffOutcome.Confirmed {
 				continue
 			}
 
@@ -165,18 +181,18 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 					"or remote code execution depending on how the file is handled.",
 				ep, probe.label, probe.filename, probe.contentType,
 			)
-			if executed != "" {
+			if assessment.Executed != "" {
 				severity = model.SeverityCritical
 				title = fmt.Sprintf("File upload — server-side execution confirmed (%s)", probe.label)
 				desc = fmt.Sprintf(
 					"The upload endpoint %s not only accepted the %s bypass payload but the response contained "+
 						"the execution marker %q, confirming that the server executed the uploaded server-side script. "+
 						"This represents a critical remote code execution (RCE) vulnerability.",
-					ep, probe.label, executed,
+					ep, probe.label, assessment.Executed,
 				)
 			}
 
-			findings = append(findings, model.Finding{
+			finding := model.Finding{
 				ID:          fid,
 				Category:    "file-upload",
 				Severity:    severity,
@@ -184,7 +200,7 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 				Description: desc,
 				Evidence: fmt.Sprintf(
 					"POST %s (filename=%q, Content-Type=%q) → HTTP %d; accepted=%v; executed=%q",
-					ep, probe.filename, probe.contentType, resp.StatusCode, accepted, executed,
+					ep, probe.filename, probe.contentType, resp.StatusCode, assessment.Accepted, assessment.Executed,
 				),
 				Recommendation: "Validate uploaded files by content (magic bytes), not only filename extension or " +
 					"MIME type. Store uploaded files in a non-web-accessible location or use a separate origin/CDN. " +
@@ -207,9 +223,12 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 					"filename":       probe.filename,
 					"mimetype":       probe.contentType,
 					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
-					"executed":       executed,
+					"executed":       assessment.Executed,
+					"responseShape":  ClassifyResponseShape(resp.Header).String(),
 				},
-			})
+			}
+			AttachDifferentialEvidence(&finding, diffOutcome)
+			findings = append(findings, finding)
 		}
 	}
 
@@ -306,19 +325,64 @@ func min(a, b int) int {
 	return b
 }
 
+type uploadAssessment struct {
+	Accepted bool
+	Executed string
+}
+
 // detectUploadExecution checks response body for execution or acceptance signals.
 // Returns "rce" for confirmed execution, "accepted" for acceptance-only, "" for none.
 func detectUploadExecution(body string) string {
-lower := strings.ToLower(body)
-for _, sig := range uploadExecutionSignals {
-if strings.Contains(lower, strings.ToLower(sig)) {
-return "rce"
+	lower := strings.ToLower(body)
+	for _, sig := range uploadExecutionSignals {
+		if strings.Contains(lower, strings.ToLower(sig)) {
+			return "rce"
+		}
+	}
+	for _, sig := range uploadSuccessSignals {
+		if strings.Contains(lower, strings.ToLower(sig)) {
+			return "accepted"
+		}
+	}
+	return ""
 }
+
+func assessUploadResponse(status int, body string) uploadAssessment {
+	assessment := uploadAssessment{}
+	signal := detectUploadExecution(body)
+	if signal == "rce" {
+		assessment.Accepted = true
+		assessment.Executed = matchAnyLower(body, uploadExecutionSignals)
+		return assessment
+	}
+	assessment.Accepted = signal == "accepted" || status < http.StatusBadRequest
+	return assessment
 }
-for _, sig := range uploadSuccessSignals {
-if strings.Contains(lower, strings.ToLower(sig)) {
-return "accepted"
+
+func blockedUploadControlFilename(label string) string {
+	if label == "path-traversal-filename" {
+		return "../abh_control_blocked.php"
+	}
+	return "abh_control_blocked.php"
 }
-}
-return ""
+
+func (s *Service) executeUploadAttempt(ctx context.Context, ep, filename, mimeType, content string, input RunInput) (*http.Response, []byte, error) {
+	body, contentType, err := buildMultipartUpload(filename, mimeType, content)
+	if err != nil {
+		return nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	ApplyAuthProfile(req, input.AuthProfile)
+	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	if err != nil || resp == nil {
+		return nil, nil, err
+	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, fileUploadBodyLimit))
+	_ = resp.Body.Close()
+	resp.Body = http.NoBody
+	return resp, respBody, nil
 }

@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,8 +43,18 @@ func TestMagicLinkProbe_TokenInResponse_LowEntropy(t *testing.T) {
 	shortToken := "abc12345"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "magic") || strings.Contains(r.URL.Path, "passwordless") {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"token":"` + shortToken + `","email":"test@example.com"}`))
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"token":"` + shortToken + `","email":"test@example.com"}`))
+				return
+			}
+			if r.URL.Query().Get("token") == shortToken {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"session":"ok"}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid token"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -79,13 +90,21 @@ func TestMagicLinkProbe_TokenReuse_Accepted(t *testing.T) {
 	var callCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "magic") || strings.Contains(r.URL.Path, "passwordless") {
-			if r.Method == http.MethodPost || r.Method == http.MethodGet {
+			if r.Method == http.MethodPost {
 				callCount++
-				// Always accept — no single-use enforcement.
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"token":"` + longToken + `","session":"new_session"}`))
 				return
 			}
+			if r.URL.Query().Get("token") == longToken {
+				callCount++
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"session":"new_session"}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid token"}`))
+			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -158,14 +177,55 @@ func TestMagicLinkProbe_AccountLinkCSRF_Accepted(t *testing.T) {
 
 // TestMagicLinkProbe_InviteTokenEnumerable verifies a Medium finding when the
 // server returns 200 for a sequentially guessed invite token.
+func TestMagicLinkProbe_InviteTokenNotBound_Accepted(t *testing.T) {
+	inviteToken := "invite-token-1234567890"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "invite") && r.Method == http.MethodPost && !strings.Contains(r.URL.Path, "accept"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"token":"` + inviteToken + `"}`))
+		case strings.Contains(r.URL.Path, "/invite/accept") && r.Method == http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), inviteToken) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"accepted":true}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid token"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	svc := NewService(Config{})
+	findings := svc.RunMagicLinkProbe(
+		context.Background(), srv.URL,
+		newMagicLinkScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{},
+		func(model.ScanEvent) {},
+	)
+	for _, f := range findings {
+		if f.ID == "invite-token-not-bound" {
+			return
+		}
+	}
+	t.Fatalf("expected invite-token-not-bound finding; got: %+v", findings)
+}
+
 func TestMagicLinkProbe_InviteTokenEnumerable(t *testing.T) {
 	var callCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "invite") {
 			callCount++
-			// Always accept — no token binding.
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"valid":true}`))
+			if r.URL.Query().Get("token") == "000001" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"valid":true}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid token"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

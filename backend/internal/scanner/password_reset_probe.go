@@ -158,6 +158,20 @@ func extractResetToken(body []byte) string {
 	return ""
 }
 
+func pwResetInvalidControlToken(token string) string {
+	control := strings.ReplaceAll(RandomMarker(), "_", "")
+	if len(token) <= 0 {
+		return control
+	}
+	for len(control) < len(token) {
+		control += "x"
+	}
+	if len(control) > len(token) {
+		control = control[:len(token)]
+	}
+	return control
+}
+
 // tryResetWithToken attempts to consume a disclosed reset token to change the
 // account password. Returns a finding when the reset succeeds.
 func (s *Service) tryResetWithToken(ctx context.Context, input RunInput, base *url.URL, resetEP, token string) *model.Finding {
@@ -203,21 +217,52 @@ func (s *Service) tryResetWithToken(ctx context.Context, input RunInput, base *u
 		if !successIndicators {
 			continue
 		}
+		controlToken := pwResetInvalidControlToken(token)
+		controlBody := map[string]string{
+			"token":       controlToken,
+			"newPassword": body["newPassword"],
+			"password":    body["password"],
+		}
+		controlJSON, err := json.Marshal(controlBody)
+		if err != nil {
+			continue
+		}
+		controlReq, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(controlJSON))
+		if err != nil {
+			continue
+		}
+		ApplyAuthProfile(controlReq, input.AuthProfile)
+		controlReq.Header.Set("Content-Type", "application/json")
+		controlResp, err := s.doRequestWithSession(ctx, controlReq, input.Options, input.Session)
+		if err != nil || controlResp == nil {
+			continue
+		}
+		controlRespBody, _ := io.ReadAll(io.LimitReader(controlResp.Body, pwResetBodyLimit))
+		_ = controlResp.Body.Close()
+		controlLower := strings.ToLower(string(controlRespBody))
+		controlAccepted := controlResp.StatusCode >= 200 && controlResp.StatusCode < 300 &&
+			(strings.Contains(controlLower, "success") ||
+				strings.Contains(controlLower, "updated") ||
+				strings.Contains(controlLower, "changed") ||
+				strings.Contains(controlLower, "password"))
+		if controlAccepted {
+			continue
+		}
 		return &model.Finding{
-			ID:             "password-reset-token-disclosure",
-			Category:       "authentication",
-			Severity:       model.SeverityCritical,
-			Title:          "Password reset token disclosed in API response — account takeover confirmed",
+			ID:       "password-reset-token-disclosure",
+			Category: "authentication",
+			Severity: model.SeverityCritical,
+			Title:    "Password reset token disclosed in API response — account takeover confirmed",
 			Description: fmt.Sprintf(
 				"The API at %s disclosed a plaintext password-reset token in the JSON response body "+
-					"(%q). The token was successfully consumed at %s to demonstrate account takeover. "+
+					"(%q). The token was successfully consumed at %s to demonstrate account takeover, while a valid-shaped invalid control token was rejected. "+
 					"Any party who can intercept the response (MITM, logging infrastructure, browser "+
 					"history) gains the ability to take over the associated account.",
 				resetEP, token, ep,
 			),
 			Evidence: fmt.Sprintf(
-				"POST %s → token=%q disclosed; POST %s with token → HTTP %d",
-				resetEP, truncateString(token, 20), ep, resp.StatusCode,
+				"POST %s → token=%q disclosed; POST %s with token → HTTP %d; invalid control token → HTTP %d",
+				resetEP, truncateString(token, 20), ep, resp.StatusCode, controlResp.StatusCode,
 			),
 			Recommendation: "Never return reset tokens in API responses. Send them only via a secure " +
 				"out-of-band channel (email). Tokens must be single-use, time-limited (≤15 min), " +
@@ -229,11 +274,13 @@ func (s *Service) tryResetWithToken(ctx context.Context, input RunInput, base *u
 			Sources:       []string{"active-scanner", "password-reset-probe"},
 			BusinessTags:  []string{"account-takeover", "password-reset", "token-disclosure"},
 			EvidenceFields: map[string]string{
-				"validationType":  "active-probe",
-				"resetEndpoint":   resetEP,
-				"consumeEndpoint": ep,
-				"disclosedToken":  truncateString(token, 20),
-				"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
+				"validationType":       "active-probe",
+				"resetEndpoint":        resetEP,
+				"consumeEndpoint":      ep,
+				"disclosedToken":       truncateString(token, 20),
+				"responseStatus":       fmt.Sprintf("%d", resp.StatusCode),
+				"controlTokenRejected": "true",
+				"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
 			},
 		}
 	}
