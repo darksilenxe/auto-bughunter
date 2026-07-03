@@ -255,21 +255,23 @@ func heavyToolBudgetExceededFinding(idPrefix, tool, target string) model.Finding
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
-//	Phase 2 — Port scan:   naabu  (target + discovered hosts)
-//	Phase 3 — HTTP probe:  httpx  (target + discovered hosts)
-//	Phase 4 — Crawling:    katana, ffuf, gobuster, kiterunner, gau, arjun, linkfinder
-//	Phase 5 — TLS/network: tlsx, cdncheck, asnmap
-//	Phase 6 — CMS scan:    WPScan (native Go; auto-triggers if WordPress detected and enabled)
-//	Phase 6b — Web scan:   Nikto  (native Go; full web application pen-test)
-//	Phase 6c — SQL inject: SQLMap (native Go; error-based, boolean-blind, time-based blind)
-//	Phase 6d — Cmd inject: commix (OS command injection; gated by ALLOW_DESTRUCTIVE_CHECKS)
-//	Phase 7 — Vuln scan:   nuclei (target + discovered hosts), vulnx, retire.js, trufflehog, zap
+//	Phase 0 — UI simulation: ui-simulation (state-change detection before any other probes)
+//	Phase 1 — Discovery:     cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
+//	Phase 2 — Port scan:     naabu  (target + discovered hosts)
+//	Phase 3 — HTTP probe:    httpx  (target + discovered hosts)
+//	Phase 4 — Crawling:      katana, ffuf, gobuster, kiterunner, gau, arjun, linkfinder
+//	Phase 5 — TLS/network:   tlsx, cdncheck, asnmap
+//	Phase 6 — CMS scan:      WPScan (native Go; auto-triggers if WordPress detected and enabled)
+//	Phase 6b — Web scan:     Nikto  (native Go; full web application pen-test)
+//	Phase 6c — SQL inject:   SQLMap (native Go; error-based, boolean-blind, time-based blind)
+//	Phase 6d — Cmd inject:   commix (OS command injection; gated by ALLOW_DESTRUCTIVE_CHECKS)
+//	Phase 7 — Vuln scan:     nuclei (target + discovered hosts), vulnx, retire.js, trufflehog, zap
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
 
 runTool := func(tool, args string, fn func() []model.Finding) []model.Finding {
+
 if input.Emit != nil {
 input.Emit(model.ScanEvent{
 Type:      model.ScanEventCommand,
@@ -289,6 +291,23 @@ Output:    fmt.Sprintf("[%s completed execution]", tool),
 }
 return res
 }
+
+	// Phase 0 — UI simulation (state-change detection before any other probes).
+	// Running ui-simulation first lets it observe the application's pristine
+	// initial state and capture state changes before other tools alter cookies,
+	// sessions, or server-side data.
+	if input.Options.UseUISimulationIntegration {
+		findings = append(findings, runTool("ui-simulation", input.Target, func() []model.Finding {
+			// RunUISimulationAgents spawns one parallel simulation agent per unique
+			// in-scope origin (base + all seeds + all discovered endpoints so far)
+			// so every distinct application entry point gets full coverage.
+			simFindings, simEndpoints := s.RunUISimulationAgents(ctx, input, state)
+			for _, ep := range simEndpoints {
+				state.addEndpoints(ep.URL)
+			}
+			return simFindings
+		})...)
+	}
 
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseCloudlistIntegration {
@@ -395,18 +414,6 @@ return res
 	if input.Options.UseLinkFinderIntegration {
 		findings = append(findings, runTool("linkfinder", "-i "+input.Target+" -o cli", func() []model.Finding {
 			return s.runLinkFinder(ctx, input.Target, input.Scope, state)
-		})...)
-	}
-	if input.Options.UseUISimulationIntegration {
-		findings = append(findings, runTool("ui-simulation", input.Target, func() []model.Finding {
-			// RunUISimulationAgents spawns one parallel simulation agent per unique
-			// in-scope origin (base + all seeds + all discovered endpoints so far)
-			// so every distinct application entry point gets full coverage.
-			simFindings, simEndpoints := s.RunUISimulationAgents(ctx, input, state)
-			for _, ep := range simEndpoints {
-				state.addEndpoints(ep.URL)
-			}
-			return simFindings
 		})...)
 	}
 
