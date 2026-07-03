@@ -107,6 +107,10 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 				ApplyAuthProfile(ctrlReq, input.AuthProfile)
 				ctrlResp, ctrlErr := s.doRequestWithRetry(ctx, ctrlReq, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory. CORS
+				// is header-only, so no parameter name applies.
+				RecordProbedKey(http.MethodGet, probeURL, "")
 				if ctrlErr == nil && ctrlResp != nil {
 					baselineACAO = strings.TrimSpace(ctrlResp.Header.Get("Access-Control-Allow-Origin"))
 					isJSONAPI = !isHTMLLikeContentType(ctrlResp.Header)
@@ -127,6 +131,9 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 			req.Header.Set("Origin", origin)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			attempts++
+			// Phase 2 coverage accounting: see the control-request comment
+			// above.
+			RecordProbedKey(http.MethodGet, probeURL, "")
 			if err != nil || resp == nil {
 				continue
 			}

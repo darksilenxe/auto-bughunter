@@ -30,6 +30,10 @@ func (s *Service) runActiveXPathInjectionProbe(ctx context.Context, input RunInp
 		candidates = []string{input.Target}
 	}
 
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the built-in XPath wordlist (see PHASE2_AUDIT.md).
+	probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), xpathProbeParams)
+
 	type hit struct {
 		url       string
 		param     string
@@ -47,7 +51,7 @@ func (s *Service) runActiveXPathInjectionProbe(ctx context.Context, input RunInp
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, param := range xpathProbeParams {
+		for _, param := range probeParams {
 			if attempts >= xpathMaxAttempts {
 				break
 			}
@@ -70,6 +74,9 @@ func (s *Service) runActiveXPathInjectionProbe(ctx context.Context, input RunInp
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, param)
 				if err != nil || resp == nil {
 					continue
 				}

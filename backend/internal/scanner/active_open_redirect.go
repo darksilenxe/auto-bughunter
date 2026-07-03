@@ -55,6 +55,10 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 		candidates = []string{input.Target}
 	}
 
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the built-in redirect-parameter wordlist (see PHASE2_AUDIT.md).
+	probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), openRedirectParams)
+
 	if input.Emit != nil {
 		input.Emit(model.ScanEvent{
 			Type:    model.ScanEventCommand,
@@ -96,7 +100,7 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 		// Two payload shapes: full scheme+host and protocol-relative `//host`.
 		// Some apps reject `http://` but happily accept `//attacker`.
 		payloads := []string{"https://" + openRedirectMarker, "//" + openRedirectMarker}
-		for _, p := range openRedirectParams {
+		for _, p := range probeParams {
 			if attempts >= openRedirectMaxAttempts {
 				break
 			}
@@ -134,6 +138,9 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := noFollow.Do(req)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, p)
 				if err != nil || resp == nil {
 					continue
 				}

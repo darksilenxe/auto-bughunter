@@ -116,6 +116,10 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 		candidates = []string{input.Target}
 	}
 
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the built-in template-reflection wordlist (see PHASE2_AUDIT.md).
+	probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), sstiProbeParams)
+
 	if input.Emit != nil {
 		input.Emit(model.ScanEvent{
 			Type:    model.ScanEventCommand,
@@ -143,7 +147,7 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, p := range sstiProbeParams {
+		for _, p := range probeParams {
 			if attempts >= sstiMaxAttempts {
 				break
 			}
@@ -174,6 +178,9 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, p)
 				if err != nil || resp == nil {
 					continue
 				}
