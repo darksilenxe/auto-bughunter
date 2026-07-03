@@ -19,6 +19,7 @@
  *   onScreenshot {fn}       – callback(b64) for screenshot lightbox
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAutoScrollToLatest, formatLiveEventText } from "../lib/liveEventFormat.js";
 
 // ── SVG geometry ────────────────────────────────────────────────────────────
 
@@ -347,25 +348,26 @@ function formatActivity(evt) {
     case "agent_spawned":
       return { icon: "⚡", color: "#fde68a", text: evt.message || `Spawned: ${evt.agentName}` };
     case "finding": {
-      const c = SEV_COLOR[evt.severity] || "#9ca3af";
-      return { icon: "⚠", color: c, text: `[${(evt.severity || "info").toUpperCase()}] ${evt.findingTitle}` };
+      const { primary } = formatLiveEventText(evt);
+      return { icon: "⚠", color: SEV_COLOR[evt.severity] || "#9ca3af", text: primary };
     }
     case "command":
       return { icon: "$", color: "#79c0ff", text: evt.command || evt.message };
-    case "screenshot":
-      return { icon: "📷", color: "#c084fc", text: evt.message || "Screenshot captured", screenshot: evt.screenshot };
-    default:
-      return { icon: "·", color: "#9ca3af", text: evt.message || "" };
+    case "screenshot": {
+      const { primary, screenshot } = formatLiveEventText(evt);
+      return { icon: "📷", color: "#c084fc", text: primary, screenshot };
+    }
+    default: {
+      const { agentName, primary } = formatLiveEventText(evt);
+      return { icon: "·", color: "#9ca3af", text: agentName ? `[${agentName}] ${primary}` : primary };
+    }
   }
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function ActivityLog({ events, scanStart, onScreenshot }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [events]);
+  const ref = useAutoScrollToLatest(events);
 
   const loggable = (events || []).filter(e =>
     e.type !== "screenshot" ||

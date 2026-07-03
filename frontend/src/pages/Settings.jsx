@@ -548,7 +548,7 @@ export default function Settings() {
           <input type="password" placeholder="Paste your API key here" value={runtimeApiKey} onChange={(e) => setRuntimeApiKey(e.target.value)} style={{ flex: "1 1 280px" }} />
           <div className="button-row">
             <button type="button" onClick={saveApiKey}>Save &amp; reload</button>
-            <button type="button" className="button-secondary" onClick={clearApiKey}>Clear</button>
+            <button type="button" className="button-danger" onClick={clearApiKey}>Clear</button>
           </div>
         </div>
         {apiKeyStatus && <p className="meta" style={{ marginTop: 12 }}>{apiKeyStatus}</p>}

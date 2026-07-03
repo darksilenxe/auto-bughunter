@@ -198,6 +198,61 @@ const cooldownAfterNuclei = 30 * time.Second
 
 const integrationPreflightTimeout = 3 * time.Second
 
+// minHeavyToolRunTime is the smallest per-call budget worth attempting for a
+// heavy Phase 7 tool (Nuclei, ZAP Baseline). Nuclei and ZAP were reported to
+// "not finish, or time out": both tools were always asked to run for the full
+// static IntegrationTimeout (e.g. 600s) even when the overall scan context had
+// far less time left, because that context is shared across every earlier
+// discovery/crawl/injection phase. The parent context would then expire mid
+// -request, producing an opaque HTTP/exec error instead of the clean
+// "*-timeout" finding, and starving whichever tool ran last (usually ZAP,
+// since it follows Nuclei) of any time at all. heavyToolBudget below caps the
+// requested timeout to whatever time genuinely remains, and this constant
+// lets callers skip the attempt outright — with a clear, actionable finding —
+// once too little budget remains for the tool to do anything useful.
+const minHeavyToolRunTime = 15 * time.Second
+
+// heavyToolTimeoutSafetyMargin is subtracted from the remaining scan-context
+// budget so a Phase 7 tool's own internal timeout always elapses slightly
+// before the parent context is canceled. This gives the tool (and the HTTP
+// sidecar wrapping it) a chance to return a clean, partial result instead of
+// having the in-flight request or subprocess killed abruptly by ctx expiry.
+const heavyToolTimeoutSafetyMargin = 5 * time.Second
+
+// heavyToolBudget returns the timeout that should actually be requested for a
+// single heavy Phase 7 tool invocation (Nuclei, ZAP Baseline), bounded by both
+// the configured IntegrationTimeout and whatever time remains on ctx before
+// the overall scan deadline. ok is false when the remaining budget is too
+// small (< minHeavyToolRunTime) for the call to be worth attempting at all.
+func (s *Service) heavyToolBudget(ctx context.Context) (timeout time.Duration, ok bool) {
+	timeout = s.cfg.IntegrationTimeout
+	if deadline, has := ctx.Deadline(); has {
+		remaining := time.Until(deadline) - heavyToolTimeoutSafetyMargin
+		if remaining < minHeavyToolRunTime {
+			return 0, false
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	return timeout, true
+}
+
+// heavyToolBudgetExceededFinding builds the informational finding returned
+// when a heavy Phase 7 tool is skipped because too little scan-context budget
+// remains to run it usefully.
+func heavyToolBudgetExceededFinding(idPrefix, tool, target string) model.Finding {
+	return model.Finding{
+		ID:             idPrefix + "-skipped-insufficient-time-budget",
+		Category:       "integration",
+		Severity:       model.SeverityInfo,
+		Title:          tool + " skipped: insufficient remaining scan time budget",
+		Description:    fmt.Sprintf("%s was not run against %s because too little time remained in the overall scan budget to complete it usefully.", tool, target),
+		Evidence:       fmt.Sprintf("min_required=%s", minHeavyToolRunTime),
+		Recommendation: "Increase SCAN_TIMEOUT_SECONDS, reduce scan scope, or disable earlier optional integrations so more budget remains for Nuclei/ZAP.",
+	}
+}
+
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
 //	Phase 1 — Discovery:   cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
@@ -730,6 +785,11 @@ func (s *Service) shouldRunNucleiViaHTTP(ctx context.Context) bool {
 }
 
 func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Finding {
+	budget, ok := s.heavyToolBudget(ctx)
+	if !ok {
+		return []model.Finding{heavyToolBudgetExceededFinding("nuclei", "Nuclei", target)}
+	}
+
 	client := toolclient.NewNucleiClient()
 
 	// Check if service is available
@@ -745,7 +805,7 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 		}}
 	}
 
-	timeoutSecs := int(s.cfg.IntegrationTimeout.Seconds())
+	timeoutSecs := int(budget.Seconds())
 	args := []string{"-u", target, "-severity", "medium,high,critical", "-silent"}
 	if s.scannerProxy.Enabled && strings.TrimSpace(s.scannerProxy.URL) != "" {
 		args = append(args, "-proxy", s.scannerProxy.URL)
@@ -753,6 +813,17 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 
 	result, err := client.Execute(ctx, args, timeoutSecs)
 	if err != nil {
+		if ctx.Err() != nil {
+			return []model.Finding{{
+				ID:             "nuclei-timeout",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Nuclei integration timed out",
+				Description:    "Nuclei did not complete before the overall scan context ended.",
+				Evidence:       "requested_timeout=" + budget.String(),
+				Recommendation: "Increase SCAN_TIMEOUT_SECONDS, reduce scan scope, or disable earlier optional integrations.",
+			}}
+		}
 		return []model.Finding{{
 			ID:             "nuclei-http-error",
 			Category:       "integration",
@@ -771,7 +842,7 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 			Severity:       model.SeverityLow,
 			Title:          "Nuclei integration timed out",
 			Description:    "Nuclei did not complete before the integration timeout.",
-			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Evidence:       "timeout=" + budget.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
@@ -810,6 +881,10 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 }
 
 func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Finding {
+	budget, ok := s.heavyToolBudget(ctx)
+	if !ok {
+		return []model.Finding{heavyToolBudgetExceededFinding("nuclei", "Nuclei", target)}
+	}
 	if _, err := exec.LookPath(s.cfg.NucleiBinary); err != nil {
 		return []model.Finding{{
 			ID:             "nuclei-binary-missing",
@@ -822,7 +897,7 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 		}}
 	}
 
-	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	ictx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	args := []string{"-u", target, "-severity", "medium,high,critical", "-silent"}
@@ -842,7 +917,7 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 			Severity:       model.SeverityLow,
 			Title:          "Nuclei integration timed out",
 			Description:    "Nuclei did not complete before the integration timeout.",
-			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Evidence:       "timeout=" + budget.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
@@ -902,6 +977,11 @@ func (s *Service) shouldRunZAPBaselineViaHTTP(ctx context.Context) bool {
 }
 
 func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model.Finding {
+	budget, ok := s.heavyToolBudget(ctx)
+	if !ok {
+		return []model.Finding{heavyToolBudgetExceededFinding("zap-baseline", "ZAP Baseline", target)}
+	}
+
 	client := toolclient.NewZapClient()
 
 	// Check if service is available
@@ -921,11 +1001,22 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 		}}
 	}
 
-	timeoutSecs := int(s.cfg.IntegrationTimeout.Seconds())
+	timeoutSecs := int(budget.Seconds())
 	args := []string{"-t", target, "-m", "1", "-I"}
 
 	result, err := client.Execute(ctx, args, timeoutSecs)
 	if err != nil {
+		if ctx.Err() != nil {
+			return []model.Finding{{
+				ID:             "zap-baseline-timeout",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "ZAP Baseline integration timed out",
+				Description:    "ZAP Baseline did not complete before the overall scan context ended.",
+				Evidence:       "requested_timeout=" + budget.String(),
+				Recommendation: "Increase SCAN_TIMEOUT_SECONDS, reduce scan scope, or disable earlier optional integrations.",
+			}}
+		}
 		return []model.Finding{{
 			ID:             "zap-baseline-http-error",
 			Category:       "integration",
@@ -944,7 +1035,7 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 			Severity:       model.SeverityLow,
 			Title:          "ZAP Baseline integration timed out",
 			Description:    "ZAP Baseline did not complete before the integration timeout.",
-			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Evidence:       "timeout=" + budget.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
@@ -953,6 +1044,10 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 }
 
 func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model.Finding {
+	budget, ok := s.heavyToolBudget(ctx)
+	if !ok {
+		return []model.Finding{heavyToolBudgetExceededFinding("zap-baseline", "ZAP Baseline", target)}
+	}
 	if _, err := exec.LookPath(s.cfg.ZAPBaselineBinary); err != nil {
 		return []model.Finding{{
 			ID:             "zap-baseline-binary-missing",
@@ -965,7 +1060,7 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 		}}
 	}
 
-	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+	ictx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	cmd := exec.CommandContext(ictx, s.cfg.ZAPBaselineBinary, "-t", target, "-m", "1", "-I")
@@ -981,7 +1076,7 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 			Severity:       model.SeverityLow,
 			Title:          "ZAP Baseline integration timed out",
 			Description:    "ZAP Baseline did not complete before the integration timeout.",
-			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
+			Evidence:       "timeout=" + budget.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
