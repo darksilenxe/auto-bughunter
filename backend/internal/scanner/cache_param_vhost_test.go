@@ -1,7 +1,10 @@
 package scanner
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -79,5 +82,51 @@ func TestVhostDiffers(t *testing.T) {
 	}
 	if vhostDiffers(bodyStatus{status: 200, body: "x"}, bodyStatus{status: 200, body: "x"}) {
 		t.Fatal("identical must not differ")
+	}
+}
+
+func TestWithCacheBusterParam(t *testing.T) {
+got := withCacheBusterParam("https://example.com/path?x=1", "abhcb", "tok123")
+u, err := url.Parse(got)
+if err != nil {
+t.Fatalf("unexpected parse error: %v", err)
+}
+if u.Query().Get("abhcb") != "tok123" {
+t.Fatalf("expected cache-buster param preserved, got %q", got)
+}
+if u.Query().Get("x") != "1" {
+t.Fatalf("expected existing query params preserved, got %q", got)
+}
+}
+
+func TestCacheBusterTokenStableAndDistinct(t *testing.T) {
+a1 := cacheBusterToken("X-Forwarded-Host")
+a2 := cacheBusterToken("X-Forwarded-Host")
+if a1 != a2 {
+t.Fatalf("expected deterministic token for same header, got %q vs %q", a1, a2)
+}
+b := cacheBusterToken("X-Host")
+if a1 == b {
+t.Fatalf("expected distinct tokens for distinct headers, both %q", a1)
+}
+}
+
+// TestCachePoisonReplayConfirmed_RejectsLoopback documents that
+// cachePoisonReplayConfirmed re-validates its target through the SSRF guard
+// independently, so it can never be used to reach loopback/internal
+// infrastructure even if a caller passed through a stale/unvalidated URL.
+func TestCachePoisonReplayConfirmed_RejectsLoopback(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("host=" + cachePoisonCanary))
+	}))
+	defer target.Close()
+
+	client := target.Client()
+	confirmed, err := cachePoisonReplayConfirmed(context.Background(), client, RunInput{}, target.URL+"?poisoned=1")
+	if err == nil {
+		t.Fatal("expected loopback replay target to be rejected by safety.ValidateOutboundURL")
+	}
+	if confirmed {
+		t.Fatal("rejected replay must not report confirmed")
 	}
 }

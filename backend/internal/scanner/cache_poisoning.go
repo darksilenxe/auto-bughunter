@@ -80,7 +80,23 @@ func (s *Service) runCachePoisoningProbe(ctx context.Context, input RunInput, _ 
 	// (the SSRF guard that rejects loopback/link-local/internal hosts) above, so
 	// the request below cannot reach an out-of-scope or internal destination.
 	for _, hdr := range cachePoisonHeaders {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		// Give every header trial its own cache-buster query parameter. This
+		// (a) stops concurrent trials from clobbering the same cache key, and
+		// (b) — per PortSwigger's canonical web-cache-poisoning methodology —
+		// gives us a stable, unique URL that we can re-request cleanly (no
+		// injected header) to prove the response was actually served *from
+		// the cache* rather than merely reflected on the poisoned request
+		// itself. A per-request reflection without a confirmed cache replay
+		// is not a demonstrated cache-poisoning vulnerability.
+		poisonURL := withCacheBusterParam(targetURL, "abhcb", cacheBusterToken(hdr))
+		// Re-validate: withCacheBusterParam only ever adds/overwrites a query
+		// parameter on targetURL, but re-check explicitly so the outbound
+		// destination is never trusted without a fresh SSRF/scope check.
+		if err := safety.ValidateOutboundURL(poisonURL); err != nil {
+			continue
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, poisonURL, nil)
 		if err != nil {
 			continue
 		}
@@ -90,8 +106,6 @@ func (s *Service) runCachePoisoningProbe(ctx context.Context, input RunInput, _ 
 		} else {
 			req.Header.Set(hdr, cachePoisonCanary)
 		}
-		// Add a cache-buster query so we never actually poison a real cache key
-		// during testing while still triggering cache storage behaviour.
 		resp, err := noFollow.Do(req)
 		if err != nil || resp == nil {
 			continue
@@ -105,24 +119,46 @@ func (s *Service) runCachePoisoningProbe(ctx context.Context, input RunInput, _ 
 			continue
 		}
 
+		// PortSwigger's own true-positive test: re-fetch the exact same
+		// (cache-buster) URL with no injected header. If a shared cache
+		// actually stored and replayed the poisoned response, the canary
+		// must still be present for this "clean visitor" request.
+		confirmed, replayErr := cachePoisonReplayConfirmed(ctx, &noFollow, input, poisonURL)
+
 		severity := model.SeverityMedium
 		confidence := 0.6
-		if cacheable {
+		verdict := "unconfirmed"
+		switch {
+		case confirmed:
+			severity = model.SeverityCritical
+			confidence = 0.95
+			verdict = "confirmed"
+		case cacheable:
 			severity = model.SeverityHigh
 			confidence = 0.85
 		}
 
-		curl := fmt.Sprintf("curl -s -H '%s: %s' '%s'", hdr, cachePoisonCanary, input.Target)
+		description := fmt.Sprintf("The response reflected the value of the unkeyed request header %q into the response. "+
+			"When this header is excluded from the cache key but influences the cached response body, an attacker can poison the shared "+
+			"cache so that all subsequent visitors receive attacker-controlled content (e.g. a malicious script host or redirect).", hdr)
+		if confirmed {
+			description += " This was confirmed by re-requesting the same URL without the injected header: the poisoned response " +
+				"(carrying the canary value) was served from the shared cache to a subsequent \"clean\" request, proving real-world impact."
+		} else if replayErr == nil {
+			description += " A clean-request replay of the same URL did not reproduce the canary, so cache poisoning is not yet " +
+				"confirmed end-to-end; this may still indicate an unkeyed-input flaw worth manual verification (e.g. cache TTL, " +
+				"vary-header exclusions, or edge/CDN caching not exercised during this scan)."
+		}
+
+		curl := fmt.Sprintf("curl -s -H '%s: %s' '%s'", hdr, cachePoisonCanary, poisonURL)
 		return []model.Finding{{
-			ID:       "cache-poisoning-" + hhSlug(hdr),
-			Category: "misconfiguration",
-			Severity: severity,
-			Title:    "Potential web cache poisoning via unkeyed header",
-			Description: fmt.Sprintf("The response reflected the value of the unkeyed request header %q into the response. "+
-				"When this header is excluded from the cache key but influences the cached response body, an attacker can poison the shared "+
-				"cache so that all subsequent visitors receive attacker-controlled content (e.g. a malicious script host or redirect).", hdr),
-			Evidence: fmt.Sprintf("Injected %s: %s was reflected in the response; cache-indicative headers present: %t (%s).",
-				hdr, cachePoisonCanary, cacheable, cacheHeaderSummary(resp.Header)),
+			ID:          "cache-poisoning-" + hhSlug(hdr),
+			Category:    "misconfiguration",
+			Severity:    severity,
+			Title:       "Potential web cache poisoning via unkeyed header",
+			Description: description,
+			Evidence: fmt.Sprintf("Injected %s: %s was reflected in the response; cache-indicative headers present: %t (%s); replay verdict: %s.",
+				hdr, cachePoisonCanary, cacheable, cacheHeaderSummary(resp.Header), verdict),
 			Recommendation: "Include every header that affects the response body in the cache key, or strip attacker-controllable headers " +
 				"(X-Forwarded-Host, X-Host, Forwarded, …) at the edge before caching. Do not build absolute URLs from request headers.",
 			Confidence:    confidence,
@@ -131,22 +167,78 @@ func (s *Service) runCachePoisoningProbe(ctx context.Context, input RunInput, _ 
 			OWASPCategory: "A05:2021 - Security Misconfiguration",
 			Sources:       []string{"active-scanner", "cache-poisoning"},
 			ReproductionSteps: []string{
-				fmt.Sprintf("Send GET %s with header %s: %s", input.Target, hdr, cachePoisonCanary),
+				fmt.Sprintf("Send GET %s with header %s: %s", poisonURL, hdr, cachePoisonCanary),
 				"Confirm the canary value is reflected into the response body or a Location/absolute-URL header.",
 				"Inspect cache headers (X-Cache, Age, Cache-Control) to confirm the response is stored in a shared cache.",
-				"Re-request the URL without the header to confirm the poisoned response is served from cache.",
+				"Re-request the same URL without the header to confirm the poisoned response is served from cache.",
 			},
 			PoC: curl,
 			EvidenceFields: map[string]string{
-				"validationType": "active-probe",
-				"unkeyedHeader":  hdr,
-				"cacheable":      fmt.Sprintf("%t", cacheable),
-				"curlReproducer": curl,
+				"validationType":  "active-probe",
+				"unkeyedHeader":   hdr,
+				"cacheable":       fmt.Sprintf("%t", cacheable),
+				"replayConfirmed": fmt.Sprintf("%t", confirmed),
+				"curlReproducer":  curl,
 			},
 		}}
 	}
 
 	return nil
+}
+
+// cacheBusterToken derives a short, deterministic-per-header token so the
+// per-trial cache-buster query stays stable within a single probe run while
+// still being distinct per header (avoids trials clobbering each other's
+// cache entries).
+func cacheBusterToken(hdr string) string {
+	sum := 0
+	for _, r := range hdr {
+		sum = sum*31 + int(r)
+	}
+	if sum < 0 {
+		sum = -sum
+	}
+	return fmt.Sprintf("%s%x", cachePoisonCanary[:3], sum)
+}
+
+// withCacheBusterParam appends a unique query parameter to rawURL so the
+// probe's poison and replay requests target the same, otherwise-unused cache
+// key without disturbing real traffic.
+func withCacheBusterParam(rawURL, param, value string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	q.Set(param, value)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// cachePoisonReplayConfirmed re-fetches poisonURL with no injected header and
+// reports whether the canary is still present — i.e. whether a shared cache
+// actually stored and replayed the poisoned response to a subsequent "clean"
+// request. This is PortSwigger's canonical distinction between a per-request
+// reflection (not yet a vulnerability) and confirmed cache poisoning.
+func cachePoisonReplayConfirmed(ctx context.Context, client *http.Client, input RunInput, poisonURL string) (bool, error) {
+	// poisonURL is caller-constructed from an already-scope/SSRF-validated
+	// target (see withCacheBusterParam call site), but re-validate here too
+	// since this helper issues its own outbound request independently.
+	if err := safety.ValidateOutboundURL(poisonURL); err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, poisonURL, nil)
+	if err != nil {
+		return false, err
+	}
+	ApplyAuthProfile(req, input.AuthProfile)
+	resp, err := client.Do(req)
+	if err != nil || resp == nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, cachePoisonBodyLimit))
+	return cachePoisonReflected(string(body), resp.Header, cachePoisonCanary), nil
 }
 
 // cachePoisonReflected reports whether the injected canary appears in the

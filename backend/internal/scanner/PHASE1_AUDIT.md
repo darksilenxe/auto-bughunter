@@ -79,6 +79,16 @@ References landed so far:
   `security-knowledge/sources/corpus_sources.json`, and
   `backend/internal/hacktricks/techniques.go` for the matching
   reference/corpus/command-template entries.
+- PortSwigger true-positive methodology applied to `cache_poisoning.go`:
+  the unkeyed-header probe now assigns each header trial its own
+  cache-buster URL and performs a clean-request replay of that exact
+  URL (no injected header) before reporting High/Critical severity —
+  per PortSwigger's canonical distinction between a per-request
+  reflection (unconfirmed) and a response actually served from the
+  shared cache to a subsequent visitor (confirmed cache poisoning,
+  now Critical). Added the previously-missing `cache-poisoning`
+  entries to `frontend/src/lib/webVulnerabilityCoverage.js` and
+  `security-knowledge/sources/corpus_sources.json`.
 
 | Probe file | gate | refl | base | verify | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
