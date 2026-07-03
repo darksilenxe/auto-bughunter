@@ -947,6 +947,27 @@
         "enabled": true
       },
       "fullText": true
+    },
+    {
+      "id": "portswigger-cache-poisoning-academy",
+      "title": "PortSwigger Web Security Academy \u2014 Web cache poisoning",
+      "url": "https://portswigger.net/web-security/web-cache-poisoning",
+      "sourceType": "portswigger",
+      "license": "source-url-only",
+      "topic": "unkeyed input and shared-cache verification methodology",
+      "vulnerabilityClass": "web cache poisoning",
+      "technique": "unkeyed header/parameter discovery with clean-request replay confirmation",
+      "keywords": [
+        "cache poisoning",
+        "unkeyed header",
+        "unkeyed input",
+        "x-forwarded-host",
+        "cache key"
+      ],
+      "passage": "Curated note: a per-request reflection of an unkeyed header/parameter is not a confirmed cache-poisoning vulnerability \u2014 re-request the same cache-buster URL without the injected value to confirm the poisoned response is served from the shared cache to a subsequent clean request.",
+      "websiteImport": {
+        "enabled": true
+      }
     }
   ],
   "bulkImports": [
