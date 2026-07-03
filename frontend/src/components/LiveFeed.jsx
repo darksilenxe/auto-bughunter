@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
+import { useAutoScrollToLatest, formatLiveEventText } from "../lib/liveEventFormat.js";
 
 const ICON = {
   agent_start:     "▶",
@@ -26,11 +27,7 @@ const REASONING_STATUS_COLOR = {
 };
 
 export default function LiveFeed({ events, isRunning, onScreenshot }) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [events]);
+  const ref = useAutoScrollToLatest(events);
 
   const counters = useMemo(() => {
     return events.reduce(
@@ -85,6 +82,7 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
           const isReasoning = evt.type === "reasoning_loop";
           const reasoningStatus = evt.metadata?.status;
           const reasoningColor = isReasoning ? (REASONING_STATUS_COLOR[reasoningStatus] || "#59d0ff") : null;
+          const { agentName, primary, screenshot } = formatLiveEventText(evt);
 
           return (
             <div
@@ -95,49 +93,17 @@ export default function LiveFeed({ events, isRunning, onScreenshot }) {
               <span className="meta">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : "live"}</span>
               <span style={reasoningColor ? { color: reasoningColor } : undefined}>{ICON[evt.type] || "·"}</span>
               <span style={{ color: evt.type === "finding" ? SEV_COLOR[evt.severity] || "#dff1ff" : isReasoning ? reasoningColor : "#dff1ff" }}>
-                {evt.type === "finding" && (
-                  <>[{evt.severity?.toUpperCase() || "INFO"}] {evt.findingTitle}</>
-                )}
-                {evt.type === "command" && (
-                  <>
-                    {evt.agentName ? <span style={{ color: "#7c8aa5" }}>[{evt.agentName}] </span> : null}
-                    <span style={{ color: "#7c8aa5" }}>$ </span>
-                    {evt.command || evt.message}
-                  </>
-                )}
-                {evt.type === "command_result" && (
-                  <>
-                    {evt.agentName ? <span style={{ color: "#7c8aa5" }}>[{evt.agentName}] </span> : null}
-                    {evt.command ? <span style={{ color: "#7c8aa5" }}>{evt.command} → </span> : null}
-                    {evt.output ? evt.output.split("\n").filter(Boolean)[0] || "(no output)" : "(no output)"}
-                  </>
-                )}
-                {evt.type === "screenshot" && (
-                  <>
-                    {evt.message}
-                    {onScreenshot && evt.screenshot && (
-                      <button
-                        type="button"
-                        onClick={() => onScreenshot(evt.screenshot)}
-                        className="button-ghost"
-                        style={{ marginLeft: 10, padding: "0.18rem 0.5rem", fontSize: "0.72rem" }}
-                      >
-                        View
-                      </button>
-                    )}
-                  </>
-                )}
-                {evt.type === "reasoning_loop" && (
-                  <span>
-                    {evt.agentName ? `[${evt.agentName}] ` : ""}
-                    {evt.message}
-                  </span>
-                )}
-                {!["finding", "command", "screenshot", "reasoning_loop"].includes(evt.type) && (
-                  <>
-                    {evt.agentName ? `[${evt.agentName}] ` : ""}
-                    {evt.message}
-                  </>
+                {agentName && <span style={{ color: "#7c8aa5" }}>[{agentName}] </span>}
+                {primary}
+                {screenshot && onScreenshot && (
+                  <button
+                    type="button"
+                    onClick={() => onScreenshot(screenshot)}
+                    className="button-ghost"
+                    style={{ marginLeft: 10, padding: "0.18rem 0.5rem", fontSize: "0.72rem" }}
+                  >
+                    View
+                  </button>
                 )}
               </span>
             </div>

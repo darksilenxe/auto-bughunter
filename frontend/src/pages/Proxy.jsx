@@ -901,7 +901,7 @@ function PassiveFindingsTab({ apiBase, apiKey, workspaceId }) {
             {loading ? "Refreshing…" : "↺ Refresh"}
           </button>
           {findings.length > 0 && (
-            <button type="button" className="button-secondary" onClick={clearFindings}>
+            <button type="button" className="button-danger" onClick={clearFindings}>
               Clear all
             </button>
           )}

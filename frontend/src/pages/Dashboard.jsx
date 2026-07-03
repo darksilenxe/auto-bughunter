@@ -595,7 +595,7 @@ export default function Dashboard() {
               ))}
               <div className="button-row" style={{ marginTop: 12 }}>
                 <button type="button" className="button-secondary" onClick={addLoginStep}>Add step</button>
-                {loginSteps.length > 0 && <button type="button" className="button-ghost" onClick={() => setLoginSteps([])}>Clear all</button>}
+                {loginSteps.length > 0 && <button type="button" className="button-danger" onClick={() => setLoginSteps([])}>Clear all</button>}
               </div>
             </details>
 

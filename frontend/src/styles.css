@@ -489,6 +489,17 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/*
+ * Button variant conventions (keep new buttons consistent with these):
+ *   (no class)       primary  — the main call-to-action for a form/section (Save, Start scan).
+ *   .button-secondary          — an equally-valid, non-destructive alternative action (Cancel, Refresh, Edit).
+ *   .button-ghost              — low-emphasis / tertiary action, e.g. closing a modal, dismissing a
+ *                                 disclosure panel, or deselecting — never for actions that delete data.
+ *   .button-danger             — destructive or irreversible actions (Delete, Clear all, Stop scan).
+ *   .button-link               — navigational actions that don't mutate state (Download, external link).
+ * Combining variant classes (e.g. "button-secondary button-link") is discouraged: pick the one that
+ * matches the action's semantics.
+ */
 .button-secondary {
   background: rgba(255, 255, 255, 0.05);
   color: var(--ink);

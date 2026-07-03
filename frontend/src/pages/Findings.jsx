@@ -387,7 +387,7 @@ export default function Findings() {
                         </div>
                       </div>
                       <div className="button-row">
-                        <a href={hackTricksUrl(finding)} target="_blank" rel="noopener noreferrer" className="button-secondary button-link">
+                        <a href={hackTricksUrl(finding)} target="_blank" rel="noopener noreferrer" className="button-link">
                           HackTricks
                         </a>
                       </div>
