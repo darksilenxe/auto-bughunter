@@ -577,7 +577,8 @@ func applyCSRFOriginVariant(req *http.Request, variant string) {
 //	default-token     — some frameworks ship with a well-known dev
 //	                    token ("0", "test", "null") that bypasses CSRF
 //	                    when set explicitly by the client.
-func applyCSRFBypass(req *http.Request, r csrfRecipe) {	if req == nil || r.bypass == "" {
+func applyCSRFBypass(req *http.Request, r csrfRecipe) {
+	if req == nil || r.bypass == "" {
 		return
 	}
 	carrier := r.tokenCarrier
