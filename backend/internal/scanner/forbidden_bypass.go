@@ -222,6 +222,8 @@ func forbiddenPathMutations(path string) []string {
 		path + "%09",
 		path + "?",
 		path + "#",
+		path + "%23",
+		clean + "/%2e%2e/",
 		strings.ToUpper(path),
 	}
 	// De-duplicate while preserving order.
