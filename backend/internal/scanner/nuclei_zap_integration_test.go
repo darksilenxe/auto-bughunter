@@ -385,3 +385,72 @@ func TestCooldownAfterNuclei_NotAppliedWithoutNuclei(t *testing.T) {
 		t.Errorf("cooldown was applied even though Nuclei did not run (elapsed %v)", elapsed)
 	}
 }
+
+// TestHeavyToolBudget_UnboundedContextUsesIntegrationTimeout confirms that,
+// absent a context deadline, the configured IntegrationTimeout is used as-is
+// (even when smaller than minHeavyToolRunTime), matching pre-existing exec
+// behaviour and test expectations.
+func TestHeavyToolBudget_UnboundedContextUsesIntegrationTimeout(t *testing.T) {
+	svc := NewService(Config{IntegrationTimeout: 10 * time.Second})
+	got, ok := svc.heavyToolBudget(context.Background())
+	if !ok {
+		t.Fatalf("expected ok=true for unbounded context")
+	}
+	if got != 10*time.Second {
+		t.Errorf("expected budget=10s, got %v", got)
+	}
+}
+
+// TestHeavyToolBudget_ShrinksToRemainingContextDeadline verifies that when the
+// scan context has less time left than IntegrationTimeout, the returned
+// budget is clamped to the remaining context time (minus the safety margin)
+// instead of the static IntegrationTimeout. This is the core fix for Nuclei
+// and ZAP requesting more time from the sidecar than the overall scan budget
+// actually allows, which previously caused hard cancellations instead of
+// clean timeouts.
+func TestHeavyToolBudget_ShrinksToRemainingContextDeadline(t *testing.T) {
+	svc := NewService(Config{IntegrationTimeout: 10 * time.Minute})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, ok := svc.heavyToolBudget(ctx)
+	if !ok {
+		t.Fatalf("expected ok=true for a 30s remaining deadline")
+	}
+	if got > 25*time.Second || got < 20*time.Second {
+		t.Errorf("expected budget clamped to ~25s (30s - 5s safety margin), got %v", got)
+	}
+}
+
+// TestHeavyToolBudget_InsufficientContextBudgetSkips verifies that once the
+// remaining context deadline drops below minHeavyToolRunTime the tool is
+// skipped (ok=false) rather than attempted with a budget too small to be
+// useful.
+func TestHeavyToolBudget_InsufficientContextBudgetSkips(t *testing.T) {
+	svc := NewService(Config{IntegrationTimeout: 10 * time.Minute})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if _, ok := svc.heavyToolBudget(ctx); ok {
+		t.Errorf("expected ok=false when remaining context budget is below minHeavyToolRunTime")
+	}
+}
+
+// TestRunNucleiExec_SkipsWhenContextBudgetInsufficient verifies that Nuclei
+// returns a clear, actionable "skipped" finding — rather than an opaque
+// timeout/cancellation error — when the overall scan context has too little
+// time left for the tool to run usefully.
+func TestRunNucleiExec_SkipsWhenContextBudgetInsufficient(t *testing.T) {
+	nucleiBin := writeFakeNuclei(t, "line1\n", 0)
+	svc := NewService(Config{
+		NucleiBinary:       nucleiBin,
+		IntegrationTimeout: 10 * time.Minute,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	findings := svc.runNucleiExec(ctx, "https://example.com/")
+	if len(findings) != 1 || findings[0].ID != "nuclei-skipped-insufficient-time-budget" {
+		t.Fatalf("expected nuclei-skipped-insufficient-time-budget finding, got %+v", findings)
+	}
+}
