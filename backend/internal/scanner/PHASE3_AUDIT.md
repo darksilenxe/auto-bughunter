@@ -31,20 +31,21 @@ whose `evidenceQuality` is `"incomplete"` when strict mode is on.
 
 ## Audit table
 
-Snapshot generated 2026-07-01.
+Snapshot generated 2026-07-01. Batch 1 (first 10 ⚠️ rows: `active_cors.go`
+through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04.
 
 | Probe file | schema | stamp | Notes |
 | --- | :---: | :---: | --- |
-| `active_cors.go` | ⚠️ | ⚠️ | Add `payloadClass=cors-origin-reflection` + `responseShape`. |
-| `active_graphql_introspection.go` | ⚠️ | ⚠️ | Add `payloadClass=graphql-introspection` + `oracleName`. |
-| `active_ldap_injection.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=ldap-injection`. |
-| `active_nosqli.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=nosql-operator`. |
-| `active_open_redirect.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=open-redirect`. |
-| `active_path_traversal.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=path-traversal`. |
-| `active_prompt_injection.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=prompt-injection`. |
-| `active_prototype_pollution.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=proto-pollution`. |
-| `active_sqli.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=sqli-error`|`sqli-time`. |
-| `active_ssti.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=ssti`. |
+| `active_cors.go` | ✅ | ⚠️ | Migrated: `payloadClass=cors-origin-reflection`, `url`, `oracleName` added. |
+| `active_graphql_introspection.go` | ✅ | ⚠️ | Migrated: `payloadClass=graphql-introspection`, `oracleName` added. |
+| `active_ldap_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=ldap-injection` added. |
+| `active_nosqli.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=nosql-operator` added. |
+| `active_open_redirect.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=open-redirect` added. |
+| `active_path_traversal.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=path-traversal` added. |
+| `active_prompt_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=prompt-injection` added. |
+| `active_prototype_pollution.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=proto-pollution` added. |
+| `active_sqli.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=sqli-error` added. |
+| `active_ssti.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=ssti` added. |
 | `active_xpath_injection.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=xpath-injection`. |
 | `active_xss.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=xss-reflected`, `reflectionContext`. |
 | `active_xxe.go` | ⚠️ | ⚠️ | Add `payloadClass=xxe`, `responseShape=xml`. |

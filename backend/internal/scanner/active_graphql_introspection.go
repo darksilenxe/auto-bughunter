@@ -139,6 +139,11 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 			"endpoint":       first.url,
 			"curlReproducer": curl,
 			"responseShape":  ShapeJSON.String(),
+			"method":         http.MethodPost,
+			"url":            first.url,
+			"payloadClass":   "graphql-introspection",
+			"oracleName":     "active_graphql_introspection",
+			"oracleVersion":  "v1",
 		},
 	}}
 }

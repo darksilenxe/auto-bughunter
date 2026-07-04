@@ -268,6 +268,12 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 			"redirectDestination": first.location,
 			"curlReproducer":      curl,
 			"reflectionContext":   ContextURL.String(),
+			"method":              http.MethodGet,
+			"url":                 first.url,
+			"param":               first.param,
+			"payloadClass":        "open-redirect",
+			"oracleName":          "active_open_redirect",
+			"oracleVersion":       "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

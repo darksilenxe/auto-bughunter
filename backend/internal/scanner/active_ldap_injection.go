@@ -35,11 +35,11 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 	probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), ldapProbeParams)
 
 	type hit struct {
-		url          string
-		param        string
-		payload      string
-		signature    string
-		responseHdr  http.Header
+		url         string
+		param       string
+		payload     string
+		signature   string
+		responseHdr http.Header
 	}
 	var hits []hit
 	attempts := 0
@@ -182,6 +182,12 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 			"signature":      first.signature,
 			"curlReproducer": curl,
 			"responseShape":  ClassifyResponseShape(first.responseHdr).String(),
+			"method":         http.MethodGet,
+			"url":            first.url,
+			"param":          first.param,
+			"payloadClass":   "ldap-injection",
+			"oracleName":     "active_ldap_injection",
+			"oracleVersion":  "v1",
 		},
 		BusinessTags: []string{"authentication", "directory-services"},
 	}

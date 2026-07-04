@@ -230,6 +230,12 @@ doneProbes:
 			"reproStep":       "Replay the listed URL and confirm system-file content appears in the response body",
 			"curlReproducer":  curl,
 			"responseShape":   ClassifyResponseShape(first.header).String(),
+			"method":          http.MethodGet,
+			"url":             first.url,
+			"param":           first.param,
+			"payloadClass":    "path-traversal",
+			"oracleName":      "active_path_traversal",
+			"oracleVersion":   "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

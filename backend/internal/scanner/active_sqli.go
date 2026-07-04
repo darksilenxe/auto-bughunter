@@ -307,6 +307,12 @@ func (s *Service) runActiveSQLiProbe(ctx context.Context, input RunInput, body s
 			"injectedPayload": sqliBenignPayload,
 			"curlReproducer":  curl,
 			"responseShape":   ClassifyResponseShape(first.header).String(),
+			"method":          http.MethodGet,
+			"url":             first.url,
+			"param":           first.param,
+			"payloadClass":    "sqli-error",
+			"oracleName":      "active_sqli",
+			"oracleVersion":   "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
