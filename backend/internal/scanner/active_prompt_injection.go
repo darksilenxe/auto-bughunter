@@ -373,6 +373,12 @@ doneDirectScan:
 			"trigger":        promptInjectionTrigger,
 			"owaspReference": "https://genai.owasp.org/llm-top-10/",
 			"responseShape":  shapeTag,
+			"method":         http.MethodGet,
+			"url":            first.url,
+			"param":          first.param,
+			"payloadClass":   "prompt-injection",
+			"oracleName":     "active_prompt_injection",
+			"oracleVersion":  "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

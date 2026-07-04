@@ -238,6 +238,11 @@ func (s *Service) runActiveCORSProbe(ctx context.Context, input RunInput, body s
 			"jsonAPIEndpoint":     fmt.Sprintf("%v", primary.jsonAPI),
 			"curlReproducer":      curl,
 			"responseShape":       shapeTagForCORSHit(primary),
+			"method":              http.MethodGet,
+			"url":                 primary.url,
+			"payloadClass":        "cors-origin-reflection",
+			"oracleName":          "active_cors",
+			"oracleVersion":       "v1",
 		},
 	}
 

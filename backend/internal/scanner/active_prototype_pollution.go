@@ -174,6 +174,12 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 					"payload":        prototypePollutionMarker,
 					"curlReproducer": curl,
 					"responseShape":  ClassifyResponseShape(followHdr).String(),
+					"method":         http.MethodGet,
+					"url":            probeURL,
+					"param":          param,
+					"payloadClass":   "proto-pollution",
+					"oracleName":     "active_prototype_pollution",
+					"oracleVersion":  "v1",
 				},
 			}
 			AttachDifferentialEvidence(&finding, diffOutcome)
@@ -260,6 +266,12 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 				"payload":        prototypePollutionMarker,
 				"curlReproducer": curl,
 				"responseShape":  ClassifyResponseShape(followHdr).String(),
+				"method":         http.MethodPost,
+				"url":            raw,
+				"param":          "__proto__",
+				"payloadClass":   "proto-pollution",
+				"oracleName":     "active_prototype_pollution",
+				"oracleVersion":  "v1",
 			},
 		}
 		AttachDifferentialEvidence(&finding, diffOutcome)

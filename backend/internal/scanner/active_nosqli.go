@@ -225,8 +225,8 @@ func (s *Service) runActiveNoSQLiProbe(ctx context.Context, input RunInput, body
 				// baseline implies operator matched far more records.
 				if len(baseBody) > 0 && len(respBody) >= len(baseBody)*3/2 {
 					hits = append(hits, hit{
-						url:   probeURL,
-						param: injectedKey,
+						url:       probeURL,
+						param:     injectedKey,
 						technique: "query-operator-length-delta",
 						evidence: fmt.Sprintf(
 							"baseline=%d bytes, probed=%d bytes (≥50%% growth)",
@@ -316,8 +316,8 @@ doneQueryProbes:
 							"application/json", string(jsonBytes),
 						)
 						hits = append(hits, hit{
-							url:   base.String(),
-							param: param,
+							url:       base.String(),
+							param:     param,
 							technique: "json-body-auth-bypass",
 							evidence: fmt.Sprintf(
 								"POST to likely auth endpoint returned 200 with operator payload %q in field %q; curl: %s",
@@ -423,6 +423,12 @@ doneJSONProbes:
 			"evidenceDetail": first.evidence,
 			"reproStep":      "Replay the listed URL/body and observe a NoSQL error or enlarged result set",
 			"curlReproducer": curl,
+			"method":         http.MethodGet,
+			"url":            first.url,
+			"param":          first.param,
+			"payloadClass":   "nosql-operator",
+			"oracleName":     "active_nosqli",
+			"oracleVersion":  "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

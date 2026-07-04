@@ -255,6 +255,12 @@ func (s *Service) runActiveSSTIProbe(ctx context.Context, input RunInput, body s
 			"curlReproducer":    curl,
 			"responseShape":     ClassifyResponseShape(first.header).String(),
 			"reflectionContext": first.refCtx.String(),
+			"method":            http.MethodGet,
+			"url":               first.url,
+			"param":             first.param,
+			"payloadClass":      "ssti",
+			"oracleName":        "active_ssti",
+			"oracleVersion":     "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
