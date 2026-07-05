@@ -122,113 +122,124 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 			continue
 		}
 
+		// Phase 2 reference wiring: merge miner-discovered upload-field
+		// names in front of the built-in "file" field name (see
+		// PHASE2_AUDIT.md). Duplicates are dropped.
+		fieldNames := phase2ProbeParams(phase2DynamicParams(input.Session), []string{"file"})
+
 		for _, probe := range uploadProbes {
-			fid := "file-upload-" + probe.label + "-" + hhSlug(ep)
-			if emitted[fid] {
-				continue
-			}
-
-			resp, respBody, err := s.executeUploadAttempt(ctx, ep, probe.filename, probe.contentType, probe.body, input)
-			if err != nil || resp == nil {
-				continue
-			}
-			respStr := string(respBody)
-			assessment := assessUploadResponse(resp.StatusCode, respStr)
-			if !assessment.Accepted {
-				continue
-			}
-
-			blockedControl := blockedUploadControlFilename(probe.label)
-			controlBaselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
-				cresp, cbody, err := s.executeUploadAttempt(bctx, ep, blockedControl, probe.contentType, probe.body, input)
-				if err != nil || cresp == nil {
-					return BaselineSample{}, err
-				}
-				return BaselineSample{Status: cresp.StatusCode, Header: cresp.Header, Body: string(cbody)}, nil
-			})
-			if berr == nil {
-				if assessUploadResponse(controlBaselines.First.Status, controlBaselines.First.Body).Accepted ||
-					assessUploadResponse(controlBaselines.Second.Status, controlBaselines.Second.Body).Accepted {
+			for _, fieldName := range fieldNames {
+				fid := "file-upload-" + probe.label + "-" + fieldName + "-" + hhSlug(ep)
+				if emitted[fid] {
 					continue
 				}
-			}
 
-			diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
-				ProbeName:       "file-upload-probe",
-				OriginalPayload: probe.filename,
-				SafePayload:     blockedControl,
-				Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
-					return s.executeUploadAttempt(dctx, ep, altPayload, probe.contentType, probe.body, input)
-				},
-				Oracle: func(_ context.Context, _ string, dresp *http.Response, dbody []byte) (bool, error) {
-					if dresp == nil {
-						return false, nil
+				resp, respBody, err := s.executeUploadAttemptField(ctx, ep, fieldName, probe.filename, probe.contentType, probe.body, input)
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodPost, ep, fieldName)
+				if err != nil || resp == nil {
+					continue
+				}
+				respStr := string(respBody)
+				assessment := assessUploadResponse(resp.StatusCode, respStr)
+				if !assessment.Accepted {
+					continue
+				}
+
+				blockedControl := blockedUploadControlFilename(probe.label)
+				controlBaselines, berr := CaptureTwoControlBaselines(ctx, func(bctx context.Context) (BaselineSample, error) {
+					cresp, cbody, err := s.executeUploadAttemptField(bctx, ep, fieldName, blockedControl, probe.contentType, probe.body, input)
+					if err != nil || cresp == nil {
+						return BaselineSample{}, err
 					}
-					return assessUploadResponse(dresp.StatusCode, string(dbody)).Accepted, nil
-				},
-			})
-			if diffOutcome.Ran && !diffOutcome.Confirmed {
-				continue
-			}
+					return BaselineSample{Status: cresp.StatusCode, Header: cresp.Header, Body: string(cbody)}, nil
+				})
+				if berr == nil {
+					if assessUploadResponse(controlBaselines.First.Status, controlBaselines.First.Body).Accepted ||
+						assessUploadResponse(controlBaselines.Second.Status, controlBaselines.Second.Body).Accepted {
+						continue
+					}
+				}
 
-			emitted[fid] = true
-			severity := model.SeverityHigh
-			title := fmt.Sprintf("File upload bypass accepted — %s technique", probe.label)
-			desc := fmt.Sprintf(
-				"The upload endpoint %s accepted a file submission using the %s bypass technique "+
-					"(filename: %q, Content-Type: %q). If the server processes or serves the uploaded file "+
-					"without proper validation, an attacker could achieve stored XSS, path traversal, "+
-					"or remote code execution depending on how the file is handled.",
-				ep, probe.label, probe.filename, probe.contentType,
-			)
-			if assessment.Executed != "" {
-				severity = model.SeverityCritical
-				title = fmt.Sprintf("File upload — server-side execution confirmed (%s)", probe.label)
-				desc = fmt.Sprintf(
-					"The upload endpoint %s not only accepted the %s bypass payload but the response contained "+
-						"the execution marker %q, confirming that the server executed the uploaded server-side script. "+
-						"This represents a critical remote code execution (RCE) vulnerability.",
-					ep, probe.label, assessment.Executed,
+				diffOutcome := DifferentialReVerify(ctx, DifferentialReVerifyInput{
+					ProbeName:       "file-upload-probe",
+					OriginalPayload: probe.filename,
+					SafePayload:     blockedControl,
+					Exec: func(dctx context.Context, altPayload string) (*http.Response, []byte, error) {
+						return s.executeUploadAttemptField(dctx, ep, fieldName, altPayload, probe.contentType, probe.body, input)
+					},
+					Oracle: func(_ context.Context, _ string, dresp *http.Response, dbody []byte) (bool, error) {
+						if dresp == nil {
+							return false, nil
+						}
+						return assessUploadResponse(dresp.StatusCode, string(dbody)).Accepted, nil
+					},
+				})
+				if diffOutcome.Ran && !diffOutcome.Confirmed {
+					continue
+				}
+
+				emitted[fid] = true
+				severity := model.SeverityHigh
+				title := fmt.Sprintf("File upload bypass accepted — %s technique", probe.label)
+				desc := fmt.Sprintf(
+					"The upload endpoint %s accepted a file submission using the %s bypass technique "+
+						"(filename: %q, Content-Type: %q). If the server processes or serves the uploaded file "+
+						"without proper validation, an attacker could achieve stored XSS, path traversal, "+
+						"or remote code execution depending on how the file is handled.",
+					ep, probe.label, probe.filename, probe.contentType,
 				)
-			}
+				if assessment.Executed != "" {
+					severity = model.SeverityCritical
+					title = fmt.Sprintf("File upload — server-side execution confirmed (%s)", probe.label)
+					desc = fmt.Sprintf(
+						"The upload endpoint %s not only accepted the %s bypass payload but the response contained "+
+							"the execution marker %q, confirming that the server executed the uploaded server-side script. "+
+							"This represents a critical remote code execution (RCE) vulnerability.",
+						ep, probe.label, assessment.Executed,
+					)
+				}
 
-			finding := model.Finding{
-				ID:          fid,
-				Category:    "file-upload",
-				Severity:    severity,
-				Title:       title,
-				Description: desc,
-				Evidence: fmt.Sprintf(
-					"POST %s (filename=%q, Content-Type=%q) → HTTP %d; accepted=%v; executed=%q",
-					ep, probe.filename, probe.contentType, resp.StatusCode, assessment.Accepted, assessment.Executed,
-				),
-				Recommendation: "Validate uploaded files by content (magic bytes), not only filename extension or " +
-					"MIME type. Store uploaded files in a non-web-accessible location or use a separate origin/CDN. " +
-					"Never execute uploaded content server-side. Strip executable extensions and normalize filenames " +
-					"before storage. Use a robust allowlist (e.g. JPEG magic bytes for image uploads).",
-				Confidence:    0.80,
-				AffectedURL:   ep,
-				CWE:           "CWE-434",
-				OWASPCategory: "A05:2021 - Security Misconfiguration",
-				Sources:       []string{"active-scanner", "file-upload"},
-				ReproductionSteps: []string{
-					fmt.Sprintf("POST %s with a multipart body:", ep),
-					fmt.Sprintf("  filename=%q, Content-Type=%q", probe.filename, probe.contentType),
-					fmt.Sprintf("  body: %s", probe.body[:min(len(probe.body), 80)]),
-					fmt.Sprintf("Observe HTTP %d — server accepted the upload.", resp.StatusCode),
-				},
-				EvidenceFields: map[string]string{
-					"validationType": "active-probe",
-					"probeLabel":     probe.label,
-					"filename":       probe.filename,
-					"mimetype":       probe.contentType,
-					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
-					"executed":       assessment.Executed,
-					"responseShape":  ClassifyResponseShape(resp.Header).String(),
-				},
+				finding := model.Finding{
+					ID:          fid,
+					Category:    "file-upload",
+					Severity:    severity,
+					Title:       title,
+					Description: desc,
+					Evidence: fmt.Sprintf(
+						"POST %s (field=%q, filename=%q, Content-Type=%q) → HTTP %d; accepted=%v; executed=%q",
+						ep, fieldName, probe.filename, probe.contentType, resp.StatusCode, assessment.Accepted, assessment.Executed,
+					),
+					Recommendation: "Validate uploaded files by content (magic bytes), not only filename extension or " +
+						"MIME type. Store uploaded files in a non-web-accessible location or use a separate origin/CDN. " +
+						"Never execute uploaded content server-side. Strip executable extensions and normalize filenames " +
+						"before storage. Use a robust allowlist (e.g. JPEG magic bytes for image uploads).",
+					Confidence:    0.80,
+					AffectedURL:   ep,
+					CWE:           "CWE-434",
+					OWASPCategory: "A05:2021 - Security Misconfiguration",
+					Sources:       []string{"active-scanner", "file-upload"},
+					ReproductionSteps: []string{
+						fmt.Sprintf("POST %s with a multipart body:", ep),
+						fmt.Sprintf("  field=%q, filename=%q, Content-Type=%q", fieldName, probe.filename, probe.contentType),
+						fmt.Sprintf("  body: %s", probe.body[:min(len(probe.body), 80)]),
+						fmt.Sprintf("Observe HTTP %d — server accepted the upload.", resp.StatusCode),
+					},
+					EvidenceFields: map[string]string{
+						"validationType": "active-probe",
+						"probeLabel":     probe.label,
+						"fieldName":      fieldName,
+						"filename":       probe.filename,
+						"mimetype":       probe.contentType,
+						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+						"executed":       assessment.Executed,
+						"responseShape":  ClassifyResponseShape(resp.Header).String(),
+					},
+				}
+				AttachDifferentialEvidence(&finding, diffOutcome)
+				findings = append(findings, finding)
 			}
-			AttachDifferentialEvidence(&finding, diffOutcome)
-			findings = append(findings, finding)
 		}
 	}
 
@@ -299,10 +310,18 @@ func discoverUploadEndpoints(target, body string, scanScope model.ScanScope, see
 // file field named "file". Returns the body buffer, the full Content-Type
 // header (including boundary), and any error.
 func buildMultipartUpload(filename, mimeType, content string) (*bytes.Buffer, string, error) {
+	return buildMultipartUploadField("file", filename, mimeType, content)
+}
+
+// buildMultipartUploadField constructs a multipart/form-data body with a
+// single file field using the given field name. Phase 2 reference wiring:
+// callers can pass miner-discovered upload-field names (see
+// PHASE2_AUDIT.md) instead of the built-in "file" default.
+func buildMultipartUploadField(fieldName, filename, mimeType, content string) (*bytes.Buffer, string, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 
-	part, err := w.CreateFormFile("file", filename)
+	part, err := w.CreateFormFile(fieldName, filename)
 	if err != nil {
 		return nil, "", err
 	}
@@ -367,7 +386,15 @@ func blockedUploadControlFilename(label string) string {
 }
 
 func (s *Service) executeUploadAttempt(ctx context.Context, ep, filename, mimeType, content string, input RunInput) (*http.Response, []byte, error) {
-	body, contentType, err := buildMultipartUpload(filename, mimeType, content)
+	return s.executeUploadAttemptField(ctx, ep, "file", filename, mimeType, content, input)
+}
+
+// executeUploadAttemptField is the Phase 2 field-aware variant of
+// executeUploadAttempt: it lets the caller choose the multipart field name
+// so miner-discovered upload-field names can be exercised alongside the
+// built-in "file" default (see PHASE2_AUDIT.md).
+func (s *Service) executeUploadAttemptField(ctx context.Context, ep, fieldName, filename, mimeType, content string, input RunInput) (*http.Response, []byte, error) {
+	body, contentType, err := buildMultipartUploadField(fieldName, filename, mimeType, content)
 	if err != nil {
 		return nil, nil, err
 	}

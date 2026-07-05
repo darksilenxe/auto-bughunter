@@ -168,6 +168,9 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				oastAttempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodPost, ep, "")
 				probedEndpoints = append(probedEndpoints, ep)
 				if err == nil && resp != nil {
 					_ = resp.Body.Close()
@@ -223,6 +226,7 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				reflectedAttempts++
+				RecordProbedKey(http.MethodPost, ep, "")
 				if err != nil || resp == nil {
 					continue
 				}
@@ -267,6 +271,7 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			errorAttempts++
+			RecordProbedKey(http.MethodPost, ep, "")
 			if err != nil || resp == nil {
 				continue
 			}

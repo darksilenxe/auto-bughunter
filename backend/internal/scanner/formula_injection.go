@@ -30,6 +30,9 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 	if len(candidates) == 0 {
 		candidates = []string{input.Target}
 	}
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the built-in wordlist (see PHASE2_AUDIT.md).
+	dynamicParams := phase2DynamicParams(input.Session)
 	attempts := 0
 	for _, raw := range candidates {
 		if attempts >= formulaMaxAttempts {
@@ -39,7 +42,7 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, param := range formulaProbeParams {
+		for _, param := range phase2ProbeParams(dynamicParams, formulaProbeParams) {
 			if attempts >= formulaMaxAttempts {
 				break
 			}
@@ -58,6 +61,9 @@ func (s *Service) runFormulaInjectionProbe(ctx context.Context, input RunInput, 
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			attempts++
+			// Phase 2 coverage accounting: record this probe key so the
+			// surface-gap detector subtracts it from the inventory.
+			RecordProbedKey(http.MethodGet, probeURL, param)
 			if err != nil || resp == nil {
 				continue
 			}

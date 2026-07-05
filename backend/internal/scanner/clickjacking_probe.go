@@ -14,6 +14,10 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 	if respHeader == nil {
 		return nil
 	}
+	// Phase 2 coverage accounting: record this probe key so the
+	// surface-gap detector subtracts it from the inventory. Clickjacking
+	// is a header-only observation, so there is no per-parameter key.
+	RecordProbedKey(http.MethodGet, input.Target, "")
 	// Clickjacking only applies to pages that are rendered as HTML by the
 	// browser. JSON/XML API responses used by SPAs cannot be embedded in a
 	// meaningful iframe — skip them to avoid false positives on API endpoints

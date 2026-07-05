@@ -142,6 +142,9 @@ func (s *Service) probeOptionsMethod(ctx context.Context, target string, input R
 	ApplyAuthProfile(req, input.AuthProfile)
 
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	// Phase 2 coverage accounting: record this probe key so the
+	// surface-gap detector subtracts it from the inventory.
+	RecordProbedKey(http.MethodOptions, safe.String(), "")
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -247,6 +250,7 @@ func (s *Service) probeTraceMethod(ctx context.Context, target string, input Run
 	ApplyAuthProfile(req, input.AuthProfile)
 
 	resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+	RecordProbedKey("TRACE", safe.String(), "")
 	if err != nil || resp == nil {
 		return nil
 	}
@@ -329,6 +333,7 @@ func (s *Service) probeVerbOverride(ctx context.Context, target string, input Ru
 	}
 	ApplyAuthProfile(baseReq, input.AuthProfile)
 	baseResp, err := s.doRequestWithRetry(ctx, baseReq, input.Options)
+	RecordProbedKey(http.MethodGet, safe.String(), "")
 	if err != nil || baseResp == nil {
 		return nil
 	}
@@ -345,6 +350,11 @@ func (s *Service) probeVerbOverride(ctx context.Context, target string, input Ru
 		req.Header.Set(overrideHeader, http.MethodDelete)
 
 		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		// Phase 2 coverage accounting: the overridden method (DELETE) is
+		// what is effectively under test here, even though the wire
+		// method is GET, so the gap detector should attribute this
+		// endpoint as having its DELETE surface exercised.
+		RecordProbedKey(http.MethodDelete, safe.String(), "")
 		if err != nil || resp == nil {
 			continue
 		}

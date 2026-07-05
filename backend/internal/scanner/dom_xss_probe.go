@@ -150,6 +150,11 @@ func (s *Service) RunDOMXSSProbe(
 
 			targetURL := ep + payload.hash
 			payloadFragment := domXSSPayloadFragment(payload.hash)
+			// Phase 2 coverage accounting: record this probe key so the
+			// surface-gap detector subtracts it from the inventory. DOM
+			// XSS uses a fragment sink rather than a query parameter, so
+			// there is no per-parameter key.
+			RecordProbedKey(http.MethodGet, ep, "")
 
 			// Build a fresh chromedp context per navigation using the shared
 			// helper that handles both local binary and remote sidecar.

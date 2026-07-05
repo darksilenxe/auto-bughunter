@@ -44,21 +44,21 @@ Snapshot generated 2026-07-01.
 | `active_sqli.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated in this PR as the reference template (see `sqliDynamicParams`, `sqliMergedProbeParams`, `RecordProbedKey`). |
 | `active_ssti.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for template-engine reflections; `RecordProbedKey` added. |
 | `active_xpath_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for XPath error surfaces; `RecordProbedKey` added. |
-| `active_xss.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params before XSS payload matrix. |
-| `active_xxe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Endpoint-shaped; record probed key only. |
+| `active_xss.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `techAwareXSSProbeParams`; `RecordProbedKey` added on both the primary and dual-marker confirmation requests. |
+| `active_xxe.go` | ✅ | ➖ | ✅ | ⚠️ | Endpoint-shaped (POST body payload, no per-parameter fuzz matrix); `RecordProbedKey` added to the OAST, reflected-file-read, and error-based phases. |
 | `browser_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Browser-side observation. |
-| `clickjacking_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Record probed key so framing coverage shows up. |
+| `clickjacking_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Header-only; `RecordProbedKey` added for the primary GET so framing coverage shows up. |
 | `cloud_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Bucket enumeration, not URL-surface. |
-| `command_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for OS-command sinks (`host`, `ip`, `cmd`). |
+| `command_injection_probe.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged via `phase2ProbeParams`/`phase2DynamicParams` in front of `cmdInjectionParams`; `RecordProbedKey` added to the output/time-based loop and the OAST sub-probe. |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | ➖ | ➖ | Fixed-path `crossdomain.xml`. |
 | `csrf_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes SurfaceInventory (POST/PUT/PATCH/DELETE) and records probed keys per (method, url). Bypass matrix covers empty-value, method-override, duplicate-token, default-token. |
-| `dangling_markup.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Phase 1 reference; Phase 3 reference is the priority here. |
-| `deserialization_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for `session=`, `token=`, `data=` style sinks. |
+| `dangling_markup.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `danglingMarkupParams`; `RecordProbedKey` added. |
+| `deserialization_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Endpoint+body-shaped like `active_xxe.go` (fixed serialized-format preambles, no per-parameter fuzz matrix); `RecordProbedKey` added to the active-probe and passive-observation loops. Does not carry a `*ScanSession` today (see `RunInput`-less signature) — a future PR would need to thread `Session` through `AdvancedCoverageAgent` before `param` could apply. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | Certificate metadata; no HTTP surface. |
-| `dom_xss_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Fragment sinks; record probed key. |
-| `file_upload_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces upload-field names. |
-| `formula_injection.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Phase 1 reference; Phase 3 reference is the priority here. |
-| `http_methods_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Explicitly emits `method_not_tested` signal via gap detector. |
+| `dom_xss_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Fragment sink (location.hash), no query-parameter matrix; `RecordProbedKey` added per navigated endpoint. |
+| `file_upload_probe.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner-surfaced upload-field names are merged in front of the built-in `"file"` field via the new `buildMultipartUploadField`/`executeUploadAttemptField` helpers; `RecordProbedKey` records `(POST, url, fieldName)`. |
+| `formula_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `formulaProbeParams`; `RecordProbedKey` added. |
+| `http_methods_probe.go` | ✅ | ➖ | ✅ | ⚠️ | `RecordProbedKey` added to `probeOptionsMethod` (OPTIONS), `probeTraceMethod` (TRACE), and `probeVerbOverride` (baseline GET + tunnelled DELETE), so the gap detector can see per-method coverage. |
 | `jwt_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-based; record probed key. |
 | `jwt_advanced_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-based; record probed key. |
 | `login_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces alternate credential fields. |
@@ -104,11 +104,23 @@ generalises steps 1-2 into a shared helper so subsequently migrated
 probes (`active_ldap_injection.go`, `active_nosqli.go`,
 `active_open_redirect.go`, `active_path_traversal.go`,
 `active_prompt_injection.go`, `active_ssti.go`,
-`active_xpath_injection.go`) do not each re-derive their own
-`*DynamicParams`/`*MergedProbeParams` pair. `active_prototype_pollution.go`
+`active_xpath_injection.go`, `active_xss.go`, `command_injection_probe.go`,
+`dangling_markup.go`, `formula_injection.go`) do not each re-derive their
+own `*DynamicParams`/`*MergedProbeParams` pair. `active_prototype_pollution.go`
 uses a variant, `prototypePollutionProbeKeys`, that nests each
 miner-discovered name as a `<param>[__proto__][polluted]` gadget key
-instead of a flat parameter merge.
+instead of a flat parameter merge. `file_upload_probe.go` uses the same
+helper but merges miner-surfaced names into the multipart *field name*
+list (`buildMultipartUploadField`/`executeUploadAttemptField`) rather
+than a query-string parameter.
+
+Batch 2 (this PR) also added `RecordProbedKey` coverage to four
+endpoint-shaped probes that have no per-parameter fuzz matrix
+(`active_xxe.go`, `clickjacking_probe.go`, `deserialization_probe.go`,
+`dom_xss_probe.go`) and to the three HTTP-method-focused sub-probes in
+`http_methods_probe.go` (`probeOptionsMethod`, `probeTraceMethod`,
+`probeVerbOverride`), matching the `param: ➖` treatment already used for
+`active_xxe.go` and `cloud_storage_probe.go`.
 
 ## Appendix — audit one-liner
 
