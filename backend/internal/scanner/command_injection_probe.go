@@ -119,7 +119,12 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 
 		baselineControls, _ := s.phase1QueryBaselines(ctx, raw, "abh_cmdi_control", "safe", true, input, cmdInjectionBodyLimit)
 
-		for _, param := range cmdInjectionParams {
+		// Phase 2 reference wiring: merge miner-discovered parameter names
+		// in front of the built-in command-injection wordlist (see
+		// PHASE2_AUDIT.md).
+		probeParams := phase2ProbeParams(phase2DynamicParams(input.Session), cmdInjectionParams)
+
+		for _, param := range probeParams {
 			if attempts >= cmdInjectionMaxAttempts {
 				break
 			}
@@ -152,6 +157,9 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				elapsed := time.Since(start)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL.String(), param)
 
 				if err != nil || resp == nil {
 					continue
@@ -353,6 +361,7 @@ func (s *Service) probeCommandInjectionOAST(ctx context.Context, target string, 
 		}
 		ApplyAuthProfile(req, input.AuthProfile)
 		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		RecordProbedKey(http.MethodGet, probeURL.String(), param)
 		if err == nil && resp != nil {
 			_ = resp.Body.Close()
 		}

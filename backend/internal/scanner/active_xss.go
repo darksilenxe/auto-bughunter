@@ -115,6 +115,10 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		})
 	}
 
+	// Phase 2 reference wiring: merge miner-discovered parameter names in
+	// front of the tech-aware built-in wordlist (see PHASE2_AUDIT.md).
+	dynamicParams := phase2DynamicParams(input.Session)
+
 	type hit struct {
 		url     string
 		param   string
@@ -130,7 +134,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		if err != nil || base.Scheme == "" || base.Host == "" {
 			continue
 		}
-		for _, p := range techAwareXSSProbeParams(input.DetectedTech) {
+		for _, p := range phase2ProbeParams(dynamicParams, techAwareXSSProbeParams(input.DetectedTech)) {
 			if attempts >= xssMaxAttempts {
 				break
 			}
@@ -163,6 +167,9 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting: record this probe key so the
+				// surface-gap detector subtracts it from the inventory.
+				RecordProbedKey(http.MethodGet, probeURL, p)
 				if err != nil || resp == nil {
 					continue
 				}
@@ -206,6 +213,7 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 							ApplyAuthProfile(creq, input.AuthProfile)
 							cresp, cerr := s.doRequestWithRetry(ctx, creq, input.Options)
 							attempts++
+							RecordProbedKey(http.MethodGet, confirmURL, p)
 							if cerr == nil && cresp != nil {
 								cb, _ := io.ReadAll(io.LimitReader(cresp.Body, 512*1024))
 								_ = cresp.Body.Close()
