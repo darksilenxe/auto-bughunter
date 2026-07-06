@@ -52,7 +52,7 @@ against each live response.
 
 ## Audit table
 
-Snapshot generated 2026-07-01.
+Snapshot generated 2026-07-06 (Batch 3 — all rows complete).
 
 | Probe file | inv | param | rec | gap | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
@@ -76,32 +76,32 @@ Snapshot generated 2026-07-01.
 | `cross_domain_policy_probe.go` | ➖ | ➖ | ➖ | ➖ | Fixed-path `crossdomain.xml`. |
 | `csrf_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes SurfaceInventory (POST/PUT/PATCH/DELETE) and records probed keys per (method, url). Bypass matrix covers empty-value, method-override, duplicate-token, default-token. |
 | `dangling_markup.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
-| `deserialization_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Endpoint+body-shaped like `active_xxe.go` (fixed serialized-format preambles, no per-parameter fuzz matrix); `RecordProbedKey` added to the active-probe and passive-observation loops. Does not carry a `*ScanSession` today (see `RunInput`-less signature) — a future PR would need to thread `Session` through `AdvancedCoverageAgent` before `param` could apply. |
+| `deserialization_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoint+body-shaped like `active_xxe.go` (fixed serialized-format preambles, no per-parameter fuzz matrix); `RecordProbedKey` added to the active-probe and passive-observation loops. Now re-invoked by the gap-requeue pass (via its `RunInput`-adapted call) for high-ROI unprobed endpoints. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | Certificate metadata; no HTTP surface. |
-| `dom_xss_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Fragment sink (location.hash), no query-parameter matrix; `RecordProbedKey` added per navigated endpoint. |
-| `file_upload_probe.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner-surfaced upload-field names are merged in front of the built-in `"file"` field via the new `buildMultipartUploadField`/`executeUploadAttemptField` helpers; `RecordProbedKey` records `(POST, url, fieldName)`. |
-| `formula_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `formulaProbeParams`; `RecordProbedKey` added. |
-| `http_methods_probe.go` | ✅ | ➖ | ✅ | ⚠️ | `RecordProbedKey` added to `probeOptionsMethod` (OPTIONS), `probeTraceMethod` (TRACE), and `probeVerbOverride` (baseline GET + tunnelled DELETE), so the gap detector can see per-method coverage. |
-| `jwt_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-based; record probed key. |
-| `jwt_advanced_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-based; record probed key. |
-| `login_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces alternate credential fields. |
-| `magic_link_invite_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `token=`, `code=`, `invite=` params. |
-| `mfa_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `otp=`, `code=`. |
-| `oauth_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `redirect_uri=`, `state=`, `scope=`. |
-| `oauth_session_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Cookie/session-focused; record probed key. |
-| `password_reset_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `token=`, `email=`. |
+| `dom_xss_probe.go` | ✅ | ➖ | ✅ | ✅ | Fragment sink (location.hash), no query-parameter matrix; `RecordProbedKey` added per navigated endpoint. Now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `file_upload_probe.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner-surfaced upload-field names are merged in front of the built-in `"file"` field via the new `buildMultipartUploadField`/`executeUploadAttemptField` helpers; `RecordProbedKey` records `(POST, url, fieldName)`. Now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `formula_injection.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner params merged in front of `formulaProbeParams`; `RecordProbedKey` added. Now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `http_methods_probe.go` | ✅ | ➖ | ✅ | ✅ | `RecordProbedKey` added to `probeOptionsMethod` (OPTIONS), `probeTraceMethod` (TRACE), and `probeVerbOverride` (baseline GET + tunnelled DELETE), so the gap detector can see per-method coverage. Now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `jwt_probe.go` | ➖ | ➖ | ✅ | ➖ | Single-token/session check (no URL enumeration); `RecordProbedKey` records the target as probed. Gap-requeue not applicable — there is no unprobed-endpoint surface to re-walk. |
+| `jwt_advanced_probe.go` | ➖ | ➖ | ✅ | ➖ | Single-token/session check like `jwt_probe.go`; `RecordProbedKey` added. Gap-requeue not applicable. |
+| `login_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints already discovered via `loginDiscoverEndpoints(..., options.SeedRuntimeEndpoints, ...)`; `RecordProbedKey` records every discovered login/registration endpoint. Now re-invoked by the gap-requeue pass (`RunLoginProbe`) for high-ROI unprobed endpoints. Credential/field fuzzing is fixed-shape (username/password), not a generic param wordlist, so `param` is ➖. |
+| `magic_link_invite_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints already discovered via `magicLinkDiscoverEndpoints(..., options.SeedRuntimeEndpoints, ...)`; `RecordProbedKey` records every discovered magic-link/invite/account-link endpoint. Now re-invoked by the gap-requeue pass (`RunMagicLinkProbe`). |
+| `mfa_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints already discovered via `mfaDiscoverEndpoints(..., options.SeedRuntimeEndpoints, ...)`; `RecordProbedKey` records every discovered MFA/backup-code/step-up endpoint. Now re-invoked by the gap-requeue pass (`RunMFAProbe`). |
+| `oauth_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints already discovered via `oauthDiscoverEndpoints(..., options.SeedRuntimeEndpoints, ...)`; `RecordProbedKey` records each authorize endpoint under the `redirect_uri` key. Now re-invoked by the gap-requeue pass (`RunOAuthProbe`). |
+| `oauth_session_probe.go` | ✅ | ➖ | ✅ | ✅ | Token/authorize endpoints already discovered via `oauthDiscoverTokenEndpoints`/`oauthDiscoverAuthorizeEndpoints` (both seeded); `RecordProbedKey` added for both. Now re-invoked by the gap-requeue pass (`RunOAuthSessionProbe`). |
+| `password_reset_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints already discovered via `collectPWResetCandidates(..., input.Options.SeedRuntimeEndpoints, ...)`; `RecordProbedKey` records every candidate under the `email` key. Now re-invoked by the gap-requeue pass (`runPasswordResetProbe`). |
 | `postmessage_probe.go` | ➖ | ➖ | ➖ | ➖ | Browser-side observation. |
-| `reverse_tabnabbing_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | HTML-only, record probed key. |
-| `saml_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `SAMLResponse=`, `RelayState=`. |
-| `security_headers_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Header-only; record probed key. |
-| `session_lifecycle_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Cookie-focused; record probed key. |
-| `smtp_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `to=`, `subject=`, `body=`. |
-| `ssi_injection_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params for SSI directives. |
+| `reverse_tabnabbing_probe.go` | ➖ | ➖ | ✅ | ➖ | Zero-request passive probe over already-fetched `bodyText`; `RecordProbedKey` records the page URL. No endpoint enumeration, so gap-requeue is not applicable. |
+| `saml_probe.go` | ✅ | ➖ | ✅ | ✅ | `samlDiscoverEndpoints` now also accepts `options.SeedRuntimeEndpoints` (merged when a seeded URL matches the ACS/metadata path set), matching the pattern used by the other auth-flow probes; `RecordProbedKey` added for ACS and metadata endpoints. Now re-invoked by the gap-requeue pass (`RunSAMLProbe`). |
+| `security_headers_probe.go` | ➖ | ➖ | ✅ | ➖ | Header-only, single-URL check against the already-fetched baseline response; `RecordProbedKey` records the target. Gap-requeue not applicable (no per-endpoint fuzz loop). |
+| `session_lifecycle_probe.go` | ✅ | ➖ | ✅ | ✅ | Login/logout/protected/password-change endpoints already discovered via the seeded `sessionDiscover*Endpoints` helpers; `RecordProbedKey` (via the new `recordSessionEndpoints` helper) added at every discovery call site plus the initial cookie-baseline GET. Now re-invoked by the gap-requeue pass (`RunSessionLifecycleProbe`). |
+| `smtp_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner params merged in front of `smtpEmailParams` via `phase2DynamicParams`/`phase2ProbeParams`; `RecordProbedKey` added per (endpoint, param) attempt. Now re-invoked by the gap-requeue pass. |
+| `ssi_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner params merged in front of `ssiParams`; `RecordProbedKey` added per (endpoint, param) attempt. Now re-invoked by the gap-requeue pass. |
 | `tls_config_probe.go` | ➖ | ➖ | ➖ | ➖ | Transport-level. |
 | `ui_simulation_probe.go` | ➖ | ➖ | ➖ | ➖ | Browser-only. |
-| `verbose_error_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner params to increase error-surface hits. |
-| `websocket_probe.go` | ⚠️ | ➖ | ⚠️ | ⚠️ | Upgrade key; record probed key. |
-| `xssi_jsonp_probe.go` | ⚠️ | ⚠️ | ⚠️ | ⚠️ | Miner surfaces `callback=`, `jsonp=`. |
+| `verbose_error_probe.go` | ✅ | ➖ | ✅ | ✅ | `malformedInputs` are fixed error-triggering payload shapes (SQL syntax, null byte, oversized int), not generic parameter names, so miner-param merging doesn't apply the same way as a query-fuzz wordlist (`param` ➖); `RecordProbedKey` records every (method, url, param) attempt. Now re-invoked by the gap-requeue pass. |
+| `websocket_probe.go` | ✅ | ➖ | ✅ | ✅ | `websocketCandidates` now also merges any `ws://`/`wss://` URL present in `options.SeedRuntimeEndpoints`; `RecordProbedKey` records every handshake URL attempted. Now re-invoked by the gap-requeue pass. |
+| `xssi_jsonp_probe.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner params merged in front of `jsonpCallbackParams`; `RecordProbedKey` added for both the JSONP-callback loop and the XSSI-array check. Now re-invoked by the gap-requeue pass. |
 
 ## Reference migration
 
@@ -119,8 +119,8 @@ Snapshot generated 2026-07-01.
    end-of-scan gap detector can distinguish `not_probed` from
    `param_not_fuzzed`.
 
-Follow the same three steps in each probe row still marked ⚠️. Header /
-cookie / transport probes only need step 3.
+Follow the same three steps for any future new probe. Header / cookie /
+transport probes only need step 3.
 
 `phase2_probe_params.go` (`phase2DynamicParams`, `phase2ProbeParams`)
 generalises steps 1-2 into a shared helper so subsequently migrated
@@ -137,13 +137,50 @@ helper but merges miner-surfaced names into the multipart *field name*
 list (`buildMultipartUploadField`/`executeUploadAttemptField`) rather
 than a query-string parameter.
 
-Batch 2 (this PR) also added `RecordProbedKey` coverage to four
+Batch 2 also added `RecordProbedKey` coverage to four
 endpoint-shaped probes that have no per-parameter fuzz matrix
 (`active_xxe.go`, `clickjacking_probe.go`, `deserialization_probe.go`,
 `dom_xss_probe.go`) and to the three HTTP-method-focused sub-probes in
 `http_methods_probe.go` (`probeOptionsMethod`, `probeTraceMethod`,
 `probeVerbOverride`), matching the `param: ➖` treatment already used for
 `active_xxe.go` and `cloud_storage_probe.go`.
+
+Batch 3 closed out every remaining row in the table:
+
+- Extended the `gap` control (`runGapReQueuePass`) to the five probes
+  that already consumed `SeedRuntimeEndpoints` but weren't yet
+  re-invoked on the second pass (`deserialization_probe.go`,
+  `dom_xss_probe.go`, `file_upload_probe.go`, `formula_injection.go`,
+  `http_methods_probe.go`), plus every auth-flow and remaining
+  injection probe below.
+- Migrated the three remaining fixed-wordlist injection probes
+  (`smtp_injection_probe.go`, `ssi_injection_probe.go`,
+  `xssi_jsonp_probe.go`) onto `phase2DynamicParams`/`phase2ProbeParams`,
+  matching the `active_sqli.go` reference pattern.
+- Added `RecordProbedKey` coverage — and, where the probe didn't
+  already consume `SeedRuntimeEndpoints`/miner-discovered endpoints,
+  extended endpoint discovery to include them — for every auth-flow
+  probe (`login_probe.go`, `magic_link_invite_probe.go`, `mfa_probe.go`,
+  `oauth_probe.go`, `oauth_session_probe.go`, `password_reset_probe.go`,
+  `saml_probe.go`, `session_lifecycle_probe.go`), the two JWT probes
+  (`jwt_probe.go`, `jwt_advanced_probe.go`), and the remaining
+  header/response-shape probes (`reverse_tabnabbing_probe.go`,
+  `security_headers_probe.go`, `verbose_error_probe.go`,
+  `websocket_probe.go`).
+- `saml_probe.go`'s `samlDiscoverEndpoints` now takes a `seeded []string`
+  parameter (mirroring `loginDiscoverEndpoints`/`mfaDiscoverEndpoints`/
+  etc.) so runtime-XHR/miner-surfaced ACS and metadata URLs are folded
+  into the inventory.
+- `session_lifecycle_probe.go` gained a `recordSessionEndpoints` helper
+  so its several `sessionDiscover*Endpoints` call sites all funnel
+  through one `RecordProbedKey` call.
+- `jwt_probe.go`, `jwt_advanced_probe.go`, `reverse_tabnabbing_probe.go`,
+  and `security_headers_probe.go` operate on a single target/token
+  rather than an enumerable endpoint list, so `inv`, `param`, and `gap`
+  remain ➖ for those four — there is no unprobed-surface list for the
+  gap-requeue pass to walk.
+
+Every row in the table is now ✅ or ➖ — no `⚠️` rows remain.
 
 ## Appendix — audit one-liner
 

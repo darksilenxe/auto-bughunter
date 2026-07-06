@@ -94,6 +94,9 @@ func (s *Service) RunOAuthProbe(
 	if len(endpoints) == 0 {
 		return nil
 	}
+	for _, ep := range endpoints {
+		RecordProbedKey(http.MethodGet, ep, "redirect_uri")
+	}
 
 	if emit != nil {
 		emit(model.ScanEvent{

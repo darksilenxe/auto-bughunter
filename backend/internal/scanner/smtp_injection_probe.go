@@ -105,13 +105,15 @@ func (s *Service) runSMTPInjectionProbe(ctx context.Context, input RunInput, bod
 
 	var findings []model.Finding
 	emitted := map[string]bool{}
+	dynamicParams := phase2DynamicParams(input.Session)
+	probeParams := phase2ProbeParams(dynamicParams, smtpEmailParams)
 
 	for _, ep := range candidates {
 		if err := safety.ValidateOutboundURL(ep); err != nil {
 			continue
 		}
 
-		for _, param := range smtpEmailParams {
+		for _, param := range probeParams {
 			for _, payloadTpl := range smtpInjectionPayloads {
 				select {
 				case <-ctx.Done():
@@ -145,6 +147,7 @@ func (s *Service) runSMTPInjectionProbe(ctx context.Context, input RunInput, bod
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				elapsed := time.Since(start)
 				_ = elapsed
+				RecordProbedKey(http.MethodPost, ep, param)
 				if err != nil || resp == nil {
 					continue
 				}

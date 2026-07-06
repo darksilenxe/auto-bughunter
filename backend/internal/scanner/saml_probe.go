@@ -97,11 +97,17 @@ func (s *Service) RunSAMLProbe(
 	}
 
 	// ── Step 1: discover ACS / metadata endpoints ──────────────────────────
-	acsEndpoints := samlDiscoverEndpoints(base, samlACSPaths, scanScope)
-	metaEndpoints := samlDiscoverEndpoints(base, samlMetadataPaths, scanScope)
+	acsEndpoints := samlDiscoverEndpoints(base, samlACSPaths, options.SeedRuntimeEndpoints, scanScope)
+	metaEndpoints := samlDiscoverEndpoints(base, samlMetadataPaths, options.SeedRuntimeEndpoints, scanScope)
 
 	if len(acsEndpoints) == 0 && len(metaEndpoints) == 0 {
 		return nil
+	}
+	for _, ep := range acsEndpoints {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range metaEndpoints {
+		RecordProbedKey(http.MethodGet, ep, "")
 	}
 
 	if emit != nil {
@@ -670,8 +676,11 @@ func samlLooksRejected(body string) bool {
 	return false
 }
 
-// samlDiscoverEndpoints returns in-scope endpoints for the given path list.
-func samlDiscoverEndpoints(base *url.URL, paths []string, scanScope model.ScanScope) []string {
+// samlDiscoverEndpoints returns in-scope endpoints for the given path list,
+// merged with any runtime-seeded endpoints matching the same path set so
+// late-discovered SAML endpoints (e.g. via runtime-XHR extraction or the
+// Phase 2 hidden-endpoint miner) are still included.
+func samlDiscoverEndpoints(base *url.URL, paths []string, seeded []string, scanScope model.ScanScope) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	for _, path := range paths {
@@ -684,6 +693,31 @@ func samlDiscoverEndpoints(base *url.URL, paths []string, scanScope model.ScanSc
 			continue
 		}
 		if !scope.IsURLInScope(ep, scanScope) {
+			continue
+		}
+		seen[ep] = struct{}{}
+		out = append(out, ep)
+	}
+	lowerPaths := make([]string, len(paths))
+	for i, p := range paths {
+		lowerPaths[i] = strings.ToLower(p)
+	}
+	for _, ep := range seeded {
+		if _, ok := seen[ep]; ok {
+			continue
+		}
+		if !scope.IsURLInScope(ep, scanScope) {
+			continue
+		}
+		lowerEP := strings.ToLower(ep)
+		matched := false
+		for _, p := range lowerPaths {
+			if strings.Contains(lowerEP, p) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			continue
 		}
 		seen[ep] = struct{}{}

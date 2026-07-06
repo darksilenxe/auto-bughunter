@@ -103,6 +103,7 @@ func (s *Service) RunSessionLifecycleProbe(
 	// Issue a single GET to the target and inspect Set-Cookie headers.
 	req0, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err == nil {
+		RecordProbedKey(http.MethodGet, target, "")
 		ApplyAuthProfile(req0, auth)
 		resp0, err := s.doRequestWithRetry(ctx, req0, options)
 		if err == nil && resp0 != nil {
@@ -127,6 +128,7 @@ func (s *Service) RunSessionLifecycleProbe(
 		if preLoginCookie != "" {
 			// Attempt login and compare the session identifier.
 			loginEPs := sessionDiscoverLoginEndpoints(base, options.SeedRuntimeEndpoints, scanScope)
+			recordSessionEndpoints(http.MethodPost, loginEPs)
 			for _, ep := range loginEPs {
 				newCookie := sessionAttemptLoginAndGetCookie(ctx, s, ep, auth, options)
 				if newCookie != "" && newCookie == preLoginCookie {
@@ -176,6 +178,8 @@ func (s *Service) RunSessionLifecycleProbe(
 		if credential != "" {
 			logoutEPs := sessionDiscoverLogoutEndpoints(base, options.SeedRuntimeEndpoints, scanScope)
 			protectedEPs := sessionDiscoverProtectedEndpoints(base, options.SeedRuntimeEndpoints, scanScope)
+			recordSessionEndpoints(http.MethodPost, logoutEPs)
+			recordSessionEndpoints(http.MethodGet, protectedEPs)
 
 			for _, logoutEP := range logoutEPs {
 				// Call logout.
@@ -379,6 +383,7 @@ func (s *Service) RunSessionLifecycleProbe(
 	fid = "session-concurrent-allowed"
 	if !emitted[fid] && hasStandardLoginCredentials(auth) {
 		loginEPs := sessionDiscoverLoginEndpoints(base, options.SeedRuntimeEndpoints, scanScope)
+		recordSessionEndpoints(http.MethodPost, loginEPs)
 		if len(loginEPs) > 0 {
 			// Attempt two logins and verify both return a session token.
 			ep := loginEPs[0]
@@ -521,6 +526,15 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 		}
 	}
 	return findings
+}
+
+// recordSessionEndpoints marks every endpoint in eps as probed with method so
+// the end-of-scan gap detector can distinguish probed session-lifecycle
+// surface from unprobed inventory entries.
+func recordSessionEndpoints(method string, eps []string) {
+	for _, ep := range eps {
+		RecordProbedKey(method, ep, "")
+	}
 }
 
 // sessionIsAuthCookie returns true for cookies whose names suggest auth/session use.

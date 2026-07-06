@@ -19,11 +19,19 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 		return nil
 	}
 	candidates := websocketCandidates(input.Target, body)
+	for _, seeded := range input.Options.SeedRuntimeEndpoints {
+		lower := strings.ToLower(seeded)
+		if strings.HasPrefix(lower, "ws://") || strings.HasPrefix(lower, "wss://") {
+			candidates = append(candidates, seeded)
+		}
+	}
+	candidates = dedupeStrings(candidates)
 	for _, wsTarget := range candidates {
 		handshakeURL := websocketToHTTP(input.Target, wsTarget)
 		if handshakeURL == "" || !scope.IsURLInScope(handshakeURL, input.Scope) {
 			continue
 		}
+		RecordProbedKey(http.MethodGet, handshakeURL, "")
 		status, _, headers, ok := s.websocketHandshake(ctx, input, handshakeURL, true, true, "https://evil.example.com")
 		if ok && isValidWebSocketUpgrade(status, headers) {
 			ctrlStatus, _, ctrlHeaders, ctrlOK := s.websocketHandshake(ctx, input, handshakeURL, true, false, "")

@@ -20,6 +20,7 @@ import (
 // and operates solely on the headers and cookies already present in the baseline
 // response passed by the caller.
 func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header, resp *http.Response) []model.Finding {
+	RecordProbedKey(http.MethodGet, input.Target, "")
 	var findings []model.Finding
 
 	// ── HSTS ──────────────────────────────────────────────────────────────────

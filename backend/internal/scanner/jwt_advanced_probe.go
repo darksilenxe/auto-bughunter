@@ -76,6 +76,7 @@ func (s *Service) RunJWTAdvancedProbe(
 	if !ok {
 		return nil
 	}
+	RecordProbedKey(http.MethodGet, target, "jwt")
 
 	var findings []model.Finding
 	emitted := map[string]bool{}

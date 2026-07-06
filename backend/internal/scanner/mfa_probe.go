@@ -94,6 +94,16 @@ func (s *Service) RunMFAProbe(
 		return nil
 	}
 
+	for _, ep := range mfaEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range backupEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range stepUpEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+
 	if emit != nil {
 		emit(model.ScanEvent{
 			Type:    model.ScanEventCommand,
