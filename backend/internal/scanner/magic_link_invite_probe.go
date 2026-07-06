@@ -94,6 +94,16 @@ func (s *Service) RunMagicLinkProbe(
 		return nil
 	}
 
+	for _, ep := range magicEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range inviteEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range linkEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+
 	if emit != nil {
 		emit(model.ScanEvent{
 			Type:    model.ScanEventCommand,

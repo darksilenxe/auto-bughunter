@@ -72,6 +72,8 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 
 	var findings []model.Finding
 	emitted := map[string]bool{}
+	dynamicParams := phase2DynamicParams(input.Session)
+	callbackParams := phase2ProbeParams(dynamicParams, jsonpCallbackParams)
 
 	for _, raw := range candidates {
 		raw = strings.TrimSpace(raw)
@@ -91,7 +93,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 		}
 
 		// ── JSONP detection ───────────────────────────────────────────────────
-		for _, cbParam := range jsonpCallbackParams {
+		for _, cbParam := range callbackParams {
 			fid := "jsonp-" + cbParam + "-" + hhSlug(raw)
 			if emitted[fid] {
 				continue
@@ -116,6 +118,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 			ApplyAuthProfile(req, input.AuthProfile)
 
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+			RecordProbedKey(http.MethodGet, probeURL.String(), cbParam)
 			if err != nil || resp == nil {
 				continue
 			}
@@ -228,6 +231,7 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 			}
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+			RecordProbedKey(http.MethodGet, raw, "")
 			if err != nil || resp == nil {
 				continue
 			}

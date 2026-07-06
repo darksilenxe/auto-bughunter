@@ -97,6 +97,13 @@ func (s *Service) RunLoginProbe(
 		return nil
 	}
 
+	for _, ep := range loginEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+	for _, ep := range regEPs {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
+
 	if emit != nil {
 		emit(model.ScanEvent{
 			Type:    model.ScanEventCommand,

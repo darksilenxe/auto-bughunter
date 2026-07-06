@@ -97,6 +97,7 @@ func (s *Service) runJWTProbe(ctx context.Context, input RunInput) []model.Findi
 	if !ok {
 		return nil
 	}
+	RecordProbedKey(http.MethodGet, input.Target, "jwt")
 
 	var findings []model.Finding
 

@@ -78,6 +78,9 @@ func (s *Service) RunOAuthSessionProbe(
 	if len(tokenEndpoints) == 0 && !hasOAuthAuthorizeEndpoints(base, options.SeedRuntimeEndpoints, scanScope) {
 		return nil
 	}
+	for _, ep := range tokenEndpoints {
+		RecordProbedKey(http.MethodPost, ep, "")
+	}
 
 	if emit != nil {
 		emit(model.ScanEvent{
@@ -163,6 +166,9 @@ func (s *Service) RunOAuthSessionProbe(
 
 	// ── Probe 2: Implicit flow / token-in-URL ───────────────────────────────
 	authorizeEndpoints := oauthDiscoverAuthorizeEndpoints(base, options.SeedRuntimeEndpoints, scanScope)
+	for _, ep := range authorizeEndpoints {
+		RecordProbedKey(http.MethodGet, ep, "")
+	}
 	for _, ep := range authorizeEndpoints {
 		fid := "oauth-implicit-flow"
 		if emitted[fid] {

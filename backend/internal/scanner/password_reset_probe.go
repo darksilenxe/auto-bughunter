@@ -82,6 +82,9 @@ func (s *Service) runPasswordResetProbe(ctx context.Context, input RunInput) []m
 	if len(candidates) == 0 {
 		return nil
 	}
+	for _, ep := range candidates {
+		RecordProbedKey(http.MethodPost, ep, "email")
+	}
 
 	var findings []model.Finding
 

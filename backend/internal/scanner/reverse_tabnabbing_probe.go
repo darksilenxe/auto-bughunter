@@ -29,6 +29,7 @@ func (s *Service) runReverseTabnabbingProbe(input RunInput, bodyText string) []m
 	if strings.TrimSpace(bodyText) == "" {
 		return nil
 	}
+	RecordProbedKey("GET", input.Target, "")
 
 	anchors := tabnabbingPattern.FindAllString(bodyText, -1)
 	if len(anchors) == 0 {

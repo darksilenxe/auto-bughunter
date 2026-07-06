@@ -96,6 +96,8 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 	var findings []model.Finding
 	emitted := map[string]bool{}
 	attempts := 0
+	dynamicParams := phase2DynamicParams(input.Session)
+	probeParams := phase2ProbeParams(dynamicParams, ssiParams)
 
 	for _, raw := range candidates {
 		if attempts >= ssiMaxAttempts {
@@ -117,7 +119,7 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 			continue
 		}
 
-		for _, param := range ssiParams {
+		for _, param := range probeParams {
 			if attempts >= ssiMaxAttempts {
 				break
 			}
@@ -144,6 +146,7 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				RecordProbedKey(http.MethodGet, probeURL.String(), param)
 				if err != nil || resp == nil {
 					continue
 				}

@@ -134,6 +134,7 @@ func (s *Service) runVerboseErrorProbe(ctx context.Context, input RunInput, body
 			ApplyAuthProfile(req, input.AuthProfile)
 
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+			RecordProbedKey(probe.method, req.URL.String(), probe.param)
 			if err != nil || resp == nil {
 				continue
 			}
