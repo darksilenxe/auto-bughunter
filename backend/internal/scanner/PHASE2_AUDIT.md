@@ -21,6 +21,29 @@ scan `DetectSurfaceGaps` compares inventory keys against
 `surfaceGapMethodMissing`, `paramDiscoveryCandidates`,
 `paramDiscoveryConfirmed`).
 
+`scanner.go`'s `Run` now feeds the `DetectSurfaceGaps` output straight
+into `(*Service).runGapReQueuePass` (`phase2_gap_requeue.go`), which:
+
+1. Calls `SelectHighROIGaps(gaps, gapReQueueBudget)` (budget 15) to pick
+   the highest-value unprobed/under-fuzzed inventory entries.
+2. Projects them to URLs via `GapReQueueURLs` and drops any URL that was
+   already part of the first pass's `SeedRuntimeEndpoints` (so the pass
+   is strictly additive, not duplicate work).
+3. Re-invokes the migrated Batch 1/Batch 2 probes that already consume
+   `input.Options.SeedRuntimeEndpoints` with the new gap URLs appended,
+   so late-discovered surface (runtime-XHR endpoints, miner-surfaced
+   params, etc. that only populate the inventory partway through the
+   first pass) still gets fuzzed within the same scan.
+4. Annotates every finding produced by the second pass with
+   `(surfaced via Phase 2 gap-requeue pass)` so operators can tell it
+   apart from first-pass findings in the report.
+
+`clickjacking_probe.go` doesn't itself consume `SeedRuntimeEndpoints`
+(header-only, single-URL check), so the re-queue pass fetches up to
+`gapReQueueClickjackingMax` (5) of the gap URLs directly
+(`gapReQueueClickjackingProbe`) and runs the existing header check
+against each live response.
+
 ## Legend
 
 - ✅ Applied.
@@ -33,26 +56,26 @@ Snapshot generated 2026-07-01.
 
 | Probe file | inv | param | rec | gap | Notes |
 | --- | :---: | :---: | :---: | :---: | --- |
-| `active_cors.go` | ✅ | ➖ | ✅ | ⚠️ | Header-only; now records probed keys (`RecordProbedKey`) on the control and per-origin requests. |
-| `active_graphql_introspection.go` | ✅ | ➖ | ✅ | ⚠️ | Introspection query is per-endpoint; now records the `POST` probe key. |
-| `active_ldap_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: `phase2ProbeParams`/`phase2DynamicParams` merge miner params into the LDAP payload matrix; `RecordProbedKey` added. |
-| `active_nosqli.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged before NoSQL operator payloads (query-string and JSON-body phases); `RecordProbedKey` added to both. |
-| `active_open_redirect.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner surfaces `next=`, `redirect=`, `url=` style params, now merged ahead of the built-in list; `RecordProbedKey` added. |
-| `active_path_traversal.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: consumes miner file-style params (`file`, `path`, `template`); `RecordProbedKey` added. |
-| `active_prompt_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for JSON LLM APIs across the direct and OAST-callback loops; `RecordProbedKey` added. |
-| `active_prototype_pollution.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner-discovered object-shaped params are tried as `<param>[__proto__][polluted]` gadget keys (`prototypePollutionProbeKeys`); `RecordProbedKey` added to both the query-string and JSON-body branches. |
-| `active_sqli.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated in this PR as the reference template (see `sqliDynamicParams`, `sqliMergedProbeParams`, `RecordProbedKey`). |
-| `active_ssti.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for template-engine reflections; `RecordProbedKey` added. |
-| `active_xpath_injection.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged for XPath error surfaces; `RecordProbedKey` added. |
-| `active_xss.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `techAwareXSSProbeParams`; `RecordProbedKey` added on both the primary and dual-marker confirmation requests. |
-| `active_xxe.go` | ✅ | ➖ | ✅ | ⚠️ | Endpoint-shaped (POST body payload, no per-parameter fuzz matrix); `RecordProbedKey` added to the OAST, reflected-file-read, and error-based phases. |
+| `active_cors.go` | ✅ | ➖ | ✅ | ✅ | now consumes the Phase 2 gap-requeue pass (`runGapReQueuePass`), so unprobed high-ROI origins/endpoints surfaced late in the first pass get re-tried. |
+| `active_graphql_introspection.go` | ✅ | ➖ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed introspection endpoints. |
+| `active_ldap_injection.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_nosqli.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_open_redirect.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_path_traversal.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_prompt_injection.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_prototype_pollution.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_sqli.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_ssti.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_xpath_injection.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_xss.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
+| `active_xxe.go` | ✅ | ➖ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
 | `browser_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Browser-side observation. |
-| `clickjacking_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Header-only; `RecordProbedKey` added for the primary GET so framing coverage shows up. |
+| `clickjacking_probe.go` | ✅ | ➖ | ✅ | ✅ | gap-requeue pass fetches up to 5 re-queued gap URLs directly (`gapReQueueClickjackingProbe`) and runs the header check on each, since this probe has no native SeedRuntimeEndpoints loop. |
 | `cloud_storage_probe.go` | ➖ | ➖ | ➖ | ➖ | Bucket enumeration, not URL-surface. |
-| `command_injection_probe.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged via `phase2ProbeParams`/`phase2DynamicParams` in front of `cmdInjectionParams`; `RecordProbedKey` added to the output/time-based loop and the OAST sub-probe. |
+| `command_injection_probe.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | ➖ | ➖ | Fixed-path `crossdomain.xml`. |
 | `csrf_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes SurfaceInventory (POST/PUT/PATCH/DELETE) and records probed keys per (method, url). Bypass matrix covers empty-value, method-override, duplicate-token, default-token. |
-| `dangling_markup.go` | ✅ | ✅ | ✅ | ⚠️ | Migrated: miner params merged in front of `danglingMarkupParams`; `RecordProbedKey` added. |
+| `dangling_markup.go` | ✅ | ✅ | ✅ | ✅ | now re-invoked by the gap-requeue pass for high-ROI unprobed endpoints. |
 | `deserialization_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Endpoint+body-shaped like `active_xxe.go` (fixed serialized-format preambles, no per-parameter fuzz matrix); `RecordProbedKey` added to the active-probe and passive-observation loops. Does not carry a `*ScanSession` today (see `RunInput`-less signature) — a future PR would need to thread `Session` through `AdvancedCoverageAgent` before `param` could apply. |
 | `dns_san_probe.go` | ➖ | ➖ | ➖ | ➖ | Certificate metadata; no HTTP surface. |
 | `dom_xss_probe.go` | ✅ | ➖ | ✅ | ⚠️ | Fragment sink (location.hash), no query-parameter matrix; `RecordProbedKey` added per navigated endpoint. |

@@ -484,8 +484,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, integrationFindings...)
 
 	// Phase 2: end-of-scan surface-gap detection. Updates process-wide
-	// SurfaceCoverageMetrics that AutomationMetrics.Extra surfaces.
-	DetectSurfaceGaps(input.Session.SurfaceInventory())
+	// SurfaceCoverageMetrics that AutomationMetrics.Extra surfaces, and
+	// returns the raw gap list so the highest-ROI candidates can be
+	// re-queued into a bounded second probe pass below.
+	gaps := DetectSurfaceGaps(input.Session.SurfaceInventory())
+	findings = append(findings, s.runGapReQueuePass(ctx, input, bodyText, gaps)...)
 
 	return findings, nil
 }
