@@ -203,6 +203,11 @@ func (s *Service) runVerboseErrorProbe(ctx context.Context, input RunInput, body
 							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 							"excerpt":        excerpt,
 							"responseShape":  ClassifyResponseShape(respHeader).String(),
+							"method":         probe.method,
+							"url":            raw,
+							"param":          probe.param,
+							"oracleName":     "verbose_error_probe",
+							"oracleVersion":  "v1",
 						},
 					})
 					break // one finding per endpoint+probe is sufficient

@@ -132,6 +132,12 @@ func (s *Service) RunMFAProbe(
 			OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
 			Sources:        []string{"active-scanner", "mfa-probe"},
 			BusinessTags:   []string{"mfa", "otp", "2fa"},
+			EvidenceFields: map[string]string{
+				"method":        http.MethodGet,
+				"url":           target,
+				"oracleName":    "mfa_probe",
+				"oracleVersion": "v1",
+			},
 		})
 	}
 
@@ -455,7 +461,13 @@ func (s *Service) RunMFAProbe(
 
 // mfaFinding constructs a standardized Finding for the MFA probe.
 func mfaFinding(id, endpoint string, severity model.Severity, title, evidence, cwe string, steps []string, extra map[string]string) model.Finding {
-	ef := map[string]string{"validationType": "active-probe"}
+	ef := map[string]string{
+		"validationType": "active-probe",
+		"method":         http.MethodPost,
+		"url":            endpoint,
+		"oracleName":     "mfa_probe",
+		"oracleVersion":  "v1",
+	}
 	for k, v := range extra {
 		ef[k] = v
 	}
@@ -586,6 +598,10 @@ func mfaTestOTPReuse(ctx context.Context, s *Service, ep string, auth model.Scan
 				"code":                     code,
 				"wrongCodeControlRejected": "true",
 				"controlStatus":            fmt.Sprintf("%d", controlStatus),
+				"method":                   http.MethodPost,
+				"url":                      ep,
+				"oracleName":               "mfa_probe",
+				"oracleVersion":            "v1",
 			},
 		}
 	}

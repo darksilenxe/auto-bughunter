@@ -55,6 +55,10 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 				EvidenceFields: map[string]string{
 					"validationType": "active-probe",
 					"controlStatus":  fmt.Sprintf("%d", ctrlStatus),
+					"method":         http.MethodGet,
+					"url":            handshakeURL,
+					"oracleName":     "websocket_probe",
+					"oracleVersion":  "v1",
 				},
 			}
 			emitted, ok := s.submitWebSocketFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
@@ -88,6 +92,10 @@ func (s *Service) runWebSocketProbe(ctx context.Context, input RunInput, body st
 					EvidenceFields: map[string]string{
 						"validationType": "active-probe",
 						"controlStatus":  fmt.Sprintf("%d", ctrlStatus),
+						"method":         http.MethodGet,
+						"url":            handshakeURL,
+						"oracleName":     "websocket_probe",
+						"oracleVersion":  "v1",
 					},
 				}
 				emitted, ok := s.submitWebSocketFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {

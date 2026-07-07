@@ -161,6 +161,11 @@ func (s *Service) RunMagicLinkProbe(
 					"consumeStatus":        fmt.Sprintf("%d", consumeStatus),
 					"controlTokenRejected": "true",
 					"controlStatus":        fmt.Sprintf("%d", controlStatus),
+					"method":               http.MethodPost,
+					"url":                  ep,
+					"param":                "token",
+					"oracleName":           "magic_link_invite_probe",
+					"oracleVersion":        "v1",
 				},
 			})
 			break
@@ -207,6 +212,11 @@ func (s *Service) RunMagicLinkProbe(
 						"secondStatus":         fmt.Sprintf("%d", status2),
 						"controlTokenRejected": "true",
 						"controlStatus":        fmt.Sprintf("%d", controlStatus),
+						"method":               http.MethodPost,
+						"url":                  ep,
+						"param":                "token",
+						"oracleName":           "magic_link_invite_probe",
+						"oracleVersion":        "v1",
 					},
 				})
 				break
@@ -249,6 +259,11 @@ func (s *Service) RunMagicLinkProbe(
 						"acceptStatus":         fmt.Sprintf("%d", status),
 						"controlTokenRejected": "true",
 						"controlStatus":        fmt.Sprintf("%d", controlStatus),
+						"method":               http.MethodPost,
+						"url":                  ep,
+						"param":                "token",
+						"oracleName":           "magic_link_invite_probe",
+						"oracleVersion":        "v1",
 					},
 				})
 				break
@@ -499,6 +514,10 @@ func magicLinkTestLinkCSRF(ctx context.Context, s *Service, ep string, auth mode
 				"validationType": "active-probe",
 				"csrfTokenSent":  "false",
 				"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+				"method":         http.MethodPost,
+				"url":            ep,
+				"oracleName":     "magic_link_invite_probe",
+				"oracleVersion":  "v1",
 			},
 		}
 	}
@@ -549,6 +568,11 @@ func magicLinkTestTokenEnumeration(ctx context.Context, s *Service, base *url.UR
 					"responseStatus":       fmt.Sprintf("%d", status),
 					"controlTokenRejected": "true",
 					"controlStatus":        fmt.Sprintf("%d", controlStatus),
+					"method":               http.MethodGet,
+					"url":                  probe,
+					"param":                "token",
+					"oracleName":           "magic_link_invite_probe",
+					"oracleVersion":        "v1",
 				},
 			}
 		}

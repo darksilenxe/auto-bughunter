@@ -553,6 +553,10 @@ func oauthSessionFinding(
 	ef := map[string]string{
 		"validationType": "active-probe",
 		"reproStep":      "Replay the manipulated OAuth request and observe whether the server rejects it",
+		"method":         http.MethodPost,
+		"url":            endpoint,
+		"oracleName":     "oauth_session_probe",
+		"oracleVersion":  "v1",
 	}
 	for k, v := range extra {
 		ef[k] = v

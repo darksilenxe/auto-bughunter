@@ -284,6 +284,11 @@ func (s *Service) tryResetWithToken(ctx context.Context, input RunInput, base *u
 				"responseStatus":       fmt.Sprintf("%d", resp.StatusCode),
 				"controlTokenRejected": "true",
 				"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
+				"method":               http.MethodPost,
+				"url":                  resetEP,
+				"param":                "token",
+				"oracleName":           "password_reset_probe",
+				"oracleVersion":        "v1",
 			},
 		}
 	}
@@ -349,6 +354,10 @@ func (s *Service) testResetHostHeaderPoisoning(ctx context.Context, input RunInp
 			"poisonedHost":   poisonedHost,
 			"resetEndpoint":  resetEP,
 			"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+			"method":         http.MethodPost,
+			"url":            resetEP,
+			"oracleName":     "password_reset_probe",
+			"oracleVersion":  "v1",
 		},
 	}
 }

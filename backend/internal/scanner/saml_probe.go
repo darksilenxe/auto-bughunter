@@ -140,6 +140,12 @@ func (s *Service) RunSAMLProbe(
 			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
 			Sources:       []string{"active-scanner", "saml-probe"},
 			BusinessTags:  []string{"saml", "oidc", "golden-saml", "federation"},
+			EvidenceFields: map[string]string{
+				"method":        http.MethodGet,
+				"url":           target,
+				"oracleName":    "saml_probe",
+				"oracleVersion": "v1",
+			},
 		})
 	}
 
@@ -191,6 +197,10 @@ func (s *Service) RunSAMLProbe(
 					"metadataEndpoint": ep,
 					"certPrefix":       truncateString(cert, 40),
 					"responseShape":    shape,
+					"method":           http.MethodGet,
+					"url":              ep,
+					"oracleName":       "saml_probe",
+					"oracleVersion":    "v1",
 				},
 			})
 		}
@@ -311,6 +321,11 @@ func (s *Service) RunSAMLProbe(
 							"firstStatus":   fmt.Sprintf("%d", r1.status),
 							"secondStatus":  fmt.Sprintf("%d", r2.status),
 							"responseShape": shape,
+							"method":        http.MethodPost,
+							"url":           ep,
+							"param":         "SAMLResponse",
+							"oracleName":    "saml_probe",
+							"oracleVersion": "v1",
 						},
 					}
 					AttachDifferentialEvidence(&finding, diffOutcome)
@@ -505,6 +520,12 @@ func (s *Service) RunSAMLProbe(
 							"xxeSignal":      sig,
 							"responseStatus": fmt.Sprintf("%d", r.status),
 							"responseShape":  shape,
+							"method":         http.MethodPost,
+							"url":            ep,
+							"param":          "SAMLResponse",
+							"payloadClass":   "xxe",
+							"oracleName":     "saml_probe",
+							"oracleVersion":  "v1",
 						},
 					}
 					AttachDifferentialEvidence(&finding, diffOutcome)
@@ -551,6 +572,11 @@ func (s *Service) testSAMLPost(
 			"acsEndpoint":    ep,
 			"responseStatus": fmt.Sprintf("%d", r.status),
 			"responseShape":  shape,
+			"method":         http.MethodPost,
+			"url":            ep,
+			"param":          "SAMLResponse",
+			"oracleName":     "saml_probe",
+			"oracleVersion":  "v1",
 		}
 		finding := model.Finding{
 			ID:                findingID,

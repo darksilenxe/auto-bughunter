@@ -34,7 +34,13 @@ whose `evidenceQuality` is `"incomplete"` when strict mode is on.
 Snapshot generated 2026-07-01. Batch 1 (first 10 ⚠️ rows: `active_cors.go`
 through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04. Batch 2
 (next 10 ⚠️ rows: `active_xpath_injection.go` through
-`http_methods_probe.go`) migrated to `schema` ✅ on 2026-07-07.
+`http_methods_probe.go`) migrated to `schema` ✅ on 2026-07-07. Batch 3
+(final 17 ⚠️ rows: `jwt_probe.go` through `xssi_jsonp_probe.go`) migrated
+to `schema` ✅ on 2026-07-07, completing the Phase 3 evidence-schema
+audit — every applicable probe file now emits a Phase 3-compliant
+EvidenceRecord (✅) or is marked not-applicable (➖). The `stamp` column
+remains ⚠️ across the board; stamping (`SubmitVerifiedFinding` wiring)
+is tracked as follow-up work.
 
 | Probe file | schema | stamp | Notes |
 | --- | :---: | :---: | --- |
@@ -64,26 +70,26 @@ through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04. Batch 2
 | `file_upload_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=upload-bypass` added. |
 | `formula_injection.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
 | `http_methods_probe.go` | ✅ | ⚠️ | Migrated: `method` added from allowed/overridden verb set. |
-| `jwt_probe.go` | ⚠️ | ⚠️ | `oracleName=jwt`. |
-| `jwt_advanced_probe.go` | ⚠️ | ⚠️ | `oracleName=jwt`. |
-| `login_probe.go` | ⚠️ | ⚠️ | Add `param`. |
-| `magic_link_invite_probe.go` | ⚠️ | ⚠️ | Add `param=token`. |
-| `mfa_probe.go` | ⚠️ | ⚠️ | Add `param=otp`. |
-| `oauth_probe.go` | ⚠️ | ⚠️ | Add `param=redirect_uri`|`state`. |
-| `oauth_session_probe.go` | ⚠️ | ⚠️ | Cookie-scoped. |
-| `password_reset_probe.go` | ⚠️ | ⚠️ | Add `param=token`. |
+| `jwt_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=jwt_probe` added. |
+| `jwt_advanced_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=jwt_advanced_probe` added via `jwtAdvancedFinding`. |
+| `login_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=login_probe` added. |
+| `magic_link_invite_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=token`, `oracleName=magic_link_invite_probe` added. |
+| `mfa_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=mfa_probe` added. |
+| `oauth_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=redirect_uri`\|`state`\|`code_challenge`, `payloadClass`, `oracleName=oauth_probe` added. |
+| `oauth_session_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=oauth_session_probe` added. |
+| `password_reset_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=token`, `oracleName=password_reset_probe` added. |
 | `postmessage_probe.go` | ➖ | ➖ | Browser observation. |
-| `reverse_tabnabbing_probe.go` | ⚠️ | ⚠️ | Add `responseShape=html`. |
-| `saml_probe.go` | ⚠️ | ⚠️ | Add `param=SAMLResponse`. |
-| `security_headers_probe.go` | ⚠️ | ⚠️ | `method=GET`. |
-| `session_lifecycle_probe.go` | ⚠️ | ⚠️ | Cookie-scoped. |
-| `smtp_injection_probe.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=smtp-crlf`. |
-| `ssi_injection_probe.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=ssi`. |
+| `reverse_tabnabbing_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `responseShape=html`, `oracleName=reverse_tabnabbing_probe` added. |
+| `saml_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=SAMLResponse`, `oracleName=saml_probe` added. |
+| `security_headers_probe.go` | ✅ | ⚠️ | Migrated: `method=GET`, `url`, `oracleName=security_headers_probe` added. |
+| `session_lifecycle_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=session_lifecycle_probe` added. |
+| `smtp_injection_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param`, `payloadClass=smtp-crlf`, `oracleName=smtp_injection_probe` added. |
+| `ssi_injection_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `payloadClass=ssi-injection`, `oracleName=ssi_injection_probe` added (had `param` already). |
 | `tls_config_probe.go` | ➖ | ➖ | Transport metadata. |
 | `ui_simulation_probe.go` | ➖ | ➖ | Browser-only. |
-| `verbose_error_probe.go` | ⚠️ | ⚠️ | Add `responseShape`. |
-| `websocket_probe.go` | ⚠️ | ⚠️ | `oracleName=websocket`. |
-| `xssi_jsonp_probe.go` | ⚠️ | ⚠️ | Add `param=callback`. |
+| `verbose_error_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param`, `responseShape` (already present), `oracleName=verbose_error_probe` added. |
+| `websocket_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=websocket_probe` added. |
+| `xssi_jsonp_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=callback`, `oracleName=xssi_jsonp_probe` added. |
 
 ## Reference migration
 

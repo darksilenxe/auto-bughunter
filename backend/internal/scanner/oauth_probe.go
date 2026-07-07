@@ -152,6 +152,8 @@ func (s *Service) RunOAuthProbe(
 						"responseStatus":      fmt.Sprintf("%d", candidateObs.status),
 						"controlStatus":       fmt.Sprintf("%d", baselines.First.Status),
 						"controlBodyVariance": fmt.Sprintf("%d", baselines.BodyByteVariance),
+						"url":                 probeURL,
+						"param":               "redirect_uri",
 					},
 				))
 			}
@@ -193,6 +195,8 @@ func (s *Service) RunOAuthProbe(
 								map[string]string{
 									"stateAbsent":    "true",
 									"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+									"url":            probeURL,
+									"param":          "state",
 								},
 							))
 						}
@@ -240,6 +244,8 @@ func (s *Service) RunOAuthProbe(
 								map[string]string{
 									"codeChallengeAbsent": "true",
 									"responseStatus":      fmt.Sprintf("%d", resp.StatusCode),
+									"url":                 probeURL,
+									"param":               "code_challenge",
 								},
 							))
 						}
@@ -418,6 +424,11 @@ func oauthFinding(
 	ef := map[string]string{
 		"validationType": "active-probe",
 		"reproStep":      "Replay the manipulated authorization request and observe whether the server rejects it",
+		"method":         http.MethodGet,
+		"url":            endpoint,
+		"payloadClass":   "oauth-flow-manipulation",
+		"oracleName":     "oauth_probe",
+		"oracleVersion":  "v1",
 	}
 	for k, v := range extra {
 		ef[k] = v
