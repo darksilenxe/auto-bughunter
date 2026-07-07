@@ -296,10 +296,10 @@ services:
 
   # DOM Invader Service (plugin) — optional sidecar scaffold for client-side
   # DOM XSS taint tracking, in the spirit of Burp Suite's DOM Invader
-  # extension. It is a starting point for your own implementation (see
-  # sidecars/dom-invader-service/README.md) and is not wired into the main
-  # scan pipeline. Gated behind the `dom-invader` compose profile so it
-  # doesn't start by default:
+  # extension. Consumed by the Proxy Suite's Plugins tab ("Run DOM Invader")
+  # via POST /api/proxy/dom-invader; it is not wired into the automated scan
+  # pipeline (see sidecars/dom-invader-service/README.md). Gated behind the
+  # `dom-invader` compose profile so it doesn't start by default:
   #   docker compose --profile dom-invader up -d dom-invader-service
   dom-invader-service:
     build:

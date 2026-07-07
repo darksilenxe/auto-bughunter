@@ -7,9 +7,13 @@ source→sink taint-tracking engine so it's useful immediately, with clear
 extension points documented in `app/main.py`.
 
 This service is intentionally standalone: it does not require the rest of
-auto-bughunter to run, and auto-bughunter does not call it automatically. Use
-it directly (e.g. `curl`, your own scripts, or wire it into the backend the
-same way other sidecars are consumed).
+auto-bughunter to run. The backend's Proxy Suite consumes it as an optional
+plugin — select a captured request in **Proxy > HTTP history**, open the
+**Plugins** tab, and click **Run DOM Invader** to analyze that request's URL
+(`POST /api/proxy/dom-invader` on the backend, which forwards to this
+service's `/v1/analyze`). It is not wired into the automated scan pipeline
+(no findings are persisted to the `Finding` model), and you can still call it
+directly (e.g. `curl`, your own scripts) for other workflows.
 
 ## What it does
 

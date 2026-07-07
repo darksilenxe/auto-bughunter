@@ -253,7 +253,6 @@ func (ps *PassiveScanStore) List() []PassiveFinding {
 	return out
 }
 
-
 // runPassiveChecks runs all passive analysis routines against a captured
 // request and returns any findings.
 func runPassiveChecks(pr *model.ProxyRequest) []model.Finding {
@@ -271,7 +270,111 @@ func runPassiveChecks(pr *model.ProxyRequest) []model.Finding {
 	findings = append(findings, passiveCheckAutocompletePassword(pr)...)
 	findings = append(findings, passiveCheckCacheableSensitive(pr)...)
 	findings = append(findings, passiveCheckReflectedOriginCORS(pr)...)
+	findings = append(findings, passiveCheckAdditionalCSRF(pr)...)
 	return findings
+}
+
+// csrfFieldNamePattern matches common anti-CSRF hidden-field/header naming
+// conventions used across frameworks (Django, Rails, ASP.NET, Spring,
+// generic "csrf_token", etc.).
+var csrfFieldNamePattern = regexp.MustCompile(`(?i)(csrf[_-]?token|_csrf|_token|authenticity_token|csrfmiddlewaretoken|requestverificationtoken|xsrf[_-]?token)`)
+
+// reHTMLFormOpenTag matches an opening <form ...> tag so its method
+// attribute and body (up to the matching </form>) can be inspected for a
+// CSRF token field.
+var reHTMLFormOpenTag = regexp.MustCompile(`(?is)<form\b[^>]*>`)
+var reFormMethodAttr = regexp.MustCompile(`(?is)\bmethod\s*=\s*["']?(get|post|put|patch|delete)["']?`)
+
+// passiveCheckAdditionalCSRF implements a small set of additional CSRF
+// checks beyond the existing SameSite cookie check ("Additional CSRF
+// Checks", à la the Burp Suite extension of the same name):
+//
+//  1. HTML forms with a state-changing method (POST/PUT/PATCH/DELETE) that
+//     contain no anti-CSRF hidden field, when the response also sets a
+//     session cookie.
+//  2. Cookie-authenticated (session-cookie-bearing) state-changing requests
+//     (POST/PUT/PATCH/DELETE) whose body/headers carry no anti-CSRF token
+//     at all — the request-side counterpart of check 1, useful for JSON
+//     APIs where there is no HTML form to inspect.
+func passiveCheckAdditionalCSRF(pr *model.ProxyRequest) []model.Finding {
+	var findings []model.Finding
+
+	// Check 1: HTML response containing state-changing forms without a
+	// visible anti-CSRF field, on a page that establishes a session cookie.
+	if hasSessionCookie(pr) && looksLikeHTML(pr.ResponseHeaders) {
+		for _, form := range reHTMLFormOpenTag.FindAllStringIndex(pr.ResponseBody, -1) {
+			openTag := pr.ResponseBody[form[0]:form[1]]
+			methodMatch := reFormMethodAttr.FindStringSubmatch(openTag)
+			if methodMatch == nil || strings.EqualFold(methodMatch[1], "get") {
+				continue // default/explicit GET forms don't need a CSRF token
+			}
+			closeIdx := strings.Index(pr.ResponseBody[form[1]:], "</form>")
+			var formBody string
+			if closeIdx >= 0 {
+				formBody = pr.ResponseBody[form[1] : form[1]+closeIdx]
+			} else {
+				formBody = pr.ResponseBody[form[1]:]
+			}
+			if !csrfFieldNamePattern.MatchString(formBody) {
+				findings = append(findings, model.Finding{
+					ID:             "proxy-csrf-form-missing-token",
+					Category:       "csrf",
+					Severity:       model.SeverityMedium,
+					Title:          "State-changing HTML form missing anti-CSRF token",
+					Description:    "A form using a state-changing HTTP method (POST/PUT/PATCH/DELETE) was found with no recognizable anti-CSRF hidden field, while the response also establishes a session cookie. This may allow a cross-site request forgery attack against the form's action.",
+					Evidence:       fmt.Sprintf("Form tag %q on %s has no csrf_token/authenticity_token/__RequestVerificationToken-style hidden field.", strings.TrimSpace(openTag), pr.URL),
+					Recommendation: "Include a unique, unpredictable, per-session (or per-request) anti-CSRF token as a hidden field in every state-changing form and validate it server-side.",
+					AffectedURL:    pr.URL,
+				})
+				break // one finding per page is sufficient signal
+			}
+		}
+	}
+
+	// Check 2: cookie-authenticated JSON/form API requests with a
+	// state-changing method and no CSRF token in body or headers.
+	if isStateChangingMethod(pr.Method) && pr.RequestHeaders[http.CanonicalHeaderKey("Cookie")] != "" {
+		hasTokenHeader := false
+		for name := range pr.RequestHeaders {
+			if csrfFieldNamePattern.MatchString(name) {
+				hasTokenHeader = true
+				break
+			}
+		}
+		if !hasTokenHeader && !csrfFieldNamePattern.MatchString(pr.RequestBody) {
+			findings = append(findings, model.Finding{
+				ID:             "proxy-csrf-request-missing-token",
+				Category:       "csrf",
+				Severity:       model.SeverityLow,
+				Title:          "Cookie-authenticated state-changing request has no anti-CSRF token",
+				Description:    "A state-changing request (POST/PUT/PATCH/DELETE) is authenticated via a Cookie header but carries no recognizable anti-CSRF token in its body or headers (e.g. X-CSRF-Token). If the endpoint relies solely on the session cookie for authorization, it may be vulnerable to CSRF.",
+				Evidence:       fmt.Sprintf("%s %s sent a Cookie header with no csrf_token/X-CSRF-Token-style value in the body or headers.", pr.Method, pr.URL),
+				Recommendation: "Require a per-session anti-CSRF token (double-submit cookie or synchronizer token) validated server-side for every cookie-authenticated state-changing request, or use SameSite=Strict/Lax cookies plus custom-header checks for JSON APIs.",
+				AffectedURL:    pr.URL,
+			})
+		}
+	}
+
+	return findings
+}
+
+func hasSessionCookie(pr *model.ProxyRequest) bool {
+	raw := pr.ResponseHeaders[http.CanonicalHeaderKey("Set-Cookie")]
+	return raw != "" && raw != "[redacted]"
+}
+
+func looksLikeHTML(headers map[string]string) bool {
+	ct := strings.ToLower(headers[http.CanonicalHeaderKey("Content-Type")])
+	return strings.Contains(ct, "html")
+}
+
+func isStateChangingMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 // passiveCheckPrivacyHeaders flags HTML responses missing Referrer-Policy
@@ -567,14 +670,14 @@ func passiveCheckHSTS(pr *model.ProxyRequest) []model.Finding {
 		return nil
 	}
 	return []model.Finding{{
-		ID:          "proxy-no-hsts",
-		Category:    "headers",
-		Severity:    model.SeverityMedium,
-		Title:       "Missing Strict-Transport-Security header",
-		Description: "The HTTPS response does not include a Strict-Transport-Security (HSTS) header. Without HSTS, browsers may be downgraded to plain HTTP.",
-		Evidence:    "Strict-Transport-Security absent from HTTPS response at " + pr.URL,
+		ID:             "proxy-no-hsts",
+		Category:       "headers",
+		Severity:       model.SeverityMedium,
+		Title:          "Missing Strict-Transport-Security header",
+		Description:    "The HTTPS response does not include a Strict-Transport-Security (HSTS) header. Without HSTS, browsers may be downgraded to plain HTTP.",
+		Evidence:       "Strict-Transport-Security absent from HTTPS response at " + pr.URL,
 		Recommendation: "Add Strict-Transport-Security: max-age=31536000; includeSubDomains to all HTTPS responses.",
-		AffectedURL: pr.URL,
+		AffectedURL:    pr.URL,
 	}}
 }
 
@@ -589,14 +692,14 @@ func passiveCheckCookies(pr *model.ProxyRequest) []model.Finding {
 	var findings []model.Finding
 	if !strings.Contains(lower, "httponly") {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-cookie-no-httponly",
-			Category:    "cookies",
-			Severity:    model.SeverityMedium,
-			Title:       "Cookie missing HttpOnly attribute",
-			Description: "One or more Set-Cookie headers lack the HttpOnly attribute, making session cookies accessible to JavaScript and increasing XSS impact.",
-			Evidence:    "Set-Cookie header without HttpOnly from " + pr.URL,
+			ID:             "proxy-cookie-no-httponly",
+			Category:       "cookies",
+			Severity:       model.SeverityMedium,
+			Title:          "Cookie missing HttpOnly attribute",
+			Description:    "One or more Set-Cookie headers lack the HttpOnly attribute, making session cookies accessible to JavaScript and increasing XSS impact.",
+			Evidence:       "Set-Cookie header without HttpOnly from " + pr.URL,
 			Recommendation: "Add HttpOnly to all session and authentication cookies.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	if strings.HasPrefix(strings.ToLower(pr.URL), "https://") {
@@ -609,27 +712,27 @@ func passiveCheckCookies(pr *model.ProxyRequest) []model.Finding {
 			lower == "secure"
 		if !hasSecure {
 			findings = append(findings, model.Finding{
-				ID:          "proxy-cookie-no-secure",
-				Category:    "cookies",
-				Severity:    model.SeverityMedium,
-				Title:       "Cookie missing Secure flag on HTTPS endpoint",
-				Description: "One or more Set-Cookie headers on this HTTPS endpoint lack the Secure attribute, allowing the cookie to be sent over plain HTTP.",
-				Evidence:    "Set-Cookie header without Secure flag from " + pr.URL,
+				ID:             "proxy-cookie-no-secure",
+				Category:       "cookies",
+				Severity:       model.SeverityMedium,
+				Title:          "Cookie missing Secure flag on HTTPS endpoint",
+				Description:    "One or more Set-Cookie headers on this HTTPS endpoint lack the Secure attribute, allowing the cookie to be sent over plain HTTP.",
+				Evidence:       "Set-Cookie header without Secure flag from " + pr.URL,
 				Recommendation: "Add the Secure attribute to all cookies served over HTTPS.",
-				AffectedURL: pr.URL,
+				AffectedURL:    pr.URL,
 			})
 		}
 	}
 	if !strings.Contains(lower, "samesite") {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-cookie-no-samesite",
-			Category:    "cookies",
-			Severity:    model.SeverityLow,
-			Title:       "Cookie missing SameSite attribute",
-			Description: "One or more Set-Cookie headers lack the SameSite attribute, leaving the cookie sent with cross-site requests by default in older browsers and increasing CSRF exposure.",
-			Evidence:    "Set-Cookie header without SameSite from " + pr.URL,
+			ID:             "proxy-cookie-no-samesite",
+			Category:       "cookies",
+			Severity:       model.SeverityLow,
+			Title:          "Cookie missing SameSite attribute",
+			Description:    "One or more Set-Cookie headers lack the SameSite attribute, leaving the cookie sent with cross-site requests by default in older browsers and increasing CSRF exposure.",
+			Evidence:       "Set-Cookie header without SameSite from " + pr.URL,
 			Recommendation: "Add SameSite=Lax (or Strict, where appropriate) to all cookies.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	return findings
@@ -653,62 +756,62 @@ func passiveCheckSecrets(pr *model.ProxyRequest) []model.Finding {
 	var findings []model.Finding
 	if rePassiveJWT.MatchString(body) {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-secret-jwt",
-			Category:    "disclosure",
-			Severity:    model.SeverityMedium,
-			Title:       "JWT token found in response body",
-			Description: "A JSON Web Token (JWT) was detected in the response body. Exposed JWTs can be replayed to impersonate users.",
-			Evidence:    "JWT pattern detected in response from " + pr.URL,
+			ID:             "proxy-secret-jwt",
+			Category:       "disclosure",
+			Severity:       model.SeverityMedium,
+			Title:          "JWT token found in response body",
+			Description:    "A JSON Web Token (JWT) was detected in the response body. Exposed JWTs can be replayed to impersonate users.",
+			Evidence:       "JWT pattern detected in response from " + pr.URL,
 			Recommendation: "Transmit JWTs only over secure channels; avoid embedding them in response bodies unnecessarily.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	if rePassiveAWSKey.MatchString(body) {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-secret-aws-key",
-			Category:    "disclosure",
-			Severity:    model.SeverityHigh,
-			Title:       "AWS access key ID found in response body",
-			Description: "An AWS access key ID (AKIA...) was detected in the response body, indicating a potential credential leak.",
-			Evidence:    "AWS key pattern detected in response from " + pr.URL,
+			ID:             "proxy-secret-aws-key",
+			Category:       "disclosure",
+			Severity:       model.SeverityHigh,
+			Title:          "AWS access key ID found in response body",
+			Description:    "An AWS access key ID (AKIA...) was detected in the response body, indicating a potential credential leak.",
+			Evidence:       "AWS key pattern detected in response from " + pr.URL,
 			Recommendation: "Rotate exposed AWS credentials immediately and audit IAM policies.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	if rePassiveGHToken.MatchString(body) {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-secret-github-token",
-			Category:    "disclosure",
-			Severity:    model.SeverityHigh,
-			Title:       "GitHub personal access token found in response body",
-			Description: "A GitHub personal access token (ghp_...) was detected in the response body.",
-			Evidence:    "GitHub token pattern detected in response from " + pr.URL,
+			ID:             "proxy-secret-github-token",
+			Category:       "disclosure",
+			Severity:       model.SeverityHigh,
+			Title:          "GitHub personal access token found in response body",
+			Description:    "A GitHub personal access token (ghp_...) was detected in the response body.",
+			Evidence:       "GitHub token pattern detected in response from " + pr.URL,
 			Recommendation: "Revoke exposed GitHub tokens immediately and audit repository access.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	if rePassivePrivKey.MatchString(body) {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-secret-private-key",
-			Category:    "disclosure",
-			Severity:    model.SeverityCritical,
-			Title:       "Private key material found in response body",
-			Description: "A private key header (RSA, EC, or OpenSSH) was detected in the response body — a severe credential exposure.",
-			Evidence:    "Private key header pattern detected in response from " + pr.URL,
+			ID:             "proxy-secret-private-key",
+			Category:       "disclosure",
+			Severity:       model.SeverityCritical,
+			Title:          "Private key material found in response body",
+			Description:    "A private key header (RSA, EC, or OpenSSH) was detected in the response body — a severe credential exposure.",
+			Evidence:       "Private key header pattern detected in response from " + pr.URL,
 			Recommendation: "Rotate the exposed key pair immediately and audit web server configuration to prevent key material from being served.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	if rePassiveGenKey.MatchString(body) {
 		findings = append(findings, model.Finding{
-			ID:          "proxy-secret-generic-key",
-			Category:    "disclosure",
-			Severity:    model.SeverityMedium,
-			Title:       "API key or access token pattern found in response body",
-			Description: "A pattern consistent with an API key or access token was detected in the response body.",
-			Evidence:    "API key/token pattern detected in response from " + pr.URL,
+			ID:             "proxy-secret-generic-key",
+			Category:       "disclosure",
+			Severity:       model.SeverityMedium,
+			Title:          "API key or access token pattern found in response body",
+			Description:    "A pattern consistent with an API key or access token was detected in the response body.",
+			Evidence:       "API key/token pattern detected in response from " + pr.URL,
 			Recommendation: "Avoid embedding API keys in responses. Rotate any exposed credentials and use a secrets manager.",
-			AffectedURL: pr.URL,
+			AffectedURL:    pr.URL,
 		})
 	}
 	return findings
