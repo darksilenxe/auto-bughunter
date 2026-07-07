@@ -270,7 +270,13 @@ func (s *Service) RunLoginProbe(
 
 // loginFinding constructs a standardized Finding for the login probe.
 func loginFinding(id, endpoint string, severity model.Severity, title, evidence, cwe string, steps []string, extra map[string]string) model.Finding {
-	ef := map[string]string{"validationType": "active-probe"}
+	ef := map[string]string{
+		"validationType": "active-probe",
+		"method":         http.MethodPost,
+		"url":            endpoint,
+		"oracleName":     "login_probe",
+		"oracleVersion":  "v1",
+	}
 	for k, v := range extra {
 		ef[k] = v
 	}
@@ -418,6 +424,10 @@ func loginTestUsernameEnumeration(ctx context.Context, s *Service, ep string, au
 				"validationType":  "active-probe",
 				"existingStatus":  fmt.Sprintf("%d", status1),
 				"syntheticStatus": fmt.Sprintf("%d", status2),
+				"method":          http.MethodPost,
+				"url":             ep,
+				"oracleName":      "login_probe",
+				"oracleVersion":   "v1",
 				"bodyDiffers":     fmt.Sprintf("%v", bodyIndicatorDiffers),
 			},
 		}
@@ -507,6 +517,10 @@ func loginTestRegistrationEnumeration(ctx context.Context, s *Service, ep string
 					"validationType": "active-probe",
 					"indicator":      ind,
 					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+					"method":         http.MethodPost,
+					"url":            ep,
+					"oracleName":     "login_probe",
+					"oracleVersion":  "v1",
 				},
 			}
 		}
@@ -600,6 +614,10 @@ func loginTestLoginCSRF(ctx context.Context, s *Service, ep string, auth model.S
 				"validationType": "active-probe",
 				"csrfTokenSent":  "false",
 				"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+				"method":         http.MethodPost,
+				"url":            ep,
+				"oracleName":     "login_probe",
+				"oracleVersion":  "v1",
 			},
 		}
 	}

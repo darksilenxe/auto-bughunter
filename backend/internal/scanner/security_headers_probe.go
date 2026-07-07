@@ -48,6 +48,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 			EvidenceFields: map[string]string{
 				"validationType": "safe-observation",
 				"reproStep":      fmt.Sprintf("GET %s and inspect response headers", input.Target),
+				"method":         http.MethodGet,
+				"url":            input.Target,
+				"oracleName":     "security_headers_probe",
+				"oracleVersion":  "v1",
 			},
 		})
 	} else {
@@ -70,6 +74,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 				EvidenceFields: map[string]string{
 					"validationType": "safe-observation",
 					"headerValue":    hsts,
+					"method":         http.MethodGet,
+					"url":            input.Target,
+					"oracleName":     "security_headers_probe",
+					"oracleVersion":  "v1",
 				},
 			})
 		}
@@ -91,6 +99,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 				EvidenceFields: map[string]string{
 					"validationType": "safe-observation",
 					"headerValue":    hsts,
+					"method":         http.MethodGet,
+					"url":            input.Target,
+					"oracleName":     "security_headers_probe",
+					"oracleVersion":  "v1",
 				},
 			})
 		}
@@ -122,6 +134,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 			EvidenceFields: map[string]string{
 				"validationType": "safe-observation",
 				"reproStep":      fmt.Sprintf("GET %s and inspect response headers", input.Target),
+				"method":         http.MethodGet,
+				"url":            input.Target,
+				"oracleName":     "security_headers_probe",
+				"oracleVersion":  "v1",
 			},
 		})
 	}
@@ -149,6 +165,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 						"validationType": "safe-observation",
 						"cookieName":     c.Name,
 						"reproStep":      fmt.Sprintf("GET %s and inspect Set-Cookie headers", input.Target),
+						"method":         http.MethodGet,
+						"url":            input.Target,
+						"oracleName":     "security_headers_probe",
+						"oracleVersion":  "v1",
 					},
 				})
 			} else if strings.EqualFold(sameSite, "none") && !c.Secure {
@@ -170,6 +190,10 @@ func (s *Service) runSecurityHeadersProbe(input RunInput, respHeader http.Header
 						"validationType": "safe-observation",
 						"cookieName":     c.Name,
 						"sameSite":       sameSite,
+						"method":         http.MethodGet,
+						"url":            input.Target,
+						"oracleName":     "security_headers_probe",
+						"oracleVersion":  "v1",
 					},
 				})
 			}

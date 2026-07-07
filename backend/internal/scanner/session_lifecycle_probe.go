@@ -151,6 +151,10 @@ func (s *Service) RunSessionLifecycleProbe(
 							"validationType":  "active-probe",
 							"preLoginCookie":  truncateString(preLoginCookie, 30),
 							"postLoginCookie": truncateString(newCookie, 30),
+							"method":          http.MethodPost,
+							"url":             ep,
+							"oracleName":      "session_lifecycle_probe",
+							"oracleVersion":   "v1",
 						},
 					}
 					findings = sessionLifecycleAppendFinding(ctx, findings, candidate, nil, func(replayCtx context.Context) (bool, string, error) {
@@ -258,6 +262,10 @@ func (s *Service) RunSessionLifecycleProbe(
 								"logoutEndpoint": logoutEP,
 								"replayEndpoint": protectedEP,
 								"replayStatus":   fmt.Sprintf("%d", resp2.StatusCode),
+								"method":         http.MethodGet,
+								"url":            protectedEP,
+								"oracleName":     "session_lifecycle_probe",
+								"oracleVersion":  "v1",
 							},
 						}
 						findings = sessionLifecycleAppendFinding(ctx, findings, candidate, nil, func(replayCtx context.Context) (bool, string, error) {
@@ -366,6 +374,10 @@ func (s *Service) RunSessionLifecycleProbe(
 									"validationType": "active-probe",
 									"passwordEP":     pwEP,
 									"replayStatus":   fmt.Sprintf("%d", resp2.StatusCode),
+									"method":         http.MethodGet,
+									"url":            protectedEP,
+									"oracleName":     "session_lifecycle_probe",
+									"oracleVersion":  "v1",
 								},
 							})
 							break
@@ -408,6 +420,10 @@ func (s *Service) RunSessionLifecycleProbe(
 					EvidenceFields: map[string]string{
 						"validationType": "active-probe",
 						"sessionCount":   "2",
+						"method":         http.MethodPost,
+						"url":            ep,
+						"oracleName":     "session_lifecycle_probe",
+						"oracleVersion":  "v1",
 					},
 				})
 			}
@@ -460,7 +476,14 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
 				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
 				BusinessTags:   []string{"cookie", "secure-flag"},
-				EvidenceFields: map[string]string{"cookieName": ck.Name, "secureFlagPresent": "false"},
+				EvidenceFields: map[string]string{
+					"cookieName":        ck.Name,
+					"secureFlagPresent": "false",
+					"method":            http.MethodGet,
+					"url":               target,
+					"oracleName":        "session_lifecycle_probe",
+					"oracleVersion":     "v1",
+				},
 			})
 		}
 
@@ -480,7 +503,14 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
 				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
 				BusinessTags:   []string{"cookie", "httponly-flag"},
-				EvidenceFields: map[string]string{"cookieName": ck.Name, "httpOnlyFlagPresent": "false"},
+				EvidenceFields: map[string]string{
+					"cookieName":          ck.Name,
+					"httpOnlyFlagPresent": "false",
+					"method":              http.MethodGet,
+					"url":                 target,
+					"oracleName":          "session_lifecycle_probe",
+					"oracleVersion":       "v1",
+				},
 			})
 		}
 
@@ -501,7 +531,14 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
 				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
 				BusinessTags:   []string{"cookie", "samesite"},
-				EvidenceFields: map[string]string{"cookieName": ck.Name, "sameSite": sameSite},
+				EvidenceFields: map[string]string{
+					"cookieName":    ck.Name,
+					"sameSite":      sameSite,
+					"method":        http.MethodGet,
+					"url":           target,
+					"oracleName":    "session_lifecycle_probe",
+					"oracleVersion": "v1",
+				},
 			})
 		}
 
@@ -521,7 +558,14 @@ func sessionAnalyzeCookieHeaders(cookies []*http.Cookie, base *url.URL, target s
 				OWASPCategory:  "A07:2021 - Identification and Authentication Failures",
 				Sources:        []string{"active-scanner", "session-lifecycle-probe"},
 				BusinessTags:   []string{"cookie", "domain-scope"},
-				EvidenceFields: map[string]string{"cookieName": ck.Name, "domain": ck.Domain},
+				EvidenceFields: map[string]string{
+					"cookieName":    ck.Name,
+					"domain":        ck.Domain,
+					"method":        http.MethodGet,
+					"url":           target,
+					"oracleName":    "session_lifecycle_probe",
+					"oracleVersion": "v1",
+				},
 			})
 		}
 	}

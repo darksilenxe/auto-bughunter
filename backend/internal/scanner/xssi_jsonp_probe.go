@@ -175,12 +175,17 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 						"Observe that the victim's sensitive data is passed to the attacker's function.",
 					},
 					EvidenceFields: map[string]string{
-						"validationType":  "active-probe",
-						"callbackParam":   cbParam,
-						"probeCallback":   probeCallback,
-						"contentType":     resp.Header.Get("Content-Type"),
-						"responseStatus":  fmt.Sprintf("%d", resp.StatusCode),
-						"responseShape":   shape.String(),
+						"validationType": "active-probe",
+						"callbackParam":  cbParam,
+						"probeCallback":  probeCallback,
+						"contentType":    resp.Header.Get("Content-Type"),
+						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+						"responseShape":  shape.String(),
+						"method":         http.MethodGet,
+						"url":            probeURL.String(),
+						"param":          cbParam,
+						"oracleName":     "xssi_jsonp_probe",
+						"oracleVersion":  "v1",
 					},
 				})
 				break // one finding per endpoint is sufficient
@@ -217,6 +222,10 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 						"contentType":    resp.Header.Get("Content-Type"),
 						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 						"responseShape":  shape.String(),
+						"method":         http.MethodGet,
+						"url":            raw,
+						"oracleName":     "xssi_jsonp_probe",
+						"oracleVersion":  "v1",
 					},
 				})
 			}
@@ -285,6 +294,10 @@ func (s *Service) runXSSIJSONPProbe(ctx context.Context, input RunInput, bodyTex
 							"contentType":    resp.Header.Get("Content-Type"),
 							"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 							"responseShape":  shape.String(),
+							"method":         http.MethodGet,
+							"url":            raw,
+							"oracleName":     "xssi_jsonp_probe",
+							"oracleVersion":  "v1",
 						},
 					})
 				}

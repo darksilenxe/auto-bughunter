@@ -286,6 +286,10 @@ func (s *Service) testJWTAlgNone(ctx context.Context, input RunInput, original s
 			"forgedToken":        truncateString(forged, 120),
 			"responseStatus":     fmt.Sprintf("%d", status),
 			"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
+			"method":             http.MethodGet,
+			"url":                input.Target,
+			"oracleName":         "jwt_probe",
+			"oracleVersion":      "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
@@ -383,6 +387,10 @@ func (s *Service) testJWTWeakSecret(ctx context.Context, input RunInput, origina
 				}(),
 				"responseStatus":     fmt.Sprintf("%d", status),
 				"authBaselineStatus": fmt.Sprintf("%d", baselines.First.Status),
+				"method":             http.MethodGet,
+				"url":                input.Target,
+				"oracleName":         "jwt_probe",
+				"oracleVersion":      "v1",
 			},
 		}
 		AttachDifferentialEvidence(&finding, diffOutcome)

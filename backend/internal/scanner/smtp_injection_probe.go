@@ -260,6 +260,11 @@ func (s *Service) runSMTPInjectionProbe(ctx context.Context, input RunInput, bod
 				EvidenceFields: map[string]string{
 					"validationType": "oast-callback",
 					"oastURL":        oastURL,
+					"method":         http.MethodPost,
+					"url":            input.Target,
+					"payloadClass":   "smtp-crlf",
+					"oracleName":     "smtp_injection_probe",
+					"oracleVersion":  "v1",
 				},
 			})
 		}
@@ -305,6 +310,12 @@ func buildSMTPFinding(ep, param, payload, matchedSig, detectionMethod, fid strin
 			"parameter":      param,
 			"payload":        payload,
 			"matchedSig":     matchedSig,
+			"method":         http.MethodPost,
+			"url":            ep,
+			"param":          param,
+			"payloadClass":   "smtp-crlf",
+			"oracleName":     "smtp_injection_probe",
+			"oracleVersion":  "v1",
 		},
 	}
 }

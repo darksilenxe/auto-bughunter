@@ -350,7 +350,13 @@ func (s *Service) RunJWTAdvancedProbe(
 
 // jwtAdvancedFinding constructs a standardized Finding for the JWT advanced probe.
 func jwtAdvancedFinding(id, endpoint string, severity model.Severity, title, evidence, cwe string, steps []string, extra map[string]string) model.Finding {
-	ef := map[string]string{"validationType": "active-probe"}
+	ef := map[string]string{
+		"validationType": "active-probe",
+		"method":         http.MethodGet,
+		"url":            endpoint,
+		"oracleName":     "jwt_advanced_probe",
+		"oracleVersion":  "v1",
+	}
 	for k, v := range extra {
 		ef[k] = v
 	}

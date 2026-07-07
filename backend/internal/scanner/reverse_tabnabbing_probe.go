@@ -100,6 +100,11 @@ func (s *Service) runReverseTabnabbingProbe(input RunInput, bodyText string) []m
 				"validationType":   "passive-analysis",
 				"vulnerableLinks":  fmt.Sprintf("%d", len(vulnerable)),
 				"exampleAnchorTag": evidenceExamples[0],
+				"method":           "GET",
+				"url":              input.Target,
+				"responseShape":    "html",
+				"oracleName":       "reverse_tabnabbing_probe",
+				"oracleVersion":    "v1",
 			},
 		},
 	}

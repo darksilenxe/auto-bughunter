@@ -230,6 +230,11 @@ func (s *Service) runSSIInjectionProbe(ctx context.Context, input RunInput, body
 						"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
 						"responseShape":     ClassifyResponseShape(respHeader).String(),
 						"reflectionContext": refCtx.String(),
+						"method":            http.MethodGet,
+						"url":               probeURL.String(),
+						"payloadClass":      "ssi-injection",
+						"oracleName":        "ssi_injection_probe",
+						"oracleVersion":     "v1",
 					},
 				}
 				AttachDifferentialEvidence(&finding, diffOutcome)
