@@ -432,6 +432,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/bypass429", s.handleProxyBypass429)
 	mux.HandleFunc("/api/proxy/activescan-plusplus", s.handleProxyActiveScanPlusPlus)
 	mux.HandleFunc("/api/proxy/anticsrf-referer", s.handleProxyAntiCSRFReferer)
+	mux.HandleFunc("/api/proxy/dom-invader", s.handleProxyDOMInvader)
 	mux.HandleFunc("/api/proxy/browse", s.handleProxyBrowse)
 	mux.HandleFunc("/api/proxy/passive-findings", s.handleProxyPassiveFindings)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)

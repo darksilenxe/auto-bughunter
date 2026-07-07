@@ -15,6 +15,7 @@ import (
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
 	"auto-bughunter/backend/internal/scope"
+	"auto-bughunter/backend/internal/toolclient"
 )
 
 // handleProxySettings returns the operator-facing configuration of the
@@ -297,6 +298,77 @@ func (s *Server) handleProxyAntiCSRFReferer(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleProxyDOMInvader runs the "DOM Invader" plugin: it replays a
+// captured request's URL (with its cookies and a subset of its headers)
+// through the optional dom-invader-service sidecar, which loads the page in
+// headless Chromium with instrumented client-side sources/sinks and reports
+// any observed taint flow (e.g. location.hash -> innerHTML), the DOM XSS
+// signal Burp Suite's "DOM Invader" extension is built around.
+//
+// The sidecar is optional (gated behind the `dom-invader` Docker Compose
+// profile); if it is not reachable this returns 503 with a hint on how to
+// enable it.
+//
+//	Body: {"requestId": "..."}
+func (s *Server) handleProxyDOMInvader(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	requestID, ok := decodeProxyRequestIDBody(w, r)
+	if !ok {
+		return
+	}
+	orig, err := s.proxyServer.Store().GetProxyRequest(r.Context(), requestID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := safety.ValidateOutboundURL(orig.URL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "blocked by outbound safety policy"})
+		return
+	}
+
+	cookies := ""
+	headers := make(map[string]string, len(orig.RequestHeaders))
+	for k, v := range orig.RequestHeaders {
+		if strings.EqualFold(k, "Cookie") {
+			cookies = v
+			continue
+		}
+		// Only forward headers that shape the response (skip hop-by-hop and
+		// connection-management headers); the sidecar's own client sets these.
+		switch strings.ToLower(k) {
+		case "host", "content-length", "connection", "proxy-connection", "proxy-authorization", "transfer-encoding":
+			continue
+		}
+		headers[k] = v
+	}
+
+	client := toolclient.NewDOMInvaderClient()
+	result, err := client.Analyze(r.Context(), toolclient.DOMInvaderAnalyzeRequest{
+		Target:  orig.URL,
+		Cookies: cookies,
+		Headers: headers,
+		Timeout: 30,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "dom-invader-service is not reachable: " + err.Error(),
+			"hint":  "enable the optional sidecar with: docker compose --profile dom-invader up -d dom-invader-service",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"requestId": requestID,
+		"result":    result,
+	})
 }
 
 // handleProxyBrowse handles GET /api/proxy/browse?url=<target-url>.

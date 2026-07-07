@@ -45,6 +45,7 @@ export default function Proxy() {
   const [bypass429Result, setBypass429Result] = useState(null);
   const [activeScanResult, setActiveScanResult] = useState(null);
   const [antiCSRFResult, setAntiCSRFResult] = useState(null);
+  const [domInvaderResult, setDomInvaderResult] = useState(null);
 
   useEffect(() => {
     loadRequests();
@@ -73,6 +74,7 @@ export default function Proxy() {
         setBypass429Result(null);
         setActiveScanResult(null);
         setAntiCSRFResult(null);
+        setDomInvaderResult(null);
       } catch (err) {
         setError(err.message || "Failed to load request detail.");
       }
@@ -213,6 +215,7 @@ export default function Proxy() {
   const runBypass429 = () => runPlugin("bypass429", "/api/proxy/bypass429", setBypass429Result);
   const runActiveScanPlusPlus = () => runPlugin("activescan", "/api/proxy/activescan-plusplus", setActiveScanResult);
   const runAntiCSRFFromReferer = () => runPlugin("anticsrf", "/api/proxy/anticsrf-referer", setAntiCSRFResult);
+  const runDomInvader = () => runPlugin("dominvader", "/api/proxy/dom-invader", setDomInvaderResult);
 
   function runDecoder(action) {
     setDecoderError("");
@@ -374,6 +377,8 @@ export default function Proxy() {
           activeScanResult={activeScanResult}
           onRunAntiCSRFFromReferer={runAntiCSRFFromReferer}
           antiCSRFResult={antiCSRFResult}
+          onRunDomInvader={runDomInvader}
+          domInvaderResult={domInvaderResult}
         />
       )}
 
@@ -636,6 +641,8 @@ function PluginsTab({
   activeScanResult,
   onRunAntiCSRFFromReferer,
   antiCSRFResult,
+  onRunDomInvader,
+  domInvaderResult,
 }) {
   if (!selected) {
     return <section className="card empty-state">Select a request from HTTP history first, then run a plugin against it.</section>;
@@ -647,7 +654,7 @@ function PluginsTab({
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
             <h2>Plugins</h2>
-            <p className="meta">Burp Suite-style extensions: 403/429 bypass batteries, Active Scan++ supplementary checks, and Anti-CSRF Token From Referer.</p>
+            <p className="meta">Burp Suite-style extensions: 403/429 bypass batteries, Active Scan++ supplementary checks, Anti-CSRF Token From Referer, and DOM Invader client-side taint tracking.</p>
           </div>
           <span className="chip chip--muted">{selected.method}</span>
         </div>
@@ -755,6 +762,74 @@ function PluginsTab({
           )
         ) : (
           <div className="empty-state" style={{ marginTop: 12 }}>Run this plugin to refresh the anti-CSRF token from the Referer page.</div>
+        )}
+      </section>
+
+      <section className="card" style={{ marginTop: 18 }}>
+        <div className="toolbar" style={{ alignItems: "flex-start" }}>
+          <div>
+            <h3 style={{ marginTop: 0 }}>DOM Invader</h3>
+            <p className="meta">
+              Loads this request's URL in a headless browser with instrumented client-side sources (location.hash,
+              document.cookie, window.name, etc.) and sinks (innerHTML, document.write, eval, etc.) and reports any
+              observed taint flow — the DOM XSS signal Burp Suite's "DOM Invader" extension is built around. Requires
+              the optional <code>dom-invader-service</code> sidecar (<code>docker compose --profile dom-invader up -d
+              dom-invader-service</code>).
+            </p>
+          </div>
+          <button type="button" onClick={onRunDomInvader} disabled={busy === "dominvader"}>
+            {busy === "dominvader" ? "Analyzing…" : "Run DOM Invader"}
+          </button>
+        </div>
+        {domInvaderResult ? (
+          <>
+            <div className="three-column-grid" style={{ marginTop: 12 }}>
+              <article className="meta-block">
+                <b>Sources tested</b>
+                <div>{(domInvaderResult.result?.sources_tested || []).length}</div>
+              </article>
+              <article className="meta-block">
+                <b>Sinks tested</b>
+                <div>{(domInvaderResult.result?.sinks_tested || []).length}</div>
+              </article>
+              <article className="meta-block">
+                <b>Taint flows found</b>
+                <div>{(domInvaderResult.result?.findings || []).length}</div>
+              </article>
+            </div>
+            {domInvaderResult.result?.error && <p className="error">{domInvaderResult.result.error}</p>}
+            {domInvaderResult.result?.timed_out && (
+              <p className="meta" style={{ color: "var(--sev-medium)" }}>Page load timed out; results may be incomplete.</p>
+            )}
+            {(domInvaderResult.result?.findings || []).length > 0 ? (
+              <div className="table-wrap" style={{ marginTop: 12, maxHeight: 320 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th>Sink</th>
+                      <th>Snippet</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {domInvaderResult.result.findings.map((f, idx) => (
+                      <tr key={idx}>
+                        <td>{f.source}</td>
+                        <td>{f.sink}</td>
+                        <td style={{ wordBreak: "break-word" }}>{f.snippet}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              !domInvaderResult.result?.error && (
+                <div className="empty-state" style={{ marginTop: 12 }}>No source→sink taint flows observed.</div>
+              )
+            )}
+          </>
+        ) : (
+          <div className="empty-state" style={{ marginTop: 12 }}>Run DOM Invader to see client-side taint-tracking results here.</div>
         )}
       </section>
     </div>
