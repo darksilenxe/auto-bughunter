@@ -31,6 +31,7 @@ import (
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/safety"
+	"auto-bughunter/backend/internal/scope"
 
 	"github.com/google/uuid"
 )
@@ -69,6 +70,8 @@ type Server struct {
 	ca           *CA
 	mu           sync.Mutex
 	passiveStore *PassiveScanStore
+	scopeMu      sync.RWMutex
+	scopeRules   model.ScanScope
 }
 
 // NewServer creates a new intercepting proxy backed by the provided Store.
@@ -116,6 +119,31 @@ func (s *Server) SetPassiveScanStore(store *PassiveScanStore) {
 // PassiveStore returns the passive scan store, or nil if none is configured.
 func (s *Server) PassiveStore() *PassiveScanStore {
 	return s.passiveStore
+}
+
+// SetScope configures which captured traffic (Target > Scope, à la Burp) is
+// persisted to HTTP history and fed to the passive scanner. Traffic is still
+// proxied/forwarded to its destination regardless of scope — only capture
+// and passive analysis are affected. An empty ScanScope (the default)
+// captures everything.
+func (s *Server) SetScope(rules model.ScanScope) {
+	s.scopeMu.Lock()
+	defer s.scopeMu.Unlock()
+	s.scopeRules = rules
+}
+
+// Scope returns the currently configured capture scope.
+func (s *Server) Scope() model.ScanScope {
+	s.scopeMu.RLock()
+	defer s.scopeMu.RUnlock()
+	return s.scopeRules
+}
+
+// InScope reports whether rawURL should be captured and passively analysed
+// under the currently configured scope. With no scope configured (the
+// default), every URL is in scope.
+func (s *Server) InScope(rawURL string) bool {
+	return scope.IsURLInScope(rawURL, s.Scope())
 }
 
 // AnalyzeResponse passively analyses a raw HTTP response and records any
@@ -214,6 +242,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseBody:    string(truncateForCapture(respBodyBytes)),
 	}
 	go func() {
+		if !s.InScope(captured.URL) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
@@ -295,6 +326,9 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		Notes:           "HTTPS CONNECT tunnel established. Configure PROXY_CA_CERT_FILE/PROXY_CA_KEY_FILE to enable TLS interception.",
 	}
 	go func() {
+		if !s.InScope(captured.URL) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)
@@ -452,6 +486,9 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 		Notes:           "captured via TLS interception",
 	}
 	go func() {
+		if !s.InScope(captured.URL) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.store.SaveProxyRequest(ctx, captured)

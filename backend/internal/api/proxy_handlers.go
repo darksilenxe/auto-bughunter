@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/proxy"
 	"auto-bughunter/backend/internal/safety"
+	"auto-bughunter/backend/internal/scope"
 )
 
 // handleProxySettings returns the operator-facing configuration of the
@@ -72,6 +75,38 @@ func (s *Server) handleProxyCACertificate(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("Content-Disposition", `attachment; filename="auto-bughunter-proxy-ca.pem"`)
 	_, _ = w.Write(pem)
+}
+
+// handleProxyScope handles GET and PUT/POST on /api/proxy/scope.
+//
+// GET returns the currently configured capture scope (Target > Scope,
+// à la Burp Suite). PUT/POST replaces it with the supplied
+// {includeHosts, excludeHosts, excludePaths, programRules} document.
+//
+// The scope controls which traffic captured by the intercepting proxy is
+// persisted to HTTP history and fed to the passive scanner — traffic outside
+// the scope is still forwarded to its destination, it just isn't recorded or
+// analysed. An empty scope (the default) captures everything.
+func (s *Server) handleProxyScope(w http.ResponseWriter, r *http.Request) {
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.proxyServer.Scope())
+	case http.MethodPut, http.MethodPost:
+		var req model.ScanScope
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body: " + err.Error()})
+			return
+		}
+		normalized := scope.Normalize("", req)
+		s.proxyServer.SetScope(normalized)
+		writeJSON(w, http.StatusOK, normalized)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 // handleProxyIntruder runs an "Intruder"-style fuzz of a captured request:

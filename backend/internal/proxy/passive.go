@@ -262,7 +262,299 @@ func runPassiveChecks(pr *model.ProxyRequest) []model.Finding {
 	findings = append(findings, passiveCheckHSTS(pr)...)
 	findings = append(findings, passiveCheckCookies(pr)...)
 	findings = append(findings, passiveCheckSecrets(pr)...)
+	findings = append(findings, passiveCheckPrivacyHeaders(pr)...)
+	findings = append(findings, passiveCheckDirectoryListing(pr)...)
+	findings = append(findings, passiveCheckVerboseErrors(pr)...)
+	findings = append(findings, passiveCheckInfoDisclosure(pr)...)
+	findings = append(findings, passiveCheckMixedContent(pr)...)
+	findings = append(findings, passiveCheckSensitiveURLParams(pr)...)
+	findings = append(findings, passiveCheckAutocompletePassword(pr)...)
+	findings = append(findings, passiveCheckCacheableSensitive(pr)...)
+	findings = append(findings, passiveCheckReflectedOriginCORS(pr)...)
 	return findings
+}
+
+// passiveCheckPrivacyHeaders flags HTML responses missing Referrer-Policy
+// and Permissions-Policy headers, both of which reduce data leakage and
+// limit access to sensitive browser APIs.
+func passiveCheckPrivacyHeaders(pr *model.ProxyRequest) []model.Finding {
+	if !isLikelyHTMLDocument(pr.ResponseHeaders, pr.ResponseBody) {
+		return nil
+	}
+	var findings []model.Finding
+	if strings.TrimSpace(headerValue(pr.ResponseHeaders, "Referrer-Policy")) == "" {
+		findings = append(findings, model.Finding{
+			ID:             "proxy-no-referrer-policy",
+			Category:       "headers",
+			Severity:       model.SeverityLow,
+			Title:          "No Referrer-Policy header",
+			Description:    "The response has no Referrer-Policy header, so the full URL (including any sensitive query parameters) may leak to third parties via the Referer header on outbound requests.",
+			Evidence:       "Referrer-Policy absent from response at " + pr.URL,
+			Recommendation: "Add Referrer-Policy: strict-origin-when-cross-origin (or stricter) to all responses.",
+			AffectedURL:    pr.URL,
+		})
+	}
+	if strings.TrimSpace(headerValue(pr.ResponseHeaders, "Permissions-Policy")) == "" {
+		findings = append(findings, model.Finding{
+			ID:             "proxy-no-permissions-policy",
+			Category:       "headers",
+			Severity:       model.SeverityLow,
+			Title:          "No Permissions-Policy header",
+			Description:    "The response has no Permissions-Policy header, leaving powerful browser features (camera, microphone, geolocation, etc.) unrestricted for embedded/third-party content.",
+			Evidence:       "Permissions-Policy absent from response at " + pr.URL,
+			Recommendation: "Add a Permissions-Policy header that disables unused browser features.",
+			AffectedURL:    pr.URL,
+		})
+	}
+	return findings
+}
+
+var reDirectoryListingTitle = regexp.MustCompile(`(?i)<title>\s*index of `)
+
+// passiveCheckDirectoryListing flags responses that look like an
+// auto-generated directory listing page (e.g. Apache/nginx "Index of /").
+func passiveCheckDirectoryListing(pr *model.ProxyRequest) []model.Finding {
+	if pr.ResponseStatus < 200 || pr.ResponseStatus >= 300 {
+		return nil
+	}
+	body := pr.ResponseBody
+	if body == "" {
+		return nil
+	}
+	if !reDirectoryListingTitle.MatchString(body) && !strings.Contains(body, "Index of /") {
+		return nil
+	}
+	return []model.Finding{{
+		ID:             "proxy-directory-listing",
+		Category:       "disclosure",
+		Severity:       model.SeverityMedium,
+		Title:          "Directory listing exposed",
+		Description:    "The server returned an auto-generated directory listing page, which can reveal file names, backups, or other unintended content.",
+		Evidence:       "Directory listing markers detected in response from " + pr.URL,
+		Recommendation: "Disable directory indexing in the web server configuration and remove any unintentionally exposed files.",
+		AffectedURL:    pr.URL,
+	}}
+}
+
+var passiveVerboseErrorPatterns = []struct {
+	pattern *regexp.Regexp
+	label   string
+}{
+	{regexp.MustCompile(`(?i)at\s+[\w.$]+\([\w.]+\.java:\d+\)`), "Java stack trace"},
+	{regexp.MustCompile(`(?i)Traceback \(most recent call last\)`), "Python traceback"},
+	{regexp.MustCompile(`(?i)Warning:\s+(mysql|pg_|mssql|oci_)\w*\(\)`), "PHP database warning"},
+	{regexp.MustCompile(`(?i)Microsoft OLE DB Provider for (ODBC|SQL Server)`), "ASP/ADO database error"},
+	{regexp.MustCompile(`(?i)System\.(NullReferenceException|Data\.SqlClient|Web\.HttpException)`), ".NET exception"},
+	{regexp.MustCompile(`(?i)org\.(springframework|hibernate)\.\w+Exception`), "Java framework exception"},
+	{regexp.MustCompile(`(?i)Fatal error:\s+Uncaught`), "PHP fatal error"},
+	{regexp.MustCompile(`(?i)ORA-\d{5}`), "Oracle database error"},
+	{regexp.MustCompile(`(?i)you have an error in your sql syntax`), "MySQL syntax error"},
+}
+
+// passiveCheckVerboseErrors flags response bodies that contain stack traces
+// or verbose database/framework error messages, which can disclose internal
+// implementation details useful to an attacker.
+func passiveCheckVerboseErrors(pr *model.ProxyRequest) []model.Finding {
+	body := pr.ResponseBody
+	if body == "" {
+		return nil
+	}
+	for _, p := range passiveVerboseErrorPatterns {
+		if p.pattern.MatchString(body) {
+			return []model.Finding{{
+				ID:             "proxy-verbose-error",
+				Category:       "disclosure",
+				Severity:       model.SeverityMedium,
+				Title:          "Verbose error/stack trace disclosed",
+				Description:    fmt.Sprintf("The response body contains what looks like a %s, which can reveal internal file paths, framework versions, or query structure to an attacker.", p.label),
+				Evidence:       fmt.Sprintf("%s pattern detected in response from %s", p.label, pr.URL),
+				Recommendation: "Disable verbose/debug error output in production and return generic error pages instead.",
+				AffectedURL:    pr.URL,
+			}}
+		}
+	}
+	return nil
+}
+
+var (
+	rePassiveInternalIP = regexp.MustCompile(`\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b`)
+	rePassiveEmail      = regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)
+)
+
+// passiveCheckInfoDisclosure flags response bodies containing internal
+// (RFC 1918) IP addresses, which can aid network reconnaissance.
+func passiveCheckInfoDisclosure(pr *model.ProxyRequest) []model.Finding {
+	body := pr.ResponseBody
+	if body == "" {
+		return nil
+	}
+	if !rePassiveInternalIP.MatchString(body) {
+		return nil
+	}
+	return []model.Finding{{
+		ID:             "proxy-internal-ip-disclosure",
+		Category:       "disclosure",
+		Severity:       model.SeverityLow,
+		Title:          "Internal IP address disclosed",
+		Description:    "The response body contains a private (RFC 1918) IP address, which can help an attacker map internal network topology.",
+		Evidence:       "Internal IP address pattern detected in response from " + pr.URL,
+		Recommendation: "Avoid exposing internal network addresses in client-facing responses.",
+		AffectedURL:    pr.URL,
+	}}
+}
+
+// passiveCheckMixedContent flags HTTPS pages that reference plain-HTTP
+// subresources, which browsers may block or downgrade and which expose
+// those subresources to network tampering.
+func passiveCheckMixedContent(pr *model.ProxyRequest) []model.Finding {
+	if !strings.HasPrefix(strings.ToLower(pr.URL), "https://") {
+		return nil
+	}
+	if !isLikelyHTMLDocument(pr.ResponseHeaders, pr.ResponseBody) {
+		return nil
+	}
+	body := pr.ResponseBody
+	if body == "" {
+		return nil
+	}
+	if !reMixedContentRef.MatchString(body) {
+		return nil
+	}
+	return []model.Finding{{
+		ID:             "proxy-mixed-content",
+		Category:       "transport",
+		Severity:       model.SeverityLow,
+		Title:          "Mixed content: HTTPS page loads HTTP subresources",
+		Description:    "An HTTPS page references one or more subresources over plain HTTP (src/href=\"http://...\"), which can be intercepted or modified by a network attacker.",
+		Evidence:       "http:// subresource reference detected in HTTPS response from " + pr.URL,
+		Recommendation: "Serve all subresources over HTTPS, or use protocol-relative/relative URLs.",
+		AffectedURL:    pr.URL,
+	}}
+}
+
+var reMixedContentRef = regexp.MustCompile(`(?i)(?:src|href)\s*=\s*["']http://[^"']+["']`)
+
+var sensitiveURLParamNames = []string{
+	"password", "passwd", "pwd", "token", "access_token", "accesstoken",
+	"api_key", "apikey", "secret", "session_id", "sessionid", "sid",
+	"auth", "jwt",
+}
+
+// passiveCheckSensitiveURLParams flags requests carrying apparently
+// sensitive values (passwords, tokens, session IDs) in the URL query
+// string, since URLs are commonly logged and cached by proxies, browsers,
+// and servers.
+func passiveCheckSensitiveURLParams(pr *model.ProxyRequest) []model.Finding {
+	u, err := url.Parse(strings.TrimSpace(pr.URL))
+	if err != nil || u.RawQuery == "" {
+		return nil
+	}
+	query := u.Query()
+	for name := range query {
+		lower := strings.ToLower(name)
+		for _, sensitive := range sensitiveURLParamNames {
+			if strings.Contains(lower, sensitive) {
+				return []model.Finding{{
+					ID:             "proxy-sensitive-data-in-url",
+					Category:       "disclosure",
+					Severity:       model.SeverityMedium,
+					Title:          "Sensitive data passed in URL query string",
+					Description:    fmt.Sprintf("The request URL includes a query parameter (%q) whose name suggests it carries a sensitive value such as a password, token, or session identifier. Query strings are commonly logged in server/proxy access logs, browser history, and Referer headers.", name),
+					Evidence:       fmt.Sprintf("Sensitive-looking parameter %q found in URL %s", name, pr.URL),
+					Recommendation: "Send sensitive values in the request body or headers instead of the URL query string.",
+					AffectedURL:    pr.URL,
+				}}
+			}
+		}
+	}
+	return nil
+}
+
+var rePasswordInputNoAutocompleteOff = regexp.MustCompile(`(?i)<input\b[^>]*type\s*=\s*["']password["'][^>]*>`)
+
+// passiveCheckAutocompletePassword flags HTML password input fields that do
+// not explicitly disable autocomplete, which can leave credentials cached
+// in the browser on shared machines.
+func passiveCheckAutocompletePassword(pr *model.ProxyRequest) []model.Finding {
+	if !isLikelyHTMLDocument(pr.ResponseHeaders, pr.ResponseBody) {
+		return nil
+	}
+	body := pr.ResponseBody
+	matches := rePasswordInputNoAutocompleteOff.FindAllString(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	for _, m := range matches {
+		lower := strings.ToLower(m)
+		if !strings.Contains(lower, `autocomplete="off"`) && !strings.Contains(lower, `autocomplete='off'`) &&
+			!strings.Contains(lower, `autocomplete="new-password"`) && !strings.Contains(lower, `autocomplete='new-password'`) {
+			return []model.Finding{{
+				ID:             "proxy-password-autocomplete-enabled",
+				Category:       "form",
+				Severity:       model.SeverityLow,
+				Title:          "Password field allows browser autocomplete",
+				Description:    "A password <input> field does not set autocomplete=\"off\"/\"new-password\", allowing browsers to store and auto-fill the credential, which is risky on shared or public computers.",
+				Evidence:       "Password input without autocomplete restriction detected in response from " + pr.URL,
+				Recommendation: "Add autocomplete=\"new-password\" (or \"off\") to password input fields on sensitive forms.",
+				AffectedURL:    pr.URL,
+			}}
+		}
+	}
+	return nil
+}
+
+// passiveCheckCacheableSensitive flags HTTPS responses that set a session
+// cookie but do not forbid caching, meaning shared/intermediate caches or
+// the local browser disk cache could retain a page containing session
+// state.
+func passiveCheckCacheableSensitive(pr *model.ProxyRequest) []model.Finding {
+	setCookie := pr.ResponseHeaders[http.CanonicalHeaderKey("Set-Cookie")]
+	if setCookie == "" || setCookie == "[redacted]" {
+		return nil
+	}
+	cacheControl := strings.ToLower(headerValue(pr.ResponseHeaders, "Cache-Control"))
+	if strings.Contains(cacheControl, "no-store") || strings.Contains(cacheControl, "private") {
+		return nil
+	}
+	return []model.Finding{{
+		ID:             "proxy-cacheable-set-cookie-response",
+		Category:       "headers",
+		Severity:       model.SeverityLow,
+		Title:          "Cacheable response sets a cookie",
+		Description:    "The response sets a cookie but does not include Cache-Control: no-store or private, so shared caches or the browser disk cache could retain a response containing session-related data.",
+		Evidence:       "Set-Cookie present without a restrictive Cache-Control directive on response from " + pr.URL,
+		Recommendation: "Add Cache-Control: no-store (or at least private) to any response that sets or depends on session cookies.",
+		AffectedURL:    pr.URL,
+	}}
+}
+
+// passiveCheckReflectedOriginCORS flags responses where
+// Access-Control-Allow-Origin reflects the request's Origin header (rather
+// than a fixed allow-list) while Access-Control-Allow-Credentials is true,
+// which effectively allows any origin to make credentialed requests.
+func passiveCheckReflectedOriginCORS(pr *model.ProxyRequest) []model.Finding {
+	acao := headerValue(pr.ResponseHeaders, "Access-Control-Allow-Origin")
+	acac := headerValue(pr.ResponseHeaders, "Access-Control-Allow-Credentials")
+	origin := strings.TrimSpace(headerValue(pr.RequestHeaders, "Origin"))
+	if acao == "" || origin == "" || acao == "*" {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(acac), "true") {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(acao), origin) {
+		return nil
+	}
+	return []model.Finding{{
+		ID:             "proxy-cors-reflected-origin-creds",
+		Category:       "cors",
+		Severity:       model.SeverityHigh,
+		Title:          "CORS reflects request Origin with credentials allowed",
+		Description:    "Access-Control-Allow-Origin echoes back the request's Origin header verbatim and Access-Control-Allow-Credentials is true, effectively allowing any origin to make credentialed cross-site requests and read the response.",
+		Evidence:       fmt.Sprintf("Request Origin %q reflected in Access-Control-Allow-Origin with credentials=true (from %s)", origin, pr.URL),
+		Recommendation: "Validate the Origin header against an explicit allow-list before reflecting it, and avoid combining reflected origins with Access-Control-Allow-Credentials: true.",
+		AffectedURL:    pr.URL,
+	}}
 }
 
 // passiveCheckHSTS flags HTTPS responses that are missing the
@@ -327,6 +619,18 @@ func passiveCheckCookies(pr *model.ProxyRequest) []model.Finding {
 				AffectedURL: pr.URL,
 			})
 		}
+	}
+	if !strings.Contains(lower, "samesite") {
+		findings = append(findings, model.Finding{
+			ID:          "proxy-cookie-no-samesite",
+			Category:    "cookies",
+			Severity:    model.SeverityLow,
+			Title:       "Cookie missing SameSite attribute",
+			Description: "One or more Set-Cookie headers lack the SameSite attribute, leaving the cookie sent with cross-site requests by default in older browsers and increasing CSRF exposure.",
+			Evidence:    "Set-Cookie header without SameSite from " + pr.URL,
+			Recommendation: "Add SameSite=Lax (or Strict, where appropriate) to all cookies.",
+			AffectedURL: pr.URL,
+		})
 	}
 	return findings
 }
