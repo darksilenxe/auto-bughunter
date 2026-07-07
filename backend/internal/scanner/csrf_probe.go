@@ -372,6 +372,8 @@ func buildCSRFFinding(input RunInput, w csrfAttempt, unauthStatus int, baselines
 		BusinessTags:      []string{"csrf", "authentication", "session"},
 		EvidenceFields: map[string]string{
 			"validationType":                "active-probe",
+			"method":                        w.candidate.method,
+			"url":                           w.candidate.url,
 			"httpMethod":                    w.candidate.method,
 			"contentType":                   w.recipe.contentType,
 			"tokenCarrierTested":            w.recipe.tokenCarrier,
@@ -382,6 +384,8 @@ func buildCSRFFinding(input RunInput, w csrfAttempt, unauthStatus int, baselines
 			"reVerifiedRuns":                fmt.Sprintf("%d", 2),
 			"responseStatus":                fmt.Sprintf("%d", w.status),
 			"curlReproducer":                curl,
+			"oracleName":                    "csrf_probe",
+			"oracleVersion":                 "v1",
 		},
 	}
 }

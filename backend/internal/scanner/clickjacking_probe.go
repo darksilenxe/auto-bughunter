@@ -66,7 +66,11 @@ func (s *Service) runClickjackingProbe(input RunInput, respHeader http.Header) [
 			"validationType": "safe-observation",
 			"xFrameOptions":  respHeader.Get("X-Frame-Options"),
 			"csp":            respHeader.Get("Content-Security-Policy"),
+			"method":         http.MethodGet,
+			"url":            input.Target,
 			"responseShape":  ClassifyResponseShape(respHeader).String(),
+			"oracleName":     "clickjacking_probe",
+			"oracleVersion":  "v1",
 		},
 	}
 	if baselineSummary != "" {

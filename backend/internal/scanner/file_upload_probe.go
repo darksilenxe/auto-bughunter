@@ -228,6 +228,10 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 					},
 					EvidenceFields: map[string]string{
 						"validationType": "active-probe",
+						"method":         http.MethodPost,
+						"url":            ep,
+						"param":          fieldName,
+						"payloadClass":   "upload-bypass",
 						"probeLabel":     probe.label,
 						"fieldName":      fieldName,
 						"filename":       probe.filename,
@@ -235,6 +239,8 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 						"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 						"executed":       assessment.Executed,
 						"responseShape":  ClassifyResponseShape(resp.Header).String(),
+						"oracleName":     "file_upload_probe",
+						"oracleVersion":  "v1",
 					},
 				}
 				AttachDifferentialEvidence(&finding, diffOutcome)

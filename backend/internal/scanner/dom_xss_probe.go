@@ -221,6 +221,9 @@ func (s *Service) RunDOMXSSProbe(
 				BusinessTags: []string{"dom-xss", "client-side", "input-validation"},
 				EvidenceFields: map[string]string{
 					"validationType":    "active-probe",
+					"method":            http.MethodGet,
+					"url":               targetURL,
+					"payloadClass":      "dom-xss",
 					"domSource":         payload.source,
 					"markerInTitle":     fmt.Sprintf("%t", markerInTitle),
 					"markerInBody":      fmt.Sprintf("%t", markerInBody),
@@ -228,6 +231,8 @@ func (s *Service) RunDOMXSSProbe(
 					"targetURL":         targetURL,
 					"responseShape":     bl.shape.String(),
 					"reflectionContext": reflectionCtx.String(),
+					"oracleName":        "dom_xss_probe",
+					"oracleVersion":     "v1",
 				},
 			}
 
