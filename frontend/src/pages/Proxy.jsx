@@ -8,6 +8,7 @@ const TABS = [
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
   { id: "decoder", label: "Decoder" },
+  { id: "scope", label: "Scope" },
   { id: "configure", label: "Configure browser" },
 ];
 
@@ -336,6 +337,8 @@ export default function Proxy() {
         />
       )}
 
+      {tab === "scope" && <ScopeTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} />}
+
       {tab === "configure" && <ConfigureTab settings={settings} />}
     </div>
   );
@@ -657,6 +660,171 @@ function DecoderTab({ input, output, error, setInput, setOutput, onTransform, on
         </section>
       </div>
     </>
+  );
+}
+
+function ScopeTab({ apiBase, apiKey, workspaceId }) {
+  const [includeHosts, setIncludeHosts] = useState("");
+  const [excludeHosts, setExcludeHosts] = useState("");
+  const [excludePaths, setExcludePaths] = useState("");
+  const [programRules, setProgramRules] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const headers = { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId };
+
+  useEffect(() => {
+    loadScope();
+  }, []);
+
+  async function loadScope() {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${apiBase}/api/proxy/scope`, { headers });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to load proxy scope.");
+        return;
+      }
+      setIncludeHosts((data.includeHosts || []).join(", "));
+      setExcludeHosts((data.excludeHosts || []).join(", "));
+      setExcludePaths((data.excludePaths || []).join(", "));
+      setProgramRules((data.programRules || []).join("\n"));
+    } catch (err) {
+      setError(err.message || "Failed to load proxy scope.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveScope() {
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      const res = await fetch(`${apiBase}/api/proxy/scope`, {
+        method: "PUT",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          includeHosts: includeHosts ? includeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
+          excludeHosts: excludeHosts ? excludeHosts.split(",").map((h) => h.trim()).filter(Boolean) : [],
+          excludePaths: excludePaths ? excludePaths.split(",").map((h) => h.trim()).filter(Boolean) : [],
+          programRules: programRules ? programRules.split(/\r?\n/).map((h) => h.trim()).filter(Boolean) : [],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to save proxy scope.");
+        return;
+      }
+      setIncludeHosts((data.includeHosts || []).join(", "));
+      setExcludeHosts((data.excludeHosts || []).join(", "));
+      setExcludePaths((data.excludePaths || []).join(", "));
+      setProgramRules((data.programRules || []).join("\n"));
+      setSaved(true);
+    } catch (err) {
+      setError(err.message || "Failed to save proxy scope.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearScope() {
+    if (!window.confirm("Reset proxy scope to capture everything?")) return;
+    setIncludeHosts("");
+    setExcludeHosts("");
+    setExcludePaths("");
+    setProgramRules("");
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      const res = await fetch(`${apiBase}/api/proxy/scope`, {
+        method: "PUT",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ includeHosts: [], excludeHosts: [], excludePaths: [], programRules: [] }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to reset proxy scope.");
+        return;
+      }
+      setSaved(true);
+    } catch (err) {
+      setError(err.message || "Failed to reset proxy scope.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <div>
+          <h2 style={{ marginBottom: 2 }}>Proxy scope</h2>
+          <p className="meta" style={{ marginBottom: 0 }}>
+            Restrict which traffic captured by the intercepting proxy is retained in HTTP history and fed to
+            the passive scanner. Out-of-scope traffic is still forwarded to its destination — it just isn't
+            logged or analysed. Leave everything blank to capture all traffic (default).
+          </p>
+        </div>
+        <button type="button" className="button-secondary" onClick={loadScope} disabled={loading}>
+          {loading ? "Refreshing…" : "↺ Refresh"}
+        </button>
+      </div>
+
+      {error && <p className="error" style={{ marginBottom: 12 }}>{error}</p>}
+      {saved && !error && <p className="meta" style={{ marginBottom: 12, color: "var(--success, #2e7d32)" }}>Scope saved.</p>}
+
+      <div className="form-grid">
+        <label>
+          Include hosts
+          <input
+            value={includeHosts}
+            onChange={(e) => setIncludeHosts(e.target.value)}
+            placeholder="example.com, *.example.com"
+          />
+        </label>
+        <label>
+          Exclude hosts
+          <input
+            value={excludeHosts}
+            onChange={(e) => setExcludeHosts(e.target.value)}
+            placeholder="login.microsoftonline.com, *.auth0.com"
+          />
+        </label>
+        <label>
+          Exclude paths
+          <input
+            value={excludePaths}
+            onChange={(e) => setExcludePaths(e.target.value)}
+            placeholder="/logout, /admin"
+          />
+        </label>
+      </div>
+
+      <label>
+        Program rules (one per line, for reference/reporting)
+        <textarea
+          rows={3}
+          value={programRules}
+          onChange={(e) => setProgramRules(e.target.value)}
+          placeholder={"in_scope: example.com\nno_dos_testing"}
+        />
+      </label>
+
+      <div className="button-row" style={{ marginTop: 14 }}>
+        <button type="button" onClick={saveScope} disabled={saving}>
+          {saving ? "Saving…" : "Save scope"}
+        </button>
+        <button type="button" className="button-danger" onClick={clearScope} disabled={saving}>
+          Reset to capture everything
+        </button>
+      </div>
+    </section>
   );
 }
 
