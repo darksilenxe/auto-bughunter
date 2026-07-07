@@ -32,7 +32,9 @@ whose `evidenceQuality` is `"incomplete"` when strict mode is on.
 ## Audit table
 
 Snapshot generated 2026-07-01. Batch 1 (first 10 ⚠️ rows: `active_cors.go`
-through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04.
+through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04. Batch 2
+(next 10 ⚠️ rows: `active_xpath_injection.go` through
+`http_methods_probe.go`) migrated to `schema` ✅ on 2026-07-07.
 
 | Probe file | schema | stamp | Notes |
 | --- | :---: | :---: | --- |
@@ -46,22 +48,22 @@ through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04.
 | `active_prototype_pollution.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=proto-pollution` added. |
 | `active_sqli.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=sqli-error` added. |
 | `active_ssti.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=ssti` added. |
-| `active_xpath_injection.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=xpath-injection`. |
-| `active_xss.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=xss-reflected`, `reflectionContext`. |
-| `active_xxe.go` | ⚠️ | ⚠️ | Add `payloadClass=xxe`, `responseShape=xml`. |
+| `active_xpath_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=xpath-injection` added. |
+| `active_xss.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=xss-reflected`, `reflectionContext` added. |
+| `active_xxe.go` | ✅ | ⚠️ | Migrated: `payloadClass=xxe`, `responseShape=xml` added. |
 | `browser_storage_probe.go` | ➖ | ➖ | Browser observation. |
-| `clickjacking_probe.go` | ⚠️ | ⚠️ | Add `responseShape=html`. |
+| `clickjacking_probe.go` | ✅ | ⚠️ | Migrated: `responseShape=html` added. |
 | `cloud_storage_probe.go` | ➖ | ➖ | Bucket enum. |
-| `command_injection_probe.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=cmd-injection`. |
+| `command_injection_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=cmd-injection` added. |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | Fixed file. |
-| `csrf_probe.go` | ⚠️ | ⚠️ | Add `method`. |
+| `csrf_probe.go` | ✅ | ⚠️ | Migrated: `method` added. |
 | `dangling_markup.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
-| `deserialization_probe.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=deserialization`. |
+| `deserialization_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=deserialization` added. |
 | `dns_san_probe.go` | ➖ | ➖ | Certificate metadata. |
-| `dom_xss_probe.go` | ⚠️ | ⚠️ | Add `payloadClass=dom-xss`. |
-| `file_upload_probe.go` | ⚠️ | ⚠️ | Add `param`, `payloadClass=upload-bypass`. |
+| `dom_xss_probe.go` | ✅ | ⚠️ | Migrated: `payloadClass=dom-xss` added. |
+| `file_upload_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=upload-bypass` added. |
 | `formula_injection.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
-| `http_methods_probe.go` | ⚠️ | ⚠️ | Add `method` from allowed set. |
+| `http_methods_probe.go` | ✅ | ⚠️ | Migrated: `method` added from allowed/overridden verb set. |
 | `jwt_probe.go` | ⚠️ | ⚠️ | `oracleName=jwt`. |
 | `jwt_advanced_probe.go` | ⚠️ | ⚠️ | `oracleName=jwt`. |
 | `login_probe.go` | ⚠️ | ⚠️ | Add `param`. |

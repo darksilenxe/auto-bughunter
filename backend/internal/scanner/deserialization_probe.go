@@ -213,11 +213,17 @@ func (s *Service) RunDeserializationProbe(
 				BusinessTags: []string{"deserialization", "rce", lang},
 				EvidenceFields: map[string]string{
 					"validationType": "active-probe",
+					"method":         http.MethodPost,
+					"url":            ep,
+					"param":          "body",
+					"payloadClass":   "deserialization",
 					"language":       lang,
 					"indicator":      indicator,
 					"probeLabel":     probe.label,
 					"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
 					"responseShape":  ClassifyResponseShape(respHeader).String(),
+					"oracleName":     "deserialization_probe",
+					"oracleVersion":  "v1",
 				},
 			}
 			AttachDifferentialEvidence(&finding, diffOutcome)
@@ -265,8 +271,14 @@ func (s *Service) RunDeserializationProbe(
 							Sources:       []string{"active-scanner", "deserialization-probe"},
 							EvidenceFields: map[string]string{
 								"validationType": "safe-observation",
+								"method":         http.MethodGet,
+								"url":            ep,
+								"param":          "body",
+								"payloadClass":   "deserialization",
 								"language":       lang,
 								"indicator":      indicator,
+								"oracleName":     "deserialization_probe",
+								"oracleVersion":  "v1",
 							},
 						})
 					}

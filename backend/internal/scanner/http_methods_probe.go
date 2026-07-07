@@ -201,8 +201,11 @@ func (s *Service) probeOptionsMethod(ctx context.Context, target string, input R
 			},
 			EvidenceFields: map[string]string{
 				"validationType": "active-probe",
+				"url":            target,
 				"method":         method,
 				"allowHeader":    allowed,
+				"oracleName":     "http_methods_probe",
+				"oracleVersion":  "v1",
 			},
 		}
 		emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
@@ -291,8 +294,12 @@ func (s *Service) probeTraceMethod(ctx context.Context, target string, input Run
 		},
 		EvidenceFields: map[string]string{
 			"validationType": "active-probe",
+			"url":            target,
+			"method":         http.MethodTrace,
 			"traceMarker":    traceMarkerValue,
 			"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
+			"oracleName":     "http_methods_probe",
+			"oracleVersion":  "v1",
 		},
 	}
 	emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {
@@ -396,9 +403,13 @@ func (s *Service) probeVerbOverride(ctx context.Context, target string, input Ru
 				},
 				EvidenceFields: map[string]string{
 					"validationType": "active-probe",
+					"url":            target,
+					"method":         http.MethodDelete,
 					"overrideHeader": overrideHeader,
 					"baseStatus":     fmt.Sprintf("%d", baseStatus),
 					"overrideStatus": fmt.Sprintf("%d", resp.StatusCode),
+					"oracleName":     "http_methods_probe",
+					"oracleVersion":  "v1",
 				},
 			}
 			emitted, ok := s.submitHTTPMethodsFinding(ctx, finding, func(rctx context.Context) (bool, string, error) {

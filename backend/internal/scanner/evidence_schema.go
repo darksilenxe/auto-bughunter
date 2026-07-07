@@ -49,7 +49,7 @@ func (e *EvidenceValidationError) Error() string {
 // evidenceCategoryRequirements maps a finding category to the set of
 // EvidenceRecord fields that must be non-empty for the record to count
 // as valid. Categories not listed fall back to the minimum
-// "url + method + oracleName" requirement.
+// "url + method" requirement.
 //
 // Kept intentionally small — the goal is that a normalized record is
 // self-describing enough for downstream consumers, not that every
@@ -58,17 +58,24 @@ var evidenceCategoryRequirements = map[string][]string{
 	"xss":                 {"url", "param", "payloadClass", "reflectionContext"},
 	"sqli":                {"url", "param", "payloadClass"},
 	"ssrf":                {"url", "param", "payloadClass"},
+	"xpath-injection":     {"url", "param", "payloadClass"},
+	"xpath_injection":     {"url", "param", "payloadClass"},
 	"open-redirect":       {"url", "param", "payloadClass"},
 	"open_redirect":       {"url", "param", "payloadClass"},
 	"path-traversal":      {"url", "param", "payloadClass"},
 	"path_traversal":      {"url", "param", "payloadClass"},
 	"command-injection":   {"url", "param", "payloadClass"},
 	"command_injection":   {"url", "param", "payloadClass"},
+	"deserialization":     {"url", "param", "payloadClass"},
+	"dom-xss":             {"url", "payloadClass", "reflectionContext"},
+	"dom_xss":             {"url", "payloadClass", "reflectionContext"},
 	"ssti":                {"url", "param", "payloadClass"},
 	"xxe":                 {"url", "payloadClass", "responseShape"},
 	"cors":                {"url", "responseShape"},
 	"clickjacking":        {"url", "responseShape"},
 	"csrf":                {"url", "method"},
+	"http-methods":        {"url", "method"},
+	"http_methods":        {"url", "method"},
 	"prototype-pollution": {"url", "param", "payloadClass"},
 	"prototype_pollution": {"url", "param", "payloadClass"},
 	"crlf":                {"url", "param", "payloadClass"},
@@ -77,6 +84,9 @@ var evidenceCategoryRequirements = map[string][]string{
 	"formula_injection":   {"url", "param", "payloadClass"},
 	"dangling-markup":     {"url", "param", "reflectionContext"},
 	"dangling_markup":     {"url", "param", "reflectionContext"},
+	"upload-bypass":       {"url", "param", "payloadClass"},
+	"file-upload":         {"url", "param", "payloadClass"},
+	"file_upload":         {"url", "param", "payloadClass"},
 }
 
 // Validate returns nil when the record satisfies the category's

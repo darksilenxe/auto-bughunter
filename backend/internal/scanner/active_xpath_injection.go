@@ -131,7 +131,13 @@ doneProbes:
 			"payload":        first.payload,
 			"signature":      first.signature,
 			"curlReproducer": curl,
+			"method":         http.MethodGet,
+			"url":            first.url,
+			"param":          first.param,
+			"payloadClass":   "xpath-injection",
 			"responseShape":  ClassifyResponseShape(first.header).String(),
+			"oracleName":     "active_xpath_injection",
+			"oracleVersion":  "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

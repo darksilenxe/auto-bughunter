@@ -368,7 +368,12 @@ func (s *Service) runActiveXXEProbe(ctx context.Context, input RunInput, body st
 			"evidenceDetail": first.evidence,
 			"reproStep":      "POST the XXE payload with Content-Type: application/xml and observe file content or OAST callback",
 			"curlReproducer": curl,
+			"method":         http.MethodPost,
+			"url":            first.url,
+			"payloadClass":   "xxe",
 			"responseShape":  ClassifyResponseShape(first.header).String(),
+			"oracleName":     "active_xxe",
+			"oracleVersion":  "v1",
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)

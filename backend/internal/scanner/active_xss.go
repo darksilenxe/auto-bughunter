@@ -326,7 +326,13 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 			"validationType":    "active-probe",
 			"reproStep":         "Replay the listed URL and confirm the marker appears unescaped in the HTML body",
 			"curlReproducer":    curl,
+			"method":            http.MethodGet,
+			"url":               first.url,
+			"param":             first.param,
+			"payloadClass":      "xss-reflected",
 			"reflectionContext": first.context.String(),
+			"oracleName":        "active_xss",
+			"oracleVersion":     "v1",
 		},
 	}
 
