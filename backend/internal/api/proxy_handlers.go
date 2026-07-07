@@ -175,6 +175,130 @@ func (s *Server) handleProxyIntruder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// decodeProxyRequestIDBody decodes a {"requestId": "..."} JSON body, common
+// to all of the single-request plugin endpoints below.
+func decodeProxyRequestIDBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var req struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return "", false
+	}
+	requestID := strings.TrimSpace(req.RequestID)
+	if requestID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "requestId is required"})
+		return "", false
+	}
+	return requestID, true
+}
+
+// handleProxyBypass403 runs the "403 Bypasser" plugin: it replays a captured
+// request that originally received a 401/403 response using a battery of
+// path-manipulation and spoofed-origin-header bypass techniques.
+//
+//	Body: {"requestId": "..."}
+func (s *Server) handleProxyBypass403(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	requestID, ok := decodeProxyRequestIDBody(w, r)
+	if !ok {
+		return
+	}
+	result, err := proxy.RunBypass403(r.Context(), s.proxyServer, requestID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleProxyBypass429 runs the "429 Bypasser" plugin: it replays a captured
+// request that originally received a 429 (Too Many Requests) response using
+// a battery of spoofed client-identity headers.
+//
+//	Body: {"requestId": "..."}
+func (s *Server) handleProxyBypass429(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	requestID, ok := decodeProxyRequestIDBody(w, r)
+	if !ok {
+		return
+	}
+	result, err := proxy.RunBypass429(r.Context(), s.proxyServer, requestID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleProxyActiveScanPlusPlus runs the "Active Scan++" plugin: a battery
+// of supplementary active checks (suspicious input transformation, backup
+// file disclosure, HTTP TRACE/XST, Host header injection) against a
+// captured request's endpoint.
+//
+//	Body: {"requestId": "..."}
+func (s *Server) handleProxyActiveScanPlusPlus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	requestID, ok := decodeProxyRequestIDBody(w, r)
+	if !ok {
+		return
+	}
+	result, err := proxy.RunActiveScanPlusPlus(r.Context(), s.proxyServer, requestID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleProxyAntiCSRFReferer runs the "Anti-CSRF Token From Referer"
+// plugin: it fetches the page named by the captured request's Referer
+// header, extracts a CSRF token from that page, injects it into the
+// original request, and replays it.
+//
+//	Body: {"requestId": "..."}
+func (s *Server) handleProxyAntiCSRFReferer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.proxyServer == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "proxy is not configured"})
+		return
+	}
+	requestID, ok := decodeProxyRequestIDBody(w, r)
+	if !ok {
+		return
+	}
+	result, err := proxy.RunAntiCSRFFromReferer(r.Context(), s.proxyServer, requestID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // handleProxyBrowse handles GET /api/proxy/browse?url=<target-url>.
 //
 // It fetches the requested URL using the proxy's recording transport so the
