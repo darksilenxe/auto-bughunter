@@ -288,23 +288,69 @@ func ValidateWithPolicy(spec CommandSpec, target string, policy ValidationPolicy
 		}
 	}
 
-	// Ensure the target hostname appears in at least one argument when the
-	// command is expected to make network requests.
+	// Ensure network tools are constrained to the authorised target host.
 	if isNetworkTool(binLower) && target != "" {
-		tHost := extractHost(target)
-		found := false
-		for _, arg := range spec.Args {
-			if tHost != "" && strings.Contains(arg, tHost) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("no argument references the scan target %q; commands must target the authorised host", tHost)
+		if err := validateNetworkTargetScope(spec.Args, target); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func validateNetworkTargetScope(args []string, target string) error {
+	tHost := strings.ToLower(strings.TrimSpace(extractHost(target)))
+	if tHost == "" {
+		return fmt.Errorf("empty scan target host")
+	}
+	foundTarget := false
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		if u, ok := parseURLArgument(trimmed); ok {
+			if u.User != nil {
+				return fmt.Errorf("url argument %q uses userinfo, which is not allowed", arg)
+			}
+			argHost := strings.ToLower(strings.TrimSpace(u.Hostname()))
+			if argHost == "" {
+				continue
+			}
+			if argHost != tHost {
+				return fmt.Errorf("url argument %q targets host %q outside authorised host %q", arg, argHost, tHost)
+			}
+			foundTarget = true
+			continue
+		}
+		if strings.Contains(strings.ToLower(trimmed), tHost) {
+			foundTarget = true
+		}
+	}
+	if !foundTarget {
+		return fmt.Errorf("no argument references the scan target %q; commands must target the authorised host", tHost)
+	}
+	return nil
+}
+
+func parseURLArgument(arg string) (*url.URL, bool) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return nil, false
+	}
+	for _, scheme := range []string{"https://", "http://"} {
+		idx := strings.Index(strings.ToLower(trimmed), scheme)
+		if idx < 0 {
+			continue
+		}
+		candidate := strings.TrimSpace(trimmed[idx:])
+		parsed, err := url.Parse(candidate)
+		if err != nil || parsed.Host == "" {
+			return nil, false
+		}
+		return parsed, true
+	}
+	return nil, false
 }
 
 func validateToolFlags(binary string, args []string) error {
