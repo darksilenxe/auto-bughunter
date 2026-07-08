@@ -599,6 +599,32 @@ and `MSF_RPC_PASSWORD` are set.
 - Use `backend/templates/metasploit_rpc_modules.template.json` as the starter template.
 - Template placeholders are auto-expanded: `{{RHOSTS}}`, `{{RPORT}}`, `{{SSL}}`, `{{TARGETURI}}`.
 
+## CVE reverse-engineering agent
+
+The `cve_reverse_engineer` agent scans every finding produced during a scan
+for CVE identifiers (retire.js `Identifiers.CVE`, nuclei `cve-*` template IDs,
+Metasploit native-probe titles, or any other probe/integration that embeds a
+`CVE-YYYY-NNNNN` string) and produces a root-cause write-up plus a proposed
+proof-of-concept for each one it finds.
+
+- Works without any AI provider configured: it still emits a finding grounded
+  in the platform's small offline CVE knowledge base (`backend/internal/cve`)
+  with known CVSS/CWE/reference data for the CVEs the native Metasploit probes
+  already fingerprint (Log4Shell, Spring4Shell, Shellshock, ProxyLogon, etc.).
+- When an AI provider is configured, it additionally asks the model to explain
+  the vulnerability's root cause and attack vector and to propose a single,
+  bounded, same-host HTTP PoC request.
+- The proposed PoC request is always validated against `safety.ValidateOutboundURL`
+  (SSRF protections) and the configured scan scope, and is rejected outright if
+  it targets a different host than the scan target — regardless of the
+  execution setting below.
+- **PoC execution is opt-in.** Set `enableCvePocExecution: true` in the scan's
+  options (`ScanOptions.EnableCVEPoCExecution`) to allow the agent to actually
+  fire the validated PoC request against the live target and record the
+  replay transcript as a `cve_poc` proof artifact. When unset (the default),
+  the agent still reports the write-up and the proposed-but-unfired PoC as a
+  reproduction step — no additional live requests are made.
+
 ## Architecture
 
 The backend container is intentionally slim — it ships only the Go server

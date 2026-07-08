@@ -73,6 +73,14 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	// novel multi-step attack chains. Registered with nil AI client by default.
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(nil, true) })
 
+	// CVEResearchAgent: reverse-engineers CVE-tagged findings (retire.js,
+	// nuclei, Metasploit native probes, etc.) into a root-cause write-up and
+	// a proposed, safety-gated PoC request. Registered with nil AI client by
+	// default; SetAIClient upgrades it to LLM-powered analysis. PoC execution
+	// itself remains opt-in via ScanOptions.EnableCVEPoCExecution regardless
+	// of AI client configuration.
+	f.Register("cve_reverse_engineer", func() Agent { return NewCVEResearchAgent(true, nil) })
+
 	// AdaptiveProbeAgent: true observe→decide→act loop where the AI chooses
 	// one probe at a time based on live HTTP observations.
 	f.Register("adaptive_probe", func() Agent {
@@ -127,6 +135,7 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	f.Register("tool_builder", func() Agent { return NewToolBuilderAgent(true, c) })
 	f.Register("hacktricks_techniques", func() Agent { return NewHackTricksAgent(true, c) })
 	f.Register("llm_chain_synthesis", func() Agent { return NewLLMChainSynthesisAgent(c, true) })
+	f.Register("cve_reverse_engineer", func() Agent { return NewCVEResearchAgent(true, c) })
 	f.Register("pentest_loop", func() Agent {
 		return NewPentestLoopAgent(c, scanService, defaultInnerRounds, true)
 	})
