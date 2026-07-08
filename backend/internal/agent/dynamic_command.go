@@ -3,8 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
+	"auto-bughunter/backend/internal/agentlearner"
 	"auto-bughunter/backend/internal/cmdbuilder"
 	"auto-bughunter/backend/internal/model"
 )
@@ -27,14 +30,29 @@ var dynamicCommandChecks = []string{
 type DynamicCommandAgent struct {
 	enabled   bool
 	generator *cmdbuilder.Generator
+	proposer  commandProposalClient
+}
+
+type commandProposalClient interface {
+	GenerateCommands(ctx context.Context, agentName, target string, findings []model.Finding, maxCommands int) []agentlearner.GeneratedCommand
 }
 
 func NewDynamicCommandAgent(enabled bool) *DynamicCommandAgent {
-	return &DynamicCommandAgent{enabled: enabled, generator: &cmdbuilder.Generator{}}
+	return &DynamicCommandAgent{
+		enabled:   enabled,
+		generator: &cmdbuilder.Generator{},
+		proposer: agentlearner.NewClientWithToken(
+			strings.TrimSpace(os.Getenv("AGENT_LEARNER_URL")),
+			firstNonEmpty(
+				strings.TrimSpace(os.Getenv("AUTOBUGHUNTER_SIDECAR_AUTH_TOKEN")),
+				strings.TrimSpace(os.Getenv("SIDECAR_AUTH_TOKEN")),
+			),
+		),
+	}
 }
 
-func (a *DynamicCommandAgent) Name() string    { return "dynamic_commands" }
-func (a *DynamicCommandAgent) Enabled() bool   { return a.enabled }
+func (a *DynamicCommandAgent) Name() string  { return "dynamic_commands" }
+func (a *DynamicCommandAgent) Enabled() bool { return a.enabled }
 
 func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentOutput, error) {
 	output := AgentOutput{
@@ -55,13 +73,19 @@ func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentO
 		allFindings = input.Previous.Findings
 	}
 
-	specs := a.generator.Generate(a.Name(), input.Target, allFindings)
+	specs := a.proposedSpecs(ctx, input.Target, allFindings)
+	commandSource := "agent-sidecar"
+	if len(specs) == 0 {
+		specs = a.generator.Generate(a.Name(), input.Target, allFindings)
+		commandSource = "local-heuristic"
+	}
 	if len(specs) == 0 {
 		output.DebugNotes = "No commands generated for current findings context"
 		return output, nil
 	}
 
 	output.Metadata["commands_generated"] = fmt.Sprintf("%d", len(specs))
+	output.Metadata["command_source"] = commandSource
 	output.Metadata["unsafe_flag_mode"] = fmt.Sprintf("%t", input.Options.UnsafeDynamicCommandFlags)
 	ran := 0
 	failed := 0
@@ -98,6 +122,48 @@ func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentO
 	output.Metadata["commands_failed"] = fmt.Sprintf("%d", failed)
 	output.DebugNotes = fmt.Sprintf("Ran %d/%d dynamic commands; produced %d findings.", ran, len(specs), len(output.Findings))
 	return output, nil
+}
+
+func (a *DynamicCommandAgent) proposedSpecs(ctx context.Context, target string, findings []model.Finding) []cmdbuilder.CommandSpec {
+	if a == nil || a.proposer == nil {
+		return nil
+	}
+	proposed := a.proposer.GenerateCommands(ctx, a.Name(), target, findings, 5)
+	if len(proposed) == 0 {
+		return nil
+	}
+	specs := make([]cmdbuilder.CommandSpec, 0, len(proposed))
+	for _, cmd := range proposed {
+		binary := strings.TrimSpace(cmd.Binary)
+		if binary == "" {
+			continue
+		}
+		timeout := time.Duration(cmd.TimeoutSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = 60 * time.Second
+		}
+		if timeout > 5*time.Minute {
+			timeout = 5 * time.Minute
+		}
+		specs = append(specs, cmdbuilder.CommandSpec{
+			Binary:      binary,
+			Args:        append([]string(nil), cmd.Args...),
+			Rationale:   strings.TrimSpace(cmd.Rationale),
+			GeneratedBy: strings.TrimSpace(cmd.GeneratedBy),
+			Timeout:     timeout,
+		})
+	}
+	return specs
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // parseCommandOutput extracts findings from a command's stdout.  It first

@@ -59,6 +59,30 @@ type SpawnResponse struct {
 	ContextFlags int      `json:"contextFlags"`
 }
 
+// GenerateCommandRequest is sent to the agents sidecar to request bounded,
+// target-scoped tool command proposals.
+type GenerateCommandRequest struct {
+	AgentName   string           `json:"agentName"`
+	Target      string           `json:"target"`
+	Findings    []findingPayload `json:"findings"`
+	MaxCommands int              `json:"maxCommands"`
+}
+
+// GeneratedCommand is one proposed command returned by the agents sidecar.
+// The backend still validates and enforces command safety before execution.
+type GeneratedCommand struct {
+	Binary         string   `json:"binary"`
+	Args           []string `json:"args"`
+	Rationale      string   `json:"rationale"`
+	GeneratedBy    string   `json:"generatedBy"`
+	TimeoutSeconds int      `json:"timeoutSeconds"`
+}
+
+// GenerateCommandResponse is the sidecar response envelope.
+type GenerateCommandResponse struct {
+	Commands []GeneratedCommand `json:"commands"`
+}
+
 // LearnRequest is sent to the agents service after a scan completes.
 type LearnRequest struct {
 	ScanID               string           `json:"scanId"`
@@ -97,6 +121,28 @@ func (c *Client) Recommend(ctx context.Context, sourceAgent string, findings []m
 		return nil
 	}
 	return resp.Recommended
+}
+
+// GenerateCommands asks the agents service to propose bounded tool commands
+// for the supplied findings context. Returns nil on nil client or errors.
+func (c *Client) GenerateCommands(ctx context.Context, agentName, target string, findings []model.Finding, maxCommands int) []GeneratedCommand {
+	if c == nil {
+		return nil
+	}
+	if maxCommands <= 0 {
+		maxCommands = 5
+	}
+	req := GenerateCommandRequest{
+		AgentName:   strings.TrimSpace(agentName),
+		Target:      strings.TrimSpace(target),
+		Findings:    toPayload(findings),
+		MaxCommands: maxCommands,
+	}
+	var resp GenerateCommandResponse
+	if err := c.post(ctx, "/v1/generate-command", req, &resp); err != nil {
+		return nil
+	}
+	return resp.Commands
 }
 
 // Learn calls the agents service to update Q-values from a completed scan.
