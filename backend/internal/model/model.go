@@ -286,6 +286,13 @@ type ScanOptions struct {
 	// 0.75 is applied.
 	StrictReporting     bool    `json:"strictReporting,omitempty"`
 	MinReportConfidence float64 `json:"minReportConfidence,omitempty"`
+	// EnableCVEPoCExecution allows the cve_reverse_engineer agent to fire its
+	// AI-proposed proof-of-concept HTTP request against the live target in
+	// order to validate exploitability. When false (the default), the agent
+	// still produces a CVE root-cause write-up and a proposed (but unfired)
+	// PoC request — no additional live requests are made beyond the scan's
+	// existing probes.
+	EnableCVEPoCExecution bool `json:"enableCvePocExecution,omitempty"`
 	// UnsafeDynamicCommandFlags disables only per-tool command-flag allow-list
 	// checks for cmdbuilder-executed dynamic commands. Core protections remain:
 	// binary allow-list, blocked injection/path patterns, python sandboxing, and
