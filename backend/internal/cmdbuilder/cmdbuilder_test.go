@@ -107,3 +107,33 @@ func TestValidate_AllowsVulnxSearchSubcommand(t *testing.T) {
 		t.Fatalf("expected vulnx search command to pass validation, got %v", err)
 	}
 }
+
+func TestValidate_RejectsURLHostConfusionViaUserinfo(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "curl",
+		Args:   []string{"https://example.com@169.254.169.254/latest/meta-data"},
+	}, "https://example.com", ValidationPolicy{})
+	if err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("expected userinfo URL rejection, got %v", err)
+	}
+}
+
+func TestValidate_RejectsURLTargetingDifferentHost(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "curl",
+		Args:   []string{"https://169.254.169.254/latest/meta-data?origin=example.com"},
+	}, "https://example.com", ValidationPolicy{})
+	if err == nil || !strings.Contains(err.Error(), "outside authorised host") {
+		t.Fatalf("expected cross-host URL rejection, got %v", err)
+	}
+}
+
+func TestValidate_AllowsMatchingURLHost(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "curl",
+		Args:   []string{"https://example.com/api/users?id=1"},
+	}, "https://example.com", ValidationPolicy{})
+	if err != nil {
+		t.Fatalf("expected matching host URL to pass validation, got %v", err)
+	}
+}
