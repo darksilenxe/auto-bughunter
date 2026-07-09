@@ -41,6 +41,9 @@ func TestOAuthProbe_RedirectURIBaselineDifference(t *testing.T) {
 			if f.EvidenceFields["controlStatus"] == "" {
 				t.Fatalf("expected control evidence on redirect finding, got %+v", f.EvidenceFields)
 			}
+			if f.EvidenceFields["preReport.verifiedBy"] == "" {
+				t.Fatalf("expected verifier metadata on redirect finding, got %+v", f.EvidenceFields)
+			}
 			return
 		}
 	}
@@ -62,6 +65,22 @@ func TestOAuthProbe_RedirectURISuppressedWhenMatchesBenignBaseline(t *testing.T)
 	for _, f := range findings {
 		if strings.HasPrefix(f.ID, "oauth-redirect-uri-") {
 			t.Fatalf("unexpected redirect_uri finding when candidate matches benign baseline: %+v", f)
+		}
+	}
+}
+
+func TestOAuthProbe_StateAndPKCESuppressedWhenControlAlsoAccepted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"login":"required"}`))
+	}))
+	defer srv.Close()
+
+	svc := NewService(Config{})
+	findings := svc.RunOAuthProbe(context.Background(), srv.URL, newOAuthScope(srv.URL), model.ScanOptions{}, model.ScanAuthProfile{}, func(model.ScanEvent) {})
+	for _, f := range findings {
+		if f.ID == "oauth-csrf-no-state" || f.ID == "oauth-pkce-downgrade" {
+			t.Fatalf("expected verifier gating to suppress %s when control also accepted; finding=%+v", f.ID, f)
 		}
 	}
 }

@@ -343,3 +343,35 @@ func TestClickjackingCategoryNormalisation(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessControlHyphenCategoryNormalisation(t *testing.T) {
+	out := EvaluateFinding(model.Finding{
+		Category:          "access-control",
+		AffectedURL:       "https://example.com/api/users/2",
+		AffectedParameter: "userId",
+		Evidence:          "Broken access control allowed another account data access.",
+	})
+	if out.Category != "idor" {
+		t.Fatalf("expected canonical 'idor', got %q", out.Category)
+	}
+}
+
+func TestAuthenticationPolicySatisfied(t *testing.T) {
+	out := EvaluateFinding(model.Finding{
+		Category:    "authentication",
+		AffectedURL: "https://example.com/oauth/token",
+		Evidence:    "OAuth refresh token replay accepted while invalid_grant control token was rejected.",
+		EvidenceFields: map[string]string{
+			"controlTokenRejected": "true",
+		},
+	})
+	if out.Category != "authentication" {
+		t.Fatalf("expected canonical 'authentication', got %q", out.Category)
+	}
+	if len(out.Missing) != 0 {
+		t.Fatalf("expected full authentication coverage, missing: %v", out.Missing)
+	}
+	if out.BelowMinCoverage {
+		t.Fatal("authentication finding with full coverage should not be below min coverage")
+	}
+}

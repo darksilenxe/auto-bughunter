@@ -125,10 +125,12 @@ func (s *Service) RunOAuthProbe(
 			}
 			candidateObs, baselines, suspicious := oauthRedirectBypassesBaseline(ctx, s, ep, mutated, legitimateCallback, auth, options)
 			if suspicious {
-				emitted[fid] = true
-				findings = append(findings, oauthFinding(
+				observedDelta := float64(absInt(len(NormalizeResponseBody(candidateObs.location+"\n"+candidateObs.body)) - len(baselines.First.Body)))
+				finding := oauthFinding(
 					fid,
 					ep,
+					"open_redirect",
+					"oauth-redirect-uri-bypass",
 					model.SeverityHigh,
 					"OAuth redirect_uri bypass — "+test.label,
 					fmt.Sprintf(
@@ -155,7 +157,20 @@ func (s *Service) RunOAuthProbe(
 						"url":                 probeURL,
 						"param":               "redirect_uri",
 					},
-				))
+				)
+				verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
+					Finding:               finding,
+					Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceBodyDelta},
+					AllowNoReplayEmission: true,
+					BaselineVariance:      float64(baselines.BodyByteVariance),
+					ObservedDelta:         observedDelta,
+					ProbeName:             "oauth_probe",
+				})
+				if verify.Suppressed {
+					continue
+				}
+				emitted[fid] = true
+				findings = append(findings, verify.EmittedFinding)
 			}
 		}
 
@@ -171,11 +186,14 @@ func (s *Service) RunOAuthProbe(
 					if err == nil && resp != nil {
 						body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
 						_ = resp.Body.Close()
-						if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) {
-							emitted[fid] = true
-							findings = append(findings, oauthFinding(
+						controlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_control", "unsupported_response_type", "openid", ""), auth, options)
+						controlRejected := oauthResponseHasError(controlObs.body) || controlObs.status >= http.StatusBadRequest
+						if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) && controlRejected {
+							finding := oauthFinding(
 								fid,
 								ep,
+								"csrf",
+								"oauth-state-omission",
 								model.SeverityMedium,
 								"OAuth CSRF — state parameter accepted as absent",
 								fmt.Sprintf(
@@ -193,12 +211,26 @@ func (s *Service) RunOAuthProbe(
 										"allowing a login-CSRF attack to link victim and attacker accounts.",
 								},
 								map[string]string{
-									"stateAbsent":    "true",
-									"responseStatus": fmt.Sprintf("%d", resp.StatusCode),
-									"url":            probeURL,
-									"param":          "state",
+									"stateAbsent":        "true",
+									"responseStatus":     fmt.Sprintf("%d", resp.StatusCode),
+									"url":                probeURL,
+									"param":              "state",
+									"controlRejected":    fmt.Sprintf("%v", controlRejected),
+									"controlStatus":      fmt.Sprintf("%d", controlObs.status),
+									"tokenCarrierTested": "state",
 								},
-							))
+							)
+							verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
+								Finding:               finding,
+								Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal},
+								AllowNoReplayEmission: true,
+								ProbeName:             "oauth_probe",
+							})
+							if verify.Suppressed {
+								continue
+							}
+							emitted[fid] = true
+							findings = append(findings, verify.EmittedFinding)
 						}
 					}
 				}
@@ -219,12 +251,15 @@ func (s *Service) RunOAuthProbe(
 						body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
 						_ = resp.Body.Close()
 						// If the server accepts the flow without code_challenge it does not enforce PKCE.
+						controlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "none", "openid", ""), auth, options)
+						controlRejected := oauthResponseHasError(controlObs.body) || controlObs.status >= http.StatusBadRequest
 						if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) &&
-							!strings.Contains(strings.ToLower(string(body)), "code_challenge") {
-							emitted[fid] = true
-							findings = append(findings, oauthFinding(
+							!strings.Contains(strings.ToLower(string(body)), "code_challenge") && controlRejected {
+							finding := oauthFinding(
 								fid,
 								ep,
+								"authentication",
+								"oauth-pkce-downgrade",
 								model.SeverityMedium,
 								"OAuth PKCE not enforced — code_challenge not required",
 								fmt.Sprintf(
@@ -246,8 +281,21 @@ func (s *Service) RunOAuthProbe(
 									"responseStatus":      fmt.Sprintf("%d", resp.StatusCode),
 									"url":                 probeURL,
 									"param":               "code_challenge",
+									"controlRejected":     fmt.Sprintf("%v", controlRejected),
+									"controlStatus":       fmt.Sprintf("%d", controlObs.status),
 								},
-							))
+							)
+							verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
+								Finding:               finding,
+								Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal},
+								AllowNoReplayEmission: true,
+								ProbeName:             "oauth_probe",
+							})
+							if verify.Suppressed {
+								continue
+							}
+							emitted[fid] = true
+							findings = append(findings, verify.EmittedFinding)
 						}
 					}
 				}
@@ -416,6 +464,8 @@ func is2xxOrRedirect(code int) bool {
 // oauthFinding constructs an OAuth/OIDC probe finding.
 func oauthFinding(
 	id, endpoint string,
+	category string,
+	payloadClass string,
 	severity model.Severity,
 	title, evidence, cwe string,
 	steps []string,
@@ -426,7 +476,7 @@ func oauthFinding(
 		"reproStep":      "Replay the manipulated authorization request and observe whether the server rejects it",
 		"method":         http.MethodGet,
 		"url":            endpoint,
-		"payloadClass":   "oauth-flow-manipulation",
+		"payloadClass":   payloadClass,
 		"oracleName":     "oauth_probe",
 		"oracleVersion":  "v1",
 	}
@@ -435,7 +485,7 @@ func oauthFinding(
 	}
 	return model.Finding{
 		ID:       id,
-		Category: "access-control",
+		Category: category,
 		Severity: severity,
 		Title:    title,
 		Description: "The OAuth/OIDC authorization server accepted a manipulated authorization initiation request. " +
@@ -447,6 +497,7 @@ func oauthFinding(
 			"Enforce PKCE (RFC 7636) for all public clients.",
 		Confidence:        0.82,
 		AffectedURL:       endpoint,
+		AffectedParameter: ef["param"],
 		CWE:               cwe,
 		OWASPCategory:     "A07:2021 - Identification and Authentication Failures",
 		Sources:           []string{"active-scanner", "oauth-probe"},

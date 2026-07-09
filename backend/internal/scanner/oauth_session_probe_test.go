@@ -91,6 +91,9 @@ func TestOAuthSessionProbe_AuthCodeReplay_Accepted(t *testing.T) {
 			if f.CWE != "CWE-294" {
 				t.Fatalf("expected CWE-294, got %s", f.CWE)
 			}
+			if f.EvidenceFields["preReport.verifiedBy"] == "" {
+				t.Fatalf("expected verifier metadata, got %+v", f.EvidenceFields)
+			}
 		}
 	}
 	if !found {

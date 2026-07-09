@@ -92,3 +92,34 @@ func TestSelectHighROIGaps_BudgetsGapReQueue(t *testing.T) {
 		t.Fatalf("expected %d gaps selected, got %d", gapReQueueBudget, len(top))
 	}
 }
+
+func TestAdaptiveGapReQueueBudget_DefaultAndCap(t *testing.T) {
+	if got := adaptiveGapReQueueBudget(nil); got != gapReQueueBudget {
+		t.Fatalf("expected default budget %d for empty gaps, got %d", gapReQueueBudget, got)
+	}
+	var gaps []SurfaceGap
+	for i := 0; i < 200; i++ {
+		gaps = append(gaps, SurfaceGap{
+			Reason: SurfaceGapUnprobed,
+			Entry: SurfaceEntry{
+				URL:    fmt.Sprintf("https://example.test/api/auth/%d", i),
+				Params: []string{"token", "state"},
+			},
+		})
+	}
+	got := adaptiveGapReQueueBudget(gaps)
+	if got != gapReQueueMaxBudget {
+		t.Fatalf("expected capped adaptive budget %d, got %d", gapReQueueMaxBudget, got)
+	}
+}
+
+func TestAdaptiveGapReQueueBudget_RaisesForHighRiskGaps(t *testing.T) {
+	gaps := []SurfaceGap{
+		{Reason: SurfaceGapUnprobed, Entry: SurfaceEntry{URL: "https://example.test/oauth/authorize", Params: []string{"state"}}},
+		{Reason: SurfaceGapParamNotFuzzed, Entry: SurfaceEntry{URL: "https://example.test/api/login", Params: []string{"password"}}, MissingItem: "password"},
+	}
+	got := adaptiveGapReQueueBudget(gaps)
+	if got <= gapReQueueBudget {
+		t.Fatalf("expected adaptive budget > base (%d), got %d", gapReQueueBudget, got)
+	}
+}

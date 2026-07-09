@@ -216,6 +216,9 @@ func TestSubmitVerifiedFinding_MetricsIncrement(t *testing.T) {
 	if m.ByProbe["p1"].Total != 3 {
 		t.Errorf("expected per-probe total 3; got %+v", m.ByProbe)
 	}
+	if m.ByCategory["sqli"].Total != 3 {
+		t.Errorf("expected per-category total 3; got %+v", m.ByCategory)
+	}
 }
 
 func TestSubmitVerifiedFinding_PoCReplayError_TreatedAsFailure(t *testing.T) {
