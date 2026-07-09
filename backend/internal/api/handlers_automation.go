@@ -1218,6 +1218,95 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 	if killSwitchActive {
 		alerts = append(alerts, "autonomy global kill switch is active")
 	}
+	extraMetrics := map[string]float64{
+		"lagSamples":                   float64(lagCount),
+		"agentRuns":                    float64(totalRuns),
+		"autonomyOutcomeScore":         roundTo2(avgOutcomeScore),
+		"autonomyFallbackRuns":         float64(fallbackRuns),
+		"autonomyFallbackRecoveryRate": roundTo2(fallbackRecoveryRate),
+		"autonomyKillSwitchActive": func() float64 {
+			if killSwitchActive {
+				return 1
+			}
+			return 0
+		}(),
+		"preReportTotal":                   float64(preReport.Total),
+		"preReportVerified":                float64(preReport.Verified),
+		"preReportSuppressed":              float64(preReport.Suppressed),
+		"preReportDowngraded":              float64(preReport.Downgraded),
+		"preReportPoCReplayed":             float64(preReport.PoCReplayed),
+		"preReportPoCSucceeded":            float64(preReport.PoCSucceeded),
+		"preReportVerifiedRate":            roundTo2(preReport.VerifiedRate),
+		"preReportSuppressedRate":          roundTo2(preReport.SuppressedRate),
+		"preReportPoCSuccessRate":          roundTo2(preReport.PoCSuccessRate),
+		"preReportAverageConfidence":       roundTo2(preReport.AverageConfidence),
+		"clusterTotalIn":                   float64(clusterMetrics.TotalIn),
+		"clusterTotalOut":                  float64(clusterMetrics.TotalOut),
+		"clusterClustered":                 float64(clusterMetrics.Clustered),
+		"clusterRatio":                     roundTo2(clusterMetrics.Ratio),
+		"differentialTotal":                float64(diffMetrics.Total),
+		"differentialConfirmed":            float64(diffMetrics.Confirmed),
+		"differentialFPStripped":           float64(diffMetrics.FPStripped),
+		"differentialFPBenign":             float64(diffMetrics.FPBenign),
+		"differentialExecErrors":           float64(diffMetrics.ExecErrors),
+		"differentialConfirmedRate":        roundTo2(diffMetrics.ConfirmedRate),
+		"surfaceTotal":                     float64(surfaceMetrics.InventoryTotal),
+		"surfaceProbed":                    float64(surfaceMetrics.ProbedUnique),
+		"surfaceCoverageRatio":             roundTo2(surfaceMetrics.CoverageRatio),
+		"surfaceGapUnprobed":               float64(surfaceMetrics.GapUnprobed),
+		"surfaceGapParamMissing":           float64(surfaceMetrics.GapParamMissing),
+		"surfaceGapMethodMissing":          float64(surfaceMetrics.GapMethodMissing),
+		"paramDiscoveryCandidates":         float64(paramMetrics.Candidates),
+		"paramDiscoveryConfirmed":          float64(paramMetrics.Confirmed),
+		"evidenceValid":                    float64(evidenceMetrics.Valid),
+		"evidenceIncomplete":               float64(evidenceMetrics.Incomplete),
+		"evidenceValidRatio":               roundTo2(evidenceMetrics.ValidRatio),
+		"evidenceMissingUrl":               float64(evidenceMetrics.MissingByField["url"]),
+		"evidenceMissingMethod":            float64(evidenceMetrics.MissingByField["method"]),
+		"evidenceMissingParam":             float64(evidenceMetrics.MissingByField["param"]),
+		"evidenceMissingPayloadClass":      float64(evidenceMetrics.MissingByField["payloadClass"]),
+		"evidenceMissingReflectionContext": float64(evidenceMetrics.MissingByField["reflectionContext"]),
+		"evidenceMissingResponseShape":     float64(evidenceMetrics.MissingByField["responseShape"]),
+		"evidenceMissingOracleName":        float64(evidenceMetrics.MissingByField["oracleName"]),
+		"calibrationApplied":               float64(calibrationMetrics.Applied),
+		"calibrationSkipped":               float64(calibrationMetrics.Skipped),
+		"calibrationPromoted":              float64(calibrationMetrics.Promoted),
+		"calibrationDemoted":               float64(calibrationMetrics.Demoted),
+		"calibrationMeanPosterior":         roundTo2(calibrationMetrics.MeanPosterior),
+	}
+	sanitizeMetricName := func(in string) string {
+		s := strings.TrimSpace(strings.ToLower(in))
+		if s == "" {
+			return "unknown"
+		}
+		var b strings.Builder
+		b.Grow(len(s))
+		for _, r := range s {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+				continue
+			}
+			b.WriteRune('_')
+		}
+		out := b.String()
+		out = strings.Trim(out, "_")
+		if out == "" {
+			return "unknown"
+		}
+		return out
+	}
+	for name, agg := range preReport.ByProbe {
+		key := sanitizeMetricName(name)
+		extraMetrics["preReportProbeTotal."+key] = float64(agg.Total)
+		extraMetrics["preReportProbeVerified."+key] = float64(agg.Verified)
+		extraMetrics["preReportProbeSuppressed."+key] = float64(agg.Suppressed)
+	}
+	for name, agg := range preReport.ByCategory {
+		key := sanitizeMetricName(name)
+		extraMetrics["preReportCategoryTotal."+key] = float64(agg.Total)
+		extraMetrics["preReportCategoryVerified."+key] = float64(agg.Verified)
+		extraMetrics["preReportCategorySuppressed."+key] = float64(agg.Suppressed)
+	}
 	writeJSON(w, http.StatusOK, model.AutomationMetrics{
 		GeneratedAt:           now,
 		WorkspaceID:           workspaceID,
@@ -1256,62 +1345,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 			}
 			return roundTo2(float64(strictSuppressed) / float64(strictScans))
 		}(),
-		Extra: map[string]float64{
-			"lagSamples":                   float64(lagCount),
-			"agentRuns":                    float64(totalRuns),
-			"autonomyOutcomeScore":         roundTo2(avgOutcomeScore),
-			"autonomyFallbackRuns":         float64(fallbackRuns),
-			"autonomyFallbackRecoveryRate": roundTo2(fallbackRecoveryRate),
-			"autonomyKillSwitchActive": func() float64 {
-				if killSwitchActive {
-					return 1
-				}
-				return 0
-			}(),
-			"preReportTotal":                   float64(preReport.Total),
-			"preReportVerified":                float64(preReport.Verified),
-			"preReportSuppressed":              float64(preReport.Suppressed),
-			"preReportDowngraded":              float64(preReport.Downgraded),
-			"preReportPoCReplayed":             float64(preReport.PoCReplayed),
-			"preReportPoCSucceeded":            float64(preReport.PoCSucceeded),
-			"preReportVerifiedRate":            roundTo2(preReport.VerifiedRate),
-			"preReportSuppressedRate":          roundTo2(preReport.SuppressedRate),
-			"preReportPoCSuccessRate":          roundTo2(preReport.PoCSuccessRate),
-			"preReportAverageConfidence":       roundTo2(preReport.AverageConfidence),
-			"clusterTotalIn":                   float64(clusterMetrics.TotalIn),
-			"clusterTotalOut":                  float64(clusterMetrics.TotalOut),
-			"clusterClustered":                 float64(clusterMetrics.Clustered),
-			"clusterRatio":                     roundTo2(clusterMetrics.Ratio),
-			"differentialTotal":                float64(diffMetrics.Total),
-			"differentialConfirmed":            float64(diffMetrics.Confirmed),
-			"differentialFPStripped":           float64(diffMetrics.FPStripped),
-			"differentialFPBenign":             float64(diffMetrics.FPBenign),
-			"differentialExecErrors":           float64(diffMetrics.ExecErrors),
-			"differentialConfirmedRate":        roundTo2(diffMetrics.ConfirmedRate),
-			"surfaceTotal":                     float64(surfaceMetrics.InventoryTotal),
-			"surfaceProbed":                    float64(surfaceMetrics.ProbedUnique),
-			"surfaceCoverageRatio":             roundTo2(surfaceMetrics.CoverageRatio),
-			"surfaceGapUnprobed":               float64(surfaceMetrics.GapUnprobed),
-			"surfaceGapParamMissing":           float64(surfaceMetrics.GapParamMissing),
-			"surfaceGapMethodMissing":          float64(surfaceMetrics.GapMethodMissing),
-			"paramDiscoveryCandidates":         float64(paramMetrics.Candidates),
-			"paramDiscoveryConfirmed":          float64(paramMetrics.Confirmed),
-			"evidenceValid":                    float64(evidenceMetrics.Valid),
-			"evidenceIncomplete":               float64(evidenceMetrics.Incomplete),
-			"evidenceValidRatio":               roundTo2(evidenceMetrics.ValidRatio),
-			"evidenceMissingUrl":               float64(evidenceMetrics.MissingByField["url"]),
-			"evidenceMissingMethod":            float64(evidenceMetrics.MissingByField["method"]),
-			"evidenceMissingParam":             float64(evidenceMetrics.MissingByField["param"]),
-			"evidenceMissingPayloadClass":      float64(evidenceMetrics.MissingByField["payloadClass"]),
-			"evidenceMissingReflectionContext": float64(evidenceMetrics.MissingByField["reflectionContext"]),
-			"evidenceMissingResponseShape":     float64(evidenceMetrics.MissingByField["responseShape"]),
-			"evidenceMissingOracleName":        float64(evidenceMetrics.MissingByField["oracleName"]),
-			"calibrationApplied":               float64(calibrationMetrics.Applied),
-			"calibrationSkipped":               float64(calibrationMetrics.Skipped),
-			"calibrationPromoted":              float64(calibrationMetrics.Promoted),
-			"calibrationDemoted":               float64(calibrationMetrics.Demoted),
-			"calibrationMeanPosterior":         roundTo2(calibrationMetrics.MeanPosterior),
-		},
+		Extra: extraMetrics,
 	})
 }
 

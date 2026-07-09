@@ -61,17 +61,17 @@ type VerificationOutcome struct {
 type EvidenceSignal string
 
 const (
-	EvidenceStatusDelta   EvidenceSignal = "status_delta"    // response status differs from baseline
-	EvidenceBodyDelta     EvidenceSignal = "body_delta"      // body differs beyond control variance
-	EvidenceTimingDelta   EvidenceSignal = "timing_delta"    // response latency differs (blind SQLi, DoS)
-	EvidenceSinkObserved  EvidenceSignal = "sink_observed"   // payload landed in a dangerous sink (attr, script)
-	EvidenceOASTHit       EvidenceSignal = "oast_hit"        // out-of-band interaction was collected
-	EvidenceReflection    EvidenceSignal = "reflection"      // per-request random marker echoed back
-	EvidenceHeaderDelta   EvidenceSignal = "header_delta"    // response header differs from baseline
-	EvidenceCookieChange  EvidenceSignal = "cookie_change"   // Set-Cookie changed post-probe
-	EvidenceErrorSignal   EvidenceSignal = "error_signal"    // application error / stack trace surfaced
-	EvidenceDOMExecution  EvidenceSignal = "dom_execution"   // headless browser confirmed sink execution
-	EvidenceCrossSubject  EvidenceSignal = "cross_subject"   // second auth profile observed different data
+	EvidenceStatusDelta  EvidenceSignal = "status_delta"  // response status differs from baseline
+	EvidenceBodyDelta    EvidenceSignal = "body_delta"    // body differs beyond control variance
+	EvidenceTimingDelta  EvidenceSignal = "timing_delta"  // response latency differs (blind SQLi, DoS)
+	EvidenceSinkObserved EvidenceSignal = "sink_observed" // payload landed in a dangerous sink (attr, script)
+	EvidenceOASTHit      EvidenceSignal = "oast_hit"      // out-of-band interaction was collected
+	EvidenceReflection   EvidenceSignal = "reflection"    // per-request random marker echoed back
+	EvidenceHeaderDelta  EvidenceSignal = "header_delta"  // response header differs from baseline
+	EvidenceCookieChange EvidenceSignal = "cookie_change" // Set-Cookie changed post-probe
+	EvidenceErrorSignal  EvidenceSignal = "error_signal"  // application error / stack trace surfaced
+	EvidenceDOMExecution EvidenceSignal = "dom_execution" // headless browser confirmed sink execution
+	EvidenceCrossSubject EvidenceSignal = "cross_subject" // second auth profile observed different data
 )
 
 // PoCReplayFunc is an optional hook a probe can supply to reproduce the
@@ -128,6 +128,7 @@ type verificationCounters struct {
 	PoCReplayed      int
 	PoCSucceeded     int
 	ByProbe          map[string]*probeCounter
+	ByCategory       map[string]*probeCounter
 	ConfidenceSum    float64
 	ConfidenceSample int
 }
@@ -141,9 +142,12 @@ type probeCounter struct {
 	PoCSucceeded int
 }
 
-var globalVerificationCounters = &verificationCounters{ByProbe: map[string]*probeCounter{}}
+var globalVerificationCounters = &verificationCounters{
+	ByProbe:    map[string]*probeCounter{},
+	ByCategory: map[string]*probeCounter{},
+}
 
-func (c *verificationCounters) record(probe string, o VerificationOutcome) {
+func (c *verificationCounters) record(probe string, category string, o VerificationOutcome) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Total++
@@ -153,24 +157,39 @@ func (c *verificationCounters) record(probe string, o VerificationOutcome) {
 		c.ByProbe[probe] = pc
 	}
 	pc.Total++
+	category = strings.TrimSpace(category)
+	if category == "" {
+		category = "unknown"
+	}
+	cc, ok := c.ByCategory[category]
+	if !ok {
+		cc = &probeCounter{}
+		c.ByCategory[category] = cc
+	}
+	cc.Total++
 	if o.Verified {
 		c.Verified++
 		pc.Verified++
+		cc.Verified++
 	}
 	if o.Suppressed {
 		c.Suppressed++
 		pc.Suppressed++
+		cc.Suppressed++
 	}
 	if o.Downgraded {
 		c.Downgraded++
 		pc.Downgraded++
+		cc.Downgraded++
 	}
 	if o.PoCReplayed {
 		c.PoCReplayed++
 		pc.PoCReplayed++
+		cc.PoCReplayed++
 		if o.PoCSuccess {
 			c.PoCSucceeded++
 			pc.PoCSucceeded++
+			cc.PoCSucceeded++
 		}
 	}
 	if o.Confidence > 0 {
@@ -183,17 +202,18 @@ func (c *verificationCounters) record(probe string, o VerificationOutcome) {
 // activity across the process. It is included in AutomationMetrics via the
 // Extra map so that operators can watch FP-reduction efficacy in real time.
 type PreReportMetrics struct {
-	Total                  int                          `json:"total"`
-	Verified               int                          `json:"verified"`
-	Suppressed             int                          `json:"suppressed"`
-	Downgraded             int                          `json:"downgraded"`
-	PoCReplayed            int                          `json:"pocReplayed"`
-	PoCSucceeded           int                          `json:"pocSucceeded"`
-	AverageConfidence      float64                      `json:"averageConfidence"`
-	VerifiedRate           float64                      `json:"verifiedRate"`
-	SuppressedRate         float64                      `json:"suppressedRate"`
-	PoCSuccessRate         float64                      `json:"pocSuccessRate"`
-	ByProbe                map[string]PreReportProbeAgg `json:"byProbe,omitempty"`
+	Total             int                          `json:"total"`
+	Verified          int                          `json:"verified"`
+	Suppressed        int                          `json:"suppressed"`
+	Downgraded        int                          `json:"downgraded"`
+	PoCReplayed       int                          `json:"pocReplayed"`
+	PoCSucceeded      int                          `json:"pocSucceeded"`
+	AverageConfidence float64                      `json:"averageConfidence"`
+	VerifiedRate      float64                      `json:"verifiedRate"`
+	SuppressedRate    float64                      `json:"suppressedRate"`
+	PoCSuccessRate    float64                      `json:"pocSuccessRate"`
+	ByProbe           map[string]PreReportProbeAgg `json:"byProbe,omitempty"`
+	ByCategory        map[string]PreReportProbeAgg `json:"byCategory,omitempty"`
 }
 
 // PreReportProbeAgg summarises verification activity for one probe.
@@ -226,6 +246,7 @@ func ResetVerificationMetrics() {
 	globalVerificationCounters.ConfidenceSum = 0
 	globalVerificationCounters.ConfidenceSample = 0
 	globalVerificationCounters.ByProbe = map[string]*probeCounter{}
+	globalVerificationCounters.ByCategory = map[string]*probeCounter{}
 }
 
 func (c *verificationCounters) snapshot() PreReportMetrics {
@@ -239,6 +260,7 @@ func (c *verificationCounters) snapshot() PreReportMetrics {
 		PoCReplayed:  c.PoCReplayed,
 		PoCSucceeded: c.PoCSucceeded,
 		ByProbe:      map[string]PreReportProbeAgg{},
+		ByCategory:   map[string]PreReportProbeAgg{},
 	}
 	if c.ConfidenceSample > 0 {
 		m.AverageConfidence = c.ConfidenceSum / float64(c.ConfidenceSample)
@@ -252,6 +274,16 @@ func (c *verificationCounters) snapshot() PreReportMetrics {
 	}
 	for name, pc := range c.ByProbe {
 		m.ByProbe[name] = PreReportProbeAgg{
+			Total:        pc.Total,
+			Verified:     pc.Verified,
+			Suppressed:   pc.Suppressed,
+			Downgraded:   pc.Downgraded,
+			PoCReplayed:  pc.PoCReplayed,
+			PoCSucceeded: pc.PoCSucceeded,
+		}
+	}
+	for name, pc := range c.ByCategory {
+		m.ByCategory[name] = PreReportProbeAgg{
 			Total:        pc.Total,
 			Verified:     pc.Verified,
 			Suppressed:   pc.Suppressed,
@@ -280,6 +312,7 @@ var categoryEvidenceMinimum = map[string]int{
 	"cors":           2,
 	"csrf":           2,
 	"clickjacking":   2,
+	"authentication": 2,
 	"headers":        1,
 	"wordlist":       1,
 }
@@ -423,7 +456,7 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 	if probeName == "" {
 		probeName = "unknown"
 	}
-	globalVerificationCounters.record(probeName, outcome)
+	globalVerificationCounters.record(probeName, canonicalCategoryLower(cand.Finding.Category), outcome)
 
 	return outcome
 }
@@ -538,6 +571,8 @@ func canonicalCategoryLower(category string) string {
 		return "wordlist"
 	case "broken_access_control", "access_control", "bola":
 		return "idor"
+	case "authentication", "auth", "oauth", "oidc", "session_auth":
+		return "authentication"
 	}
 	return c
 }
@@ -560,8 +595,8 @@ type BaselineSample struct {
 // variance between them. Probes call ExceedsControlVariance(observed) to
 // decide whether a probe-induced delta is real.
 type BaselineControls struct {
-	First          BaselineSample
-	Second         BaselineSample
+	First  BaselineSample
+	Second BaselineSample
 	// BodyByteVariance is |len(Body1)-len(Body2)| after NormalizeResponseBody.
 	BodyByteVariance int
 	// TimingVarianceMs is the |ms1 - ms2| latency variance.
@@ -602,7 +637,7 @@ func CaptureTwoControlBaselines(ctx context.Context, fetch BaselineFetcher) (Bas
 		First:            first,
 		Second:           second,
 		BodyByteVariance: absInt(len(first.Body) - len(second.Body)),
-		TimingVarianceMs: math.Abs(float64(first.Duration.Milliseconds()-second.Duration.Milliseconds())),
+		TimingVarianceMs: math.Abs(float64(first.Duration.Milliseconds() - second.Duration.Milliseconds())),
 		StatusStable:     first.Status == second.Status,
 	}
 	return bc, nil

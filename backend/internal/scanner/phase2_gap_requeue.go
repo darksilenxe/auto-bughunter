@@ -21,6 +21,8 @@ import (
 // gapReQueueBudget bounds how many high-ROI gaps are re-queued per scan
 // so a large, mostly-unprobed inventory can't blow up scan duration.
 const gapReQueueBudget = 15
+const gapReQueueMinBudget = 10
+const gapReQueueMaxBudget = 30
 
 // runGapReQueuePass re-runs the Batch 1 + Batch 2 Phase 2 probes
 // against the highest-ROI unprobed surface gaps. It is a no-op when
@@ -30,7 +32,7 @@ func (s *Service) runGapReQueuePass(ctx context.Context, input RunInput, bodyTex
 	if input.Options.PassiveOnly || len(gaps) == 0 {
 		return nil
 	}
-	top := SelectHighROIGaps(gaps, gapReQueueBudget)
+	top := SelectHighROIGaps(gaps, adaptiveGapReQueueBudget(gaps))
 	urls := GapReQueueURLs(top)
 	if len(urls) == 0 {
 		return nil
@@ -99,6 +101,67 @@ func (s *Service) runGapReQueuePass(ctx context.Context, input RunInput, bodyTex
 		}
 	}
 	return findings
+}
+
+func adaptiveGapReQueueBudget(gaps []SurfaceGap) int {
+	if len(gaps) == 0 {
+		return gapReQueueBudget
+	}
+	budget := gapReQueueBudget
+	unprobed := 0
+	authWeighted := 0
+	for _, g := range gaps {
+		if g.Reason == SurfaceGapUnprobed {
+			unprobed++
+		}
+		if isHighRiskGap(g) {
+			authWeighted++
+		}
+	}
+	if unprobed > len(gaps)/2 {
+		budget += 5
+	}
+	if authWeighted > 0 {
+		// Raise budget in proportion to risky auth/state-changing surfaces,
+		// capped so scans stay bounded.
+		budget += minInt(10, authWeighted/2+1)
+	}
+	if budget < gapReQueueMinBudget {
+		return gapReQueueMinBudget
+	}
+	if budget > gapReQueueMaxBudget {
+		return gapReQueueMaxBudget
+	}
+	return budget
+}
+
+func isHighRiskGap(g SurfaceGap) bool {
+	target := strings.ToLower(strings.TrimSpace(g.Entry.URL) + " " + strings.TrimSpace(g.MissingItem))
+	if hasAnyGapKeyword(target, "auth", "oauth", "oidc", "token", "session", "login", "logout", "mfa", "password", "reset", "admin", "csrf", "redirect", "callback") {
+		return true
+	}
+	for _, p := range g.Entry.Params {
+		if hasAnyGapKeyword(strings.ToLower(strings.TrimSpace(p)), "token", "state", "code", "redirect", "return", "next", "password", "email", "session", "csrf", "auth") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyGapKeyword(s string, keywords ...string) bool {
+	for _, kw := range keywords {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // gapReQueueClickjackingMax bounds how many re-queued gap URLs get a

@@ -92,6 +92,17 @@ func (s *Service) RunOAuthSessionProbe(
 
 	var findings []model.Finding
 	emitted := map[string]bool{}
+	appendVerified := func(f model.Finding, signals []EvidenceSignal) {
+		out := SubmitVerifiedFinding(ctx, VerifyCandidate{
+			Finding:               f,
+			Signals:               signals,
+			AllowNoReplayEmission: true,
+			ProbeName:             "oauth_session_probe",
+		})
+		if !out.Suppressed {
+			findings = append(findings, out.EmittedFinding)
+		}
+	}
 
 	// ── Probe 1: Authorization code replay ─────────────────────────────────
 	for _, ep := range tokenEndpoints {
@@ -132,8 +143,12 @@ func (s *Service) RunOAuthSessionProbe(
 			controlAccepted := controlResp != nil && controlResp.status >= 200 && controlResp.status < 300 && !oauthTokenResponseHasError(strings.ToLower(controlResp.body))
 			if noError1 && noError2 && resp1.status == resp2.status &&
 				resp1.status >= 200 && resp1.status < 300 && !controlAccepted {
+				controlStatus := "0"
+				if controlResp != nil {
+					controlStatus = fmt.Sprintf("%d", controlResp.status)
+				}
 				emitted[fid] = true
-				findings = append(findings, oauthSessionFinding(
+				appendVerified(oauthSessionFinding(
 					fid, ep, model.SeverityHigh,
 					"OAuth authorization code accepted on replay",
 					fmt.Sprintf(
@@ -157,9 +172,9 @@ func (s *Service) RunOAuthSessionProbe(
 						"firstStatus":         fmt.Sprintf("%d", resp1.status),
 						"secondStatus":        fmt.Sprintf("%d", resp2.status),
 						"controlCodeRejected": "true",
-						"controlStatus":       fmt.Sprintf("%d", controlResp.status),
+						"controlStatus":       controlStatus,
 					},
-				))
+				), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
 			}
 		}
 	}
@@ -200,7 +215,7 @@ func (s *Service) RunOAuthSessionProbe(
 
 		if implicitAccepted && tokenInResponse {
 			emitted[fid] = true
-			findings = append(findings, oauthSessionFinding(
+			appendVerified(oauthSessionFinding(
 				fid, ep, model.SeverityMedium,
 				"OAuth implicit flow accepted — access token exposed in redirect URL",
 				fmt.Sprintf(
@@ -222,7 +237,7 @@ func (s *Service) RunOAuthSessionProbe(
 					"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
 					"tokenInLocation":   fmt.Sprintf("%v", strings.Contains(locationHdr, "access_token=")),
 				},
-			))
+			), []EvidenceSignal{EvidenceStatusDelta, EvidenceReflection})
 		}
 	}
 
@@ -254,7 +269,7 @@ func (s *Service) RunOAuthSessionProbe(
 		if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(bodyStr) &&
 			!strings.Contains(strings.ToLower(bodyStr), "nonce") {
 			emitted[fid] = true
-			findings = append(findings, oauthSessionFinding(
+			appendVerified(oauthSessionFinding(
 				fid, ep, model.SeverityMedium,
 				"OIDC hybrid flow accepted without nonce — id_token replay possible",
 				fmt.Sprintf(
@@ -278,7 +293,7 @@ func (s *Service) RunOAuthSessionProbe(
 					"nonceAbsent":       "true",
 					"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
 				},
-			))
+			), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
 		}
 	}
 
@@ -344,7 +359,7 @@ func (s *Service) RunOAuthSessionProbe(
 					!strings.Contains(strings.ToLower(string(replayBody)), "invalid_token") &&
 					!controlAccepted {
 					emitted[fid] = true
-					findings = append(findings, oauthSessionFinding(
+					appendVerified(oauthSessionFinding(
 						fid, target, model.SeverityHigh,
 						"OAuth token accepted after revocation — revocation not enforced",
 						fmt.Sprintf(
@@ -364,7 +379,7 @@ func (s *Service) RunOAuthSessionProbe(
 							"controlTokenRejected": "true",
 							"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
 						},
-					))
+					), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
 				}
 			}
 		}
@@ -397,8 +412,12 @@ refreshProbe:
 					if r1.status >= 200 && r1.status < 300 &&
 						r2.status >= 200 && r2.status < 300 &&
 						!oauthTokenResponseHasError(strings.ToLower(r2.body)) && !controlAccepted {
+						controlStatus := "0"
+						if controlResp != nil {
+							controlStatus = fmt.Sprintf("%d", controlResp.status)
+						}
 						emitted[fid] = true
-						findings = append(findings, oauthSessionFinding(
+						appendVerified(oauthSessionFinding(
 							fid, ep, model.SeverityHigh,
 							"OAuth refresh token accepted on replay — rotation not enforced",
 							fmt.Sprintf(
@@ -421,9 +440,9 @@ refreshProbe:
 								"firstStatus":          fmt.Sprintf("%d", r1.status),
 								"secondStatus":         fmt.Sprintf("%d", r2.status),
 								"controlTokenRejected": "true",
-								"controlStatus":        fmt.Sprintf("%d", controlResp.status),
+								"controlStatus":        controlStatus,
 							},
-						))
+						), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
 						break
 					}
 				}
@@ -454,7 +473,7 @@ refreshProbe:
 			acao := resp.Header.Get("Access-Control-Allow-Origin")
 			if acao == "*" || strings.EqualFold(acao, "https://attacker.example.com") {
 				emitted[fid] = true
-				findings = append(findings, oauthSessionFinding(
+				appendVerified(oauthSessionFinding(
 					fid, ep, model.SeverityMedium,
 					"OAuth token endpoint allows cross-origin requests from arbitrary origins",
 					fmt.Sprintf(
@@ -475,7 +494,7 @@ refreshProbe:
 						"accessControlAllowOrigin": acao,
 						"attackerOrigin":           "https://attacker.example.com",
 					},
-				))
+				), []EvidenceSignal{EvidenceHeaderDelta, EvidenceStatusDelta})
 				break
 			}
 		}
@@ -508,7 +527,7 @@ refreshProbe:
 										!strings.Contains(strings.ToLower(string(controlBody)), "unauthorized")
 									if candidateStatus >= 200 && candidateStatus < 300 && !controlAccepted {
 										emitted[fid] = true
-										findings = append(findings, oauthSessionFinding(
+										appendVerified(oauthSessionFinding(
 											fid, target, model.SeverityHigh,
 											"JWT accepted without audience (aud) claim — audience validation missing",
 											fmt.Sprintf(
@@ -528,7 +547,7 @@ refreshProbe:
 												"controlTokenRejected": "true",
 												"controlStatus":        fmt.Sprintf("%d", controlResp.StatusCode),
 											},
-										))
+										), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
 									}
 								}
 							}
