@@ -238,6 +238,15 @@ var rulesByCategory = map[string][]requirement{
 			return strings.TrimSpace(f.AffectedURL) != ""
 		}},
 	},
+	"prototype_pollution": {
+		{name: "polluted_marker_observed", hit: func(blob string, _ model.Finding) bool {
+			return hasAny(blob, "prototype pollution", "proto-pollution", "polluted marker", "polluted response", "marker")
+		}},
+		{name: "differential_or_control_signal", hit: func(blob string, f model.Finding) bool {
+			return hasAny(blob, "differential", "control", "follow-up", "response shape") ||
+				strings.EqualFold(strings.TrimSpace(f.EvidenceFields["oracleName"]), "active_prototype_pollution")
+		}},
+	},
 	"authentication": {
 		{name: "auth_flow_or_token_surface", hit: func(blob string, f model.Finding) bool {
 			return strings.TrimSpace(f.AffectedURL) != "" ||
@@ -259,21 +268,22 @@ var rulesByCategory = map[string][]requirement{
 // claimed severity. Critical/high-value exploit classes require full (1.0)
 // coverage; medium-risk classes require 0.66; low/informational classes 0.50.
 var categoryMinCoverage = map[string]float64{
-	"sqli":           1.0,
-	"ssrf":           1.0,
-	"xxe":            1.0,
-	"ssti":           1.0,
-	"nosqli":         1.0,
-	"xss":            0.66,
-	"idor":           0.66,
-	"path_traversal": 0.66,
-	"open_redirect":  0.66,
-	"cors":           0.66,
-	"csrf":           0.66,
-	"clickjacking":   1.0,
-	"authentication": 0.66,
-	"headers":        0.50,
-	"wordlist":       0.50,
+	"sqli":                1.0,
+	"ssrf":                1.0,
+	"xxe":                 1.0,
+	"ssti":                1.0,
+	"nosqli":              1.0,
+	"xss":                 0.66,
+	"idor":                0.66,
+	"path_traversal":      0.66,
+	"open_redirect":       0.66,
+	"cors":                0.66,
+	"csrf":                0.66,
+	"clickjacking":        1.0,
+	"authentication":      0.66,
+	"prototype_pollution": 0.50,
+	"headers":             0.50,
+	"wordlist":            0.50,
 }
 
 func EvaluateFinding(f model.Finding) Result {
@@ -341,6 +351,8 @@ func canonicalCategory(category string) string {
 		return "csrf"
 	case "clickjacking", "ui_redress", "ui_redressing":
 		return "clickjacking"
+	case "prototype_pollution", "prototype_polution", "prototype-pollution", "prototypepollution":
+		return "prototype_pollution"
 	case "authentication", "auth", "session_auth", "oauth", "oidc":
 		return "authentication"
 	case "authorization":

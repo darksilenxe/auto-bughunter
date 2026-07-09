@@ -12,6 +12,7 @@ import (
 )
 
 func TestRunActivePrototypePollutionProbe_FindsVulnerability(t *testing.T) {
+	ResetVerificationMetrics()
 	var polluted string
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v := r.URL.Query().Get("__proto__[polluted]"); v != "" {
@@ -36,6 +37,12 @@ func TestRunActivePrototypePollutionProbe_FindsVulnerability(t *testing.T) {
 	}
 	if findings[0].ID != "active-prototype-pollution" || findings[0].Severity != model.SeverityHigh || findings[0].CWE != "CWE-1321" {
 		t.Fatalf("unexpected finding: %+v", findings[0])
+	}
+	if findings[0].Category != "input-validation" {
+		t.Fatalf("expected external category to be preserved, got %q", findings[0].Category)
+	}
+	if findings[0].EvidenceFields["preReport.verified"] != "true" {
+		t.Fatalf("expected finding to be marked as verified; evidence fields: %+v", findings[0].EvidenceFields)
 	}
 }
 

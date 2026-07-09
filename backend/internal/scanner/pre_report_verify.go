@@ -300,21 +300,22 @@ func (c *verificationCounters) snapshot() PreReportMetrics {
 // successful PoC replay. Categories with a hard proof-obligation (SQLi,
 // SSRF, XXE, SSTI, NoSQLi) require 3 signals; medium classes 2; low 1.
 var categoryEvidenceMinimum = map[string]int{
-	"sqli":           3,
-	"ssrf":           3,
-	"xxe":            3,
-	"ssti":           3,
-	"nosqli":         3,
-	"xss":            2,
-	"idor":           2,
-	"path_traversal": 2,
-	"open_redirect":  2,
-	"cors":           2,
-	"csrf":           2,
-	"clickjacking":   2,
-	"authentication": 2,
-	"headers":        1,
-	"wordlist":       1,
+	"sqli":                3,
+	"ssrf":                3,
+	"xxe":                 3,
+	"ssti":                3,
+	"nosqli":              3,
+	"xss":                 2,
+	"idor":                2,
+	"path_traversal":      2,
+	"open_redirect":       2,
+	"cors":                2,
+	"csrf":                2,
+	"clickjacking":        2,
+	"authentication":      2,
+	"prototype_pollution": 2,
+	"headers":             1,
+	"wordlist":            1,
 }
 
 // EvidenceMinimumForCategory returns the min-N-of-M evidence threshold for
@@ -565,6 +566,8 @@ func canonicalCategoryLower(category string) string {
 		return "csrf"
 	case "ui_redress", "ui_redressing":
 		return "clickjacking"
+	case "prototype_pollution", "prototype-pollution", "prototypepollution":
+		return "prototype_pollution"
 	case "security_headers":
 		return "headers"
 	case "wordlist_discovery", "content_discovery":
