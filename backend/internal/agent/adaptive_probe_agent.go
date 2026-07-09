@@ -148,6 +148,7 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	stepsConfirmed := 0
 	stepsWAFBlocked := 0
 	stepsNearMiss := 0
+	stepsAttackPathGuided := 0
 	stopReason := ""
 
 	// confirmedCounts tracks how many distinct probes have confirmed a finding
@@ -167,7 +168,7 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		case <-ctx.Done():
 			output.Status = "partial"
 			output.DebugNotes = "AdaptiveProbeAgent: cancelled by context"
-			a.writeMetadata(&output, stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss)
+			a.writeMetadata(&output, stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss, stepsAttackPathGuided, input.Options.UseAttackPathAgent)
 			return output, ctx.Err()
 		default:
 		}
@@ -183,6 +184,7 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			endpoints,
 			budgetLeft,
 			input.Options.ImpactGoals,
+			input.Options.UseAttackPathAgent,
 			probePolicy,
 		)
 
@@ -196,14 +198,16 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				AgentName: a.Name(),
 				Message:   fmt.Sprintf("[adaptive] AI stopped after %d step(s): %s", stepsExecuted, stopReason),
 				Metadata: map[string]string{
-					"step":       itoa(step),
-					"status":     "ai_stopped",
-					"stopReason": stopReason,
-					"stepsRun":   itoa(stepsExecuted),
-					"confirmed":  itoa(stepsConfirmed),
-					"wafBlocked": itoa(stepsWAFBlocked),
-					"nearMiss":   itoa(stepsNearMiss),
-					"budgetLeft": itoa(budgetLeft),
+					"step":                 itoa(step),
+					"status":               "ai_stopped",
+					"stopReason":           stopReason,
+					"stepsRun":             itoa(stepsExecuted),
+					"confirmed":            itoa(stepsConfirmed),
+					"wafBlocked":           itoa(stepsWAFBlocked),
+					"nearMiss":             itoa(stepsNearMiss),
+					"budgetLeft":           itoa(budgetLeft),
+					"attackPathEnabled":    boolStr(input.Options.UseAttackPathAgent),
+					"attackPathInfluenced": itoa(stepsAttackPathGuided),
 				},
 			})
 			break
@@ -226,6 +230,9 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 
 		// ── Emit the AI's reasoning before executing the probe ────────────
 		// This is what the operator sees in real time: WHY the AI chose this.
+		if decision.AttackPathInfluenced {
+			stepsAttackPathGuided++
+		}
 		Emit(input.Emit, model.ScanEvent{
 			Type:      model.ScanEventReasoningLoop,
 			AgentName: a.Name(),
@@ -236,15 +243,18 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 				decision.Rationale,
 			),
 			Metadata: map[string]string{
-				"step":          itoa(step),
-				"status":        "ai_decision",
-				"category":      decision.Category,
-				"endpoint":      decision.Endpoint,
-				"paramName":     decision.ParamName,
-				"payload":       decision.Payload,
-				"rationale":     decision.Rationale,
-				"goalAlignment": fmt.Sprintf("%.2f", decision.GoalAlignment),
-				"budgetLeft":    itoa(budgetLeft),
+				"step":                 itoa(step),
+				"status":               "ai_decision",
+				"category":             decision.Category,
+				"endpoint":             decision.Endpoint,
+				"paramName":            decision.ParamName,
+				"payload":              decision.Payload,
+				"rationale":            decision.Rationale,
+				"goalAlignment":        fmt.Sprintf("%.2f", decision.GoalAlignment),
+				"budgetLeft":           itoa(budgetLeft),
+				"attackPathEnabled":    boolStr(input.Options.UseAttackPathAgent),
+				"attackPathInfluenced": boolStr(decision.AttackPathInfluenced),
+				"attackPathSignal":     decision.AttackPathSignal,
 			},
 		})
 
@@ -420,10 +430,10 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		output.Findings = append(output.Findings, chainFindings...)
 	}
 
-	a.writeMetadata(&output, stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss)
+	a.writeMetadata(&output, stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss, stepsAttackPathGuided, input.Options.UseAttackPathAgent)
 	baseNotes := fmt.Sprintf(
-		"AdaptiveProbeAgent: %d step(s) executed, %d confirmed, %d WAF-blocked, %d near-miss. Stop: %s",
-		stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss, stopReason,
+		"AdaptiveProbeAgent: %d step(s) executed, %d confirmed, %d WAF-blocked, %d near-miss, %d attack-path-guided. Stop: %s",
+		stepsExecuted, stepsConfirmed, stepsWAFBlocked, stepsNearMiss, stepsAttackPathGuided, stopReason,
 	)
 	if output.DebugNotes != "" {
 		output.DebugNotes = output.DebugNotes + " | " + baseNotes
@@ -456,11 +466,13 @@ func buildPriorProbeSummary(priors []memory.ProbeMemory) string {
 	return strings.Join(parts, "; ")
 }
 
-func (a *AdaptiveProbeAgent) writeMetadata(out *AgentOutput, steps, confirmed, wafBlocked, nearMiss int) {
+func (a *AdaptiveProbeAgent) writeMetadata(out *AgentOutput, steps, confirmed, wafBlocked, nearMiss, attackPathGuided int, attackPathEnabled bool) {
 	out.Metadata["adaptive_steps"] = itoa(steps)
 	out.Metadata["adaptive_confirmed"] = itoa(confirmed)
 	out.Metadata["adaptive_waf_blocked"] = itoa(wafBlocked)
 	out.Metadata["adaptive_near_miss"] = itoa(nearMiss)
+	out.Metadata["adaptive_attack_path_guided"] = itoa(attackPathGuided)
+	out.Metadata["adaptive_attack_path_enabled"] = boolStr(attackPathEnabled)
 	out.Metadata["adaptive_budget"] = itoa(a.StepBudget)
 }
 

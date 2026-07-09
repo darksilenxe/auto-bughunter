@@ -3,6 +3,9 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
@@ -53,6 +56,12 @@ type ProbeDecision struct {
 
 	// StopReason explains why the AI decided to stop iterating.
 	StopReason string `json:"stopReason,omitempty"`
+
+	// AttackPathInfluenced indicates the decision matched a ranked live
+	// attack-path signal and was therefore chain-guided.
+	AttackPathInfluenced bool `json:"attackPathInfluenced,omitempty"`
+	// AttackPathSignal is a short identifier of the matched ranked signal.
+	AttackPathSignal string `json:"attackPathSignal,omitempty"`
 }
 
 // probeObservation is a compact, prompt-serialisable view of one ProbeResult.
@@ -66,6 +75,13 @@ type probeObservation struct {
 	StatusCode  int    `json:"statusCode"`
 	Observation string `json:"observation"`
 	Confirmed   bool   `json:"confirmed"`
+}
+
+type attackPathSignal struct {
+	Category string  `json:"category"`
+	Endpoint string  `json:"endpoint,omitempty"`
+	Score    float64 `json:"score"`
+	Reason   string  `json:"reason,omitempty"`
 }
 
 // DecideNextProbe asks the configured AI model to choose the single most
@@ -93,10 +109,12 @@ func (c *Client) DecideNextProbe(
 	endpoints []string,
 	stepBudgetRemaining int,
 	goals []model.ImpactGoal,
+	attackPathEnabled bool,
 	policyPack ...string,
 ) ProbeDecision {
+	signals := buildAttackPathSignals(allFindings, probeHistory, endpoints)
 	if c == nil || !c.shouldCallProvider() {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals, attackPathEnabled, signals)
 	}
 
 	// Build compact observation history for the prompt.
@@ -150,6 +168,12 @@ func (c *Client) DecideNextProbe(
 		"appears clean, set action='stop' and explain why in stopReason.\n" +
 		"When a 'knowledgeGuidance' field is present, prefer the techniques and payloads it describes " +
 		"(curated from HackTricks / PayloadsAllTheThings) when they fit the observed evidence.\n"
+	if attackPathEnabled && len(signals) > 0 {
+		baseInstructions += "\nATTACK-PATH PRIORITY: A ranked 'attackPathSignals' list is provided. " +
+			"Prefer probes that advance the highest-scoring chain signal unless stronger immediate evidence " +
+			"(like waf_blocked/near_miss/server_error follow-ups) dictates otherwise. " +
+			"When you follow a signal, mention it briefly in rationale.\n"
+	}
 
 	// Inject policy-specific constraints based on the automation profile.
 	// Also parse the low-signal advisory suffix that the AdaptiveProbeAgent
@@ -212,6 +236,9 @@ func (c *Client) DecideNextProbe(
 		},
 		"instructions": baseInstructions,
 	}
+	if attackPathEnabled && len(signals) > 0 {
+		payload["attackPathSignals"] = signals
+	}
 	if len(goalStrs) > 0 {
 		payload["impactGoals"] = goalStrs
 	}
@@ -230,7 +257,7 @@ func (c *Client) DecideNextProbe(
 
 	userJSON, err := json.Marshal(payload)
 	if err != nil {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals, attackPathEnabled, signals)
 	}
 
 	messages := []Message{
@@ -244,12 +271,12 @@ func (c *Client) DecideNextProbe(
 
 	content, err := c.fastComplete(ctx, messages, 0.2, true)
 	if err != nil || content == "" {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals, attackPathEnabled, signals)
 	}
 
 	var decision ProbeDecision
 	if err := json.Unmarshal([]byte(content), &decision); err != nil {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals, attackPathEnabled, signals)
 	}
 
 	decision.Action = strings.ToLower(strings.TrimSpace(decision.Action))
@@ -263,9 +290,11 @@ func (c *Client) DecideNextProbe(
 
 	// Validate: probe decisions must have a category and endpoint.
 	if decision.Action == "probe" && (decision.Category == "" || decision.Endpoint == "") {
-		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals)
+		return localProbeDecision(target, allFindings, probeHistory, endpoints, stepBudgetRemaining, goals, attackPathEnabled, signals)
 	}
-
+	if attackPathEnabled && len(signals) > 0 {
+		decision = annotateAttackPathInfluence(decision, signals)
+	}
 	return decision
 }
 
@@ -289,6 +318,8 @@ func localProbeDecision(
 	endpoints []string,
 	stepBudgetRemaining int,
 	goals []model.ImpactGoal,
+	attackPathEnabled bool,
+	signals []attackPathSignal,
 ) ProbeDecision {
 	_ = goals
 	if stepBudgetRemaining <= 0 {
@@ -394,7 +425,25 @@ func localProbeDecision(
 		}
 	}
 
-	// Priority 4: Next uncovered (category, endpoint) combination.
+	// Priority 4: attack-path ranked chain signals (when enabled).
+	if attackPathEnabled {
+		for _, s := range signals {
+			k := triedKey{s.Category, s.Endpoint}
+			if _, seen := tried[k]; seen {
+				continue
+			}
+			return ProbeDecision{
+				Action:               "probe",
+				Category:             s.Category,
+				Endpoint:             s.Endpoint,
+				Rationale:            "Attack-path ranking prioritizes " + s.Category + " on " + s.Endpoint + " (" + s.Reason + "). Probing this chain signal before broad coverage expansion.",
+				AttackPathInfluenced: true,
+				AttackPathSignal:     formatAttackPathSignal(s),
+			}
+		}
+	}
+
+	// Priority 5: Next uncovered (category, endpoint) combination.
 	ep := target
 	if len(endpoints) > 0 {
 		ep = endpoints[0]
@@ -493,6 +542,213 @@ func truncateObs(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func buildAttackPathSignals(findings []model.Finding, history []model.ProbeResult, endpoints []string) []attackPathSignal {
+	type agg struct {
+		score   float64
+		reasons map[string]struct{}
+	}
+	defaultEndpoint := ""
+	if len(endpoints) > 0 {
+		defaultEndpoint = strings.TrimSpace(endpoints[0])
+	}
+	scores := map[string]*agg{}
+	add := func(cat, endpoint string, score float64, reason string) {
+		cat = normalizeAttackPathCategory(cat)
+		endpoint = strings.TrimSpace(endpoint)
+		if cat == "" {
+			return
+		}
+		if endpoint == "" {
+			endpoint = defaultEndpoint
+		}
+		if endpoint == "" {
+			return
+		}
+		k := cat + "|" + endpoint
+		item := scores[k]
+		if item == nil {
+			item = &agg{reasons: map[string]struct{}{}}
+			scores[k] = item
+		}
+		item.score += score
+		if reason != "" {
+			item.reasons[reason] = struct{}{}
+		}
+	}
+
+	for _, f := range findings {
+		ep := strings.TrimSpace(f.AffectedURL)
+		if ep == "" && f.EvidenceFields != nil {
+			ep = strings.TrimSpace(f.EvidenceFields["url"])
+		}
+		cat := normalizeAttackPathCategory(f.Category)
+		if cat != "" {
+			add(cat, ep, 0.9, "confirmed-category:"+cat)
+			for _, next := range attackPathTransitions[cat] {
+				add(next, ep, 0.55, "transition:"+cat+"->"+next)
+			}
+		}
+		if f.Exploitability != nil {
+			for _, hint := range f.Exploitability.AttackPathHints {
+				hint = strings.TrimSpace(hint)
+				if hint == "" {
+					continue
+				}
+				for _, hc := range categoriesFromAttackPathHint(hint) {
+					add(hc, ep, 1.1, "hint:"+hint)
+				}
+			}
+		}
+	}
+
+	for _, pr := range history {
+		cat := normalizeAttackPathCategory(pr.Category)
+		if cat == "" {
+			continue
+		}
+		ep := strings.TrimSpace(pr.Endpoint)
+		switch pr.Outcome {
+		case model.ProbeConfirmed:
+			add(cat, ep, 0.7, "confirmed-probe:"+cat)
+			for _, next := range attackPathTransitions[cat] {
+				add(next, ep, 0.45, "transition:"+cat+"->"+next)
+			}
+		case model.ProbeNearMiss, model.ProbeServerError:
+			add(cat, ep, 0.25, "live-signal:"+cat)
+		}
+	}
+
+	out := make([]attackPathSignal, 0, len(scores))
+	for key, item := range scores {
+		parts := strings.SplitN(key, "|", 2)
+		reasons := make([]string, 0, len(item.reasons))
+		for r := range item.reasons {
+			reasons = append(reasons, r)
+		}
+		sort.Strings(reasons)
+		out = append(out, attackPathSignal{
+			Category: parts[0],
+			Endpoint: parts[1],
+			Score:    round2(item.score),
+			Reason:   strings.Join(reasons, ","),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			if out[i].Category == out[j].Category {
+				return out[i].Endpoint < out[j].Endpoint
+			}
+			return out[i].Category < out[j].Category
+		}
+		return out[i].Score > out[j].Score
+	})
+	if len(out) > 8 {
+		out = out[:8]
+	}
+	return out
+}
+
+func annotateAttackPathInfluence(decision ProbeDecision, signals []attackPathSignal) ProbeDecision {
+	if decision.Action != "probe" || decision.Category == "" || decision.Endpoint == "" {
+		return decision
+	}
+	dcat := normalizeAttackPathCategory(decision.Category)
+	for _, s := range signals {
+		if s.Category != dcat {
+			continue
+		}
+		if s.Endpoint != "" && s.Endpoint != decision.Endpoint {
+			continue
+		}
+		decision.AttackPathInfluenced = true
+		if strings.TrimSpace(decision.AttackPathSignal) == "" {
+			decision.AttackPathSignal = formatAttackPathSignal(s)
+		}
+		return decision
+	}
+	return decision
+}
+
+func formatAttackPathSignal(s attackPathSignal) string {
+	return fmt.Sprintf("%s@%s(score=%.2f)", s.Category, s.Endpoint, s.Score)
+}
+
+var attackPathTransitions = map[string][]string{
+	"xss":           {"auth_bypass", "business_logic"},
+	"sqli":          {"auth_bypass", "ssrf"},
+	"open_redirect": {"auth_bypass", "xss"},
+	"cors":          {"auth_bypass", "xss"},
+	"ssrf":          {"auth_bypass", "business_logic"},
+	"auth_bypass":   {"idor", "business_logic"},
+	"idor":          {"auth_bypass", "business_logic"},
+	"ssti":          {"ssrf", "auth_bypass"},
+}
+
+func categoriesFromAttackPathHint(hint string) []string {
+	h := strings.ToLower(strings.TrimSpace(hint))
+	if h == "" {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	add := func(c string) {
+		c = normalizeAttackPathCategory(c)
+		if c == "" {
+			return
+		}
+		for _, existing := range out {
+			if existing == c {
+				return
+			}
+		}
+		out = append(out, c)
+	}
+	switch {
+	case strings.Contains(h, "auth"):
+		add("auth_bypass")
+	case strings.Contains(h, "idor"):
+		add("idor")
+	case strings.Contains(h, "sqli"), strings.Contains(h, "sql"):
+		add("sqli")
+	case strings.Contains(h, "xss"):
+		add("xss")
+	case strings.Contains(h, "cors"):
+		add("cors")
+	case strings.Contains(h, "redirect"):
+		add("open_redirect")
+	case strings.Contains(h, "ssti"):
+		add("ssti")
+	case strings.Contains(h, "ssrf"), strings.Contains(h, "metadata"):
+		add("ssrf")
+	case strings.Contains(h, "business"), strings.Contains(h, "workflow"), strings.Contains(h, "scope-tuning"):
+		add("business_logic")
+	}
+	for cat := range attackPathTransitions {
+		if strings.Contains(h, strings.ReplaceAll(cat, "_", "-")) || strings.Contains(h, cat) {
+			add(cat)
+		}
+	}
+	return out
+}
+
+func normalizeAttackPathCategory(category string) string {
+	c := strings.ToLower(strings.TrimSpace(category))
+	if c == "" {
+		return ""
+	}
+	c = strings.ReplaceAll(c, "-", "_")
+	c = strings.ReplaceAll(c, " ", "_")
+	switch c {
+	case "xss", "sqli", "cors", "open_redirect", "ssrf", "auth_bypass", "idor", "ssti", "business_logic":
+		return c
+	default:
+		return ""
+	}
+}
+
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
 }
 
 // probeKnowledgeCategories collects the distinct vulnerability categories
