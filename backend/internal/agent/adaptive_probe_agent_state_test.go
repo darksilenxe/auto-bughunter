@@ -46,3 +46,19 @@ func TestAssessProbeStateChange_NoMaterialDelta(t *testing.T) {
 		t.Fatalf("expected no-material message, got %q", msg)
 	}
 }
+
+func TestAdaptiveWriteMetadata_IncludesAttackPathCounters(t *testing.T) {
+	agent := &AdaptiveProbeAgent{StepBudget: 7}
+	out := &AgentOutput{Metadata: map[string]string{}}
+	agent.writeMetadata(out, 5, 2, 1, 1, 3, true)
+
+	if got := out.Metadata["adaptive_attack_path_guided"]; got != "3" {
+		t.Fatalf("adaptive_attack_path_guided = %q, want 3", got)
+	}
+	if got := out.Metadata["adaptive_attack_path_enabled"]; got != "true" {
+		t.Fatalf("adaptive_attack_path_enabled = %q, want true", got)
+	}
+	if got := out.Metadata["adaptive_budget"]; got != "7" {
+		t.Fatalf("adaptive_budget = %q, want 7", got)
+	}
+}
