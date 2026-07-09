@@ -183,7 +183,11 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 				},
 			}
 			AttachDifferentialEvidence(&finding, diffOutcome)
-			return []model.Finding{finding}
+			emitted, ok := phase1SubmitVerified(ctx, finding, "prototype_pollution", []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}, "active-prototype-pollution")
+			if !ok {
+				return nil
+			}
+			return []model.Finding{emitted}
 		}
 		if attempts >= prototypePollutionMaxAttempts {
 			break
@@ -275,7 +279,11 @@ func (s *Service) runActivePrototypePollutionProbe(ctx context.Context, input Ru
 			},
 		}
 		AttachDifferentialEvidence(&finding, diffOutcome)
-		return []model.Finding{finding}
+		emitted, ok := phase1SubmitVerified(ctx, finding, "prototype_pollution", []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}, "active-prototype-pollution")
+		if !ok {
+			return nil
+		}
+		return []model.Finding{emitted}
 	}
 	return nil
 }
