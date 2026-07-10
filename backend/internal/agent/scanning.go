@@ -47,20 +47,24 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	}
 
 	findings, err := a.scanService.Run(ctx, scanner.RunInput{
-		Target:      input.Target,
-		AuthProfile: input.AuthProfile,
-		Options:     input.Options,
-		Scope:       input.Scope,
-		Emit:        input.Emit,
+		Target:        input.Target,
+		AuthProfile:   input.AuthProfile,
+		Options:       input.Options,
+		Scope:         input.Scope,
+		Emit:          input.Emit,
+		ProbeRecorder: input.ProbeRecorder,
+		ScanID:        input.ScanID,
 	})
 	if err != nil {
 		if hasAuth(input.AuthProfile) {
 			unauthFindings, fallbackErr := a.scanService.Run(ctx, scanner.RunInput{
-				Target:      input.Target,
-				AuthProfile: model.ScanAuthProfile{},
-				Options:     input.Options,
-				Scope:       input.Scope,
-				Emit:        input.Emit,
+				Target:        input.Target,
+				AuthProfile:   model.ScanAuthProfile{},
+				Options:       input.Options,
+				Scope:         input.Scope,
+				Emit:          input.Emit,
+				ProbeRecorder: input.ProbeRecorder,
+				ScanID:        input.ScanID,
 			})
 			if fallbackErr == nil {
 				output.Findings = append(output.Findings, unauthFindings...)
