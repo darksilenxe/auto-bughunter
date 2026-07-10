@@ -171,6 +171,12 @@ type RunInput struct {
 	// populated automatically by Run() before any active probes launch so
 	// all probes can consult it without re-issuing the canary request.
 	WAFFingerprint WAFFingerprint
+	// ProbeRecorder is an optional callback that persists individual probe
+	// outcomes so that the Probe History and Probe Coverage UIs can display
+	// them. When nil, probe records are not persisted (backward-compatible).
+	ProbeRecorder ProbeRecorder
+	// ScanID is the parent scan job ID. Required when ProbeRecorder is set.
+	ScanID string
 }
 
 func NewService(cfg Config) *Service {
@@ -489,6 +495,10 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// re-queued into a bounded second probe pass below.
 	gaps := DetectSurfaceGaps(input.Session.SurfaceInventory())
 	findings = append(findings, s.runGapReQueuePass(ctx, input, bodyText, gaps)...)
+
+	// Persist probe records for the Probe Coverage and Findings probe-history
+	// UIs. Fire-and-forget; never blocks the caller.
+	s.saveProbeRecords(input.ProbeRecorder, input.ScanID, input.Target, findings)
 
 	return findings, nil
 }
