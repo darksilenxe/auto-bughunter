@@ -4,6 +4,10 @@ This repository is a file-based openhack workspace. When a human asks to
 start, initiate, run, resume, or continue a pentest/security review, use the
 tool structure before doing vulnerability analysis.
 
+For backend agent responsibility boundaries outside the run-flow protocol below,
+use `/home/runner/work/auto-bughunter/auto-bughunter/docs/skills/README.md` and
+its SKILL files as the source of truth.
+
 ## Required Pentest Flow
 
 Do not begin with a broad LLM source sweep, direct expert pass, or ad hoc manual
