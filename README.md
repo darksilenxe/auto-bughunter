@@ -11,6 +11,10 @@ OpenHack-inspired agent prompt references are available under
 [`docs/openhack/`](./docs/openhack/) (imported from
 [hadriansecurity/openhack](https://github.com/hadriansecurity/openhack)).
 
+Agent responsibility SKILL files (scope, constraints, and handoffs) are tracked
+under [`docs/skills/`](./docs/skills/), with
+[`docs/skills/README.md`](./docs/skills/README.md) as the source of truth.
+
 ## Important Use Policy
 
 This project is designed for defensive testing on systems you own or are explicitly authorized to test.
