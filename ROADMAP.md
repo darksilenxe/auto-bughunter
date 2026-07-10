@@ -43,6 +43,24 @@ This roadmap now focuses on finishing the remaining productization and enterpris
 - Public benchmark suite + CI regression gates + release scorecards as a continuous moat.
 - Intercept proxy plugin platform groundwork, rollout, and governance (free plugin store + performance transparency + container/API contracts).
 
+### Autonomous Agentic Platform Implementation Backlog
+
+- [ ] Implement policy-aware runtime model/prompt tuning profiles with full audit traces.
+- [ ] Implement per-target adaptive strategy using historical drift, ROI, and prior exploit success.
+- [ ] Build autonomous campaign planner that continuously discovers targets, clusters by asset risk, and auto-schedules scans within policy budgets.
+- [ ] Add autonomous retest loop that verifies remediations and reopens findings when regressions appear.
+- [ ] Add exploit-validation sandbox with strict isolation for safe live PoC execution and replayable proof artifacts.
+- [ ] Add automatic bounty-report submission adapters (HackerOne/Bugcrowd APIs), including program-specific formatting and duplicate pre-checks.
+- [ ] Add auto-triage + auto-suppression governance with confidence thresholds, reviewer override flows, and drift alerts.
+- [ ] Add outcome-learning loop from bounty responses (duplicate/N-A/accepted/payout) directly into ranking and probe planning.
+- [ ] Implement Jira/Linear bidirectional sync with ownership SLAs and remediation state reconciliation.
+- [ ] Ship decision dashboards for risk burn-down, MTTR, true-positive trend, exploitability trend, and payout ROI.
+- [ ] Define and enforce orchestration/queueing SLOs with auto-scaling and backpressure controls.
+- [ ] Complete proxy plugin platform: catalog lifecycle, signing/review pipeline, capability sandbox, compatibility gates, and perf-cost enforcement.
+- [ ] Add benchmark-gated release quality: public benchmark suite, CI regression gates, and release scorecards.
+- [ ] Add immutable evidence chain-of-custody for every autonomous decision/finding/report for audit and legal defensibility.
+- [ ] Add autonomy guardrails that pause or de-escalate scans on scope ambiguity, legal-risk signals, or anomalous behavior.
+
 ---
 
 ## Wave 1 — Trust + Quality Foundations
