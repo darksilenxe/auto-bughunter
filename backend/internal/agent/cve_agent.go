@@ -39,8 +39,9 @@ import (
 // The agent never invents PoC requests itself — it only ever fires what the
 // AI proposed, and only after the safety/scope gates above pass.
 type CVEResearchAgent struct {
-	enabled  bool
-	aiClient *ai.Client
+	enabled            bool
+	aiClient           *ai.Client
+	discoverRecentCVEs func(context.Context, []model.Finding, cve.DiscoveryOptions) ([]cve.DiscoveredCVE, error)
 }
 
 // maxCVEsPerRun bounds how many distinct CVE identifiers are analysed in a
@@ -56,7 +57,11 @@ const cvePoCTimeout = 15 * time.Second
 // summary, CWE/CVSS from the offline knowledge base, references) but performs
 // no AI-driven root-cause analysis and proposes no PoC.
 func NewCVEResearchAgent(enabled bool, aiClient *ai.Client) *CVEResearchAgent {
-	return &CVEResearchAgent{enabled: enabled, aiClient: aiClient}
+	return &CVEResearchAgent{
+		enabled:            enabled,
+		aiClient:           aiClient,
+		discoverRecentCVEs: cve.DiscoverRecentWebCVEs,
+	}
 }
 
 func (a *CVEResearchAgent) Name() string  { return "cve_reverse_engineer" }
@@ -85,6 +90,28 @@ func (a *CVEResearchAgent) Run(ctx context.Context, input AgentInput) (AgentOutp
 		return output, nil
 	}
 
+	recentDiscovered := 0
+	recentDiscoveryNote := ""
+	if input.Options.UseRecentCVEFeed && a.discoverRecentCVEs != nil {
+		recentCVEs, err := a.discoverRecentCVEs(ctx, allFindings, cve.DiscoveryOptions{})
+		if err != nil {
+			recentDiscoveryNote = fmt.Sprintf(" recent-discovery-error=%v.", err)
+		} else {
+			for _, rec := range recentCVEs {
+				finding := buildRecentCVEFinding(rec.Record, rec.MatchedTechnologies)
+				output.Findings = append(output.Findings, finding)
+				Emit(input.Emit, model.ScanEvent{
+					Type:         model.ScanEventFinding,
+					AgentName:    a.Name(),
+					FindingTitle: finding.Title,
+					Severity:     string(finding.Severity),
+					Message:      fmt.Sprintf("[%s] %s", finding.Severity, finding.Title),
+				})
+			}
+			recentDiscovered = len(recentCVEs)
+		}
+	}
+
 	// Detect CVEs across all findings, remembering the first finding each
 	// CVE was seen on so the AI analysis has real evidence to work from.
 	type cveHit struct {
@@ -104,7 +131,17 @@ func (a *CVEResearchAgent) Run(ctx context.Context, input AgentInput) (AgentOutp
 	}
 
 	if len(hits) == 0 {
-		output.DebugNotes = "CVEResearchAgent: no CVE identifiers detected in findings; skipping"
+		output.Metadata["cves_detected"] = "0"
+		output.Metadata["cves_analyzed"] = "0"
+		output.Metadata["pocs_proposed"] = "0"
+		output.Metadata["pocs_executed"] = "0"
+		output.Metadata["pocs_confirmed"] = "0"
+		output.Metadata["cves_recent_discovered"] = fmt.Sprintf("%d", recentDiscovered)
+		if recentDiscovered == 0 {
+			output.DebugNotes = "CVEResearchAgent: no CVE identifiers detected in findings; skipping"
+		} else {
+			output.DebugNotes = fmt.Sprintf("CVEResearchAgent: no existing CVE-tagged findings; recent discovery added %d CVE(s).", recentDiscovered)
+		}
 		return output, nil
 	}
 
@@ -181,11 +218,49 @@ done:
 	output.Metadata["pocs_proposed"] = fmt.Sprintf("%d", pocsProposed)
 	output.Metadata["pocs_executed"] = fmt.Sprintf("%d", pocsExecuted)
 	output.Metadata["pocs_confirmed"] = fmt.Sprintf("%d", pocsConfirmed)
+	output.Metadata["cves_recent_discovered"] = fmt.Sprintf("%d", recentDiscovered)
 	output.DebugNotes = fmt.Sprintf(
-		"CVEResearchAgent: analysed %d of %d detected CVE(s); proposed %d PoC(s), executed %d, confirmed %d.",
-		analyzed, len(hits), pocsProposed, pocsExecuted, pocsConfirmed,
+		"CVEResearchAgent: analysed %d of %d detected CVE(s); recent discovery added %d CVE(s); proposed %d PoC(s), executed %d, confirmed %d.%s",
+		analyzed, len(hits), recentDiscovered, pocsProposed, pocsExecuted, pocsConfirmed, recentDiscoveryNote,
 	)
 	return output, nil
+}
+
+func buildRecentCVEFinding(rec cve.Record, matchedTech []string) model.Finding {
+	cveID := cve.Normalize(rec.ID)
+	title := fmt.Sprintf("Newly published CVE relevant to detected stack: %s", cveID)
+	evidence := "source=nvd-recent"
+	if rec.PublishedDate != "" {
+		evidence += ", published=" + rec.PublishedDate
+	}
+	if len(matchedTech) > 0 {
+		evidence += ", matchedTech=" + strings.Join(matchedTech, ",")
+	}
+	desc := strings.TrimSpace(rec.Summary)
+	if desc == "" {
+		desc = fmt.Sprintf("%s was recently published and appears relevant to observed technologies.", cveID)
+	}
+	return model.Finding{
+		ID:             fmt.Sprintf("recent-cve-%s", strings.ToLower(cveID)),
+		Category:       "known_vulnerability",
+		Severity:       model.SeverityInfo,
+		Title:          title,
+		Description:    desc,
+		Evidence:       evidence,
+		Recommendation: "Validate affected component versions and patch status against this newly published CVE.",
+		CWE:            rec.CWE,
+		CVSSVector:     rec.CVSSVector,
+		CVSSScore:      rec.CVSSScore,
+		References:     append([]string{}, rec.References...),
+		Sources:        []string{"cve-discovery", "nvd-recent"},
+		Confidence:     0.35,
+		EvidenceFields: map[string]string{
+			"cveId":              cveID,
+			"cveKnowledgeSource": rec.Source,
+			"publishedDate":      rec.PublishedDate,
+			"matchedTech":        strings.Join(matchedTech, ","),
+		},
+	}
 }
 
 // buildCVEFinding assembles the base finding for a detected CVE, populating

@@ -19,12 +19,14 @@ var idPattern = regexp.MustCompile(`(?i)CVE-\d{4}-\d{4,7}`)
 // Record is a small, structured summary of a known CVE, sourced either from
 // the bundled offline knowledge base or from a live lookup client.
 type Record struct {
-	ID         string
-	Summary    string
-	CWE        string
-	CVSSVector string
-	CVSSScore  float64
-	References []string
+	ID                  string
+	Summary             string
+	CWE                 string
+	CVSSVector          string
+	CVSSScore           float64
+	References          []string
+	PublishedDate       string
+	MatchedTechnologies []string
 	// Source describes where this record came from (e.g. "offline", "nvd").
 	Source string
 }
