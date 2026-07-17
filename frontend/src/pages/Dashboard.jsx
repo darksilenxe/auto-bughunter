@@ -19,6 +19,7 @@ const SCENARIOS = {
     useAttackPath: true,
     useFalsePositiveReview: true,
     useRemediationPlanner: false,
+    useRecentCVEFeed: true,
     aggressiveExploitation: false,
     strictReporting: false,
     minReportConfidence: "",
@@ -37,6 +38,7 @@ const SCENARIOS = {
     useAttackPath: true,
     useFalsePositiveReview: true,
     useRemediationPlanner: true,
+    useRecentCVEFeed: true,
     aggressiveExploitation: true,
     strictReporting: false,
     minReportConfidence: "",
@@ -55,6 +57,7 @@ const SCENARIOS = {
     useAttackPath: true,
     useFalsePositiveReview: true,
     useRemediationPlanner: false,
+    useRecentCVEFeed: true,
     aggressiveExploitation: false,
     strictReporting: true,
     minReportConfidence: "0.80",
@@ -102,6 +105,7 @@ export default function Dashboard() {
   const [useAttackPath, setUseAttackPath] = useState(true);
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(true);
   const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
+  const [useRecentCVEFeed, setUseRecentCVEFeed] = useState(true);
   const [useAIToolCalling, setUseAIToolCalling] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("bugbounty");
@@ -162,7 +166,7 @@ export default function Dashboard() {
       basicAuthUsername, basicAuthPassword,
       includeHosts, excludeHosts, excludePaths, programRules,
       useNuclei, useZap, useXSSMap, useUISimulation, useMLTriage, useAttackPath,
-      useFalsePositiveReview, useRemediationPlanner, useAIToolCalling,
+      useFalsePositiveReview, useRemediationPlanner, useRecentCVEFeed, useAIToolCalling,
       aggressiveExploitation, humanPaced, strictReporting, minReportConfidence,
       loginSteps, impactGoals,
     };
@@ -194,6 +198,7 @@ export default function Dashboard() {
     if (cfg.useAttackPath !== undefined) setUseAttackPath(cfg.useAttackPath);
     if (cfg.useFalsePositiveReview !== undefined) setUseFalsePositiveReview(cfg.useFalsePositiveReview);
     if (cfg.useRemediationPlanner !== undefined) setUseRemediationPlanner(cfg.useRemediationPlanner);
+    if (cfg.useRecentCVEFeed !== undefined) setUseRecentCVEFeed(cfg.useRecentCVEFeed);
     if (cfg.useAIToolCalling !== undefined) setUseAIToolCalling(cfg.useAIToolCalling);
     if (cfg.aggressiveExploitation !== undefined) setAggressiveExploitation(cfg.aggressiveExploitation);
     if (cfg.humanPaced !== undefined) setHumanPaced(cfg.humanPaced);
@@ -238,6 +243,7 @@ export default function Dashboard() {
     setUseAttackPath(preset.useAttackPath);
     setUseFalsePositiveReview(preset.useFalsePositiveReview);
     setUseRemediationPlanner(preset.useRemediationPlanner);
+    setUseRecentCVEFeed(preset.useRecentCVEFeed ?? true);
     setAggressiveExploitation(preset.aggressiveExploitation);
     setStrictReporting(preset.strictReporting ?? false);
     setMinReportConfidence(preset.minReportConfidence ?? "");
@@ -315,6 +321,7 @@ export default function Dashboard() {
         useAttackPathAgent: useAttackPath,
         useFalsePositiveReview,
         useRemediationPlanner,
+        useRecentCveFeed: useRecentCVEFeed || undefined,
         useAIToolCalling,
         aggressiveExploitation,
         humanPaced: humanPaced || undefined,
@@ -635,6 +642,7 @@ export default function Dashboard() {
                 <label className="check"><input type="checkbox" checked={useAttackPath} onChange={(e) => setUseAttackPath(e.target.checked)} />Attack path agent</label>
                 <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
                 <label className="check"><input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />Remediation planner</label>
+                <label className="check"><input type="checkbox" checked={useRecentCVEFeed} onChange={(e) => setUseRecentCVEFeed(e.target.checked)} />Recent/undiscovered CVE discovery</label>
                 <label className="check"><input type="checkbox" checked={useAIToolCalling} onChange={(e) => setUseAIToolCalling(e.target.checked)} />AI tool-calling (build &amp; run custom probes)</label>
                 <label className="check"><input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />Aggressive exploitation</label>
                 <label className="check"><input type="checkbox" checked={humanPaced} onChange={(e) => setHumanPaced(e.target.checked)} />Human-paced (1–2 min between tools)</label>

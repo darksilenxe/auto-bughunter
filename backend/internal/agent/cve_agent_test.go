@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"auto-bughunter/backend/internal/ai"
+	"auto-bughunter/backend/internal/cve"
 	"auto-bughunter/backend/internal/model"
 )
 
@@ -218,5 +220,122 @@ func TestCVEResearchAgent_RegisteredInFactory(t *testing.T) {
 	}
 	if a.Name() != "cve_reverse_engineer" {
 		t.Errorf("expected name cve_reverse_engineer, got %q", a.Name())
+	}
+}
+
+func TestCVEResearchAgent_RecentCVEDiscoveryGatedByOption(t *testing.T) {
+	a := NewCVEResearchAgent(true, nil)
+	called := false
+	a.discoverRecentCVEs = func(ctx context.Context, findings []model.Finding, opts cve.DiscoveryOptions) ([]cve.DiscoveredCVE, error) {
+		called = true
+		return []cve.DiscoveredCVE{
+			{
+				Record: cve.Record{
+					ID:            "CVE-2026-1111",
+					Summary:       "WordPress reflected XSS",
+					Source:        "nvd-recent",
+					PublishedDate: "2026-07-17T00:00:00Z",
+				},
+				MatchedTechnologies: []string{"WordPress"},
+			},
+		}, nil
+	}
+
+	input := AgentInput{
+		Target: "https://example.com",
+		Options: model.ScanOptions{
+			UseRecentCVEFeed: false,
+		},
+		AllFindings: []model.Finding{{
+			ID:          "integration",
+			Description: "wappalyzergo identified WordPress",
+		}},
+	}
+	out, err := a.Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called {
+		t.Fatal("expected recent CVE discovery to be skipped when UseRecentCVEFeed=false")
+	}
+	if got := out.Metadata["cves_recent_discovered"]; got != "0" {
+		t.Fatalf("expected cves_recent_discovered=0, got %q", got)
+	}
+}
+
+func TestCVEResearchAgent_RecentCVEDiscoveryEmitsInformationalFindings(t *testing.T) {
+	a := NewCVEResearchAgent(true, nil)
+	a.discoverRecentCVEs = func(ctx context.Context, findings []model.Finding, opts cve.DiscoveryOptions) ([]cve.DiscoveredCVE, error) {
+		return []cve.DiscoveredCVE{
+			{
+				Record: cve.Record{
+					ID:            "CVE-2026-1111",
+					Summary:       "WordPress plugin reflected XSS",
+					CWE:           "CWE-79",
+					CVSSVector:    "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+					CVSSScore:     8.2,
+					References:    []string{"https://nvd.nist.gov/vuln/detail/CVE-2026-1111"},
+					Source:        "nvd-recent",
+					PublishedDate: "2026-07-17T00:00:00Z",
+				},
+				MatchedTechnologies: []string{"WordPress"},
+			},
+		}, nil
+	}
+
+	input := AgentInput{
+		Target: "https://example.com",
+		Options: model.ScanOptions{
+			UseRecentCVEFeed: true,
+		},
+		AllFindings: []model.Finding{{
+			ID:          "stack",
+			Category:    "integration",
+			Description: "wappalyzergo identified WordPress",
+		}},
+	}
+	out, err := a.Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := out.Metadata["cves_recent_discovered"]; got != "1" {
+		t.Fatalf("expected cves_recent_discovered=1, got %q", got)
+	}
+	found := false
+	for _, f := range out.Findings {
+		if f.EvidenceFields["cveId"] == "CVE-2026-1111" && f.Severity == model.SeverityInfo {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected informational recent-CVE finding in output, got %+v", out.Findings)
+	}
+}
+
+func TestCVEResearchAgent_RecentCVEDiscoveryFailureDoesNotAbortRun(t *testing.T) {
+	a := NewCVEResearchAgent(true, nil)
+	a.discoverRecentCVEs = func(ctx context.Context, findings []model.Finding, opts cve.DiscoveryOptions) ([]cve.DiscoveredCVE, error) {
+		return nil, fmt.Errorf("feed down")
+	}
+	input := AgentInput{
+		Target: "https://example.com",
+		Options: model.ScanOptions{
+			UseRecentCVEFeed: true,
+		},
+		AllFindings: []model.Finding{{
+			ID:          "f1",
+			Title:       "Log4Shell",
+			Description: "CVE-2021-44228 detected",
+		}},
+	}
+	out, err := a.Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(out.Findings) != 1 {
+		t.Fatalf("expected fallback CVE analysis finding to still be produced, got %d", len(out.Findings))
+	}
+	if got := out.Metadata["cves_recent_discovered"]; got != "0" {
+		t.Fatalf("expected cves_recent_discovered=0 on discovery failure, got %q", got)
 	}
 }

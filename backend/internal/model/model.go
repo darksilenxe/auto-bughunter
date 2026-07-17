@@ -293,6 +293,12 @@ type ScanOptions struct {
 	// PoC request — no additional live requests are made beyond the scan's
 	// existing probes.
 	EnableCVEPoCExecution bool `json:"enableCvePocExecution,omitempty"`
+	// UseRecentCVEFeed enables external recent-CVE enrichment. When enabled, the
+	// cve_reverse_engineer agent fetches recently published CVEs from NVD,
+	// filters for web-app relevance, prioritizes entries matching detected stack
+	// technologies, and emits informational findings for potentially relevant
+	// newly published CVEs not already present in scan findings.
+	UseRecentCVEFeed bool `json:"useRecentCveFeed,omitempty"`
 	// UnsafeDynamicCommandFlags disables only per-tool command-flag allow-list
 	// checks for cmdbuilder-executed dynamic commands. Core protections remain:
 	// binary allow-list, blocked injection/path patterns, python sandboxing, and
