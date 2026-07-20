@@ -1514,15 +1514,16 @@ func (p *Postgres) GetLatestFindingVerifications(ctx context.Context, scanID str
 }
 
 // GetRejectedFindingsByTarget returns all finding verifications with
-// status "rejected" that belong to scans whose target matches the given
-// target string. These are used to suppress historically-rejected
-// fingerprints from being re-promoted as new findings in subsequent scans.
+// status "rejected" or "suppressed" that belong to scans whose target
+// matches the given target string. These are used to filter out
+// operator-dismissed findings from re-surfacing as new findings in
+// subsequent scans.
 func (p *Postgres) GetRejectedFindingsByTarget(ctx context.Context, target string) ([]model.FindingVerification, error) {
 	rows, err := p.queryContext(ctx, `
 		SELECT fv.id, fv.scan_id, fv.finding_id, fv.status, fv.notes, fv.verified_by, fv.owner, fv.created_at
 		FROM finding_verifications fv
 		JOIN scan_jobs sj ON sj.id = fv.scan_id
-		WHERE fv.status = 'rejected'
+		WHERE fv.status IN ('rejected', 'suppressed')
 		  AND sj.target = $1
 		ORDER BY fv.created_at DESC
 	`, target)

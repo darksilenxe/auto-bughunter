@@ -296,9 +296,9 @@ type Repository interface {
 	// category created at or after since, newest-first, up to limit rows.
 	ListProbeRecordsByCategory(ctx context.Context, category string, since time.Time, limit int) ([]model.ProbeRecord, error)
 	// GetRejectedFindingsByTarget returns all finding verifications with status
-	// "rejected" for findings associated with the given target host. The results
-	// are used to suppress historically-rejected findings from re-surfacing in
-	// subsequent scans.
+	// "rejected" or "suppressed" for findings associated with the given target
+	// host. The results are used to filter out operator-dismissed findings from
+	// re-surfacing as new findings in subsequent scans.
 	GetRejectedFindingsByTarget(ctx context.Context, target string) ([]model.FindingVerification, error)
 }
 
@@ -1196,35 +1196,16 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		job.Findings = append(job.Findings, deltaFindings...)
 		s.appendAuditEvent(id, "monitoring", fmt.Sprintf("Drift states: new=%d, changed=%d, resolved=%d", newItems, changedItems, resolvedItems))
 	}
-	// Suppress historically-rejected findings: look up operator-confirmed
-	// rejections for this target across all prior scans. Any current finding
-	// whose base fingerprint matches a rejected verification gets its
-	// confidence halved and its drift status marked "historically_rejected"
-	// so it stays visible for auditing while not meeting the strict-reporting
-	// threshold.
-	if rejectedVerifs, err := s.repo.GetRejectedFindingsByTarget(context.Background(), target); err == nil && len(rejectedVerifs) > 0 {
-		rejectedKeys := make(map[string]bool, len(rejectedVerifs))
-		for _, rv := range rejectedVerifs {
-			if rv.FindingID != "" {
-				rejectedKeys[rv.FindingID] = true
-			}
-		}
-		if len(rejectedKeys) > 0 {
-			suppressed := 0
-			for i, f := range job.Findings {
-				if rejectedKeys[fingerprintFindingBase(f)] || rejectedKeys[f.ID] {
-					job.Findings[i].Confidence *= 0.5
-					job.Findings[i].DriftStatus = "historically_rejected"
-					if job.Findings[i].EvidenceFields == nil {
-						job.Findings[i].EvidenceFields = map[string]string{}
-					}
-					job.Findings[i].EvidenceFields["historicallyRejected"] = "true"
-					suppressed++
-				}
-			}
-			if suppressed > 0 {
-				s.appendAuditEvent(id, "analysis", fmt.Sprintf("Suppressed %d historically-rejected findings", suppressed))
-			}
+	// Filter out historically-rejected or suppressed findings: look up
+	// operator-confirmed rejections and suppressions for this target across
+	// all prior scans. Any current finding whose ID matches a previously
+	// triaged finding is removed from the results so it does not reappear
+	// as a new finding on the triage board.
+	if dismissedVerifs, err := s.repo.GetRejectedFindingsByTarget(context.Background(), target); err == nil && len(dismissedVerifs) > 0 {
+		filtered, dismissed := filterDismissedFindings(job.Findings, dismissedVerifs)
+		job.Findings = filtered
+		if dismissed > 0 {
+			s.appendAuditEvent(id, "analysis", fmt.Sprintf("Filtered %d previously rejected/suppressed findings", dismissed))
 		}
 	}
 	if len(job.Findings) > len(findings) {
@@ -2617,6 +2598,34 @@ func isSuppressed(f model.Finding, target string, rules []model.SuppressionRule)
 		}
 	}
 	return false
+}
+
+// filterDismissedFindings removes findings whose IDs match any of the
+// provided operator verifications (rejected or suppressed from prior scans).
+// It returns the filtered slice and the number of findings removed.
+func filterDismissedFindings(findings []model.Finding, verifs []model.FindingVerification) ([]model.Finding, int) {
+	if len(verifs) == 0 {
+		return findings, 0
+	}
+	dismissedIDs := make(map[string]bool, len(verifs))
+	for _, rv := range verifs {
+		if rv.FindingID != "" {
+			dismissedIDs[rv.FindingID] = true
+		}
+	}
+	if len(dismissedIDs) == 0 {
+		return findings, 0
+	}
+	out := findings[:0]
+	dismissed := 0
+	for _, f := range findings {
+		if dismissedIDs[f.ID] {
+			dismissed++
+			continue
+		}
+		out = append(out, f)
+	}
+	return out, dismissed
 }
 
 type toolHealth struct {

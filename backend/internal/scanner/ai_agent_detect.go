@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -46,41 +47,33 @@ var aiAgentResponseHeaders = []string{
 // applications that embed LLM toolkits. Detected in the baseline HTML body or
 // any discovered JavaScript resources.
 var aiAgentJSKeywords = []string{
+	`require('openai'`,
+	`require("openai"`,
+	`from 'openai'`,
+	`from "openai"`,
+	`from '@langchain/`,
+	`from "@langchain/`,
 	"langchain",
-	"openai",
-	"anthropic",
-	"\"gpt-",
-	"\"claude-",
-	"chatgpt",
-	"copilot",
-	"llm",
 	"llmchain",
-	"embeddings",
 	"langsmith",
-	"huggingface",
-	"cohere",
-	"mistral",
-	"ollama",
-	"bedrock",
-	"vertexai",
-	"generativeai",
+	"openai.chat.completions",
+	"client.chat.completions.create",
+	"anthropic.messages.create",
+	"assistant_id",
+	`"gpt-`,
+	`"claude-`,
 }
 
 // aiAgentHTMLIndicators are UI-level patterns found in pages that embed an
 // AI chat widget or assistant interface.
 var aiAgentHTMLIndicators = []string{
 	"chat with ai",
-	"ask ai",
 	"ai assistant",
-	"powered by openai",
-	"powered by claude",
-	"powered by gpt",
-	"chatgpt",
-	"your ai",
 	"ai chat",
 	`data-ai-widget`,
 	`class="chat-widget`,
 	`id="ai-assistant`,
+	`data-testid="ai-chat`,
 }
 
 // aiAgentStreamingMarkers appear in streaming HTTP responses produced by LLM
@@ -93,11 +86,21 @@ var aiAgentStreamingMarkers = []string{
 	`"object": "chat.completion"`,
 }
 
+var aiAgentEndpointBodyMarkers = []string{
+	`"choices"`,
+	`"messages"`,
+	`"model"`,
+	`"usage"`,
+	`"object":"chat.completion`,
+	`"object": "chat.completion`,
+	`"prompt_tokens"`,
+}
+
 // AIAgentSignal records a single evidence item collected during fingerprinting.
 type AIAgentSignal struct {
-	Source  string // e.g. "header", "js-keyword", "endpoint", "html", "streaming"
-	Detail  string
-	Weight  int // relative confidence contribution
+	Source string // e.g. "header", "js-keyword", "endpoint", "html", "streaming"
+	Detail string
+	Weight int // relative confidence contribution
 }
 
 // DetectAIAgent fingerprints the target for LLM/AI agent indicators using the
@@ -108,36 +111,30 @@ type AIAgentSignal struct {
 // The function is deliberately non-blocking: each endpoint probe is bounded by
 // a short timeout and the total number of probes is capped.
 func (s *Service) DetectAIAgent(ctx context.Context, input RunInput, baseBody string) (signals []AIAgentSignal, detected bool) {
-	// 1. Check baseline response headers.
-	if input.Session != nil {
-		// We don't have direct access to the baseline response headers here,
-		// but callers may pre-populate DetectedTech or we re-probe below.
-	}
-
 	bodyLower := strings.ToLower(baseBody)
 
-	// 2. JavaScript keyword scan in baseline body.
+	// 1. JavaScript keyword scan in baseline body.
 	for _, kw := range aiAgentJSKeywords {
 		if strings.Contains(bodyLower, strings.ToLower(kw)) {
-			signals = append(signals, AIAgentSignal{Source: "js-keyword", Detail: kw, Weight: 2})
+			signals = append(signals, AIAgentSignal{Source: "js-keyword", Detail: kw, Weight: 4})
 		}
 	}
 
-	// 3. HTML indicator scan.
+	// 2. HTML indicator scan.
 	for _, ind := range aiAgentHTMLIndicators {
 		if strings.Contains(bodyLower, strings.ToLower(ind)) {
-			signals = append(signals, AIAgentSignal{Source: "html", Detail: ind, Weight: 2})
+			signals = append(signals, AIAgentSignal{Source: "html", Detail: ind, Weight: 1})
 		}
 	}
 
-	// 4. Streaming body marker scan.
+	// 3. Streaming body marker scan.
 	for _, m := range aiAgentStreamingMarkers {
 		if strings.Contains(bodyLower, strings.ToLower(m)) {
 			signals = append(signals, AIAgentSignal{Source: "streaming", Detail: m, Weight: 4})
 		}
 	}
 
-	// 5. Probe well-known AI endpoint paths (cap at 6 to limit noise).
+	// 4. Probe well-known AI endpoint paths (cap at 6 to limit noise).
 	probeLimit := 6
 	tried := 0
 	for _, suffix := range aiAgentEndpoints {
@@ -158,25 +155,22 @@ func (s *Service) DetectAIAgent(ctx context.Context, input RunInput, baseBody st
 		if err != nil || resp == nil {
 			continue
 		}
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		_ = resp.Body.Close()
-		// 200, 401, or 405 all indicate the path exists behind the server.
-		if resp.StatusCode == http.StatusOK ||
-			resp.StatusCode == http.StatusUnauthorized ||
-			resp.StatusCode == http.StatusMethodNotAllowed ||
-			resp.StatusCode == http.StatusForbidden {
+		if isLikelyAIEndpointResponse(resp, respBody) {
 			signals = append(signals, AIAgentSignal{
-				Source:  "endpoint",
-				Detail:  fmt.Sprintf("%s → HTTP %d", suffix, resp.StatusCode),
-				Weight:  4,
+				Source: "endpoint",
+				Detail: fmt.Sprintf("%s → HTTP %d (%s)", suffix, resp.StatusCode, sanitizeContentType(resp.Header.Get("Content-Type"))),
+				Weight: 4,
 			})
 		}
 		// Header check on each probed response.
 		for _, h := range aiAgentResponseHeaders {
 			if resp.Header.Get(h) != "" {
 				signals = append(signals, AIAgentSignal{
-					Source:  "header",
-					Detail:  fmt.Sprintf("%s: %s", h, resp.Header.Get(h)),
-					Weight:  5,
+					Source: "header",
+					Detail: fmt.Sprintf("%s: %s", h, resp.Header.Get(h)),
+					Weight: 5,
 				})
 			}
 		}
@@ -191,9 +185,9 @@ func (s *Service) DetectAIAgent(ctx context.Context, input RunInput, baseBody st
 			for _, h := range aiAgentResponseHeaders {
 				if headResp.Header.Get(h) != "" {
 					signals = append(signals, AIAgentSignal{
-						Source:  "header",
-						Detail:  fmt.Sprintf("%s: %s", h, headResp.Header.Get(h)),
-						Weight:  5,
+						Source: "header",
+						Detail: fmt.Sprintf("%s: %s", h, headResp.Header.Get(h)),
+						Weight: 5,
 					})
 				}
 			}
@@ -205,8 +199,7 @@ func (s *Service) DetectAIAgent(ctx context.Context, input RunInput, baseBody st
 	for _, sig := range signals {
 		total += sig.Weight
 	}
-	// Threshold: ≥4 combined weight → confident detection.
-	detected = total >= 4
+	detected = hasStrongAIAgentSignal(signals) || (len(aiAgentSignalSources(signals)) >= 2 && total >= 5)
 	return signals, detected
 }
 
@@ -216,31 +209,18 @@ func (s *Service) DetectAIAgent(ctx context.Context, input RunInput, baseBody st
 // downstream probes (prompt injection, disclosure, etc.) can gate themselves.
 func (s *Service) runAIAgentDetectProbe(ctx context.Context, input RunInput, body string) []model.Finding {
 	if input.Options.PassiveOnly {
-		// Passive-only scans: still run the body/header analysis but skip
-		// active endpoint probes by temporarily forcing that limit to zero.
-		// We achieve this by scanning keywords only.
-		bodyLower := strings.ToLower(body)
-		weight := 0
-		var details []string
-		for _, kw := range aiAgentJSKeywords {
-			if strings.Contains(bodyLower, strings.ToLower(kw)) {
-				weight += 2
-				details = append(details, kw)
-			}
-		}
-		for _, ind := range aiAgentHTMLIndicators {
-			if strings.Contains(bodyLower, strings.ToLower(ind)) {
-				weight += 2
-				details = append(details, ind)
-			}
-		}
-		if weight < 4 {
+		signals := collectPassiveAIAgentSignals(body)
+		if !(hasStrongAIAgentSignal(signals) || (len(aiAgentSignalSources(signals)) >= 2 && signalWeight(signals) >= 5)) {
 			return nil
 		}
 		if input.DetectedTech.techs == nil {
 			input.DetectedTech.techs = make(map[string]struct{})
 		}
 		input.DetectedTech.techs["ai-agent"] = struct{}{}
+		details := make([]string, 0, len(signals))
+		for _, sig := range signals {
+			details = append(details, fmt.Sprintf("[%s] %s", sig.Source, sig.Detail))
+		}
 		return []model.Finding{{
 			ID:             "ai-agent-detected-passive",
 			Category:       "ai-agent",
@@ -298,4 +278,87 @@ func (s *Service) runAIAgentDetectProbe(ctx context.Context, input RunInput, bod
 			"signals":        strings.Join(details, "; "),
 		},
 	}}
+}
+
+func collectPassiveAIAgentSignals(body string) []AIAgentSignal {
+	bodyLower := strings.ToLower(body)
+	signals := make([]AIAgentSignal, 0, len(aiAgentJSKeywords)+len(aiAgentHTMLIndicators)+len(aiAgentStreamingMarkers))
+	for _, kw := range aiAgentJSKeywords {
+		if strings.Contains(bodyLower, strings.ToLower(kw)) {
+			signals = append(signals, AIAgentSignal{Source: "js-keyword", Detail: kw, Weight: 4})
+		}
+	}
+	for _, ind := range aiAgentHTMLIndicators {
+		if strings.Contains(bodyLower, strings.ToLower(ind)) {
+			signals = append(signals, AIAgentSignal{Source: "html", Detail: ind, Weight: 1})
+		}
+	}
+	for _, m := range aiAgentStreamingMarkers {
+		if strings.Contains(bodyLower, strings.ToLower(m)) {
+			signals = append(signals, AIAgentSignal{Source: "streaming", Detail: m, Weight: 4})
+		}
+	}
+	return signals
+}
+
+func isLikelyAIEndpointResponse(resp *http.Response, body []byte) bool {
+	if resp == nil {
+		return false
+	}
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed:
+	default:
+		return false
+	}
+	for _, h := range aiAgentResponseHeaders {
+		if resp.Header.Get(h) != "" {
+			return true
+		}
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	bodyLower := strings.ToLower(string(body))
+	if strings.Contains(contentType, "text/event-stream") {
+		return true
+	}
+	if strings.Contains(contentType, "application/json") || strings.Contains(contentType, "application/problem+json") {
+		for _, marker := range aiAgentEndpointBodyMarkers {
+			if strings.Contains(bodyLower, strings.ToLower(marker)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasStrongAIAgentSignal(signals []AIAgentSignal) bool {
+	for _, sig := range signals {
+		switch sig.Source {
+		case "header", "streaming", "js-keyword", "endpoint":
+			return true
+		}
+	}
+	return false
+}
+
+func aiAgentSignalSources(signals []AIAgentSignal) map[string]struct{} {
+	out := make(map[string]struct{}, len(signals))
+	for _, sig := range signals {
+		out[sig.Source] = struct{}{}
+	}
+	return out
+}
+
+func signalWeight(signals []AIAgentSignal) int {
+	total := 0
+	for _, sig := range signals {
+		total += sig.Weight
+	}
+	return total
+}
+
+func sanitizeContentType(contentType string) string {
+	if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
+		contentType = contentType[:idx]
+	}
+	return strings.TrimSpace(contentType)
 }
