@@ -81,7 +81,9 @@ func TestDetectAIAgent_ResponseHeader(t *testing.T) {
 func TestDetectAIAgent_ChatEndpoint(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/chat" {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"hello"}}],"model":"gpt-4o-mini"}`)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -105,16 +107,36 @@ func TestDetectAIAgent_ChatEndpoint(t *testing.T) {
 	}
 }
 
+func TestDetectAIAgent_ChatEndpoint_NoAIShape(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/chat" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, "ok")
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer target.Close()
+
+	svc := NewService(Config{})
+	input := RunInput{Target: target.URL}
+	signals, detected := svc.DetectAIAgent(context.Background(), input, "")
+	if detected {
+		t.Fatalf("expected plain /api/chat endpoint not to count as AI, got signals=%v", signals)
+	}
+}
+
 func TestRunAIAgentDetectProbe_PassiveOnly(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, `<html><body>powered by openai</body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><script>const client = require('openai')</script></body></html>`)
 	}))
 	defer target.Close()
 
 	svc := NewService(Config{})
 	input := RunInput{Target: target.URL}
 	input.Options.PassiveOnly = true
-	findings := svc.runAIAgentDetectProbe(context.Background(), input, `<html><body>powered by openai</body></html>`)
+	findings := svc.runAIAgentDetectProbe(context.Background(), input, `<html><body><script>const client = require('openai')</script></body></html>`)
 	// Should produce a passive informational finding
 	if len(findings) == 0 {
 		t.Fatal("expected passive AI agent finding")
@@ -139,6 +161,16 @@ func TestRunAIAgentDetectProbe_NoFindingWhenNoSignal(t *testing.T) {
 	findings := svc.runAIAgentDetectProbe(context.Background(), input, `<html><body><h1>Store</h1></body></html>`)
 	if len(findings) != 0 {
 		t.Fatalf("expected no findings, got %d", len(findings))
+	}
+}
+
+func TestRunAIAgentDetectProbe_NoFindingForMarketingCopyAlone(t *testing.T) {
+	svc := NewService(Config{})
+	input := RunInput{Target: "https://example.test"}
+	input.Options.PassiveOnly = true
+	findings := svc.runAIAgentDetectProbe(context.Background(), input, `<html><body>powered by openai</body></html>`)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings for marketing copy alone, got %d", len(findings))
 	}
 }
 
