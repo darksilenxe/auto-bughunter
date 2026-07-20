@@ -255,7 +255,6 @@ func heavyToolBudgetExceededFinding(idPrefix, tool, target string) model.Finding
 
 // runOptionalIntegrations executes the opted-in integrations in a dependency-aware order:
 //
-//	Phase 0 — UI simulation: ui-simulation (state-change detection before any other probes)
 //	Phase 1 — Discovery:     cloudlist, subfinder, dnsx, shuffledns, certificate-transparency, amass(native-go), uncover
 //	Phase 2 — Port scan:     naabu  (target + discovered hosts)
 //	Phase 3 — HTTP probe:    httpx  (target + discovered hosts)
@@ -266,6 +265,11 @@ func heavyToolBudgetExceededFinding(idPrefix, tool, target string) model.Finding
 //	Phase 6c — SQL inject:   SQLMap (native Go; error-based, boolean-blind, time-based blind)
 //	Phase 6d — Cmd inject:   commix (OS command injection; gated by ALLOW_DESTRUCTIVE_CHECKS)
 //	Phase 7 — Vuln scan:     nuclei (target + discovered hosts), vulnx, retire.js, trufflehog, zap
+//
+// Note: UI simulation (formerly Phase 0) is now launched concurrently with the
+// active probes in Run() immediately after headlessChecks completes, so it
+// runs in parallel with the active scan rather than sequentially before these
+// integration phases.
 func (s *Service) runOptionalIntegrations(ctx context.Context, input RunInput) []model.Finding {
 	findings := []model.Finding{}
 	state := &integrationState{SkippedReasons: map[string]int{}}
@@ -291,23 +295,6 @@ Output:    fmt.Sprintf("[%s completed execution]", tool),
 }
 return res
 }
-
-	// Phase 0 — UI simulation (state-change detection before any other probes).
-	// Running ui-simulation first lets it observe the application's pristine
-	// initial state and capture state changes before other tools alter cookies,
-	// sessions, or server-side data.
-	if input.Options.UseUISimulationIntegration {
-		findings = append(findings, runTool("ui-simulation", input.Target, func() []model.Finding {
-			// RunUISimulationAgents spawns one parallel simulation agent per unique
-			// in-scope origin (base + all seeds + all discovered endpoints so far)
-			// so every distinct application entry point gets full coverage.
-			simFindings, simEndpoints := s.RunUISimulationAgents(ctx, input, state)
-			for _, ep := range simEndpoints {
-				state.addEndpoints(ep.URL)
-			}
-			return simFindings
-		})...)
-	}
 
 	// Phase 1 — Subdomain & DNS discovery.
 	if input.Options.UseCloudlistIntegration {

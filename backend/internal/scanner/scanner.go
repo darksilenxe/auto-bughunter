@@ -383,6 +383,27 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 	seedRuntimeEndpointsFromSession(&input)
 
+	// Launch UI simulation concurrently with active probes. The simulation
+	// drives a headless browser to generate realistic user-behaviour traffic
+	// while the active probes exercise the same application in parallel. We
+	// collect results after the active probes complete and feed any newly
+	// discovered endpoints back into the session before calling
+	// runOptionalIntegrations, so later integration phases (nuclei, sqlmap,
+	// etc.) can exercise the simulation-surfaced endpoints as well.
+	type uiSimResult struct {
+		findings  []model.Finding
+		endpoints []DiscoveredEndpoint
+	}
+	var uiSimCh chan uiSimResult
+	if input.Options.UseUISimulationIntegration {
+		uiSimCh = make(chan uiSimResult, 1)
+		emitCmd("ui-simulation "+input.Target, "Running headless UI simulation concurrently with active probes")
+		go func() {
+			f, ep := s.RunUISimulationAgents(ctx, input, nil)
+			uiSimCh <- uiSimResult{findings: f, endpoints: ep}
+		}()
+	}
+
 	// Phase 2: build the per-scan SurfaceInventory from crawl links and
 	// runtime XHR endpoints, then run a small hidden-parameter miner on
 	// the baseline target so downstream probes (see runActiveSQLiProbe)
@@ -484,6 +505,20 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, s.runPasswordResetProbe(ctx, input)...)
 		findings = append(findings, s.runCacheDeceptionProbe(ctx, input)...)
 		findings = append(findings, s.runMFABypassProbe(ctx, input)...)
+	}
+
+	// Collect UI simulation results now that all active probes have run.
+	// The goroutine was started concurrently after headlessChecks, so it has
+	// had the full duration of the active probe phase to complete. Any
+	// endpoints it discovered are seeded back into the session so
+	// runOptionalIntegrations can include them in later pipeline phases.
+	if uiSimCh != nil {
+		res := <-uiSimCh
+		findings = append(findings, res.findings...)
+		for _, ep := range res.endpoints {
+			input.Session.AddDiscoveredEndpoint(ep)
+		}
+		seedRuntimeEndpointsFromSession(&input)
 	}
 
 	integrationFindings := s.runOptionalIntegrations(ctx, input)
