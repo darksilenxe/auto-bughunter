@@ -338,6 +338,20 @@ type ScanOptions struct {
 	// operator (e.g. via the Agent Console).  They are surfaced in AI planner
 	// and hypothesis-agent prompts as extra context for guiding the scan.
 	OperatorHints []string `json:"operatorHints,omitempty"`
+
+	// UseLiveScan enables Burp Suite-style "Live Audit from Proxy" behaviour:
+	// endpoints discovered during the headless crawl and UI simulation are
+	// immediately queued for active scanning so probing and crawling run
+	// concurrently rather than sequentially.
+	UseLiveScan bool `json:"useLiveScan,omitempty"`
+	// LiveScanConcurrency controls how many parallel active-probe goroutines
+	// consume from the live-scan queue. Defaults to 3 when zero.
+	LiveScanConcurrency int `json:"liveScanConcurrency,omitempty"`
+	// LiveScanDepth selects the probe subset applied per queued endpoint.
+	// "shallow" runs XSS reflection and open-redirect probes only.
+	// "standard" (default) additionally runs error-based SQLi, SSTI
+	// arithmetic, host-header injection, and TRACE/XST checks.
+	LiveScanDepth string `json:"liveScanDepth,omitempty"`
 }
 
 // ScanScope contains per-scan program scope rules.

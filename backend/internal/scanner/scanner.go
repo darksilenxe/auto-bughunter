@@ -119,6 +119,13 @@ type Config struct {
 	EnableSemgrep        bool
 	EnableUISimulation   bool
 	AllowDestructive     bool
+	// EnableLiveScan activates Burp Suite-style concurrent crawl+probe
+	// behaviour for all scans run by this service instance. Individual
+	// scans can also opt in via ScanOptions.UseLiveScan.
+	EnableLiveScan      bool
+	// LiveScanConcurrency is the default number of parallel probe workers
+	// for live scanning. Zero falls back to liveScanDefaultConcurrency (3).
+	LiveScanConcurrency int
 	NucleiBinary      string
 	ZAPBaselineBinary string
 	XSSMapBinary      string
@@ -361,7 +368,23 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	}
 
 	emitCmd(fmt.Sprintf("chromedp navigate %s", input.Target), "Running headless browser crawl and capturing screenshot")
-	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit)
+
+	// Live scanning: start the worker pool before headlessChecks so workers
+	// begin probing endpoints immediately as they are discovered during crawl,
+	// mirroring Burp Suite Pro's "Live Audit from Proxy" behaviour.
+	var liveQueue *LiveScanQueue
+	var liveScanDone <-chan []model.Finding
+	if liveScanEnabled(s.cfg, input.Options) {
+		concurrency := liveScanEffectiveConcurrency(s.cfg, input.Options)
+		liveQueue = NewLiveScanQueue(liveScanMaxItems)
+		liveScanDone = s.startLiveScanWorkers(ctx, input, liveQueue, concurrency)
+		emitCmd(
+			fmt.Sprintf("live-scan start concurrency=%d depth=%s", concurrency, input.Options.LiveScanDepth),
+			"Starting live-scan worker pool (Burp Suite-style concurrent crawl+probe)",
+		)
+	}
+
+	browserFindings, browserEndpoints, err := headlessChecks(ctx, input.Target, input.AuthProfile, input.Options, input.Scope, input.Emit, liveQueue)
 	if err != nil {
 		findings = append(findings, model.Finding{
 			ID:             "browser-error",
@@ -517,8 +540,32 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		findings = append(findings, res.findings...)
 		for _, ep := range res.endpoints {
 			input.Session.AddDiscoveredEndpoint(ep)
+			// Feed UI simulation-discovered endpoints into the live-scan
+			// queue so workers actively test them too.
+			liveQueue.TryEnqueue(ep.Method, ep.URL, "", "", nil)
 		}
 		seedRuntimeEndpointsFromSession(&input)
+	}
+
+	// Close the live-scan queue now that all crawl and simulation endpoints
+	// have been submitted, and wait for workers to drain.
+	if liveQueue != nil {
+		liveQueue.Close()
+		liveFindings := <-liveScanDone
+		if len(liveFindings) > 0 {
+			findings = append(findings, liveFindings...)
+		}
+		if liveQueue.Dropped() > 0 {
+			findings = append(findings, model.Finding{
+				ID:             "live-scan-queue-overflow",
+				Category:       "coverage",
+				Severity:       model.SeverityInfo,
+				Title:          fmt.Sprintf("Live-scan queue reached capacity (%d endpoint(s) dropped)", liveQueue.Dropped()),
+				Description:    "The live-scan queue reached its maximum capacity before all crawl-discovered endpoints could be enqueued. Some endpoints may not have been actively tested during the crawl phase.",
+				Evidence:       fmt.Sprintf("dropped=%d queueCapacity=%d", liveQueue.Dropped(), liveScanMaxItems),
+				Recommendation: "Increase LiveScanConcurrency or reduce CrawlMaxPages to process more endpoints within the live-scan budget.",
+			})
+		}
 	}
 
 	integrationFindings := s.runOptionalIntegrations(ctx, input)
