@@ -32,6 +32,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         # Network/port scanning
+        nmap \
         masscan \
         ncat \
         socat \
