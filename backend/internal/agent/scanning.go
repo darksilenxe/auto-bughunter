@@ -119,6 +119,24 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	if input.Options.AggressiveExploitation {
 		output.Metadata["aggressive_exploitation"] = "true"
 	}
+
+	// Feed all endpoints discovered by integration tools (gobuster, ffuf,
+	// katana, kiterunner, etc.) back into the SharedScanContext so that
+	// subsequent agents see the full discovered attack surface via
+	// SeedRuntimeEndpoints.
+	if input.SharedScanContext != nil {
+		for _, f := range findings {
+			if raw := strings.TrimSpace(f.EvidenceFields["seedRuntimeEndpoints"]); raw != "" {
+				for _, ep := range strings.Split(raw, ",") {
+					ep = strings.TrimSpace(ep)
+					if ep != "" {
+						input.SharedScanContext.AddEndpoint(ep)
+					}
+				}
+			}
+		}
+	}
+
 	output.DebugNotes = "Built-in security checks executed."
 	return output, nil
 }
