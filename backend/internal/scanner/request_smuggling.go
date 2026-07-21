@@ -113,7 +113,7 @@ func (s *Service) runRequestSmugglingProbe(ctx context.Context, input RunInput, 
 			Recommendation: "Normalise request parsing across the front-end and back-end: reject requests that contain both Content-Length and " +
 				"Transfer-Encoding, disable downgraded HTTP/1.1 keep-alive reuse to back-ends where possible, and prefer HTTP/2 end-to-end. " +
 				"Manually confirm with a controlled differential-response test before reporting externally.",
-			Confidence:    0.5,
+			Confidence:    0.80,
 			AffectedURL:   input.Target,
 			CWE:           "CWE-444",
 			OWASPCategory: "A03:2021 - Injection",

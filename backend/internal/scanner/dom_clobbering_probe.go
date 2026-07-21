@@ -192,7 +192,7 @@ func (s *Service) finishDOMClobberingFinding(ctx context.Context, input RunInput
 			"`if (!config.Y)` check to detect \"unset\" — validate with `typeof window.X === 'expected type'` or " +
 			"use `Object.create(null)`-based namespaces that cannot be shadowed by DOM named-property access. " +
 			"Deploy a strict Content-Security-Policy to limit the blast radius of any resulting script execution.",
-		Confidence:    0.6,
+		Confidence:    0.85,
 		AffectedURL:   ep,
 		CWE:           "CWE-79",
 		OWASPCategory: "A03:2021 - Injection",

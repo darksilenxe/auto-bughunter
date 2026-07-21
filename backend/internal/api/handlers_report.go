@@ -87,12 +87,6 @@ func isStrictReportingExempt(f model.Finding) bool {
 	case "governance", "operations":
 		return true
 	}
-	if f.Exploitability != nil {
-		switch strings.ToLower(strings.TrimSpace(f.Exploitability.VerifiedStatus)) {
-		case "verified", "confirmed":
-			return true
-		}
-	}
 	return false
 }
 

@@ -545,6 +545,10 @@ func (s *Server) handleScanOrEvents(w http.ResponseWriter, r *http.Request) {
 		s.handleScanEvents(w, r)
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/commands") {
+		s.handleListScanCommands(w, r)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/probes") {
 		s.handleListScanProbes(w, r)
 		return
@@ -792,6 +796,53 @@ func (s *Server) handleListScanProbes(w http.ResponseWriter, r *http.Request) {
 		records = []model.ProbeRecord{}
 	}
 	writeJSON(w, http.StatusOK, records)
+}
+
+// handleListScanCommands handles GET /api/scan/{id}/commands.
+// It returns every tool command line executed during the scan in chronological
+// order, harvested from the persisted agent-event log. Each entry is the
+// original ScanEvent (type=command) so callers get the agent name, rationale,
+// full command string, and timestamp in one response.
+func (s *Server) handleListScanCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/commands")
+	scanID := strings.TrimSpace(strings.TrimPrefix(path, "/api/scan/"))
+	if scanID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing scan id"})
+		return
+	}
+	job, err := s.repo.GetJob(r.Context(), scanID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load scan"})
+		return
+	}
+	if job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "scan not found"})
+		return
+	}
+	if !canAccessWorkspaceForRequest(r.Context(), job.WorkspaceID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "scan not accessible in this workspace"})
+		return
+	}
+	events, err := s.repo.ListAgentEvents(r.Context(), scanID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list agent events"})
+		return
+	}
+	out := make([]model.ScanEvent, 0, len(events))
+	for _, ev := range events {
+		if ev.Type == model.ScanEventCommand {
+			out = append(out, ev)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
@@ -2548,7 +2599,12 @@ func isSuppressed(f model.Finding, target string, rules []model.SuppressionRule)
 		if r.Title != "" && !strings.EqualFold(r.Title, f.Title) {
 			continue
 		}
-		if r.Category != "" || r.Title != "" {
+		// Both Category and Title must be specified together to suppress by
+		// pattern — a category-only or title-only rule would be over-broad and
+		// could hide real findings a human pentester would catch. Requiring
+		// both fields makes the match precise while still allowing operators to
+		// suppress a specific (category, title) combination.
+		if r.Category != "" && r.Title != "" {
 			return true
 		}
 	}
@@ -3090,7 +3146,7 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 		}
 		switch strings.ToLower(strings.TrimSpace(f.EvidenceQualityTier)) {
 		case "strong":
-			conf = minFloat(0.99, conf*1.05)
+			conf = minFloat(1.0, conf*1.05)
 		case "weak":
 			conf = maxFloat(0.05, conf*0.9)
 		}
@@ -3101,7 +3157,7 @@ func (s *Server) applyFeedbackConfidencePrioritization(ctx context.Context, find
 			noiseRate := float64(s.rejected+s.duplicate) / float64(s.total)
 			conf = conf * (0.8 + acceptRate*0.5) * (1 - noiseRate*0.35)
 		}
-		f.Confidence = maxFloat(0.05, minFloat(0.99, conf))
+		f.Confidence = maxFloat(0.05, minFloat(1.0, conf))
 		out = append(out, f)
 	}
 	return out
@@ -3531,9 +3587,12 @@ func buildAgentTelemetry(outputs []agent.AgentOutput) []model.AgentRunTelemetry 
 func enrichFindings(findings []model.Finding) []model.Finding {
 	dedup := map[string]model.Finding{}
 	for _, f := range findings {
-		if strings.TrimSpace(f.ID) == "" {
-			f.ID = syntheticFindingID(f)
-		}
+		// Always normalize the finding ID to a deterministic, content-based
+		// hash so that the same vulnerability produces the same ID on every
+		// scan. Agent-assigned positional IDs (e.g. "hypothesis-1-sqli")
+		// change between scans when ordering shifts, which breaks the
+		// cross-scan rejection filter in filterDismissedFindings.
+		f.ID = syntheticFindingID(f)
 		if len(f.Sources) == 0 {
 			f.Sources = []string{defaultSourceForCategory(f.Category)}
 		}
@@ -3701,6 +3760,13 @@ func deriveShadowSignals(f model.Finding) []scanner.EvidenceSignal {
 func enforceMinimumEvidenceFields(f model.Finding) model.Finding {
 	if f.EvidenceFields == nil {
 		f.EvidenceFields = map[string]string{}
+	}
+	// Oracle-confirmed active-probe findings have already demonstrated the
+	// vulnerability with a live HTTP signal. Applying a 50% confidence
+	// penalty because the evidence landed in a different field would
+	// contradict the confirmed result; skip the check for these findings.
+	if vt := strings.TrimSpace(f.EvidenceFields["validationType"]); vt == "active-probe" || vt == "oast-confirmed" {
+		return f
 	}
 	cat := strings.ToLower(strings.TrimSpace(f.Category))
 	hasField := func(keys ...string) bool {

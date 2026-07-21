@@ -2082,9 +2082,20 @@ func (s *Server) applyAutoSuppressionHeuristics(ctx context.Context, findings []
 			out = append(out, f)
 			continue
 		}
+		// Oracle-confirmed active-probe findings (e.g. reflected payload,
+		// SQL error, timing differential) are never auto-suppressed regardless
+		// of feedback history — a human pentester would always report a
+		// demonstrated exploit primitive.
+		if vt := strings.TrimSpace(f.EvidenceFields["validationType"]); vt == "active-probe" || vt == "oast-confirmed" {
+			out = append(out, f)
+			continue
+		}
 		key := strings.ToLower(strings.TrimSpace(f.Category)) + "|" + strings.ToLower(strings.TrimSpace(f.Title))
 		agg := signals[key]
-		if agg.total < 3 {
+		// Require at least 5 feedback samples before auto-suppression kicks in.
+		// With only 3 samples a single test-environment run with all-rejections
+		// would incorrectly suppress a real finding in production.
+		if agg.total < 5 {
 			out = append(out, f)
 			continue
 		}
@@ -2566,9 +2577,37 @@ func dedupeStrings(items []string) []string {
 	return out
 }
 
+// fingerprintFindingBase returns a deduplication key that distinguishes the
+// same vulnerability class on different endpoints. Including the normalised
+// URL host+path and parameter means "SQL Injection on /api/users?id=" and
+// "SQL Injection on /api/posts?id=" are tracked as separate findings — the
+// same way a human pentester would report them — instead of being collapsed
+// into a single entry that hides new attack surface.
 func fingerprintFindingBase(f model.Finding) string {
 	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
-		strings.ToLower(strings.TrimSpace(f.Title))
+		strings.ToLower(strings.TrimSpace(f.Title)) + "|" +
+		fingerprintURLHostPath(f.AffectedURL) + "|" +
+		strings.ToLower(strings.TrimSpace(f.AffectedParameter))
+}
+
+// fingerprintURLHostPath returns "host/path" (lowercased, query/fragment
+// stripped) for use in dedup keys. Empty input returns an empty string.
+func fingerprintURLHostPath(rawURL string) string {
+	u := strings.TrimSpace(rawURL)
+	if u == "" {
+		return ""
+	}
+	// Strip scheme.
+	if idx := strings.Index(u, "://"); idx >= 0 {
+		u = u[idx+3:]
+	}
+	// Strip query and fragment.
+	for _, sep := range []string{"?", "#"} {
+		if idx := strings.Index(u, sep); idx >= 0 {
+			u = u[:idx]
+		}
+	}
+	return strings.ToLower(strings.TrimRight(u, "/"))
 }
 
 func hasAuthorizationProfile(profile model.ScanAuthProfile) bool {

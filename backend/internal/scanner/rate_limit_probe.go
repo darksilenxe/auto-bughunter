@@ -113,7 +113,7 @@ func (s *Service) runRateLimitProbe(ctx context.Context, input RunInput, body st
 				"identifier) to every sensitive state-changing endpoint, not only the primary login form. Return " +
 				"HTTP 429 with a Retry-After header once the threshold is exceeded, and back this with a server-" +
 				"side lockout/backoff counter that survives client-side retries.",
-			Confidence:    0.55,
+			Confidence:    0.80,
 			AffectedURL:   ep,
 			CWE:           "CWE-307",
 			OWASPCategory: "A07:2021 - Identification and Authentication Failures",
