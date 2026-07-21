@@ -35,7 +35,7 @@ func chromedpContext(parent context.Context) (context.Context, context.CancelFun
 	}
 	return ctx, cancel
 }
-func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent)) ([]model.Finding, []DiscoveredEndpoint, error) {
+func headlessChecks(parent context.Context, target string, profile model.ScanAuthProfile, options model.ScanOptions, scanScope model.ScanScope, emit func(model.ScanEvent), liveQueue *LiveScanQueue) ([]model.Finding, []DiscoveredEndpoint, error) {
 	// headlessChecks performs multi-page crawling and screenshot capture with graceful degradation.
 	// Key improvements for screenshot reliability:
 	//   - Individual 5-second timeout for initial screenshot (separate from page navigation)
@@ -87,6 +87,13 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 			xhrMu.Lock()
 			xhrEndpoints = append(xhrEndpoints, DiscoveredEndpoint{URL: rawURL, Method: method})
 			xhrMu.Unlock()
+			// Immediately enqueue for live scanning so probing starts
+			// concurrently with continued crawling.
+			ct := ""
+			if ctVal, ok := e.Request.Headers["Content-Type"]; ok {
+				ct = fmt.Sprintf("%v", ctVal)
+			}
+			liveQueue.TryEnqueue(method, rawURL, "", ct, nil)
 		}
 	})
 
@@ -209,10 +216,15 @@ func headlessChecks(parent context.Context, target string, profile model.ScanAut
 	for _, l := range internalLinks {
 		runtimeRefs[l] = struct{}{}
 	}
+	// Enqueue the initial page for live scanning immediately.
+	liveQueue.TryEnqueue("GET", currentURL, "", "", nil)
 	if isLikelyLoginURL(currentURL) {
 		loginRedirects++
 	}
 	for _, next := range internalLinks {
+		// Enqueue each crawled page for live scanning before navigating to it
+		// so probing can begin as soon as the URL is known.
+		liveQueue.TryEnqueue("GET", next, "", "", nil)
 		var pageForms int
 		var pageCsrfLike int
 		var pageLinks []string
