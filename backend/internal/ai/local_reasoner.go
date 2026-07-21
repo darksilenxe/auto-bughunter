@@ -8,10 +8,6 @@ import (
 	"auto-bughunter/backend/internal/model"
 )
 
-func localReasonerSummary(target string, findings []model.Finding) string {
-	return localReasonerSummaryWithKnowledge(target, findings, nil)
-}
-
 func localReasonerSummaryWithKnowledge(target string, findings []model.Finding, knowledge *model.SecurityKnowledgeContext) string {
 	if len(findings) == 0 {
 		return "Offline AI summary: no findings were reported. Continue periodic scans and keep security headers, cookie flags, and TLS settings hardened."

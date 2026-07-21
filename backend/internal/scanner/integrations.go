@@ -718,14 +718,6 @@ return res
 	return findings
 }
 
-// expandTargets returns the primary target URL plus a URL for each subdomain in state,
-// sharing the same URL scheme as the primary target. Hosts that duplicate the primary
-// target's hostname are skipped to avoid scanning the same host twice.
-func expandTargets(target string, state *integrationState, scanScope model.ScanScope) []string {
-	targets, _ := expandTargetsWithScope(target, state, scanScope)
-	return targets
-}
-
 func expandTargetsWithScope(target string, state *integrationState, scanScope model.ScanScope) ([]string, int) {
 	targets := []string{target}
 	if len(state.DiscoveredHosts) == 0 {

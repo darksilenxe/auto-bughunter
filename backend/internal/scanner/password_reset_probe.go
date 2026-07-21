@@ -31,13 +31,6 @@ var pwResetProbePaths = []string{
 	"/users/password",
 }
 
-// pwResetEmailFields are JSON body field names used for the email address in
-// reset requests.
-var pwResetEmailFields = []string{"email", "emailAddress", "username", "user", "login"}
-
-// pwResetNewPasswordFields are field names for the new-password payload.
-var pwResetNewPasswordFields = []string{"newPassword", "new_password", "password", "passwd"}
-
 // pwResetTokenFields are response body field names that may contain a reset
 // token in verbose APIs or development builds.
 var pwResetTokenFields = []string{"token", "resetToken", "reset_token", "code", "verificationCode", "otp"}

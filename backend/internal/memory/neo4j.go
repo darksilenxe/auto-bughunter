@@ -24,7 +24,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -566,12 +565,4 @@ func firstN(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-// neo4jSortByCreatedAt sorts a slice of FindingMemory by CreatedAt descending.
-// Used when graph traversal returns unsorted results.
-func neo4jSortByCreatedAt(items []FindingMemory) {
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreatedAt.After(items[j].CreatedAt)
-	})
 }

@@ -34,9 +34,6 @@ var cloudBucketPattern = regexp.MustCompile(
 // s3ListBucketMarker is the XML element present in an accessible S3 bucket listing.
 const s3ListBucketMarker = "<listbucketresult"
 
-// gcsListBucketMarker is present in an accessible GCS bucket listing.
-const gcsListBucketMarker = "<listbucketresult"
-
 // cloudStorageMaxExtract caps the number of distinct buckets probed.
 const cloudStorageMaxExtract = 8
 

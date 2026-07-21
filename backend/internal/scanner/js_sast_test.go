@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -145,7 +146,7 @@ func TestNormalizeDiscoveredRoute(t *testing.T) {
 
 func TestRunJavaScriptSAST_NoScriptsNoResult(t *testing.T) {
 	svc := NewService(Config{})
-	res := svc.runJavaScriptSAST(nil, RunInput{Target: "https://1.1.1.1/"}, "<html><body>no scripts</body></html>")
+	res := svc.runJavaScriptSAST(context.TODO(), RunInput{Target: "https://1.1.1.1/"}, "<html><body>no scripts</body></html>")
 	if len(res.Findings) != 0 || len(res.Routes) != 0 || res.ScriptsAnalyzed != 0 {
 		t.Fatalf("expected empty SAST result, got %+v", res)
 	}

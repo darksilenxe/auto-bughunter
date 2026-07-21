@@ -37,10 +37,6 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 )
 
-// metasploitNativeProbeCount is the number of native Go probe functions called
-// in MetasploitAgent.Run. Update this constant whenever a probe is added or removed.
-const metasploitNativeProbeCount = 23
-
 // metasploitChecks lists the canonical check names for each native probe and
 // the optional Metasploit RPC phase. An AI advisor may reorder or skip entries
 // based on the tech stack discovered earlier in the scan (e.g. skip Java probes

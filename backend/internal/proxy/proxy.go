@@ -68,7 +68,6 @@ type Server struct {
 	store        Store
 	transport    *http.Transport
 	ca           *CA
-	mu           sync.Mutex
 	passiveStore *PassiveScanStore
 	scopeMu      sync.RWMutex
 	scopeRules   model.ScanScope

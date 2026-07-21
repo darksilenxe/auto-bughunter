@@ -86,24 +86,3 @@ func isSensitiveHeaderName(name string) bool {
 	}
 	return false
 }
-
-// withCurlReproducer mutates a finding to attach `curlReproducer` to its
-// EvidenceFields and (when empty) to PoC, so downstream rendering layers
-// (Markdown, HTML, PDF, bug-bounty submissions) can surface it without
-// further plumbing.
-//
-// Used by probes that already populate AffectedURL but call buildCurlReproducer
-// from the call site for richer body/content-type wrapping.
-func withCurlReproducer(f model.Finding, curl string) model.Finding {
-	if curl == "" {
-		return f
-	}
-	if f.EvidenceFields == nil {
-		f.EvidenceFields = map[string]string{}
-	}
-	f.EvidenceFields["curlReproducer"] = curl
-	if f.PoC == "" {
-		f.PoC = curl
-	}
-	return f
-}

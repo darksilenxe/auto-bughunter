@@ -91,11 +91,9 @@ func (a *DynamicCommandAgent) Run(ctx context.Context, input AgentInput) (AgentO
 	failed := 0
 
 	for _, spec := range specs {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			output.Status = "partial"
 			break
-		default:
 		}
 
 		result := cmdbuilder.RunWithPolicy(ctx, spec, input.Target, cmdbuilder.ValidationPolicy{

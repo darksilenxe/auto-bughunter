@@ -116,12 +116,6 @@ func phase1SubmitVerified(ctx context.Context, finding model.Finding, canonicalC
 	return emitted, true
 }
 
-func phase1EnsureEvidence(f *model.Finding) {
-	if f.EvidenceFields == nil {
-		f.EvidenceFields = map[string]string{}
-	}
-}
-
 func phase1TimingExceeds(observed, b1, b2 time.Duration) bool {
 	median := b1
 	if b2 < median {

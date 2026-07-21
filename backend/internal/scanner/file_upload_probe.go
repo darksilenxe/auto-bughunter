@@ -391,14 +391,9 @@ func blockedUploadControlFilename(label string) string {
 	return "abh_control_blocked.php"
 }
 
-func (s *Service) executeUploadAttempt(ctx context.Context, ep, filename, mimeType, content string, input RunInput) (*http.Response, []byte, error) {
-	return s.executeUploadAttemptField(ctx, ep, "file", filename, mimeType, content, input)
-}
-
-// executeUploadAttemptField is the Phase 2 field-aware variant of
-// executeUploadAttempt: it lets the caller choose the multipart field name
-// so miner-discovered upload-field names can be exercised alongside the
-// built-in "file" default (see PHASE2_AUDIT.md).
+// executeUploadAttemptField is the Phase 2 field-aware variant that lets the
+// caller choose the multipart field name so miner-discovered upload-field
+// names can be exercised alongside the built-in "file" default.
 func (s *Service) executeUploadAttemptField(ctx context.Context, ep, fieldName, filename, mimeType, content string, input RunInput) (*http.Response, []byte, error) {
 	body, contentType, err := buildMultipartUploadField(fieldName, filename, mimeType, content)
 	if err != nil {

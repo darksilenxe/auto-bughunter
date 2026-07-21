@@ -93,18 +93,6 @@ const defaultMaxConcurrentFastRequests = 4
 // routinely exceeds the previous hardcoded 20 s limit.
 const defaultAIRequestTimeoutSeconds = 120
 
-// aiConcurrencyLimit resolves the maximum number of concurrent LLM requests from
-// AI_MAX_CONCURRENT_REQUESTS, falling back to defaultMaxConcurrentAIRequests.
-// Retained for backwards compatibility; new code should prefer aiLaneLimit.
-func aiConcurrencyLimit() int {
-	if v := strings.TrimSpace(os.Getenv("AI_MAX_CONCURRENT_REQUESTS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return defaultMaxConcurrentAIRequests
-}
-
 // aiLaneLimit resolves the per-lane concurrency limit.  Each lane first
 // consults its own env var (AI_MAX_CONCURRENT_REQUESTS_PRIMARY / _CODING /
 // _FAST); if unset it falls back to the global AI_MAX_CONCURRENT_REQUESTS and

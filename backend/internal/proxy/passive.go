@@ -479,10 +479,7 @@ func passiveCheckVerboseErrors(pr *model.ProxyRequest) []model.Finding {
 	return nil
 }
 
-var (
-	rePassiveInternalIP = regexp.MustCompile(`\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b`)
-	rePassiveEmail      = regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)
-)
+var rePassiveInternalIP = regexp.MustCompile(`\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b`)
 
 // passiveCheckInfoDisclosure flags response bodies containing internal
 // (RFC 1918) IP addresses, which can aid network reconnaissance.

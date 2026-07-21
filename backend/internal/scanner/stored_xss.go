@@ -145,7 +145,7 @@ func (s *Service) runStoredXSSProbe(ctx context.Context, input RunInput) []model
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, storedXSSBodyLimit))
 		_ = resp.Body.Close()
 		if isHTMLContextReflection(string(respBody), storedXSSMarker) {
-			hits = append(hits, hit{writeEP: inj.writeEP, readEP: inj.readEP, field: inj.field})
+			hits = append(hits, hit(inj))
 		}
 	}
 

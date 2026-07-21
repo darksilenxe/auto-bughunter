@@ -2350,12 +2350,6 @@ func buildDeltaFindings(previousFindings, currentFindings []model.Finding) (int,
 	return len(newItems), len(changedItems), len(resolvedItems), delta
 }
 
-func fingerprintFinding(f model.Finding) string {
-	return strings.ToLower(strings.TrimSpace(f.Category)) + "|" +
-		strings.ToLower(strings.TrimSpace(f.Title)) + "|" +
-		strings.ToLower(strings.TrimSpace(f.Evidence))
-}
-
 func normalizedFindingKey(f model.Finding) string {
 	category := normalizeDedupToken(f.Category)
 	title := normalizeDedupToken(f.Title)
