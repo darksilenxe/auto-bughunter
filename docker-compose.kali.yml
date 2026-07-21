@@ -101,3 +101,16 @@ services:
         limits:
           cpus: "2.0"
           memory: 2g
+
+  # Kali-tools sidecar resource limits. The container is mostly idle between
+  # exec calls; reserve modest CPU and memory so the scheduler doesn't
+  # starve it. Bump cpus to 4.0 if you are running masscan or hashcat jobs.
+  kali-tools:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          cpus: "0.25"
+          memory: 256m

@@ -159,7 +159,10 @@ func TestApplyStrictReportingFilter_FiltersLowConfidence(t *testing.T) {
 		Findings: []model.Finding{
 			{ID: "1", Confidence: 0.9, Severity: model.SeverityMedium, Title: "kept"},
 			{ID: "2", Confidence: 0.4, Severity: model.SeverityMedium, Title: "dropped"},
-			{ID: "3", Confidence: 0.2, Severity: model.SeverityHigh, Title: "verified-kept",
+			// exploitability "verified" is no longer exempt from strict reporting:
+			// a verified finding with 0.2 confidence must still be suppressed when
+			// MinReportConfidence is 0.8 (Fix 3 — exploit-verified bypass removed).
+			{ID: "3", Confidence: 0.2, Severity: model.SeverityHigh, Title: "verified-dropped",
 				Exploitability: &model.Exploitability{VerifiedStatus: "verified"}},
 			{ID: "4", Confidence: 0.0, Severity: model.SeverityInfo, Title: "ops-kept", Category: "operations"},
 		},
@@ -168,14 +171,14 @@ func TestApplyStrictReportingFilter_FiltersLowConfidence(t *testing.T) {
 	if !applied || filtered == nil {
 		t.Fatal("expected strict filter to apply")
 	}
-	if suppressed != 1 {
-		t.Fatalf("expected 1 suppressed, got %d", suppressed)
+	if suppressed != 2 {
+		t.Fatalf("expected 2 suppressed (dropped + verified-dropped), got %d", suppressed)
 	}
 	if threshold != 0.8 {
 		t.Fatalf("expected threshold 0.8, got %f", threshold)
 	}
-	if len(filtered.Findings) != 3 {
-		t.Fatalf("expected 3 findings to remain, got %d", len(filtered.Findings))
+	if len(filtered.Findings) != 2 {
+		t.Fatalf("expected 2 findings to remain (kept + ops-kept), got %d", len(filtered.Findings))
 	}
 }
 

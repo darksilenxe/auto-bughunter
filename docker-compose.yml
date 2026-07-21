@@ -740,6 +740,27 @@ services:
     expose:
       - "55553"
 
+  # ---------------------------------------------------------------------------
+  # Kali-tools sidecar — opt-in container providing additional security tools
+  # not already in the existing sidecars: masscan, hydra, whatweb, wafw00f,
+  # sslyze, testssl.sh, dnsrecon, wfuzz, feroxbuster, hashcat, john, exiftool,
+  # binwalk, seclists.
+  #
+  # Start with:
+  #   docker compose --profile kali up -d kali-tools
+  #
+  # Execute a tool:
+  #   docker compose exec kali-tools nmap -sV -T4 <target>
+  # ---------------------------------------------------------------------------
+  kali-tools:
+    build:
+      context: ./sidecars/kali-tools
+    profiles: ["kali"]
+    restart: unless-stopped
+    # No ports exposed to the host — the backend reaches it via exec() over
+    # the Docker daemon socket, same pattern as the metasploit sidecar.
+    network_mode: "none"
+
   # Tool-updater — one-shot container that runs on every `docker compose
   # up`. Refreshes the nuclei templates volume and queries GitHub Releases
   # for every pinned tool listed in sidecars/tool-updater/manifest.json,

@@ -253,7 +253,7 @@ func buildRecentCVEFinding(rec cve.Record, matchedTech []string) model.Finding {
 		CVSSScore:      rec.CVSSScore,
 		References:     append([]string{}, rec.References...),
 		Sources:        []string{"cve-discovery", "nvd-recent"},
-		Confidence:     0.35,
+		Confidence:     0.55,
 		EvidenceFields: map[string]string{
 			"cveId":              cveID,
 			"cveKnowledgeSource": rec.Source,

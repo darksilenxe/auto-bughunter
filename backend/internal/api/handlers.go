@@ -2599,7 +2599,12 @@ func isSuppressed(f model.Finding, target string, rules []model.SuppressionRule)
 		if r.Title != "" && !strings.EqualFold(r.Title, f.Title) {
 			continue
 		}
-		if r.Category != "" || r.Title != "" {
+		// Both Category and Title must be specified together to suppress by
+		// pattern — a category-only or title-only rule would be over-broad and
+		// could hide real findings a human pentester would catch. Requiring
+		// both fields makes the match precise while still allowing operators to
+		// suppress a specific (category, title) combination.
+		if r.Category != "" && r.Title != "" {
 			return true
 		}
 	}
@@ -3755,6 +3760,13 @@ func deriveShadowSignals(f model.Finding) []scanner.EvidenceSignal {
 func enforceMinimumEvidenceFields(f model.Finding) model.Finding {
 	if f.EvidenceFields == nil {
 		f.EvidenceFields = map[string]string{}
+	}
+	// Oracle-confirmed active-probe findings have already demonstrated the
+	// vulnerability with a live HTTP signal. Applying a 50% confidence
+	// penalty because the evidence landed in a different field would
+	// contradict the confirmed result; skip the check for these findings.
+	if vt := strings.TrimSpace(f.EvidenceFields["validationType"]); vt == "active-probe" || vt == "oast-confirmed" {
+		return f
 	}
 	cat := strings.ToLower(strings.TrimSpace(f.Category))
 	hasField := func(keys ...string) bool {
