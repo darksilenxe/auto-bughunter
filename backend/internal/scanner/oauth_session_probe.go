@@ -1,9 +1,7 @@
 package scanner
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -731,25 +729,4 @@ func oauthExtractRefreshToken(auth model.ScanAuthProfile) string {
 		}
 	}
 	return ""
-}
-
-// oauthPostJSON issues a JSON POST to ep.
-func oauthPostJSON(ctx context.Context, s *Service, ep string, payload interface{}, auth model.ScanAuthProfile, options model.ScanOptions) *oauthPostFormResult {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Content-Type", "application/json")
-	ApplyAuthProfile(req, auth)
-	resp, err := s.doRequestWithRetry(ctx, req, options)
-	if err != nil || resp == nil {
-		return nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthSessionBodyLimit))
-	_ = resp.Body.Close()
-	return &oauthPostFormResult{status: resp.StatusCode, body: string(body)}
 }

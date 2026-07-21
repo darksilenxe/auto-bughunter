@@ -98,11 +98,6 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		roundsCompleted++
 
 		if stop, reason := impact.ShouldStopForDemonstratedImpact(allFindings, goals); stop {
-			history = appendToolHistory(history, ai.ToolCallHistory{
-				Action:  "stop",
-				Status:  "completed",
-				Summary: reason,
-			})
 			Emit(input.Emit, model.ScanEvent{
 				Type:      model.ScanEventInfo,
 				AgentName: a.Name(),
@@ -127,11 +122,6 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 		}
 		decision := a.aiClient.PlanToolCall(ctx, req)
 		if decision == nil {
-			history = appendToolHistory(history, ai.ToolCallHistory{
-				Action:  "stop",
-				Status:  "no_decision",
-				Summary: "planner returned no actionable tool decision",
-			})
 			break
 		}
 
@@ -140,11 +130,6 @@ func (a *AIToolCallingAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			if reason == "" {
 				reason = "model requested stop"
 			}
-			history = appendToolHistory(history, ai.ToolCallHistory{
-				Action:  "stop",
-				Status:  "completed",
-				Summary: reason,
-			})
 			Emit(input.Emit, model.ScanEvent{
 				Type:      model.ScanEventInfo,
 				AgentName: a.Name(),

@@ -437,17 +437,6 @@ func appendUniqueStr(ss []string, s string) []string {
 	return append(ss, s)
 }
 
-// escalationSuffix returns a short suffix string when escalation is recommended.
-func escalationSuffix(r ai.ReflectionResult) string {
-	if !r.ShouldEscalate {
-		return ""
-	}
-	if r.EscalationReason != "" {
-		return " | ESCALATE: " + r.EscalationReason
-	}
-	return " | ESCALATE recommended"
-}
-
 // boolStr converts a bool to "true"/"false".
 func boolStr(b bool) string {
 	if b {

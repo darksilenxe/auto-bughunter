@@ -322,28 +322,6 @@ func (s *Service) runCommandInjectionProbe(ctx context.Context, input RunInput, 
 	return findings
 }
 
-// measureBaselineLatency returns the average of two baseline GET request
-// durations to the target, used as the reference latency for time-based
-// detection. Falls back to 0 on error.
-func (s *Service) measureBaselineLatency(ctx context.Context, target string, input RunInput) time.Duration {
-	var total time.Duration
-	for i := 0; i < 2; i++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-		if err != nil {
-			continue
-		}
-		ApplyAuthProfile(req, input.AuthProfile)
-		start := time.Now()
-		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
-		elapsed := time.Since(start)
-		if err == nil && resp != nil {
-			_ = resp.Body.Close()
-			total += elapsed
-		}
-	}
-	return total / 2
-}
-
 // probeCommandInjectionOAST injects an OAST callback URL as a parameter value
 // and waits briefly for a DNS/HTTP callback that confirms blind command
 // injection (e.g. via wget/curl of the callback URL).

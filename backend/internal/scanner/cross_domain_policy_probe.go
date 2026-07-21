@@ -39,19 +39,6 @@ type crossDomainAllowFrom struct {
 	HTTPSRequired string `xml:"headers,attr"`
 }
 
-// clientAccessPolicyXML is a minimal representation of a Silverlight
-// clientaccesspolicy.xml for parsing allowed domains.
-type clientAccessPolicyXML struct {
-	XMLName         xml.Name                  `xml:"access-policy"`
-	AllowFrom       []clientAccessAllowFrom   `xml:"cross-domain-access>policy>allow-from"`
-}
-
-type clientAccessAllowFrom struct {
-	HTTPRequestHeaders string `xml:"http-request-headers,attr"`
-	URI                string `xml:"domain,attr"`
-	AllowSubdomains    string `xml:"allow-subdomains,attr"`
-}
-
 // runCrossDomainPolicyProbe is an active probe covering WSTG-CONF-08. It
 // fetches crossdomain.xml and clientaccesspolicy.xml from the target origin
 // and flags configurations that allow unrestricted cross-origin access:

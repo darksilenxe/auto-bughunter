@@ -3,7 +3,6 @@ package impact
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
@@ -328,10 +327,6 @@ func scoreImpact(f model.Finding, goals []model.ImpactGoal) float64 {
 	return clamp01(score)
 }
 
-func scoreBounty(f model.Finding, goals []model.ImpactGoal) float64 {
-	return scoreBountyWithPack(f, goals, nil)
-}
-
 // scoreBountyWithPack computes a [0,1] bounty-desirability score.  When pack
 // is non-nil its CategoryPayoutMultipliers are applied on top of the base
 // heuristic, allowing program-specific payout calibration.
@@ -641,8 +636,4 @@ func truncate(s string, max int) string {
 		return s[:max]
 	}
 	return s[:max-3] + "..."
-}
-
-func itoa(v int) string {
-	return strconv.Itoa(v)
 }

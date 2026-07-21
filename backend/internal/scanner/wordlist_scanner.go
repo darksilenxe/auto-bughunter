@@ -921,10 +921,6 @@ func captureURLStateWithClient(ctx context.Context, client *http.Client, rawURL 
 	}
 }
 
-func stateMeaningfullyChanged(baseline, candidate pathStateFingerprint) bool {
-	return !samePathState(baseline, candidate)
-}
-
 func normalizePathStateText(text string) string {
 	text = strings.ToLower(strings.TrimSpace(text))
 	text = pathStateWhitespaceRe.ReplaceAllString(text, " ")

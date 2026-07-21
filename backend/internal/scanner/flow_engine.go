@@ -49,14 +49,6 @@ type Flow struct {
 	Steps []FlowStep `json:"steps"`
 }
 
-// flowStepResult records what happened when a step was executed.
-type flowStepResult struct {
-	Name       string
-	Status     int
-	Body       string
-	DurationMs int64
-}
-
 // builtInFlows are the default flows derived from common web-application
 // transaction patterns. These are used when the operator has not provided
 // explicit flows via SeedRuntimeEndpoints context.

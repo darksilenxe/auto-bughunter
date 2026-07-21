@@ -24,16 +24,16 @@ const raceMaxEndpoints = 6
 // only needs 2–4 concurrent successes; higher counts just add noise.
 const raceWorkers = 8
 
-// raceWindowMs is the synchronisation window. All goroutines launch within
+// raceWindow is the synchronisation window. All goroutines launch within
 // this time to ensure they hit the server in the same window.
-const raceWindowMs = 50 * time.Millisecond
+const raceWindow = 50 * time.Millisecond
 
 // raceBodyLimit caps the per-response body read to bound memory use.
 const raceBodyLimit = 32 * 1024
 
 // RunRaceConditionProbe is an active Time-Of-Check/Time-Of-Use (TOCTOU) probe.
 // For each candidate state-changing endpoint it fires raceWorkers concurrent
-// requests through a barrier so all threads hit the server within raceWindowMs.
+// requests through a barrier so all threads hit the server within raceWindow.
 // When two or more concurrent requests receive a 2xx response the endpoint
 // likely lacks an atomic guard (row-level lock, idempotency key, or compare-and-swap)
 // and is susceptible to duplicate-action exploitation: double-spend, credit
@@ -141,7 +141,7 @@ func (s *Service) raceProbeEndpoint(
 	)
 
 	// Barrier: all goroutines wait at a WaitGroup before launching so they hit
-	// the endpoint as simultaneously as possible within raceWindowMs.
+	// the endpoint as simultaneously as possible within raceWindow.
 	var barrier sync.WaitGroup
 	barrier.Add(raceWorkers)
 	var release sync.WaitGroup
@@ -182,7 +182,7 @@ func (s *Service) raceProbeEndpoint(
 	go func() { release.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(raceWindowMs + 12*time.Second):
+	case <-time.After(raceWindow + 12*time.Second):
 	}
 
 	successes := int(atomic.LoadInt64(&successCount))
@@ -207,7 +207,7 @@ func (s *Service) raceProbeEndpoint(
 				"state-changing operation multiple times in a single race window. "+
 				"Common impacts: double-spend in payment flows, duplicate coupon redemption, "+
 				"multiple balance credits from a single deposit, or duplicate invitations.",
-			successes, raceWorkers, ep, raceWindowMs.Milliseconds(),
+			successes, raceWorkers, ep, raceWindow.Milliseconds(),
 		),
 		Evidence: fmt.Sprintf(
 			"Endpoint: %s | Workers: %d | Concurrent 2xx: %d | Status codes: [%s]",

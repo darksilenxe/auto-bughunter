@@ -27,10 +27,9 @@ type EvidenceMetrics struct {
 }
 
 type evidenceMetricsState struct {
-	valid          atomic.Uint64
-	incomplete     atomic.Uint64
-	missing        map[string]*atomic.Uint64
-	missingKnownAt uint64 // (unused, retained for future append) — see comment below
+	valid      atomic.Uint64
+	incomplete atomic.Uint64
+	missing    map[string]*atomic.Uint64
 }
 
 // Fields tracked in EvidenceMetrics.MissingByField. Kept as a fixed set
@@ -164,8 +163,6 @@ func firstNonEmptyEv(vals ...string) string {
 // missing-field name. Concurrent creation is protected by a
 // double-check pattern on the map because updates are rare after
 // warm-up.
-var evidenceMetricsMu = struct{ dummy int }{}
-
 func (s *evidenceMetricsState) counterFor(field string) *atomic.Uint64 {
 	if c, ok := s.missing[field]; ok {
 		return c

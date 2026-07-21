@@ -52,66 +52,10 @@ var csrfStateChangingMethods = []string{
 	http.MethodDelete,
 }
 
-// csrfContentTypes rotates over the body shapes an attacker can send
-// cross-origin. Form-encoded and text/plain are the classic CSRF
-// vectors (CORS-simple, no preflight); JSON and multipart are the
-// modern-API variants that also matter when the server accepts them.
-var csrfContentTypes = []string{
-	"application/x-www-form-urlencoded",
-	"text/plain",
-	"application/json",
-	"multipart/form-data; boundary=abhboundary",
-}
-
-// csrfHeaderTokenNames is the set of well-known CSRF-token header
-// aliases the forged-token branch iterates. Using only "X-CSRF-Token"
-// (the pre-migration behaviour) missed servers that enforce any of
-// the other names.
-var csrfHeaderTokenNames = []string{
-	"X-CSRF-Token",
-	"X-XSRF-TOKEN",
-	"X-CSRFToken",
-	"CSRF-Token",
-	"X-Requested-With",
-}
-
-// csrfOriginVariants is the set of Origin headers the probe rotates
-// over to detect Origin/Referer-only defences. "same-origin" leaves
-// the Origin header untouched (browser default for same-origin
-// requests); "attacker" forges a hostile origin and drops Referer;
-// "null" simulates a sandboxed-iframe / data-URL document.
-var csrfOriginVariants = []string{"same-origin", "attacker", "null"}
-
 // csrfAttackerOrigin is the synthetic hostile Origin used for the
 // Origin/Referer bypass variant. The invalid TLD guarantees the
 // value cannot collide with any real deployment.
 const csrfAttackerOrigin = "https://attacker.abh-scanner.invalid"
-
-// csrfBypassVariants enumerates common CSRF-token *bypass* techniques
-// the probe attempts against candidates that reject the plain
-// absent-token / forged-token attempts. These target real-world
-// misconfigurations where the server implements a CSRF check but the
-// check is defeatable by a benign-looking request tweak.
-//
-//	empty-value        — server treats an empty header/parameter
-//	                     value as valid ("presence, not value" check)
-//	method-override    — server routes on X-HTTP-Method-Override /
-//	                     _method but applies CSRF policy to the outer
-//	                     HTTP method
-//	duplicate-token    — parameter/header pollution: send the token
-//	                     twice with different values; middleware may
-//	                     compare against one copy while the app reads
-//	                     the other
-//	default-token      — server accepts a well-known default / stub
-//	                     value (some frameworks ship with "test" or
-//	                     "0" as a development bypass)
-var csrfBypassVariants = []string{
-	"",
-	"empty-value",
-	"method-override",
-	"duplicate-token",
-	"default-token",
-}
 
 // csrfDefaultTokenValues is the small list of "obvious" token values
 // the default-token bypass rotates over. Kept short so a single
@@ -136,8 +80,8 @@ var csrfMethodOverrideAliases = []string{
 type csrfRecipe struct {
 	contentType  string
 	tokenCarrier string // "absent", a header name, or a body-param name
-	origin       string // one of csrfOriginVariants
-	bypass       string // one of csrfBypassVariants ("" == none)
+	origin       string // "same-origin", "attacker", or "null"
+	bypass       string // "", "empty-value", "method-override", "duplicate-token", or "default-token"
 }
 
 // csrfRecipes is the ordered attempt matrix per candidate. The order

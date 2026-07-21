@@ -464,6 +464,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/admin/apikeys", s.handleAPIKeys)
 	mux.HandleFunc("/api/admin/apikeys/", s.handleAPIKeyByID)
 	mux.HandleFunc("/api/admin/logs", s.handleSystemLogs)
+	// Diagnostic bundle — safe to attach to bug reports (sensitive values redacted).
+	mux.HandleFunc("/api/diag/logs", s.handleDiagLogs)
 	// Agent Console — dispatch a single named agent with custom instructions.
 	mux.HandleFunc("/api/agent/dispatch", s.handleAgentDispatch)
 	// IDE — generate PoC / exploit code using the configured coding model.
@@ -1454,8 +1456,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		for _, run := range job.AgentRuns {
 			agentSeq = append(agentSeq, run.AgentName)
 		}
-		var scanDurationMs int64
-		scanDurationMs = executionFinishedAt.Sub(job.StartedAt).Milliseconds()
+		scanDurationMs := executionFinishedAt.Sub(job.StartedAt).Milliseconds()
 		s.agentLearner.Learn(context.Background(), job.ID, agentSeq, job.Findings, scanDurationMs, job.AgentRuns)
 	}
 	completionAudit := "Scan execution completed successfully"
@@ -1495,49 +1496,6 @@ func hasOperatorOverrides(options model.ScanOptions) bool {
 		len(options.AutonomySuppressAgents) > 0 ||
 		strings.TrimSpace(options.AutonomyPlannerLock) != "" ||
 		options.AutonomyFallbackRerun
-}
-
-func (s *Server) newRegistry(options model.ScanOptions) *agent.Registry {
-	reg := agent.NewRegistry()
-
-	reg.Register(agent.NewReconnaissanceAgent(true))
-	reg.Register(agent.NewJavaScriptSASTAgent(s.scanService, true))
-	reg.Register(agent.NewScanningAgent(s.scanService, true))
-	reg.Register(agent.NewInputValidationAgent(true))
-	reg.Register(agent.NewInformationDisclosureAgent(true))
-	reg.Register(agent.NewAccessControlAgent(true))
-	reg.Register(agent.NewAPISecurityAgent(true))
-	reg.Register(agent.NewCORSRedirectAgent(true))
-	reg.Register(agent.NewWordlistAgent(true))
-	reg.Register(agent.NewAnalysisAgent(true))
-	reg.Register(agent.NewAIToolCallingAgent(s.aiClient, options.UseAIToolCalling))
-
-	// Autonomous tool-building agents — run after core scanning so they have
-	// rich findings context to work from.  DynamicCommandAgent composes and
-	// executes validated CLI tool invocations; ToolBuilderAgent writes and
-	// runs custom Python probes for specialised tasks.
-	reg.Register(agent.NewDynamicCommandAgent(true))
-	reg.Register(agent.NewToolBuilderAgent(true, s.aiClient))
-
-	mlTriageEnabled := options.UseMLTriageAgent
-	attackPathEnabled := options.UseAttackPathAgent
-	falsePositiveEnabled := options.UseFalsePositiveReview
-	remediationEnabled := options.UseRemediationPlanner
-
-	reg.Register(agent.NewMLTriageAgent(s.mlService, mlTriageEnabled))
-	reg.Register(agent.NewAttackPathAgent(s.mlService, attackPathEnabled))
-	reg.Register(agent.NewFalsePositiveReviewAgent(s.mlService, falsePositiveEnabled))
-	reg.Register(agent.NewRemediationPlannerAgent(s.mlService, remediationEnabled))
-	reg.Register(agent.NewImpactVerifierAgent(true))
-	reg.Register(agent.NewReportingAgent(true))
-
-	// Attach the neural learner as the autonomous spawner so it can augment
-	// the static orchestration rules with learned Q-values.
-	if s.agentLearner != nil {
-		reg.SetSpawner(s.agentLearner)
-	}
-
-	return reg
 }
 
 func normalizeAndValidateTarget(raw string) (string, string, error) {
@@ -2131,10 +2089,7 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 			// against the changed surface.
 			changedURLs := extractChangedURLsFromDriftEvidence(earlySurfaceFindings)
 			if len(changedURLs) > 0 {
-				seeded := append([]string(nil), options.SeedRuntimeEndpoints...)
-				for _, u := range changedURLs {
-					seeded = append(seeded, u)
-				}
+				seeded := append(append([]string(nil), options.SeedRuntimeEndpoints...), changedURLs...)
 				options.SeedRuntimeEndpoints = uniqueStrings(seeded)
 				if emit != nil {
 					emit(model.ScanEvent{
@@ -3005,10 +2960,6 @@ func inWindowAt(now time.Time, spec string, loc *time.Location) bool {
 	return (localNow.Equal(start) || localNow.After(start)) && localNow.Before(end)
 }
 
-func inWindowUTC(now time.Time, spec string) bool {
-	return inWindowAt(now, spec, time.UTC)
-}
-
 func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
 	for _, win := range windows {
 		if strings.TrimSpace(win) == "" {
@@ -3019,10 +2970,6 @@ func inBlackoutAt(now time.Time, windows []string, loc *time.Location) bool {
 		}
 	}
 	return false
-}
-
-func inBlackout(now time.Time, windows []string) bool {
-	return inBlackoutAt(now, windows, time.UTC)
 }
 
 func computeNextCampaignRun(now time.Time, req model.AutomationCampaignUpsertRequest) time.Time {

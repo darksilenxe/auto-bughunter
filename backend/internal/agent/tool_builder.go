@@ -69,11 +69,9 @@ func (a *ToolBuilderAgent) Run(ctx context.Context, input AgentInput) (AgentOutp
 	totalFindings := 0
 
 	for _, toolName := range selected {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			output.Status = "partial"
 			break
-		default:
 		}
 
 		factory, ok := catalog[toolName]

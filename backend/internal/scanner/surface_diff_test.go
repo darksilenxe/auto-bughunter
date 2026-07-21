@@ -103,7 +103,7 @@ func TestSurfaceDiff_DetectsOpenAPIChange(t *testing.T) {
 func TestRunSurfaceDiffProbe_PassiveOnly(t *testing.T) {
 	svc := NewService(Config{})
 	findings, snap := svc.RunSurfaceDiffProbe(
-		nil,
+		context.TODO(),
 		"https://example.com",
 		model.ScanOptions{PassiveOnly: true},
 		model.ScanAuthProfile{},

@@ -130,10 +130,7 @@ func (p *Postgres) shouldRetry(parent context.Context, err error, attempt int) b
 		}
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return false
+	return errors.As(err, &netErr)
 }
 
 func (p *Postgres) retryDelay(attempt int) time.Duration {
