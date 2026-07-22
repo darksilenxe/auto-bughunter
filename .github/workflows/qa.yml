@@ -63,6 +63,16 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: Accuracy benchmark fixture gate
+        run: |
+          go test ./internal/accuracybench/... ./cmd/accuracy-bench/...
+          go build -o /tmp/accuracy-bench ./cmd/accuracy-bench
+          /tmp/accuracy-bench \
+            -corpus ./cmd/accuracy-bench/testdata/corpus \
+            -actuals ./cmd/accuracy-bench/testdata/actuals \
+            -output-json /tmp/accuracy-report.json \
+            -output-md /tmp/accuracy-report.md
+
       - name: Replay planner regression gate
         run: |
           go run ./cmd/replayharness \

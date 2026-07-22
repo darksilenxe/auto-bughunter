@@ -1300,6 +1300,15 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		extraMetrics["preReportProbeTotal."+key] = float64(agg.Total)
 		extraMetrics["preReportProbeVerified."+key] = float64(agg.Verified)
 		extraMetrics["preReportProbeSuppressed."+key] = float64(agg.Suppressed)
+		extraMetrics["preReportProbeDowngraded."+key] = float64(agg.Downgraded)
+		if agg.Total > 0 {
+			extraMetrics["preReportProbeVerifiedRate."+key] = roundTo2(float64(agg.Verified) / float64(agg.Total))
+			extraMetrics["preReportProbeSuppressedRate."+key] = roundTo2(float64(agg.Suppressed) / float64(agg.Total))
+			extraMetrics["preReportProbeDowngradedRate."+key] = roundTo2(float64(agg.Downgraded) / float64(agg.Total))
+		}
+		if agg.PoCReplayed > 0 {
+			extraMetrics["preReportProbePoCSuccessRate."+key] = roundTo2(float64(agg.PoCSucceeded) / float64(agg.PoCReplayed))
+		}
 	}
 	for name, agg := range preReport.ByCategory {
 		key := sanitizeMetricName(name)

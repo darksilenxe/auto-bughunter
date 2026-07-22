@@ -179,59 +179,55 @@ func (s *Service) RunOAuthProbe(
 		if !emitted[fid] {
 			probeURL := buildOAuthAuthorizeURL(ep, legitimateCallback, "", "code", "openid", "")
 			if scope.IsURLInScope(probeURL, scanScope) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				candidateObs, err := oauthFetchAuthorizeObservation(ctx, s, probeURL, auth, options)
 				if err == nil {
-					ApplyAuthProfile(req, auth)
-					resp, err := s.doRequestWithRetry(ctx, req, options)
-					if err == nil && resp != nil {
-						body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
-						_ = resp.Body.Close()
-						controlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_control", "unsupported_response_type", "openid", ""), auth, options)
-						controlRejected := oauthResponseHasError(controlObs.body) || controlObs.status >= http.StatusBadRequest
-						if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) && controlRejected {
-							finding := oauthFinding(
-								fid,
-								ep,
-								"csrf",
-								"oauth-state-omission",
-								model.SeverityMedium,
-								"OAuth CSRF — state parameter accepted as absent",
-								fmt.Sprintf(
-									"Authorization request to %s without a state parameter returned HTTP %d without an error. "+
-										"The state parameter is the primary CSRF protection for OAuth flows (RFC 6749 §10.12). "+
-										"An attacker can initiate an authorization request on behalf of a victim, "+
-										"omit the state, and link the victim's account to the attacker's identity.",
-									probeURL, resp.StatusCode,
-								),
-								"CWE-352",
-								[]string{
-									"Craft an authorization URL without the `state` parameter.",
-									"Deliver the link to a victim user and observe that the flow completes.",
-									"The victim's authorization code will be delivered without a CSRF nonce, " +
-										"allowing a login-CSRF attack to link victim and attacker accounts.",
-								},
-								map[string]string{
-									"stateAbsent":        "true",
-									"responseStatus":     fmt.Sprintf("%d", resp.StatusCode),
-									"url":                probeURL,
-									"param":              "state",
-									"controlRejected":    fmt.Sprintf("%v", controlRejected),
-									"controlStatus":      fmt.Sprintf("%d", controlObs.status),
-									"tokenCarrierTested": "state",
-								},
-							)
-							verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
-								Finding:               finding,
-								Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal},
-								AllowNoReplayEmission: true,
-								ProbeName:             "oauth_probe",
-							})
-							if verify.Suppressed {
-								continue
-							}
-							emitted[fid] = true
-							findings = append(findings, verify.EmittedFinding)
+					controlAcceptedObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_control", "code", "openid", ""), auth, options)
+					controlRejectedObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_control", "unsupported_response_type", "openid", ""), auth, options)
+					candidateAccepted := oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback)
+					controlAccepted := oauthAuthorizeLooksSuccessful(controlAcceptedObs, legitimateCallback)
+					controlRejected := oauthResponseHasError(controlRejectedObs.body) || controlRejectedObs.status >= http.StatusBadRequest
+					if candidateAccepted && controlAccepted && controlRejected {
+						finding := oauthFinding(
+							fid,
+							ep,
+							"csrf",
+							"oauth-state-omission",
+							model.SeverityMedium,
+							"OAuth CSRF — state parameter accepted as absent",
+							fmt.Sprintf(
+								"Authorization request to %s without a state parameter advanced the OAuth flow (HTTP %d) in the same way as a valid control request with state, while a malformed control request was rejected. "+
+									"The state parameter is the primary CSRF protection for OAuth flows (RFC 6749 §10.12). "+
+									"An attacker can initiate an authorization request on behalf of a victim, omit the state, and link the victim's account to the attacker's identity.",
+								probeURL, candidateObs.status,
+							),
+							"CWE-352",
+							[]string{
+								"Craft an authorization URL without the `state` parameter.",
+								"Deliver the link to a victim user and observe that the flow still advances to the callback or consent redirect.",
+								"Compare the result with a valid `state` request and confirm the server does not reject the missing-state variant.",
+							},
+							map[string]string{
+								"stateAbsent":           "true",
+								"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
+								"url":                   probeURL,
+								"param":                 "state",
+								"controlAcceptedStatus": fmt.Sprintf("%d", controlAcceptedObs.status),
+								"controlRejected":       fmt.Sprintf("%v", controlRejected),
+								"controlRejectedStatus": fmt.Sprintf("%d", controlRejectedObs.status),
+								"tokenCarrierTested":    "state",
+							},
+						)
+						verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
+							Finding:               finding,
+							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal},
+							AllowNoReplayEmission: true,
+							ProbeName:             "oauth_probe",
+						})
+						if verify.Suppressed {
+							continue
 						}
+						emitted[fid] = true
+						findings = append(findings, verify.EmittedFinding)
 					}
 				}
 			}
@@ -243,60 +239,57 @@ func (s *Service) RunOAuthProbe(
 			probeURL := buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "code", "openid", "")
 			// Note: deliberately no code_challenge parameter.
 			if scope.IsURLInScope(probeURL, scanScope) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				candidateObs, err := oauthFetchAuthorizeObservation(ctx, s, probeURL, auth, options)
 				if err == nil {
-					ApplyAuthProfile(req, auth)
-					resp, err := s.doRequestWithRetry(ctx, req, options)
-					if err == nil && resp != nil {
-						body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthBodyLimit))
-						_ = resp.Body.Close()
-						// If the server accepts the flow without code_challenge it does not enforce PKCE.
-						controlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "none", "openid", ""), auth, options)
-						controlRejected := oauthResponseHasError(controlObs.body) || controlObs.status >= http.StatusBadRequest
-						if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(string(body)) &&
-							!strings.Contains(strings.ToLower(string(body)), "code_challenge") && controlRejected {
-							finding := oauthFinding(
-								fid,
-								ep,
-								"authentication",
-								"oauth-pkce-downgrade",
-								model.SeverityMedium,
-								"OAuth PKCE not enforced — code_challenge not required",
-								fmt.Sprintf(
-									"Authorization endpoint %s accepted an authorization request without a code_challenge parameter (HTTP %d). "+
-										"Without PKCE enforcement, a public client (mobile app, SPA) is vulnerable to authorization "+
-										"code interception: a malicious app on the same device can capture and exchange the code "+
-										"without possessing the code_verifier (RFC 7636).",
-									probeURL, resp.StatusCode,
-								),
-								"CWE-863",
-								[]string{
-									"Initiate an authorization flow from a public client without `code_challenge`.",
-									"Intercept the authorization code.",
-									"Exchange the code at the /token endpoint without providing `code_verifier`.",
-									"Observe that the server issues an access token without requiring PKCE.",
-								},
-								map[string]string{
-									"codeChallengeAbsent": "true",
-									"responseStatus":      fmt.Sprintf("%d", resp.StatusCode),
-									"url":                 probeURL,
-									"param":               "code_challenge",
-									"controlRejected":     fmt.Sprintf("%v", controlRejected),
-									"controlStatus":       fmt.Sprintf("%d", controlObs.status),
-								},
-							)
-							verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
-								Finding:               finding,
-								Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal},
-								AllowNoReplayEmission: true,
-								ProbeName:             "oauth_probe",
-							})
-							if verify.Suppressed {
-								continue
-							}
-							emitted[fid] = true
-							findings = append(findings, verify.EmittedFinding)
+					validControlURL := buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "code", "openid", "abh-valid-pkce")
+					validControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, validControlURL, auth, options)
+					invalidControlURL := buildOAuthAuthorizeURLWithExtras(ep, legitimateCallback, "state_xyz", "code", "openid", "abh-invalid-pkce", map[string]string{
+						"code_challenge_method": "plain-invalid",
+					})
+					invalidControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, invalidControlURL, auth, options)
+					candidateAccepted := oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback)
+					validControlAccepted := oauthAuthorizeLooksSuccessful(validControlObs, legitimateCallback)
+					invalidControlRejected := oauthResponseHasError(invalidControlObs.body) || invalidControlObs.status >= http.StatusBadRequest
+					if candidateAccepted && validControlAccepted && invalidControlRejected {
+						finding := oauthFinding(
+							fid,
+							ep,
+							"authentication",
+							"oauth-pkce-downgrade",
+							model.SeverityMedium,
+							"OAuth PKCE not enforced — code_challenge not required",
+							fmt.Sprintf(
+								"Authorization endpoint %s advanced an authorization request without a code_challenge parameter (HTTP %d) in the same way as a valid PKCE control, while a malformed PKCE control was rejected. "+
+									"Without PKCE enforcement, a public client (mobile app, SPA) is vulnerable to authorization code interception because a malicious app can capture and exchange the code without possessing the code_verifier (RFC 7636).",
+								probeURL, candidateObs.status,
+							),
+							"CWE-863",
+							[]string{
+								"Initiate an authorization flow from a public client without `code_challenge`.",
+								"Compare the result with a valid PKCE request and confirm the server advances both flows.",
+								"Verify that a malformed PKCE control is rejected while the missing-PKCE flow is not.",
+							},
+							map[string]string{
+								"codeChallengeAbsent":   "true",
+								"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
+								"url":                   probeURL,
+								"param":                 "code_challenge",
+								"validControlStatus":    fmt.Sprintf("%d", validControlObs.status),
+								"invalidControlRejected": fmt.Sprintf("%v", invalidControlRejected),
+								"invalidControlStatus":  fmt.Sprintf("%d", invalidControlObs.status),
+							},
+						)
+						verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
+							Finding:               finding,
+							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal},
+							AllowNoReplayEmission: true,
+							ProbeName:             "oauth_probe",
+						})
+						if verify.Suppressed {
+							continue
 						}
+						emitted[fid] = true
+						findings = append(findings, verify.EmittedFinding)
 					}
 				}
 			}
@@ -355,6 +348,10 @@ func oauthDiscoverEndpoints(base *url.URL, seeded []string, scanScope model.Scan
 
 // buildOAuthAuthorizeURL constructs an authorization initiation URL.
 func buildOAuthAuthorizeURL(ep, redirectURI, state, responseType, scope_, codeChallenge string) string {
+	return buildOAuthAuthorizeURLWithExtras(ep, redirectURI, state, responseType, scope_, codeChallenge, nil)
+}
+
+func buildOAuthAuthorizeURLWithExtras(ep, redirectURI, state, responseType, scope_, codeChallenge string, extras map[string]string) string {
 	u, err := url.Parse(ep)
 	if err != nil {
 		return ep
@@ -376,6 +373,13 @@ func buildOAuthAuthorizeURL(ep, redirectURI, state, responseType, scope_, codeCh
 	if codeChallenge != "" {
 		q.Set("code_challenge", codeChallenge)
 		q.Set("code_challenge_method", "S256")
+	}
+	for k, v := range extras {
+		if strings.TrimSpace(v) == "" {
+			q.Del(k)
+			continue
+		}
+		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -452,6 +456,26 @@ func oauthResponseHasError(body string) bool {
 	} {
 		if strings.Contains(lower, kw) {
 			return true
+		}
+
+		func oauthAuthorizeLooksSuccessful(obs oauthAuthorizeObservation, legitimateCallback string) bool {
+			if !is2xxOrRedirect(obs.status) || oauthResponseHasError(obs.body) {
+				return false
+			}
+			location := strings.TrimSpace(strings.ToLower(obs.location))
+			body := strings.TrimSpace(strings.ToLower(obs.body))
+			if legitimateCallback != "" {
+				callback := strings.ToLower(strings.TrimSpace(legitimateCallback))
+				if strings.Contains(location, strings.ToLower(callback)) {
+					return true
+				}
+			}
+			for _, token := range []string{"code=", "access_token=", "id_token=", `"access_token"`, `"id_token"`} {
+				if strings.Contains(location, token) || strings.Contains(body, token) {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false

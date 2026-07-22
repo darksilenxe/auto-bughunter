@@ -65,18 +65,11 @@ func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.Sca
 			filtered = append(filtered, f)
 			continue
 		}
-		if f.Confidence >= threshold {
-			// Phase 3: strict mode additionally suppresses findings
-			// whose typed evidence record failed schema validation.
-			// Governance/verified findings are already exempted above.
-			if f.EvidenceFields != nil && f.EvidenceFields["evidenceQuality"] == "incomplete" {
-				suppressed++
-				continue
-			}
-			filtered = append(filtered, f)
+		if reason := strictReportingSuppressionReason(f, threshold); reason != "" {
+			suppressed++
 			continue
 		}
-		suppressed++
+		filtered = append(filtered, f)
 	}
 	clone.Findings = filtered
 	return &clone, suppressed, threshold, true
@@ -85,6 +78,59 @@ func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.Sca
 func isStrictReportingExempt(f model.Finding) bool {
 	switch strings.ToLower(strings.TrimSpace(f.Category)) {
 	case "governance", "operations":
+		return true
+	}
+	return false
+}
+
+func strictReportingSuppressionReason(f model.Finding, threshold float64) string {
+	if f.Confidence < threshold {
+		return "confidence_below_threshold"
+	}
+	if f.EvidenceFields != nil && f.EvidenceFields["evidenceQuality"] == "incomplete" {
+		return "evidence_incomplete"
+	}
+	verified := strings.EqualFold(strings.TrimSpace(f.EvidenceFields["preReport.verified"]), "true")
+	stamp := strictVerifierStamp(f)
+	hasProofGap := strings.TrimSpace(f.EvidenceFields["proofPolicyMissing"]) != ""
+	sev := strings.ToLower(strings.TrimSpace(string(f.Severity)))
+	highImpact := sev == "high" || sev == "critical"
+	if strictCategoryNeedsVerifier(f.Category) && stamp == "" {
+		return "missing_verifier_stamp"
+	}
+	if highImpact && !verified {
+		return "high_severity_not_verified"
+	}
+	if (highImpact || strictCategoryNeedsProof(f.Category)) && hasProofGap {
+		return "missing_required_proof"
+	}
+	return ""
+}
+
+func strictVerifierStamp(f model.Finding) string {
+	if f.EvidenceFields == nil {
+		return ""
+	}
+	if stamp := strings.TrimSpace(f.EvidenceFields["preReport.verifiedBy"]); stamp != "" {
+		return stamp
+	}
+	return strings.TrimSpace(f.EvidenceFields["verifiedBy"])
+}
+
+func strictCategoryNeedsVerifier(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "authentication", "xss", "dom_xss", "dom-xss", "open_redirect", "open-redirect",
+		"csrf", "cors", "clickjacking", "xxe", "ssti", "sqli", "nosqli", "path_traversal",
+		"path-traversal", "prototype_pollution", "prototype-pollution":
+		return true
+	}
+	return false
+}
+
+func strictCategoryNeedsProof(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "authentication", "xss", "dom_xss", "dom-xss", "open_redirect", "open-redirect",
+		"csrf", "cors", "clickjacking":
 		return true
 	}
 	return false

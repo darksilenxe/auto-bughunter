@@ -213,9 +213,23 @@ def feedback_label(feedback: List[Dict[str, Any]], finding_id: str) -> int | Non
         if normalize(item.get("findingId", "")) != fid:
             continue
         outcome = normalize(item.get("outcome", ""))
+        reason = normalize(item.get("reason", ""))
+        notes = item.get("notes", "")
+        if not outcome and notes:
+            try:
+                parsed = json.loads(str(notes))
+                outcome = normalize(parsed.get("outcome", ""))
+                if not reason:
+                    reason = normalize(parsed.get("reason", "") or parsed.get("decision", ""))
+            except Exception:
+                pass
         if outcome == "accepted":
             return 1
-        if outcome in {"rejected", "duplicate", "informative"}:
+        if outcome in {"rejected", "duplicate", "informative", "suppressed"}:
+            return 0
+        if reason in {"operator_accepted", "operator_verified"}:
+            return 1
+        if reason in {"operator_rejected", "operator_suppressed", "false_positive", "duplicate"}:
             return 0
     return None
 

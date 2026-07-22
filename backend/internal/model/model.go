@@ -442,6 +442,7 @@ type ReportFeedback struct {
 	Title       string    `json:"title,omitempty"`
 	ProgramName string    `json:"programName,omitempty"`
 	Outcome     string    `json:"outcome"`
+	Reason      string    `json:"reason,omitempty"`
 	PayoutUSD   float64   `json:"payoutUsd,omitempty"`
 	Notes       string    `json:"notes,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`

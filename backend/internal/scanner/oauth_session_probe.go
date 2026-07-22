@@ -251,47 +251,46 @@ func (s *Service) RunOAuthSessionProbe(
 		if !scope.IsURLInScope(probeURL, scanScope) {
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		candidateObs, err := oauthFetchAuthorizeObservation(ctx, s, probeURL, auth, options)
 		if err != nil {
 			continue
 		}
-		ApplyAuthProfile(req, auth)
-		resp, err := s.doRequestWithRetry(ctx, req, options)
-		if err != nil || resp == nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthSessionBodyLimit))
-		_ = resp.Body.Close()
-
-		bodyStr := string(body)
-		if is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(bodyStr) &&
-			!strings.Contains(strings.ToLower(bodyStr), "nonce") {
+		validControlURL := buildOAuthAuthorizeURLWithExtras(ep, legitimateCallback, "state_xyz", "code id_token", "openid", "", map[string]string{
+			"nonce": "abh-valid-nonce",
+		})
+		validControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, validControlURL, auth, options)
+		rejectedControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "unsupported_response_type", "openid", ""), auth, options)
+		if oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback) &&
+			oauthAuthorizeLooksSuccessful(validControlObs, legitimateCallback) &&
+			(oauthResponseHasError(rejectedControlObs.body) || rejectedControlObs.status >= http.StatusBadRequest) {
 			emitted[fid] = true
 			appendVerified(oauthSessionFinding(
 				fid, ep, model.SeverityMedium,
 				"OIDC hybrid flow accepted without nonce — id_token replay possible",
 				fmt.Sprintf(
 					"The authorization endpoint %s accepted a hybrid flow request "+
-						"(response_type=code id_token) without a nonce parameter (HTTP %d) "+
-						"and did not return an error requiring it. The nonce binds an "+
+						"(response_type=code id_token) without a nonce parameter (HTTP %d), advanced it like a valid nonce-bearing control, "+
+						"and rejected a malformed control request. The nonce binds an "+
 						"id_token to a specific browser session; without it an attacker "+
 						"who obtains an id_token can replay it across sessions.",
-					ep, resp.StatusCode,
+					ep, candidateObs.status,
 				),
 				"CWE-294",
 				[]string{
 					"Initiate an OIDC hybrid flow without the nonce parameter.",
-					"Observe that the server does not reject the request.",
-					"Obtain an id_token from the flow.",
-					"Present the id_token to a different session or application to demonstrate cross-session replay.",
+					"Compare the result with a valid nonce-bearing hybrid-flow request and confirm both are accepted.",
+					"Verify that a malformed control request is rejected while the missing-nonce flow is not.",
+					"Present the resulting id_token to a different session or application to demonstrate cross-session replay.",
 				},
 				map[string]string{
-					"authorizeEndpoint": ep,
-					"responseType":      "code id_token",
-					"nonceAbsent":       "true",
-					"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
+					"authorizeEndpoint":    ep,
+					"responseType":         "code id_token",
+					"nonceAbsent":          "true",
+					"responseStatus":       fmt.Sprintf("%d", candidateObs.status),
+					"validControlStatus":   fmt.Sprintf("%d", validControlObs.status),
+					"rejectedControlStatus": fmt.Sprintf("%d", rejectedControlObs.status),
 				},
-			), []EvidenceSignal{EvidenceStatusDelta, EvidenceErrorSignal})
+			), []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal})
 		}
 	}
 
@@ -467,19 +466,24 @@ refreshProbe:
 			if err != nil || resp == nil {
 				continue
 			}
-			_ = resp.Body.Close()
 			acao := resp.Header.Get("Access-Control-Allow-Origin")
-			if acao == "*" || strings.EqualFold(acao, "https://attacker.example.com") {
+			acah := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
+			acam := strings.ToLower(resp.Header.Get("Access-Control-Allow-Methods"))
+			_ = resp.Body.Close()
+			allowsOrigin := acao == "*" || strings.EqualFold(acao, "https://attacker.example.com")
+			allowsMethod := strings.Contains(acam, "post") || strings.Contains(acam, "*")
+			allowsHeaders := strings.Contains(acah, "authorization") || strings.Contains(acah, "content-type") || strings.Contains(acah, "*")
+			if allowsOrigin && allowsMethod && allowsHeaders {
 				emitted[fid] = true
 				appendVerified(oauthSessionFinding(
 					fid, ep, model.SeverityMedium,
 					"OAuth token endpoint allows cross-origin requests from arbitrary origins",
 					fmt.Sprintf(
 						"The token endpoint %s responded to a CORS preflight from "+
-							"https://attacker.example.com with Access-Control-Allow-Origin: %q. "+
+							"https://attacker.example.com with Access-Control-Allow-Origin: %q, Access-Control-Allow-Methods: %q, and Access-Control-Allow-Headers: %q. "+
 							"This allows a malicious page to exchange authorization codes for "+
 							"access tokens cross-origin using the victim's browser credentials.",
-						ep, acao,
+						ep, acao, resp.Header.Get("Access-Control-Allow-Methods"), resp.Header.Get("Access-Control-Allow-Headers"),
 					),
 					"CWE-942",
 					[]string{
@@ -490,9 +494,11 @@ refreshProbe:
 					map[string]string{
 						"tokenEndpoint":            ep,
 						"accessControlAllowOrigin": acao,
+						"accessControlAllowMethods": resp.Header.Get("Access-Control-Allow-Methods"),
+						"accessControlAllowHeaders": resp.Header.Get("Access-Control-Allow-Headers"),
 						"attackerOrigin":           "https://attacker.example.com",
 					},
-				), []EvidenceSignal{EvidenceHeaderDelta, EvidenceStatusDelta})
+				), []EvidenceSignal{EvidenceHeaderDelta, EvidenceStatusDelta, EvidenceErrorSignal})
 				break
 			}
 		}
