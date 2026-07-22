@@ -550,13 +550,13 @@ func computePreReportConfidence(policy proofpolicy.Result, hits, required int, s
 func downgradeSeverity(s model.Severity) model.Severity {
 	switch strings.ToLower(string(s)) {
 	case "critical":
-		return model.Severity("High")
+		return model.SeverityHigh
 	case "high":
-		return model.Severity("Medium")
+		return model.SeverityMedium
 	case "medium":
-		return model.Severity("Low")
+		return model.SeverityLow
 	case "low":
-		return model.Severity("Info")
+		return model.SeverityInfo
 	default:
 		return s
 	}

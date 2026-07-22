@@ -118,15 +118,15 @@ func NewLiveScanQueue(capacity int) *LiveScanQueue {
 	}
 }
 
-// TryEnqueue computes the structural fingerprint for rawURL+method and
-// enqueues the item if it has not been seen before and the queue is not full.
+// TryEnqueue computes the structural fingerprint for rawURL+method+body-shape
+// and enqueues the item if it has not been seen before and the queue is not full.
 // Returns true when the item was accepted. Safe to call on a nil receiver
 // (returns false).
 func (q *LiveScanQueue) TryEnqueue(method, rawURL, body, contentType string, headers map[string]string) bool {
 	if q == nil {
 		return false
 	}
-	fp := structuralFingerprint(method, rawURL)
+	fp := structuralFingerprintWithBody(method, rawURL, body, contentType)
 	if fp == "" {
 		return false
 	}
@@ -219,11 +219,19 @@ func normalizePathSegment(seg string) string {
 	}
 }
 
-// structuralFingerprint returns a stable string key for a method + URL
-// combination that treats dynamically varying path segments and ignores query
-// parameter values (keeping only parameter names). The result is used to
-// deduplicate equivalent endpoints discovered under different resource IDs.
+// structuralFingerprint returns a stable string key for a method + URL + body
+// shape combination. It normalises dynamic path segments, ignores query
+// parameter values (keeping only names), and for request methods that carry a
+// body (POST, PUT, PATCH) also includes the sorted top-level JSON field names.
+// This ensures that two POST requests to the same URL with different body
+// schemas are treated as distinct endpoints with different injection points.
 func structuralFingerprint(method, rawURL string) string {
+	return structuralFingerprintWithBody(method, rawURL, "", "")
+}
+
+// structuralFingerprintWithBody is the full fingerprint that also factors in
+// body field names for mutation-capable HTTP methods.
+func structuralFingerprintWithBody(method, rawURL, body, contentType string) string {
 	method = strings.ToUpper(strings.TrimSpace(method))
 	if method == "" {
 		method = "GET"
@@ -247,12 +255,29 @@ func structuralFingerprint(method, rawURL string) string {
 	}
 	sort.Strings(params)
 
-	key := fmt.Sprintf("%s:%s://%s%s?[%s]",
+	// For request methods that carry a body, include the sorted top-level
+	// JSON field names in the fingerprint so that requests to the same URL
+	// but with different body schemas are treated as distinct endpoints.
+	bodyShape := ""
+	if (method == "POST" || method == "PUT" || method == "PATCH") && strings.Contains(contentType, "json") && body != "" {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(body), &obj); err == nil {
+			fields := make([]string, 0, len(obj))
+			for k := range obj {
+				fields = append(fields, strings.ToLower(k))
+			}
+			sort.Strings(fields)
+			bodyShape = "{" + strings.Join(fields, ",") + "}"
+		}
+	}
+
+	key := fmt.Sprintf("%s:%s://%s%s?[%s]body:%s",
 		method,
 		u.Scheme,
 		strings.ToLower(u.Host),
 		normalizedPath,
 		strings.Join(params, ","),
+		bodyShape,
 	)
 	h := md5.Sum([]byte(key))
 	return fmt.Sprintf("%x", h)
