@@ -321,11 +321,24 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewAdvancedCoverageAgent(scanService, true))
 	reg.Register(agent.NewInputValidationAgent(true))
 	reg.Register(agent.NewInformationDisclosureAgent(true))
+	// file_upload always runs so every scan checks for upload vulnerabilities
+	// regardless of whether a prior agent surfaced upload indicators.
+	reg.Register(agent.NewFileUploadAgent(true))
 	reg.Register(agent.NewAccessControlAgent(true))
+	// auth_bypass always runs so every scan exercises authentication weaknesses.
+	reg.Register(agent.NewAuthBypassAgent(true))
 	reg.Register(agent.NewAPISecurityAgent(true))
+	// ssrf always runs so every scan probes server-side request forgery vectors.
+	reg.Register(agent.NewSSRFAgent(true))
 	reg.Register(agent.NewCORSRedirectAgent(true))
 	reg.Register(agent.NewWordlistAgent(true))
+	// burp always runs after content discovery so the Burp active scanner
+	// exercises every endpoint surfaced by wordlist and recon phases.
+	reg.Register(agent.NewBurpAgent(true))
 	reg.Register(agent.NewAnalysisAgent(true))
+	// cve_reverse_engineer always runs so CVE-tagged findings (retire.js,
+	// nuclei, Metasploit) get a root-cause write-up and PoC on every scan.
+	reg.Register(agent.NewCVEResearchAgent(true, aiClient))
 	// Agentic loop agents: these form the autonomous observe→reason→act core.
 	// They are registered in the static order so they always execute even when
 	// the AI planner is unavailable, while still being schedulable by the AI
@@ -336,6 +349,12 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	reg.Register(agent.NewPentestLoopAgent(aiClient, scanService, 0, true))
 	reg.Register(agent.NewReasoningIterationAgent(aiClient, scanService, 0, true))
 	reg.Register(agent.NewExploitChainAgent(true))
+	// metasploit always runs so every scan attempts exploit-chain verification
+	// against the attack surface discovered in earlier phases.
+	reg.Register(agent.NewMetasploitAgent(true))
+	// dynamic_commands always runs late so it has maximum context from all
+	// prior phases when generating and executing tailored tool invocations.
+	reg.Register(agent.NewDynamicCommandAgent(true))
 	reg.Register(agent.NewHackTricksAgent(true, aiClient))
 	reg.Register(agent.NewToolBuilderAgent(true, aiClient))
 	// ai_tool_calling is enabled whenever an AI client is present so the LLM

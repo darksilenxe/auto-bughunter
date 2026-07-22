@@ -63,9 +63,9 @@ type integrationState struct {
 
 // maxValidationTargets caps how many discovered endpoints (plus the base
 // target) are handed to the heavier active-validation tools (sqlmap, commix,
-// nuclei, xssmap). It bounds scan time so a large discovery surface cannot blow
-// the per-scan budget.
-const maxValidationTargets = 6
+// nuclei, xssmap). The higher limit ensures more of the attack surface
+// discovered by ffuf/gobuster/katana is actively validated.
+const maxValidationTargets = 20
 
 // maxInjectionParams caps how many discovered parameter names are appended to a
 // single validation URL when building injection points.
@@ -2632,6 +2632,11 @@ func (s *Service) runSQLMap(ctx context.Context, target string, authProfile mode
 	return result.Findings
 }
 
+// maxFFUFRecurseDirs is the maximum number of discovered paths that FFUF will
+// recursively enumerate in a second pass. This ensures deep coverage of the
+// application's directory tree while keeping total scan time bounded.
+const maxFFUFRecurseDirs = 10
+
 func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableFFUF {
 		return []model.Finding{{
@@ -2669,45 +2674,95 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 	}
 	defer os.Remove(wordlistPath)
 
-	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ictx, s.cfg.FFUFBinary, "-u", strings.TrimRight(target, "/")+"/FUZZ", "-w", wordlistPath, "-mc", "200,204,301,302,307,401,403", "-s")
-	var outb bytes.Buffer
-	cmd.Stdout = &outb
-	cmd.Stderr = &outb
-	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+	// ffufDirPass runs a single FFUF directory enumeration pass against passTarget
+	// and returns the in-scope paths found.
+	ffufDirPass := func(passTarget string) []string {
+		if ctx.Err() != nil {
+			return nil
+		}
+		ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ictx, s.cfg.FFUFBinary, "-u", strings.TrimRight(passTarget, "/")+"/FUZZ", "-w", wordlistPath, "-mc", "200,204,301,302,307,401,403", "-s")
+		var outb bytes.Buffer
+		cmd.Stdout = &outb
+		cmd.Stderr = &outb
+		_ = cmd.Run()
+		if ictx.Err() == context.DeadlineExceeded {
+			return nil
+		}
+		paths := parsePathHits(outb.String(), passTarget, scanScope)
+		return filterStateChangingPaths(ctx, s.httpClient, passTarget, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	}
+
+	// First pass: fuzz the base target.
+	paths := ffufDirPass(target)
+	if ctx.Err() != nil {
 		return []model.Finding{{
 			ID:             "ffuf-timeout",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
 			Title:          "FFUF timed out",
-			Description:    "FFUF did not complete before the integration timeout.",
+			Description:    "FFUF did not complete before the overall scan context ended.",
 			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
 
-	paths := parsePathHits(outb.String(), target, scanScope)
-	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
-
 	// Record discovered paths as absolute, in-scope endpoint URLs so the deeper
 	// validation phases (sqlmap, commix, nuclei, xssmap) can reuse them as
 	// additional targets instead of only probing the base URL.
 	baseTrim := strings.TrimRight(target, "/")
+	allPaths := append([]string(nil), paths...)
 	endpointURLs := make([]string, 0, len(paths))
 	for _, p := range paths {
 		endpointURLs = append(endpointURLs, baseTrim+p)
 	}
+
+	// Recursive pass: enumerate each discovered directory so FFUF dives as
+	// deep as possible into the application. Cap the number of sub-targets to
+	// avoid unbounded scan time.
+	recurseDirs := make([]string, 0, maxFFUFRecurseDirs)
+	for _, p := range paths {
+		if len(recurseDirs) >= maxFFUFRecurseDirs {
+			break
+		}
+		if strings.HasSuffix(p, "/") || !strings.Contains(filepath.Base(p), ".") {
+			recurseDirs = append(recurseDirs, baseTrim+strings.TrimRight(p, "/")+"/")
+		}
+	}
+	seenPaths := make(map[string]struct{}, len(allPaths))
+	for _, p := range allPaths {
+		seenPaths[p] = struct{}{}
+	}
+	for _, subTarget := range recurseDirs {
+		if ctx.Err() != nil {
+			break
+		}
+		subPaths := ffufDirPass(subTarget)
+		subBase := strings.TrimRight(subTarget, "/")
+		for _, sp := range subPaths {
+			fullPath := subBase + sp
+			if _, ok := seenPaths[fullPath]; ok {
+				continue
+			}
+			seenPaths[fullPath] = struct{}{}
+			allPaths = append(allPaths, fullPath)
+			endpointURLs = append(endpointURLs, subBase+sp)
+		}
+		// Also fuzz parameters on discovered sub-directories.
+		subParams := s.ffufFuzzParameters(ctx, subTarget, scanScope)
+		state.addParams(subParams...)
+	}
 	state.addEndpoints(endpointURLs...)
 
-	// Second pass: fuzz hidden query-string parameters so FFUF covers parameter
-	// inputs, not just paths. Discovered parameter names are recorded so they
-	// become injection points for sqlmap/commix downstream.
+	// Parameter fuzzing pass: fuzz hidden query-string parameters so FFUF covers
+	// parameter inputs, not just paths. Discovered parameter names are recorded
+	// so they become injection points for sqlmap/commix downstream.
 	params := s.ffufFuzzParameters(ctx, target, scanScope)
 	state.addParams(params...)
 
 	findings := make([]model.Finding, 0, 2)
-	if len(paths) == 0 {
+	if len(allPaths) == 0 {
 		findings = append(findings, model.Finding{
 			ID:             "ffuf-no-paths",
 			Category:       "integration",
@@ -2723,8 +2778,8 @@ func (s *Service) runFFUF(ctx context.Context, target string, scanScope model.Sc
 			Category:       "discovery",
 			Severity:       model.SeverityInfo,
 			Title:          "FFUF discovered candidate paths",
-			Description:    "FFUF discovered in-scope endpoint candidates using directory fuzzing.",
-			Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+			Description:    fmt.Sprintf("FFUF discovered in-scope endpoint candidates using directory fuzzing (base pass + recursive enumeration of %d sub-directories).", len(recurseDirs)),
+			Evidence:       strings.Join(limitStrings(allPaths, 20), ", "),
 			Recommendation: "Review discovered paths for authentication, authorization, and input-validation flaws.",
 			Sources:        []string{"ffuf"},
 			Confidence:     0.8,
@@ -2842,6 +2897,11 @@ func isValidParamName(token string) bool {
 	return true
 }
 
+// maxGobusterRecurseDirs is the maximum number of discovered directories that
+// Gobuster will recursively enumerate in a second pass. This bounds the total
+// scan time while still ensuring deep path enumeration.
+const maxGobusterRecurseDirs = 10
+
 func (s *Service) runGobuster(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableGobuster {
 		return []model.Finding{{
@@ -2879,33 +2939,84 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 	}
 	defer os.Remove(wordlistPath)
 
-	ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ictx, s.cfg.GobusterBinary, "dir", "-u", target, "-w", wordlistPath, "-q", "--no-error")
-	var outb bytes.Buffer
-	cmd.Stdout = &outb
-	cmd.Stderr = &outb
-	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+	// gobusterDirPass runs Gobuster against a single target URL and returns the
+	// discovered paths. It is called for both the base target and for each
+	// discovered directory in the recursive pass.
+	gobusterDirPass := func(passTarget string) []string {
+		if ctx.Err() != nil {
+			return nil
+		}
+		ictx, cancel := context.WithTimeout(ctx, s.cfg.IntegrationTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ictx, s.cfg.GobusterBinary, "dir", "-u", passTarget, "-w", wordlistPath, "-q", "--no-error")
+		var outb bytes.Buffer
+		cmd.Stdout = &outb
+		cmd.Stderr = &outb
+		_ = cmd.Run()
+		if ictx.Err() == context.DeadlineExceeded {
+			return nil
+		}
+		paths := parsePathHits(outb.String(), passTarget, scanScope)
+		return filterStateChangingPaths(ctx, s.httpClient, passTarget, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
+	}
+
+	// First pass: enumerate the base target.
+	basePaths := gobusterDirPass(target)
+	if ctx.Err() != nil {
 		return []model.Finding{{
 			ID:             "gobuster-timeout",
 			Category:       "integration",
 			Severity:       model.SeverityInfo,
 			Title:          "Gobuster timed out",
-			Description:    "Gobuster did not complete before the integration timeout.",
+			Description:    "Gobuster did not complete before the overall scan context ended.",
 			Evidence:       "timeout=" + s.cfg.IntegrationTimeout.String(),
 			Recommendation: "Increase INTEGRATION_TIMEOUT_SECONDS or reduce scan scope.",
 		}}
 	}
 
-	paths := parsePathHits(outb.String(), target, scanScope)
-	paths = filterStateChangingPaths(ctx, s.httpClient, target, paths, model.ScanAuthProfile{}, scanScope, 5, s.cfg.IntegrationTimeout)
 	baseTrim := strings.TrimRight(target, "/")
-	gobusterEndpoints := make([]string, 0, len(paths))
-	for _, p := range paths {
+	allPaths := append([]string(nil), basePaths...)
+	gobusterEndpoints := make([]string, 0, len(basePaths))
+	for _, p := range basePaths {
 		gobusterEndpoints = append(gobusterEndpoints, baseTrim+p)
 	}
+
+	// Second pass: recursively enumerate each discovered directory so Gobuster
+	// dives as deep as the application's directory tree allows. Cap the number
+	// of sub-targets to avoid unbounded scan time.
+	recurseDirs := make([]string, 0, maxGobusterRecurseDirs)
+	for _, p := range basePaths {
+		if len(recurseDirs) >= maxGobusterRecurseDirs {
+			break
+		}
+		// Only recurse into directory-like paths (ending with "/" or no extension).
+		if strings.HasSuffix(p, "/") || !strings.Contains(filepath.Base(p), ".") {
+			recurseDirs = append(recurseDirs, baseTrim+strings.TrimRight(p, "/")+"/")
+		}
+	}
+	seenPaths := make(map[string]struct{}, len(allPaths))
+	for _, p := range allPaths {
+		seenPaths[p] = struct{}{}
+	}
+	for _, subTarget := range recurseDirs {
+		if ctx.Err() != nil {
+			break
+		}
+		subPaths := gobusterDirPass(subTarget)
+		subBase := strings.TrimRight(subTarget, "/")
+		for _, sp := range subPaths {
+			fullPath := subBase + sp
+			if _, ok := seenPaths[fullPath]; ok {
+				continue
+			}
+			seenPaths[fullPath] = struct{}{}
+			allPaths = append(allPaths, fullPath)
+			gobusterEndpoints = append(gobusterEndpoints, subBase+sp)
+		}
+	}
+
 	state.addEndpoints(gobusterEndpoints...)
-	if len(paths) == 0 {
+	if len(allPaths) == 0 {
 		return []model.Finding{{
 			ID:             "gobuster-no-paths",
 			Category:       "integration",
@@ -2921,8 +3032,8 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 		Category:       "discovery",
 		Severity:       model.SeverityInfo,
 		Title:          "Gobuster discovered candidate paths",
-		Description:    "Gobuster discovered in-scope endpoint candidates using directory brute-force.",
-		Evidence:       strings.Join(limitStrings(paths, 20), ", "),
+		Description:    fmt.Sprintf("Gobuster discovered in-scope endpoint candidates using directory brute-force (base pass + recursive enumeration of %d sub-directories).", len(recurseDirs)),
+		Evidence:       strings.Join(limitStrings(allPaths, 20), ", "),
 		Recommendation: "Review discovered paths for sensitive content, auth bypass, and exposed administrative surfaces.",
 		Sources:        []string{"gobuster"},
 		Confidence:     0.8,

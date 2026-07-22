@@ -99,6 +99,23 @@ func (a *WordlistAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	output.Metadata["targets_attempted"] = fmt.Sprintf("%d", acceptedWordlistCount(dirs)+len(subs)+acceptedWordlistCount(apis))
 	output.Metadata["targets_skipped"] = fmt.Sprintf("%d", suppressedWordlistCount(dirs)+suppressedWordlistCount(apis))
 
+	// Feed all discovered endpoints into the SharedScanContext blackboard so
+	// subsequent agents (hypothesis, pentest_loop, adaptive_probe, ssrf, etc.)
+	// receive them via SeedRuntimeEndpoints and can probe the full discovered
+	// surface rather than just the base target URL.
+	if input.SharedScanContext != nil {
+		for _, f := range output.Findings {
+			if raw := strings.TrimSpace(f.EvidenceFields["seedRuntimeEndpoints"]); raw != "" {
+				for _, ep := range strings.Split(raw, ",") {
+					ep = strings.TrimSpace(ep)
+					if ep != "" {
+						input.SharedScanContext.AddEndpoint(ep)
+					}
+				}
+			}
+		}
+	}
+
 	prioritized := prioritizeLikelyHighRiskEndpoints(output.Findings)
 	if len(prioritized) > 0 {
 		output.Metadata["prioritized_endpoints"] = strings.Join(prioritized, ",")
