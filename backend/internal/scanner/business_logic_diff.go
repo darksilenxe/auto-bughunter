@@ -132,6 +132,26 @@ func (s *Service) RunBusinessLogicDiff(
 	// Runs with the baseline credentials so we avoid confounding with probe 1.
 	findings = append(findings, s.bldProbeParameterTamper(ctx, candidates, baseline, options)...)
 
+	// Browser validation: for each confirmed finding, capture before/after
+	// DOM snapshots of the affected URL to produce human-reviewable
+	// screenshots and automatically promote body-delta / code-change signals.
+	// This runs sequentially after the HTTP probing phase to avoid inflating
+	// the parallel browser session count.
+	for i := range findings {
+		f := &findings[i]
+		if f.AffectedURL == "" {
+			continue
+		}
+		capturedFinding := *f
+		capturedEmit := emit
+		capturedAuth := baseline
+		bvResult, bvErr := ValidateFindingWithBrowser(ctx, capturedFinding, capturedAuth, capturedEmit)
+		if bvErr != nil || bvResult == nil {
+			continue
+		}
+		attachBrowserValidationArtifacts(f, bvResult.Before, bvResult.After, bvResult.Delta)
+	}
+
 	return findings
 }
 

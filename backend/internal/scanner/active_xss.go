@@ -399,6 +399,12 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 	// verifier. Temporarily canonicalise the category to "xss" so the
 	// proof-policy engine evaluates the correct ruleset; the external
 	// category label is preserved on the emitted finding.
+	// BrowserValidation navigates to the reflection URL so the scanner
+	// can capture before/after screenshots of the DOM and detect whether
+	// the payload produced a visible state change (e.g. title mutation,
+	// injected element).
+	capturedFinding := finding
+	capturedAuth := input.AuthProfile
 	originalCategory := finding.Category
 	finding.Category = "xss"
 	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
@@ -406,6 +412,9 @@ func (s *Service) runActiveXSSProbe(ctx context.Context, input RunInput, body st
 		Signals:               []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved},
 		AllowNoReplayEmission: true,
 		ProbeName:             "active-xss",
+		BrowserValidation: func(bvCtx context.Context) (*model.BrowserValidationResult, error) {
+			return ValidateFindingWithBrowser(bvCtx, capturedFinding, capturedAuth, input.Emit)
+		},
 	})
 	if verifyOutcome.Suppressed {
 		return nil

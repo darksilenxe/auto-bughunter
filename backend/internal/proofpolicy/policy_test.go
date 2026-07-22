@@ -368,10 +368,47 @@ func TestAuthenticationPolicySatisfied(t *testing.T) {
 	if out.Category != "authentication" {
 		t.Fatalf("expected canonical 'authentication', got %q", out.Category)
 	}
-	if len(out.Missing) != 0 {
-		t.Fatalf("expected full authentication coverage, missing: %v", out.Missing)
-	}
+	// screenshot_state_change is an optional bonus rule added by browser
+	// validation. A finding without it should still satisfy the minimum
+	// coverage threshold (0.66 ≤ 3/4 = 0.75).
 	if out.BelowMinCoverage {
-		t.Fatal("authentication finding with full coverage should not be below min coverage")
+		t.Fatalf("authentication finding with 3/4 rules satisfied should not be below min coverage (%.2f >= %.2f)", out.Coverage, out.MinCoverage)
+	}
+	// The three core rules must all be satisfied; only screenshot_state_change
+	// is expected to be missing.
+	coreRequired := []string{"auth_flow_or_token_surface", "control_bypass_signal", "control_rejection_baseline"}
+	for _, req := range coreRequired {
+		satisfied := false
+		for _, s := range out.Satisfied {
+			if s == req {
+				satisfied = true
+				break
+			}
+		}
+		if !satisfied {
+			t.Errorf("expected core rule %q to be satisfied; satisfied=%v", req, out.Satisfied)
+		}
+	}
+}
+
+func TestAuthenticationPolicySatisfied_WithScreenshotEvidence(t *testing.T) {
+	// When browser validation evidence is present, all 4 rules including
+	// screenshot_state_change should be satisfied.
+	out := EvaluateFinding(model.Finding{
+		Category:    "authentication",
+		AffectedURL: "https://example.com/oauth/token",
+		Evidence:    "OAuth refresh token replay accepted while invalid_grant control token was rejected.",
+		EvidenceFields: map[string]string{
+			"controlTokenRejected":          "true",
+			"browserValidation.htmlChanged": "true",
+		},
+	})
+	if out.BelowMinCoverage {
+		t.Fatalf("expected above min coverage; got coverage=%.2f minCoverage=%.2f", out.Coverage, out.MinCoverage)
+	}
+	for _, missing := range out.Missing {
+		if missing == "screenshot_state_change" {
+			t.Errorf("expected screenshot_state_change to be satisfied when browserValidation.htmlChanged=true")
+		}
 	}
 }

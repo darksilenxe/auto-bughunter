@@ -72,6 +72,11 @@ const (
 	EvidenceErrorSignal  EvidenceSignal = "error_signal"  // application error / stack trace surfaced
 	EvidenceDOMExecution EvidenceSignal = "dom_execution" // headless browser confirmed sink execution
 	EvidenceCrossSubject EvidenceSignal = "cross_subject" // second auth profile observed different data
+	// EvidenceCodeChange is added automatically when the browser validation
+	// pipeline detects that one or more JS bundles changed after the probe
+	// was applied. It indicates the server processed the request differently
+	// (delivered different code) rather than returning a static response.
+	EvidenceCodeChange EvidenceSignal = "code_change"
 )
 
 // PoCReplayFunc is an optional hook a probe can supply to reproduce the
@@ -86,6 +91,13 @@ const (
 // must not contain secrets.
 type PoCReplayFunc func(ctx context.Context) (success bool, transcript string, err error)
 
+// BrowserValidationFunc is an optional hook a probe can supply to drive a
+// headless browser session that captures before/after DOM snapshots of the
+// affected URL and derives a StateChangeDelta. The verifier automatically
+// promotes EvidenceBodyDelta and EvidenceCodeChange signals from the delta
+// and attaches screenshots as ProofArtifacts on the emitted finding.
+type BrowserValidationFunc func(ctx context.Context) (*model.BrowserValidationResult, error)
+
 // VerifyCandidate is the input to SubmitVerifiedFinding. Probes populate it
 // with the candidate finding, the signals they observed, and (optionally) a
 // PoC replay function that reproduces the exploit.
@@ -99,6 +111,16 @@ type VerifyCandidate struct {
 	// the finding. A failed replay causes suppression unless proof-policy
 	// coverage is 100% and the probe explicitly set AllowNoReplayEmission.
 	PoCReplay PoCReplayFunc
+	// BrowserValidation, if non-nil, is executed by the verifier to drive a
+	// headless browser session that captures before/after DOM snapshots of
+	// the finding's AffectedURL. The verifier automatically:
+	//   - adds EvidenceBodyDelta when HTML or visible text changed;
+	//   - adds EvidenceCodeChange when JS bundles changed;
+	//   - records EvidenceFields["browserValidation.static"] = "true" when
+	//     the page looks identical before and after the probe (no signals added).
+	//   - attaches before/after screenshots and a state-delta JSON as
+	//     ProofArtifacts so human reviewers can inspect the state change.
+	BrowserValidation BrowserValidationFunc
 	// AllowNoReplayEmission permits emission when PoCReplay is nil (or
 	// unavailable due to network policy) as long as the proof obligation
 	// is fully met. Probes should set this to true for categories that
@@ -366,10 +388,7 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 	outcome.EvidenceHits = len(uniq)
 	outcome.EvidenceRequired = EvidenceMinimumForCategory(cand.Finding.Category)
 
-	// 3) Compute pre-emission confidence.
-	outcome.Confidence = computePreReportConfidence(outcome.Policy, outcome.EvidenceHits, outcome.EvidenceRequired)
-
-	// 4) Optionally execute PoC replay.
+	// 3) PoC replay.
 	if cand.PoCReplay != nil {
 		outcome.PoCReplayed = true
 		success, transcript, err := cand.PoCReplay(ctx)
@@ -382,7 +401,30 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 		}
 	}
 
-	// 5) Verdict.
+	// 4b) Optionally run browser validation to capture before/after DOM
+	// snapshots and automatically promote evidence signals from the delta.
+	if cand.BrowserValidation != nil {
+		if bvResult, bvErr := cand.BrowserValidation(ctx); bvErr == nil && bvResult != nil {
+			delta := bvResult.Delta
+			if delta.HTMLChanged || delta.TextChanged {
+				// DOM changed after the probe — count as body delta evidence.
+				uniq[EvidenceBodyDelta] = struct{}{}
+			}
+			if delta.JSBundleChanged {
+				// JS bundles changed — strong signal of server-side code execution.
+				uniq[EvidenceCodeChange] = struct{}{}
+			}
+			// Re-tally hits after injecting browser-derived signals.
+			outcome.EvidenceHits = len(uniq)
+			// Attach before/after screenshots and state-delta as ProofArtifacts.
+			attachBrowserValidationArtifacts(&cand.Finding, bvResult.Before, bvResult.After, delta)
+		}
+	}
+
+	// 5) Compute final confidence (includes browser-validation code-change bonus).
+	outcome.Confidence = computePreReportConfidence(outcome.Policy, outcome.EvidenceHits, outcome.EvidenceRequired, uniq)
+
+	// 6) Verdict.
 	fullyProved := outcome.Policy.Coverage >= outcome.Policy.MinCoverage && outcome.Policy.MinCoverage > 0
 	evidenceEnough := outcome.EvidenceHits >= outcome.EvidenceRequired
 	switch {
@@ -413,7 +455,7 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 		outcome.Reason = "insufficient-proof-and-evidence"
 	}
 
-	// 6) Confidence-threshold override: even a "verified" finding is
+	// 7) Confidence-threshold override: even a "verified" finding is
 	// downgraded if calibrated confidence is very low.
 	if outcome.Verified && outcome.Confidence < 0.35 {
 		outcome.Verified = false
@@ -422,7 +464,7 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 		cand.Finding.Severity = downgradeSeverity(cand.Finding.Severity)
 	}
 
-	// 7) Persist confidence + verification metadata on the finding for
+	// 8) Persist confidence + verification metadata on the finding for
 	// downstream ML calibration and the strict-mode UI toggle.
 	if outcome.Confidence > cand.Finding.Confidence {
 		cand.Finding.Confidence = outcome.Confidence
@@ -452,7 +494,7 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 		outcome.EmittedFinding = cand.Finding
 	}
 
-	// 8) Metrics.
+	// 9) Metrics.
 	probeName := cand.ProbeName
 	if probeName == "" {
 		probeName = "unknown"
@@ -475,8 +517,11 @@ func strictEmissionRequired(category string) bool {
 
 // computePreReportConfidence produces a bounded [0, 1] pre-emission
 // confidence score derived from proof-policy coverage and the number of
-// evidence-signal hits.
-func computePreReportConfidence(policy proofpolicy.Result, hits, required int) float64 {
+// evidence-signal hits. The optional signals set allows the function to
+// apply a +0.05 bonus when EvidenceCodeChange is present — JS bundle drift
+// after a probe is a strong signal that the server processed the request
+// differently rather than returning a static cached response.
+func computePreReportConfidence(policy proofpolicy.Result, hits, required int, signals map[EvidenceSignal]struct{}) float64 {
 	base := 0.4 // baseline for any candidate that makes it this far
 	if policy.MinCoverage > 0 {
 		// Coverage contributes up to 0.4.
@@ -485,6 +530,11 @@ func computePreReportConfidence(policy proofpolicy.Result, hits, required int) f
 	if required > 0 {
 		// Evidence contributes up to 0.2.
 		base += 0.2 * math.Min(1.0, float64(hits)/float64(required))
+	}
+	// Code-change bonus: +0.05 when JS bundles changed after the probe,
+	// confirming the server actually executed different code paths.
+	if _, ok := signals[EvidenceCodeChange]; ok {
+		base += 0.05
 	}
 	if base > 1.0 {
 		base = 1.0
