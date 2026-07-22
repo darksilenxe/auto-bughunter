@@ -87,6 +87,11 @@ func TestOAuthProbe_StateAndPKCESuppressedWhenControlAlsoAccepted(t *testing.T) 
 
 func TestOAuthProbe_StateAndPKCEAcceptedWithValidAndRejectedControls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/callback" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":"` + r.URL.Query().Get("code") + `"}`))
+			return
+		}
 		q := r.URL.Query()
 		switch q.Get("response_type") {
 		case "unsupported_response_type":

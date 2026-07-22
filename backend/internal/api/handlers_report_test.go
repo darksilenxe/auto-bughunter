@@ -496,5 +496,9 @@ func min(a, b int) int {
 	return b
 }
 
-func (r *reportTestRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error { return nil }
-func (r *reportTestRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) { return nil, nil }
+func (r *reportTestRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
+	return nil
+}
+func (r *reportTestRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
+	return nil, nil
+}

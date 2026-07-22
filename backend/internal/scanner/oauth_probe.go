@@ -270,13 +270,13 @@ func (s *Service) RunOAuthProbe(
 								"Verify that a malformed PKCE control is rejected while the missing-PKCE flow is not.",
 							},
 							map[string]string{
-								"codeChallengeAbsent":   "true",
-								"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
-								"url":                   probeURL,
-								"param":                 "code_challenge",
-								"validControlStatus":    fmt.Sprintf("%d", validControlObs.status),
+								"codeChallengeAbsent":    "true",
+								"responseStatus":         fmt.Sprintf("%d", candidateObs.status),
+								"url":                    probeURL,
+								"param":                  "code_challenge",
+								"validControlStatus":     fmt.Sprintf("%d", validControlObs.status),
 								"invalidControlRejected": fmt.Sprintf("%v", invalidControlRejected),
-								"invalidControlStatus":  fmt.Sprintf("%d", invalidControlObs.status),
+								"invalidControlStatus":   fmt.Sprintf("%d", invalidControlObs.status),
 							},
 						)
 						verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
@@ -457,25 +457,25 @@ func oauthResponseHasError(body string) bool {
 		if strings.Contains(lower, kw) {
 			return true
 		}
+	}
+	return false
+}
 
-		func oauthAuthorizeLooksSuccessful(obs oauthAuthorizeObservation, legitimateCallback string) bool {
-			if !is2xxOrRedirect(obs.status) || oauthResponseHasError(obs.body) {
-				return false
-			}
-			location := strings.TrimSpace(strings.ToLower(obs.location))
-			body := strings.TrimSpace(strings.ToLower(obs.body))
-			if legitimateCallback != "" {
-				callback := strings.ToLower(strings.TrimSpace(legitimateCallback))
-				if strings.Contains(location, strings.ToLower(callback)) {
-					return true
-				}
-			}
-			for _, token := range []string{"code=", "access_token=", "id_token=", `"access_token"`, `"id_token"`} {
-				if strings.Contains(location, token) || strings.Contains(body, token) {
-					return true
-				}
-			}
-			return false
+func oauthAuthorizeLooksSuccessful(obs oauthAuthorizeObservation, legitimateCallback string) bool {
+	if !is2xxOrRedirect(obs.status) || oauthResponseHasError(obs.body) {
+		return false
+	}
+	location := strings.TrimSpace(strings.ToLower(obs.location))
+	body := strings.TrimSpace(strings.ToLower(obs.body))
+	if legitimateCallback != "" {
+		callback := strings.ToLower(strings.TrimSpace(legitimateCallback))
+		if strings.Contains(location, strings.ToLower(callback)) {
+			return true
+		}
+	}
+	for _, token := range []string{"code=", "access_token=", "id_token=", `"code"`, `"access_token"`, `"id_token"`} {
+		if strings.Contains(location, token) || strings.Contains(body, token) {
+			return true
 		}
 	}
 	return false

@@ -283,11 +283,11 @@ func (s *Service) RunOAuthSessionProbe(
 					"Present the resulting id_token to a different session or application to demonstrate cross-session replay.",
 				},
 				map[string]string{
-					"authorizeEndpoint":    ep,
-					"responseType":         "code id_token",
-					"nonceAbsent":          "true",
-					"responseStatus":       fmt.Sprintf("%d", candidateObs.status),
-					"validControlStatus":   fmt.Sprintf("%d", validControlObs.status),
+					"authorizeEndpoint":     ep,
+					"responseType":          "code id_token",
+					"nonceAbsent":           "true",
+					"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
+					"validControlStatus":    fmt.Sprintf("%d", validControlObs.status),
 					"rejectedControlStatus": fmt.Sprintf("%d", rejectedControlObs.status),
 				},
 			), []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal})
@@ -492,11 +492,11 @@ refreshProbe:
 						"Use the obtained access token to act as the victim user.",
 					},
 					map[string]string{
-						"tokenEndpoint":            ep,
-						"accessControlAllowOrigin": acao,
+						"tokenEndpoint":             ep,
+						"accessControlAllowOrigin":  acao,
 						"accessControlAllowMethods": resp.Header.Get("Access-Control-Allow-Methods"),
 						"accessControlAllowHeaders": resp.Header.Get("Access-Control-Allow-Headers"),
-						"attackerOrigin":           "https://attacker.example.com",
+						"attackerOrigin":            "https://attacker.example.com",
 					},
 				), []EvidenceSignal{EvidenceHeaderDelta, EvidenceStatusDelta, EvidenceErrorSignal})
 				break
