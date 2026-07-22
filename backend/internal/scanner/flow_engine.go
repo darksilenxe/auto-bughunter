@@ -56,7 +56,12 @@ var builtInFlows = []Flow{
 	{
 		Name: "payment-flow",
 		Steps: []FlowStep{
-			{Name: "add-to-cart", Method: "POST", Path: "/cart", Body: map[string]interface{}{"product_id": "1", "quantity": 1}},
+			{
+				Name: "add-to-cart", Method: "POST", Path: "/cart",
+				Body:           map[string]interface{}{"product_id": "1", "quantity": 1},
+				MutationField:  "quantity",
+				MutationValues: []interface{}{-1, 0},
+			},
 			{Name: "apply-coupon", Method: "POST", Path: "/cart/coupon", Body: map[string]interface{}{"code": "TEST10"}},
 			{Name: "checkout", Method: "POST", Path: "/checkout", Body: map[string]interface{}{"payment_method": "card"}},
 			{Name: "confirm", Method: "POST", Path: "/checkout/confirm", Body: map[string]interface{}{"confirmed": true}},
@@ -260,7 +265,18 @@ func (s *Service) runSingleFlow(
 				break
 			}
 			resp, body, err := s.flowSendStep(ctx, ep, step, prevBody, auth, options, sess)
-			if err != nil || resp == nil || !is2xx(resp.StatusCode) {
+			if err != nil || resp == nil {
+				allOK = false
+				break
+			}
+			// When ExpectedStatus is set, require that exact code; otherwise
+			// accept any 2xx response.
+			if step.ExpectedStatus != 0 {
+				if resp.StatusCode != step.ExpectedStatus {
+					allOK = false
+					break
+				}
+			} else if !is2xx(resp.StatusCode) {
 				allOK = false
 				break
 			}

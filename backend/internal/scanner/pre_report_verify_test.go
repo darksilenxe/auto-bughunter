@@ -241,10 +241,10 @@ func TestSubmitVerifiedFinding_PoCReplayError_TreatedAsFailure(t *testing.T) {
 
 func TestDowngradeSeverity(t *testing.T) {
 	cases := map[string]string{
-		"critical": "High",
-		"high":     "Medium",
-		"medium":   "Low",
-		"low":      "Info",
+		"critical": string(model.SeverityHigh),
+		"high":     string(model.SeverityMedium),
+		"medium":   string(model.SeverityLow),
+		"low":      string(model.SeverityInfo),
 		"info":     "info",
 	}
 	for in, want := range cases {

@@ -378,7 +378,6 @@ func (s *Server) handleAutomationReport(w http.ResponseWriter, r *http.Request) 
 			delete(report.AgentFalsePositiveRate, agentName)
 		}
 	}
-	_ = openTickets
 	writeJSON(w, http.StatusOK, report)
 }
 

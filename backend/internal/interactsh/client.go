@@ -498,6 +498,10 @@ func aesDecrypt(key, cipherText []byte) ([]byte, error) {
 	iv := cipherText[:aes.BlockSize]
 	data := make([]byte, len(cipherText)-aes.BlockSize)
 	copy(data, cipherText[aes.BlockSize:])
+	// The interactsh server encrypts payloads with AES-256-CFB. We must match
+	// this mode for protocol compatibility; switching to a different stream
+	// cipher would break decryption of server responses.
+	//lint:ignore SA1019 cipher.NewCFBDecrypter is required by the interactsh wire protocol
 	stream := cipher.NewCFBDecrypter(block, iv)
 	stream.XORKeyStream(data, data)
 	return data, nil

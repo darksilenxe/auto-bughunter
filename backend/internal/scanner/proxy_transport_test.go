@@ -30,6 +30,7 @@ func TestBuildTransport_Disabled(t *testing.T) {
 		if u != nil && u.Host != "" {
 			// only fail when an explicit non-env proxy is configured;
 			// otherwise the env-proxy fallback is acceptable.
+			t.Errorf("expected no explicit proxy URL for disabled config, got %q", u)
 		}
 	}
 }

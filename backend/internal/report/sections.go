@@ -450,9 +450,11 @@ func findingFingerprint(f model.Finding) string {
 }
 
 // severityRank gives an integer rank to severities so that they can be sorted
-// or compared (HIGH is largest, INFO is smallest).
+// or compared (CRITICAL is largest, INFO is smallest).
 func severityRank(s model.Severity) int {
 	switch s {
+	case model.SeverityCritical:
+		return 5
 	case model.SeverityHigh:
 		return 4
 	case model.SeverityMedium:
