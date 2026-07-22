@@ -182,49 +182,49 @@ type ScanAuthProfileSummary struct {
 }
 
 type ScanOptions struct {
-	UseNucleiIntegration      bool     `json:"useNucleiIntegration,omitempty"`
-	UseZAPBaselineIntegration bool     `json:"useZapBaselineIntegration,omitempty"`
-	UseXSSMapIntegration      bool     `json:"useXssMapIntegration,omitempty"`
-	UseSubfinderIntegration   bool     `json:"useSubfinderIntegration,omitempty"`
-	UseHttpxIntegration       bool     `json:"useHttpxIntegration,omitempty"`
-	UseCloudlistIntegration   bool     `json:"useCloudlistIntegration,omitempty"`
-	UseVulnxIntegration       bool     `json:"useVulnxIntegration,omitempty"`
-	UseNaabuIntegration       bool     `json:"useNaabuIntegration,omitempty"`
-	UseDnsxIntegration        bool     `json:"useDnsxIntegration,omitempty"`
-	UseShuffleDNSIntegration  bool     `json:"useShuffleDnsIntegration,omitempty"`
-	UseCertTransparency       bool     `json:"useCertificateTransparencyIntegration,omitempty"`
-	UseAmassIntegration       bool     `json:"useAmassIntegration,omitempty"`
-	UseKatanaIntegration      bool     `json:"useKatanaIntegration,omitempty"`
-	UseTlsxIntegration        bool     `json:"useTlsxIntegration,omitempty"`
-	UseCdncheckIntegration    bool     `json:"useCdncheckIntegration,omitempty"`
-	UseAsnmapIntegration      bool     `json:"useAsnmapIntegration,omitempty"`
-	UseWPScanIntegration      bool     `json:"useWpScanIntegration,omitempty"`
-	UseNiktoIntegration       bool     `json:"useNiktoIntegration,omitempty"`
-	UseSQLMapIntegration      bool     `json:"useSqlMapIntegration,omitempty"`
-	UseFFUFIntegration        bool     `json:"useFfufIntegration,omitempty"`
-	UseGobusterIntegration    bool     `json:"useGobusterIntegration,omitempty"`
-	UseKiterunnerIntegration  bool     `json:"useKiterunnerIntegration,omitempty"`
-	UseGauIntegration         bool     `json:"useGauIntegration,omitempty"`
-	UseArjunIntegration       bool     `json:"useArjunIntegration,omitempty"`
-	UseCommixIntegration      bool     `json:"useCommixIntegration,omitempty"`
-	UseLinkFinderIntegration  bool     `json:"useLinkFinderIntegration,omitempty"`
-	UseRetireJSIntegration    bool     `json:"useRetireJsIntegration,omitempty"`
-	UseTruffleHogIntegration  bool     `json:"useTruffleHogIntegration,omitempty"`
-	UseUncoverIntegration        bool     `json:"useUncoverIntegration,omitempty"`
-	UseUISimulationIntegration   bool     `json:"useUiSimulationIntegration,omitempty"`
-	RescanIntervalMinutes        int      `json:"rescanIntervalMinutes,omitempty"`
-	Priority                  int      `json:"priority,omitempty"`
-	MaxRetries                int      `json:"maxRetries,omitempty"`
-	BackoffMillis             int      `json:"backoffMillis,omitempty"`
-	RequestDelayMillis        int      `json:"requestDelayMillis,omitempty"`
-	MaxPerTargetConcurrency   int      `json:"maxPerTargetConcurrency,omitempty"`
-	TargetRateLimitPerMinute  int      `json:"targetRateLimitPerMinute,omitempty"`
-	GlobalScanBudget          int      `json:"globalScanBudget,omitempty"`
-	AutomationMode            string   `json:"automationMode,omitempty"`
-	MinExpectedROIUSD         float64  `json:"minExpectedRoiUsd,omitempty"`
-	DeepScanOnHighSignal      bool     `json:"deepScanOnHighSignal,omitempty"`
-	CrawlMaxPages             int      `json:"crawlMaxPages,omitempty"`
-	SeedRuntimeEndpoints      []string `json:"seedRuntimeEndpoints,omitempty"`
+	UseNucleiIntegration       bool     `json:"useNucleiIntegration,omitempty"`
+	UseZAPBaselineIntegration  bool     `json:"useZapBaselineIntegration,omitempty"`
+	UseXSSMapIntegration       bool     `json:"useXssMapIntegration,omitempty"`
+	UseSubfinderIntegration    bool     `json:"useSubfinderIntegration,omitempty"`
+	UseHttpxIntegration        bool     `json:"useHttpxIntegration,omitempty"`
+	UseCloudlistIntegration    bool     `json:"useCloudlistIntegration,omitempty"`
+	UseVulnxIntegration        bool     `json:"useVulnxIntegration,omitempty"`
+	UseNaabuIntegration        bool     `json:"useNaabuIntegration,omitempty"`
+	UseDnsxIntegration         bool     `json:"useDnsxIntegration,omitempty"`
+	UseShuffleDNSIntegration   bool     `json:"useShuffleDnsIntegration,omitempty"`
+	UseCertTransparency        bool     `json:"useCertificateTransparencyIntegration,omitempty"`
+	UseAmassIntegration        bool     `json:"useAmassIntegration,omitempty"`
+	UseKatanaIntegration       bool     `json:"useKatanaIntegration,omitempty"`
+	UseTlsxIntegration         bool     `json:"useTlsxIntegration,omitempty"`
+	UseCdncheckIntegration     bool     `json:"useCdncheckIntegration,omitempty"`
+	UseAsnmapIntegration       bool     `json:"useAsnmapIntegration,omitempty"`
+	UseWPScanIntegration       bool     `json:"useWpScanIntegration,omitempty"`
+	UseNiktoIntegration        bool     `json:"useNiktoIntegration,omitempty"`
+	UseSQLMapIntegration       bool     `json:"useSqlMapIntegration,omitempty"`
+	UseFFUFIntegration         bool     `json:"useFfufIntegration,omitempty"`
+	UseGobusterIntegration     bool     `json:"useGobusterIntegration,omitempty"`
+	UseKiterunnerIntegration   bool     `json:"useKiterunnerIntegration,omitempty"`
+	UseGauIntegration          bool     `json:"useGauIntegration,omitempty"`
+	UseArjunIntegration        bool     `json:"useArjunIntegration,omitempty"`
+	UseCommixIntegration       bool     `json:"useCommixIntegration,omitempty"`
+	UseLinkFinderIntegration   bool     `json:"useLinkFinderIntegration,omitempty"`
+	UseRetireJSIntegration     bool     `json:"useRetireJsIntegration,omitempty"`
+	UseTruffleHogIntegration   bool     `json:"useTruffleHogIntegration,omitempty"`
+	UseUncoverIntegration      bool     `json:"useUncoverIntegration,omitempty"`
+	UseUISimulationIntegration bool     `json:"useUiSimulationIntegration,omitempty"`
+	RescanIntervalMinutes      int      `json:"rescanIntervalMinutes,omitempty"`
+	Priority                   int      `json:"priority,omitempty"`
+	MaxRetries                 int      `json:"maxRetries,omitempty"`
+	BackoffMillis              int      `json:"backoffMillis,omitempty"`
+	RequestDelayMillis         int      `json:"requestDelayMillis,omitempty"`
+	MaxPerTargetConcurrency    int      `json:"maxPerTargetConcurrency,omitempty"`
+	TargetRateLimitPerMinute   int      `json:"targetRateLimitPerMinute,omitempty"`
+	GlobalScanBudget           int      `json:"globalScanBudget,omitempty"`
+	AutomationMode             string   `json:"automationMode,omitempty"`
+	MinExpectedROIUSD          float64  `json:"minExpectedRoiUsd,omitempty"`
+	DeepScanOnHighSignal       bool     `json:"deepScanOnHighSignal,omitempty"`
+	CrawlMaxPages              int      `json:"crawlMaxPages,omitempty"`
+	SeedRuntimeEndpoints       []string `json:"seedRuntimeEndpoints,omitempty"`
 	// ML agent per-scan toggles
 	UseMLTriageAgent       bool `json:"useMLTriageAgent,omitempty"`
 	UseAttackPathAgent     bool `json:"useAttackPathAgent,omitempty"`
@@ -442,6 +442,7 @@ type ReportFeedback struct {
 	Title       string    `json:"title,omitempty"`
 	ProgramName string    `json:"programName,omitempty"`
 	Outcome     string    `json:"outcome"`
+	Reason      string    `json:"reason,omitempty"`
 	PayoutUSD   float64   `json:"payoutUsd,omitempty"`
 	Notes       string    `json:"notes,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`

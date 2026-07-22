@@ -137,6 +137,50 @@ func TestOAuthSessionProbe_ImplicitFlow_Accepted(t *testing.T) {
 	}
 }
 
+func TestOAuthSessionProbe_NonceOmission_AcceptedWithControlReplay(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/callback" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":"` + r.URL.Query().Get("code") + `","id_token":"` + r.URL.Query().Get("id_token") + `"}`))
+			return
+		}
+		q := r.URL.Query()
+		switch q.Get("response_type") {
+		case "unsupported_response_type":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unsupported_response_type"}`))
+		case "code id_token":
+			redirect := q.Get("redirect_uri")
+			if q.Get("nonce") != "" {
+				http.Redirect(w, r, redirect+"?code=abc&id_token=jwt&state="+q.Get("state"), http.StatusFound)
+				return
+			}
+			http.Redirect(w, r, redirect+"?code=abc&id_token=jwt", http.StatusFound)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewService(Config{})
+	findings := svc.RunOAuthSessionProbe(
+		context.Background(), srv.URL,
+		newOAuthSessionScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{},
+		func(model.ScanEvent) {},
+	)
+	for _, f := range findings {
+		if f.ID == "oidc-nonce-omission" {
+			if f.EvidenceFields["preReport.verifiedBy"] == "" {
+				t.Fatalf("expected verifier stamp on nonce omission finding, got %+v", f.EvidenceFields)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected oidc-nonce-omission finding, got %+v", findings)
+}
+
 // TestOAuthSessionProbe_RefreshTokenReplay_Accepted verifies a finding when the
 // server accepts the same refresh token twice.
 func TestOAuthSessionProbe_RefreshTokenReplay_Accepted(t *testing.T) {
@@ -186,6 +230,7 @@ func TestOAuthSessionProbe_TokenEndpointCORS_Wildcard(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -208,5 +253,27 @@ func TestOAuthSessionProbe_TokenEndpointCORS_Wildcard(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected oauth-token-endpoint-cors finding; got: %+v", findings)
+	}
+}
+
+func TestOAuthSessionProbe_TokenEndpointCORSSuppressedWithoutAllowedHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	svc := NewService(Config{})
+	findings := svc.RunOAuthSessionProbe(
+		context.Background(), srv.URL,
+		newOAuthSessionScope(srv.URL),
+		model.ScanOptions{},
+		model.ScanAuthProfile{},
+		func(model.ScanEvent) {},
+	)
+	for _, f := range findings {
+		if f.ID == "oauth-token-endpoint-cors" {
+			t.Fatalf("expected CORS finding to be suppressed without allowed headers, got %+v", f)
+		}
 	}
 }

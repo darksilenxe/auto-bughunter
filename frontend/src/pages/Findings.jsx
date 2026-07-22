@@ -97,7 +97,13 @@ export default function Findings() {
       const res = await fetch(`${API_BASE}/api/finding-verification`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "X-Workspace-ID": workspaceID },
-        body: JSON.stringify({ scanId: job.id, findingId, status: nextStatus, owner: owner.trim() }),
+        body: JSON.stringify({
+          scanId: job.id,
+          findingId,
+          status: nextStatus,
+          owner: owner.trim(),
+          notes: (notes[`${scanId}::${findingId}`] || "").trim(),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {

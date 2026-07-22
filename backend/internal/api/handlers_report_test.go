@@ -421,6 +421,74 @@ func TestHandleScanReport_MissingScanID(t *testing.T) {
 	}
 }
 
+func TestApplyStrictReportingFilterSuppressesUnverifiedHighSeverity(t *testing.T) {
+	job := sampleReportJob()
+	job.Options.StrictReporting = true
+	job.Options.MinReportConfidence = 0.7
+	job.Findings = []model.Finding{{
+		ID:         "f1",
+		Category:   "authentication",
+		Severity:   model.SeverityHigh,
+		Confidence: 0.95,
+		Title:      "OAuth token replay",
+		EvidenceFields: map[string]string{
+			"evidenceQuality": "valid",
+		},
+	}}
+	out, suppressed, _, strict := applyStrictReportingFilter(job, nil)
+	if !strict {
+		t.Fatal("expected strict filter to apply")
+	}
+	if suppressed != 1 || len(out.Findings) != 0 {
+		t.Fatalf("expected strict filter to suppress unverified high-severity finding, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
+func TestApplyStrictReportingFilterKeepsVerifiedHighSeverity(t *testing.T) {
+	job := sampleReportJob()
+	job.Options.StrictReporting = true
+	job.Options.MinReportConfidence = 0.7
+	job.Findings = []model.Finding{{
+		ID:         "f1",
+		Category:   "authentication",
+		Severity:   model.SeverityHigh,
+		Confidence: 0.95,
+		Title:      "OAuth token replay",
+		EvidenceFields: map[string]string{
+			"evidenceQuality":      "valid",
+			"preReport.verified":   "true",
+			"preReport.verifiedBy": "oauth_session_probe@v1",
+		},
+	}}
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil)
+	if suppressed != 0 || len(out.Findings) != 1 {
+		t.Fatalf("expected verified finding to survive strict filter, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
+func TestApplyStrictReportingFilterSuppressesProofGapsForAuthFlowFindings(t *testing.T) {
+	job := sampleReportJob()
+	job.Options.StrictReporting = true
+	job.Options.MinReportConfidence = 0.7
+	job.Findings = []model.Finding{{
+		ID:         "f1",
+		Category:   "authentication",
+		Severity:   model.SeverityMedium,
+		Confidence: 0.91,
+		Title:      "OIDC nonce omission",
+		EvidenceFields: map[string]string{
+			"evidenceQuality":      "valid",
+			"preReport.verified":   "true",
+			"preReport.verifiedBy": "oauth_session_probe@v1",
+			"proofPolicyMissing":   "nonce",
+		},
+	}}
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil)
+	if suppressed != 1 || len(out.Findings) != 0 {
+		t.Fatalf("expected proof-gap auth-flow finding to be suppressed, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -428,5 +496,9 @@ func min(a, b int) int {
 	return b
 }
 
-func (r *reportTestRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error { return nil }
-func (r *reportTestRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) { return nil, nil }
+func (r *reportTestRepo) SaveAgentEvent(ctx context.Context, scanID string, event model.ScanEvent) error {
+	return nil
+}
+func (r *reportTestRepo) ListAgentEvents(ctx context.Context, scanID string) ([]model.ScanEvent, error) {
+	return nil, nil
+}

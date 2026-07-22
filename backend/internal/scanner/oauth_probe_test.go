@@ -84,3 +84,51 @@ func TestOAuthProbe_StateAndPKCESuppressedWhenControlAlsoAccepted(t *testing.T) 
 		}
 	}
 }
+
+func TestOAuthProbe_StateAndPKCEAcceptedWithValidAndRejectedControls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/callback" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":"` + r.URL.Query().Get("code") + `"}`))
+			return
+		}
+		q := r.URL.Query()
+		switch q.Get("response_type") {
+		case "unsupported_response_type":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unsupported_response_type"}`))
+			return
+		case "code":
+			if q.Get("code_challenge_method") == "plain-invalid" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"invalid_request","error_description":"unsupported code_challenge_method"}`))
+				return
+			}
+			redirect := q.Get("redirect_uri")
+			target := redirect + "?code=abc123"
+			if state := q.Get("state"); state != "" {
+				target += "&state=" + state
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewService(Config{})
+	findings := svc.RunOAuthProbe(context.Background(), srv.URL, newOAuthScope(srv.URL), model.ScanOptions{}, model.ScanAuthProfile{}, func(model.ScanEvent) {})
+	var sawState, sawPKCE bool
+	for _, f := range findings {
+		switch f.ID {
+		case "oauth-csrf-no-state":
+			sawState = true
+		case "oauth-pkce-downgrade":
+			sawPKCE = true
+		}
+	}
+	if !sawState || !sawPKCE {
+		t.Fatalf("expected state and PKCE findings, got %+v", findings)
+	}
+}

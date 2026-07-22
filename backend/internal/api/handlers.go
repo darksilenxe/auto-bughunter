@@ -1813,6 +1813,7 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 	req.ScanID = strings.TrimSpace(req.ScanID)
 	req.FindingID = strings.TrimSpace(req.FindingID)
 	req.Outcome = strings.ToLower(strings.TrimSpace(req.Outcome))
+	req.Reason = strings.TrimSpace(req.Reason)
 	if req.ScanID == "" || req.FindingID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
 		return
@@ -1917,6 +1918,7 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	req.FindingID = strings.TrimSpace(req.FindingID)
 	req.Status = findingLifecycleAliases(req.Status)
 	req.Owner = strings.TrimSpace(req.Owner)
+	req.Notes = strings.TrimSpace(req.Notes)
 	if req.ScanID == "" || req.FindingID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
 		return
@@ -1962,8 +1964,49 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save verification"})
 		return
 	}
+	s.recordVerificationFeedback(r.Context(), job, req)
 	s.persistShadowDecision(r.Context(), job, req)
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": req.ID, "status": req.Status, "owner": req.Owner, "previousStatus": priorStatus})
+}
+
+func (s *Server) recordVerificationFeedback(ctx context.Context, job *model.ScanJob, verification model.FindingVerification) {
+	if s == nil || s.repo == nil || job == nil {
+		return
+	}
+	outcome, reason, ok := verificationFeedbackOutcome(verification.Status)
+	if !ok {
+		return
+	}
+	finding, found := findingByID(job.Findings, verification.FindingID)
+	if !found {
+		return
+	}
+	feedback := model.ReportFeedback{
+		ID:          uuid.NewString(),
+		ScanID:      verification.ScanID,
+		FindingID:   verification.FindingID,
+		Category:    strings.TrimSpace(finding.Category),
+		Title:       strings.TrimSpace(finding.Title),
+		ProgramName: strings.TrimSpace(job.ProgramName),
+		Outcome:     outcome,
+		Reason:      reason,
+		Notes:       strings.TrimSpace(verification.Notes),
+		CreatedAt:   verification.CreatedAt,
+	}
+	_ = s.repo.SaveFeedback(ctx, feedback)
+}
+
+func verificationFeedbackOutcome(status string) (outcome string, reason string, ok bool) {
+	switch findingLifecycleAliases(status) {
+	case "accepted":
+		return "accepted", "operator_accepted", true
+	case "rejected":
+		return "rejected", "operator_rejected", true
+	case "suppressed":
+		return "rejected", "operator_suppressed", true
+	default:
+		return "", "", false
+	}
 }
 
 func (s *Server) persistShadowDecision(ctx context.Context, job *model.ScanJob, verification model.FindingVerification) {

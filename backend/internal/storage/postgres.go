@@ -613,6 +613,7 @@ func (p *Postgres) migrate(ctx context.Context) error {
 			title TEXT NOT NULL DEFAULT '',
 			program_name TEXT NOT NULL DEFAULT '',
 			outcome TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
 			payout_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
 			notes TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -620,6 +621,13 @@ func (p *Postgres) migrate(ctx context.Context) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate report_feedback table: %w", err)
+	}
+	_, err = p.execContext(ctx, `
+		ALTER TABLE report_feedback
+		ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT ''
+	`)
+	if err != nil {
+		return fmt.Errorf("migrate report_feedback reason column: %w", err)
 	}
 	_, err = p.execContext(ctx, `
 		CREATE TABLE IF NOT EXISTS finding_verifications (
@@ -1442,10 +1450,10 @@ func (p *Postgres) SaveFeedback(ctx context.Context, feedback model.ReportFeedba
 	}
 	_, err := p.execContext(ctx, `
 		INSERT INTO report_feedback (
-			id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
+			id, scan_id, finding_id, category, title, program_name, outcome, reason, payout_usd, notes, created_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-	`, feedback.ID, feedback.ScanID, feedback.FindingID, feedback.Category, feedback.Title, feedback.ProgramName, feedback.Outcome, feedback.PayoutUSD, feedback.Notes, ts)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`, feedback.ID, feedback.ScanID, feedback.FindingID, feedback.Category, feedback.Title, feedback.ProgramName, feedback.Outcome, feedback.Reason, feedback.PayoutUSD, feedback.Notes, ts)
 	if err != nil {
 		return fmt.Errorf("insert report feedback: %w", err)
 	}
@@ -1457,7 +1465,7 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 		limit = 500
 	}
 	rows, err := p.queryContext(ctx, `
-		SELECT id, scan_id, finding_id, category, title, program_name, outcome, payout_usd, notes, created_at
+		SELECT id, scan_id, finding_id, category, title, program_name, outcome, reason, payout_usd, notes, created_at
 		FROM report_feedback
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -1469,7 +1477,7 @@ func (p *Postgres) ListFeedback(ctx context.Context, limit int) ([]model.ReportF
 	out := make([]model.ReportFeedback, 0)
 	for rows.Next() {
 		var f model.ReportFeedback
-		if err := rows.Scan(&f.ID, &f.ScanID, &f.FindingID, &f.Category, &f.Title, &f.ProgramName, &f.Outcome, &f.PayoutUSD, &f.Notes, &f.CreatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.ScanID, &f.FindingID, &f.Category, &f.Title, &f.ProgramName, &f.Outcome, &f.Reason, &f.PayoutUSD, &f.Notes, &f.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan report feedback row: %w", err)
 		}
 		out = append(out, f)

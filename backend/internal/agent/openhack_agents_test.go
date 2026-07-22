@@ -87,6 +87,21 @@ func TestOpenHackTriageAgentLocalFallbackAccepts(t *testing.T) {
 	}
 }
 
+func TestPrioritizedTriageFindingsPrefersVerifiedHighSeverity(t *testing.T) {
+	in := []model.Finding{
+		{ID: "low", Severity: model.SeverityLow, Confidence: 0.9},
+		{ID: "high", Severity: model.SeverityHigh, Confidence: 0.6, EvidenceFields: map[string]string{"preReport.verified": "true"}},
+		{ID: "medium", Severity: model.SeverityMedium, Confidence: 0.95},
+	}
+	out := prioritizedTriageFindings(in)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 findings, got %d", len(out))
+	}
+	if out[0].ID != "high" {
+		t.Fatalf("expected verified high-severity finding first, got %q", out[0].ID)
+	}
+}
+
 func TestOpenHackAgentsRegisteredInFactory(t *testing.T) {
 	f := NewFactory(nil, nil)
 	for _, name := range []string{"openhack_expert", "openhack_triage"} {

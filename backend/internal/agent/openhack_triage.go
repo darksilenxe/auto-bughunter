@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"auto-bughunter/backend/internal/ai"
@@ -58,6 +59,7 @@ func (a *OpenHackTriageAgent) Run(ctx context.Context, input AgentInput) (AgentO
 	if len(allFindings) == 0 {
 		allFindings = input.Previous.Findings
 	}
+	allFindings = prioritizedTriageFindings(allFindings)
 	if len(allFindings) == 0 {
 		output.DebugNotes = "OpenHackTriageAgent: no findings to triage"
 		output.Metadata["findings_count"] = "0"
@@ -138,11 +140,54 @@ done:
 	output.Metadata["openhack_triage_deferred"] = fmt.Sprintf("%d", deferred)
 	output.Metadata["openhack_triage_llm_calls"] = fmt.Sprintf("%d", llmCalls)
 	output.Metadata["openhack_triage_fallbacks"] = fmt.Sprintf("%d", fallbacks)
+	if len(allFindings) > maxOpenHackTriageCalls {
+		output.Metadata["openhack_triage_overflow"] = fmt.Sprintf("%d", len(allFindings)-maxOpenHackTriageCalls)
+	}
 	output.DebugNotes = fmt.Sprintf(
 		"OpenHackTriageAgent: %d accepted, %d rejected, %d deferred (LLM=%d, local=%d)",
 		accepted, rejected, deferred, llmCalls, fallbacks,
 	)
 	return output, nil
+}
+
+func prioritizedTriageFindings(findings []model.Finding) []model.Finding {
+	out := append([]model.Finding(nil), findings...)
+	sort.SliceStable(out, func(i, j int) bool {
+		si := triagePriorityScore(out[i])
+		sj := triagePriorityScore(out[j])
+		if si == sj {
+			return strings.TrimSpace(out[i].ID) < strings.TrimSpace(out[j].ID)
+		}
+		return si > sj
+	})
+	return out
+}
+
+func triagePriorityScore(f model.Finding) float64 {
+	score := 0.0
+	switch f.Severity {
+	case model.SeverityCritical:
+		score += 40
+	case model.SeverityHigh:
+		score += 30
+	case model.SeverityMedium:
+		score += 20
+	case model.SeverityLow:
+		score += 10
+	}
+	score += f.Confidence * 10
+	if f.EvidenceFields != nil {
+		if strings.EqualFold(strings.TrimSpace(f.EvidenceFields["preReport.verified"]), "true") {
+			score += 12
+		}
+		if strings.TrimSpace(f.EvidenceFields["proofPolicyMissing"]) != "" {
+			score += 4
+		}
+		if strings.EqualFold(strings.TrimSpace(f.EvidenceFields["evidenceQuality"]), "incomplete") {
+			score -= 3
+		}
+	}
+	return score
 }
 
 // applyTriageDecision writes the triage outcome onto the finding and reports
