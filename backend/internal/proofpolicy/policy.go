@@ -216,6 +216,13 @@ var rulesByCategory = map[string][]requirement{
 			return strings.TrimSpace(f.EvidenceFields["httpMethod"]) != "" ||
 				hasAny(blob, "post ", "put ", "patch ", "delete ", "state-changing")
 		}},
+		// Optional but satisfiable: browser screenshot confirms the DOM
+		// actually changed after the forged request was accepted.
+		{name: "screenshot_state_change", hit: func(blob string, f model.Finding) bool {
+			return hasAny(blob, "dom changed", "html changed", "text changed", "code_change", "state delta") ||
+				strings.TrimSpace(f.EvidenceFields["browserValidation.htmlChanged"]) == "true" ||
+				strings.TrimSpace(f.EvidenceFields["browserValidation.textChanged"]) == "true"
+		}},
 	},
 	"clickjacking": {
 		// Require that the probe confirmed the response is rendered as HTML.
@@ -259,6 +266,14 @@ var rulesByCategory = map[string][]requirement{
 			return hasAny(blob, "invalid_grant", "invalid_token", "control", "baseline", "rejected", "differential") ||
 				strings.EqualFold(strings.TrimSpace(f.EvidenceFields["controlTokenRejected"]), "true") ||
 				strings.EqualFold(strings.TrimSpace(f.EvidenceFields["controlCodeRejected"]), "true")
+		}},
+		// Optional but satisfiable: browser screenshot confirms the DOM
+		// changed after the authentication bypass was applied, indicating
+		// real session state was modified.
+		{name: "screenshot_state_change", hit: func(blob string, f model.Finding) bool {
+			return hasAny(blob, "dom changed", "html changed", "text changed", "code_change", "state delta") ||
+				strings.TrimSpace(f.EvidenceFields["browserValidation.htmlChanged"]) == "true" ||
+				strings.TrimSpace(f.EvidenceFields["browserValidation.textChanged"]) == "true"
 		}},
 	},
 }

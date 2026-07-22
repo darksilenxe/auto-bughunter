@@ -242,11 +242,20 @@ func (s *Service) runCSRFProbe(ctx context.Context, input RunInput) []model.Find
 	// csrf is a canonical proof-policy category (see
 	// proofpolicy.canonicalCategory), so the finding is emitted with
 	// its native label without a swap.
+	// BrowserValidation captures before/after screenshots of the affected
+	// URL so human reviewers can confirm the forged request produced a
+	// visible state change (e.g. profile was updated, session changed).
+	capturedFinding := finding
+	capturedAuth := input.AuthProfile
+	capturedEmit := input.Emit
 	outcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
 		Finding:               finding,
 		Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceCookieChange},
 		AllowNoReplayEmission: true,
 		ProbeName:             "csrf-probe",
+		BrowserValidation: func(bvCtx context.Context) (*model.BrowserValidationResult, error) {
+			return ValidateFindingWithBrowser(bvCtx, capturedFinding, capturedAuth, capturedEmit)
+		},
 	})
 	if outcome.Suppressed {
 		return nil

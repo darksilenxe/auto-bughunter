@@ -280,7 +280,13 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 
 	// Phase 1 pre-report verification. Canonicalise category to
 	// "open_redirect" for proof-policy evaluation, restore label on emit.
+	// BrowserValidation navigates to the redirect URL so the scanner can
+	// screenshot where the browser actually lands, confirming the redirect
+	// was followed to an attacker-controlled destination.
 	signals := []EvidenceSignal{EvidenceHeaderDelta, EvidenceReflection, EvidenceStatusDelta}
+	capturedFinding := finding
+	capturedAuth := input.AuthProfile
+	capturedEmit := input.Emit
 	originalCategory := finding.Category
 	finding.Category = "open_redirect"
 	verifyOutcome := SubmitVerifiedFinding(ctx, VerifyCandidate{
@@ -288,6 +294,9 @@ func (s *Service) runActiveOpenRedirectProbe(ctx context.Context, input RunInput
 		Signals:               signals,
 		AllowNoReplayEmission: true,
 		ProbeName:             "active-open-redirect",
+		BrowserValidation: func(bvCtx context.Context) (*model.BrowserValidationResult, error) {
+			return ValidateFindingWithBrowser(bvCtx, capturedFinding, capturedAuth, capturedEmit)
+		},
 	})
 	if verifyOutcome.Suppressed {
 		return nil

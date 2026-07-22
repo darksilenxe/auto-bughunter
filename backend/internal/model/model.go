@@ -810,6 +810,71 @@ type SurfaceSnapshot struct {
 	JSBundleHashes map[string]string `json:"jsBundleHashes,omitempty"` // url → sha256
 }
 
+// DOMPageSnapshot captures the DOM state of a page at a specific moment in
+// time. It is used by the browser validation pipeline to detect state changes
+// before and after a suspected finding is replayed: changes in outerHTML,
+// visible text, or JS bundle hashes indicate that the payload triggered a real
+// server-side response rather than being silently ignored.
+type DOMPageSnapshot struct {
+	// URL is the page URL at the time of the snapshot.
+	URL string `json:"url"`
+	// Title is document.title at snapshot time.
+	Title string `json:"title"`
+	// OuterHTMLHash is the SHA-256 hex digest of
+	// document.documentElement.outerHTML. Differs between snapshots when any
+	// part of the rendered DOM changed.
+	OuterHTMLHash string `json:"outerHtmlHash,omitempty"`
+	// VisibleTextHash is the SHA-256 hex digest of document.body.innerText.
+	// Differs only when the human-visible text content changed, filtering out
+	// invisible attribute / script changes.
+	VisibleTextHash string `json:"visibleTextHash,omitempty"`
+	// FormCount is the number of <form> elements present in the DOM.
+	FormCount int `json:"formCount"`
+	// InputCount is the number of <input> elements present in the DOM.
+	InputCount int `json:"inputCount"`
+	// JSBundleHashes maps each <script src="…"> URL found in the DOM to the
+	// SHA-256 hex digest of the script's text content. A hash change signals
+	// that the server delivered different JavaScript code — a strong indicator
+	// that a state-changing probe actually mutated server-side behaviour.
+	JSBundleHashes map[string]string `json:"jsBundleHashes,omitempty"`
+	// ScreenshotB64 is a base64-encoded PNG screenshot of the page at this
+	// snapshot. Embedded directly for human validation in the UI.
+	ScreenshotB64 string `json:"screenshotB64,omitempty"`
+}
+
+// StateChangeDelta is the computed difference between a "before" and "after"
+// DOMPageSnapshot produced by the browser validation pipeline.
+type StateChangeDelta struct {
+	// HTMLChanged is true when the outerHTML hashes differ between snapshots.
+	HTMLChanged bool `json:"htmlChanged"`
+	// TextChanged is true when the visible-text hashes differ.
+	TextChanged bool `json:"textChanged"`
+	// JSBundleChanged is true when at least one JS bundle hash changed or a
+	// new bundle appeared. This is the strongest signal: the server delivered
+	// different code after the probe was applied.
+	JSBundleChanged bool `json:"jsBundleChanged"`
+	// NewJSBundles lists bundle URLs present in the "after" snapshot but
+	// absent in the "before" snapshot.
+	NewJSBundles []string `json:"newJsBundles,omitempty"`
+	// FormCountDelta is (after.FormCount - before.FormCount). A non-zero
+	// value means forms appeared or disappeared after the probe.
+	FormCountDelta int `json:"formCountDelta"`
+	// IsStaticResponse is true when none of the HTML, text, or JS bundle
+	// hashes changed — the page looks identical before and after the probe.
+	// Probes should treat this as a signal that the payload had no effect.
+	IsStaticResponse bool `json:"isStaticResponse"`
+}
+
+// BrowserValidationResult is the output of ValidateFindingWithBrowser. It
+// carries before/after DOM snapshots and the derived state-change delta so
+// callers can attach screenshots as ProofArtifacts and automatically promote
+// evidence signals.
+type BrowserValidationResult struct {
+	Before DOMPageSnapshot
+	After  DOMPageSnapshot
+	Delta  StateChangeDelta
+}
+
 type PersistentScanState struct {
 	Target                string           `json:"target"`
 	LastUpdatedAt         time.Time        `json:"lastUpdatedAt"`
