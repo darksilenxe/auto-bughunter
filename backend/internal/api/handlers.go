@@ -426,6 +426,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if proxyStore != nil {
 		scanService.SetProxyStore(proxyStore)
 	}
+	scanService.SetPassiveScanStore(passiveStore)
 	go s.runCampaignScheduler()
 	return s
 }
