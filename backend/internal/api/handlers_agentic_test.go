@@ -65,6 +65,36 @@ func TestRunWithAuthProfilesUsesAgentOutputsForSupplementalState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runWithAuthProfiles returned error: %v", err)
 	}
+
+	func TestRunAgentsStaticFallbackExecutesFullRegistryOrder(t *testing.T) {
+		reg := agent.NewRegistry()
+		reg.Register(staticAgent{name: "reconnaissance"})
+		reg.Register(staticAgent{name: "scanning"})
+		reg.Register(staticAgent{name: "analysis"})
+
+		factory := agent.NewFactory(nil, nil)
+		factory.Register("reconnaissance", func() agent.Agent { return staticAgent{name: "reconnaissance"} })
+		factory.Register("scanning", func() agent.Agent { return staticAgent{name: "scanning"} })
+		factory.Register("analysis", func() agent.Agent { return staticAgent{name: "analysis"} })
+
+		s := &Server{
+			agentRegistry: reg,
+			agentFactory:  factory,
+			autonomous:    false,
+			maxRounds:     10,
+		}
+
+		outputs, _, err := s.runAgents(context.Background(), agent.AgentInput{})
+		if err != nil {
+			t.Fatalf("runAgents returned error: %v", err)
+		}
+		if len(outputs) != 3 {
+			t.Fatalf("expected full static order to execute (3 outputs), got %d", len(outputs))
+		}
+		if outputs[0].AgentName != "reconnaissance" || outputs[1].AgentName != "scanning" || outputs[2].AgentName != "analysis" {
+			t.Fatalf("unexpected output order: %+v", outputs)
+		}
+	}
 	if len(outputs) != 2 {
 		t.Fatalf("expected 2 agent outputs, got %d", len(outputs))
 	}
