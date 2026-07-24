@@ -71,6 +71,8 @@ type Server struct {
 	passiveStore *PassiveScanStore
 	scopeMu      sync.RWMutex
 	scopeRules   model.ScanScope
+	authMu       sync.RWMutex
+	authCaptures map[string]capturedAuthSession
 }
 
 // NewServer creates a new intercepting proxy backed by the provided Store.
@@ -89,9 +91,10 @@ func NewServerWithCA(store Store, ca *CA) *Server {
 	transport.MaxIdleConns = 100
 	transport.IdleConnTimeout = 90 * time.Second
 	return &Server{
-		store:     store,
-		ca:        ca,
-		transport: transport,
+		store:        store,
+		ca:           ca,
+		transport:    transport,
+		authCaptures: map[string]capturedAuthSession{},
 	}
 }
 
@@ -206,6 +209,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(outReq.Header, r.Header)
 	outReq.Header.Del("Proxy-Connection")
 	outReq.Header.Del("Proxy-Authorization")
+	s.captureAuthFromRequest(r.URL.String(), r.Header)
 
 	// Forward to destination.
 	resp, err := s.transport.RoundTrip(outReq)
@@ -444,6 +448,7 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 	copyHeaders(outReq.Header, req.Header)
 	outReq.Header.Del("Proxy-Connection")
 	outReq.Header.Del("Proxy-Authorization")
+	s.captureAuthFromRequest(req.URL.String(), req.Header)
 
 	resp, err := s.transport.RoundTrip(outReq)
 	if err != nil {

@@ -704,6 +704,11 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	proxyAuthApplied := false
+	if mergedAuthProfile, applied := s.applyCapturedProxyAuthProfile(target, req.AuthProfile); applied {
+		req.AuthProfile = mergedAuthProfile
+		proxyAuthApplied = true
+	}
 	if req.Options.RescanIntervalMinutes < 0 || req.Options.RescanIntervalMinutes > 10080 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rescanIntervalMinutes must be between 0 and 10080"})
 		return
@@ -759,6 +764,9 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	s.appendAuditEvent(jobID, "queued", "Scan job accepted and queued")
 	if req.Options.AggressiveExploitation {
 		s.appendAuditEvent(jobID, "exploitation", "Aggressive exploitation mode enabled for deeper Metasploit/Burp validation")
+	}
+	if proxyAuthApplied {
+		s.appendAuditEvent(jobID, "auth", "Latest proxy-captured session data was merged into the scan auth profile")
 	}
 
 	go s.runJob(jobID, target, req.AuthProfile, req.AuthProfiles, req.Options, req.Scope)
