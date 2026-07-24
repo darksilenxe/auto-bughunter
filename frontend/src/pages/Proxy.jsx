@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const TABS = [
@@ -24,6 +25,7 @@ const jsonHeaders = () => ({
 });
 
 export default function Proxy() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState("history");
   const [requests, setRequests] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -245,6 +247,13 @@ export default function Proxy() {
 
   const historySummary = useMemo(() => summarizeHistory(requests), [requests]);
 
+  function sendToDashboard(req) {
+    const auth = extractAuthFromRequest(req);
+    if (!auth) return;
+    localStorage.setItem("proxy_auth_handoff", JSON.stringify(auth));
+    navigate("/");
+  }
+
   return (
     <div className="page page--wide">
       <section className="hero-panel">
@@ -328,6 +337,7 @@ export default function Proxy() {
           onClear={clearHistory}
           busy={busy}
           selected={selected}
+          onSendToDashboard={sendToDashboard}
         />
       )}
 
@@ -403,7 +413,7 @@ export default function Proxy() {
   );
 }
 
-function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, selected }) {
+function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, selected, onSendToDashboard }) {
   return (
     <div className="two-column-grid">
       <section className="card">
@@ -449,16 +459,28 @@ function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, 
         )}
       </section>
 
-      {selected ? <RequestDetail req={selected} /> : (
+      {selected ? <RequestDetail req={selected} onSendToDashboard={onSendToDashboard} /> : (
         <section className="card empty-state">
-          Select a captured request to inspect headers, bodies, and replay inputs.
+          <p>Select a captured request to inspect headers, bodies, and replay inputs.</p>
+          <p className="meta" style={{ marginTop: 8 }}>
+            Requests that carry an OAuth / ****** or session cookies will show a
+            <strong> → Use for Authenticated Scan</strong> shortcut so you can hand the
+            live session directly to the Operator Dashboard.
+          </p>
         </section>
       )}
     </div>
   );
 }
 
-function RequestDetail({ req }) {
+function RequestDetail({ req, onSendToDashboard }) {
+  const authInfo = onSendToDashboard ? extractAuthFromRequest(req) : null;
+  const hasAuth = authInfo && (authInfo.headersJson || authInfo.cookiesJson);
+  const authLabel = hasAuth ? [
+    authInfo.headersJson && "Authorization header",
+    authInfo.cookiesJson && "session cookies",
+  ].filter(Boolean).join(" + ") : "";
+
   return (
     <section className="card">
       <div className="toolbar" style={{ alignItems: "flex-start" }}>
@@ -468,6 +490,31 @@ function RequestDetail({ req }) {
         </div>
         <span className="chip chip--muted">status {req.responseStatus || "-"}</span>
       </div>
+
+      {hasAuth && (
+        <div
+          className="surface"
+          style={{ marginTop: 14, borderLeft: "3px solid var(--accent)", padding: "12px 14px" }}
+        >
+          <div className="toolbar" style={{ alignItems: "center", gap: 14 }}>
+            <div style={{ flex: 1 }}>
+              <strong>🔑 Auth session detected</strong>
+              <p className="meta" style={{ marginTop: 4 }}>
+                <strong>{authLabel}</strong> captured in this request.
+                Click to pre-fill the Operator Dashboard auth fields and launch a fully authenticated scan.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSendToDashboard(req)}
+              style={{ flexShrink: 0, whiteSpace: "nowrap" }}
+            >
+              → Use for Authenticated Scan
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="two-column-grid" style={{ marginTop: 14 }}>
         <div className="surface">
           <strong>Request headers</strong>
@@ -1521,6 +1568,58 @@ function summarizeHistory(requests) {
     if (status >= 500) summary.serverErrors += 1;
     return summary;
   }, { success: 0, serverErrors: 0 });
+}
+
+// Extracts auth material from a captured proxy request for the Dashboard handoff.
+// Returns { headersJson, cookiesJson, target } or null when no auth is found.
+function extractAuthFromRequest(req) {
+  if (!req) return null;
+  const reqHeaders = req.requestHeaders || {};
+
+  function headerVal(name) {
+    const lower = name.toLowerCase();
+    for (const [k, v] of Object.entries(reqHeaders)) {
+      if (k.toLowerCase() === lower) return v;
+    }
+    return null;
+  }
+
+  const authorization = headerVal("authorization");
+  const cookieHeader = headerVal("cookie");
+
+  if (!authorization && !cookieHeader) return null;
+
+  const authHeaders = {};
+  const cookies = {};
+
+  if (authorization) {
+    authHeaders["Authorization"] = authorization;
+  }
+
+  if (cookieHeader) {
+    for (const part of cookieHeader.split(";")) {
+      const trimmed = part.trim();
+      const idx = trimmed.indexOf("=");
+      if (idx > 0) {
+        const k = trimmed.slice(0, idx).trim();
+        const v = trimmed.slice(idx + 1).trim();
+        if (k) cookies[k] = v;
+      }
+    }
+  }
+
+  let target = "";
+  try {
+    const parsed = new URL(req.url);
+    target = `${parsed.protocol}//${parsed.host}`;
+  } catch { /* ignore */ }
+
+  return {
+    headersJson: Object.keys(authHeaders).length > 0 ? JSON.stringify(authHeaders, null, 2) : "",
+    cookiesJson: Object.keys(cookies).length > 0 ? JSON.stringify(cookies, null, 2) : "",
+    target,
+  };
+}
 }
 
 function applyDecoderAction(action, value) {

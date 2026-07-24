@@ -130,6 +130,23 @@ export default function Dashboard() {
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
 
+  // Import OAuth session captured from the Proxy page via localStorage handoff.
+  useEffect(() => {
+    const raw = localStorage.getItem("proxy_auth_handoff");
+    if (!raw) return;
+    try {
+      const auth = JSON.parse(raw);
+      localStorage.removeItem("proxy_auth_handoff");
+      if (auth.target) setTarget(auth.target);
+      if (auth.headersJson) setHeadersJson(auth.headersJson);
+      if (auth.cookiesJson) setCookiesJson(auth.cookiesJson);
+      toast(
+        "OAuth session imported from Proxy — review the pre-filled auth fields then start your scan.",
+        { type: "success", duration: 6000 },
+      );
+    } catch { /* ignore */ }
+  }, [toast]);
+
   useEffect(() => {
     if (isScanActive && scanStartedAt) {
       timerRef.current = setInterval(() => {
