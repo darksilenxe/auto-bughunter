@@ -223,6 +223,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Read full response body (bounded) so the client gets complete bytes.
 	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody))
 
+	// Capture any auth material issued by the server (session cookies set
+	// after OAuth login, JSON token responses from token endpoints, etc.).
+	s.captureAuthFromResponse(r.URL.String(), resp.Header, respBodyBytes)
+
 	// Write response back to client.
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -459,6 +463,10 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 	defer resp.Body.Close()
 
 	respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody))
+
+	// Capture any auth material issued by the server (session cookies set
+	// after OAuth login, JSON token responses from token endpoints, etc.).
+	s.captureAuthFromResponse(req.URL.String(), resp.Header, respBodyBytes)
 
 	// Write the response back to the client over the same TLS connection.
 	out := &http.Response{

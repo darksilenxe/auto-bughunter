@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,7 +17,7 @@ type capturedAuthSession struct {
 }
 
 func (s *Server) captureAuthFromRequest(rawURL string, headers http.Header) {
-	if s == nil || len(headers) == 0 {
+	if s == nil {
 		return
 	}
 	key := authCaptureKey(rawURL)
@@ -23,6 +25,43 @@ func (s *Server) captureAuthFromRequest(rawURL string, headers http.Header) {
 		return
 	}
 	profile := authProfileFromHeaders(headers)
+	// Also fold in any OAuth bearer token embedded as a URL query parameter
+	// (e.g. GET /api/resource?access_token=eyJ…).
+	if urlProfile := authProfileFromURLQueryParams(rawURL); !isEmptyAuthProfile(urlProfile) {
+		profile = mergeAuthProfiles(profile, urlProfile)
+	}
+	if isEmptyAuthProfile(profile) {
+		return
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	existing := s.authCaptures[key]
+	s.authCaptures[key] = capturedAuthSession{
+		Profile:    mergeAuthProfiles(existing.Profile, profile),
+		CapturedAt: time.Now().UTC(),
+	}
+}
+
+// captureAuthFromResponse extracts authentication material from an HTTP
+// response and merges it into the per-host auth capture store. It handles
+// two cases that the request-side capture misses:
+//
+//   - Set-Cookie headers: cookies set by the server after a successful OAuth
+//     login or token-exchange are folded into the session cookie jar so that
+//     subsequent scan requests carry the correct session identity.
+//   - JSON token responses: when the token endpoint returns a body such as
+//     {"access_token":"eyJ…","token_type":"Bearer"} (RFC 6749 §5.1 / OIDC),
+//     the token is stored as an Authorization: ****** in the captured
+//     profile so it can be replayed immediately without a separate login step.
+func (s *Server) captureAuthFromResponse(rawURL string, respHeader http.Header, respBody []byte) {
+	if s == nil {
+		return
+	}
+	key := authCaptureKey(rawURL)
+	if key == "" {
+		return
+	}
+	profile := authProfileFromResponse(respHeader, respBody)
 	if isEmptyAuthProfile(profile) {
 		return
 	}
@@ -184,4 +223,108 @@ func isEmptyAuthProfile(profile model.ScanAuthProfile) bool {
 		strings.TrimSpace(profile.Username) == "" &&
 		strings.TrimSpace(profile.Password) == "" &&
 		len(profile.LoginSteps) == 0
+}
+
+// authProfileFromResponse builds a ScanAuthProfile from an HTTP response's
+// headers and body. It captures:
+//
+//   - Cookies issued via Set-Cookie (e.g. session cookies set after a
+//     successful OAuth callback).
+//   - An OAuth bearer token found in the response JSON body under one of the
+//     standard field names (access_token, id_token, token — RFC 6749 §5.1 /
+//     OIDC). The token is stored as Authorization: ****** so it can
+//     be replayed directly in subsequent probe requests.
+func authProfileFromResponse(respHeader http.Header, respBody []byte) model.ScanAuthProfile {
+	profile := model.ScanAuthProfile{}
+
+	// Capture server-issued cookies from Set-Cookie response headers.
+	for _, c := range (&http.Response{Header: respHeader}).Cookies() {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		if profile.Cookies == nil {
+			profile.Cookies = map[string]string{}
+		}
+		profile.Cookies[name] = c.Value
+	}
+
+	// Extract an OAuth bearer token from a JSON response body and synthesise
+	// an Authorization header so authenticated replay works immediately.
+	if token := extractOAuthTokenFromJSON(respBody); token != "" {
+		if profile.Headers == nil {
+			profile.Headers = map[string]string{}
+		}
+		profile.Headers["Authorization"] = "Bearer " + token
+	}
+
+	return profile
+}
+
+// oauthTokenJSONFields is the ordered list of JSON object keys we probe for an
+// OAuth bearer token. access_token (RFC 6749) is tried first; id_token (OIDC)
+// second; the generic "token" key used by many non-standard APIs last.
+var oauthTokenJSONFields = []string{
+	"access_token", "accessToken",
+	"id_token", "idToken",
+	"token",
+	"auth_token", "authToken",
+}
+
+// extractOAuthTokenFromJSON parses body as a JSON object and returns the value
+// of the first recognised OAuth token field. Returns "" when the body is not a
+// JSON object or contains no recognised field.
+func extractOAuthTokenFromJSON(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return ""
+	}
+	for _, field := range oauthTokenJSONFields {
+		if v, ok := obj[field]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+// oauthQueryParamNames is the ordered list of URL query parameter names used
+// by OAuth and API-key "token-in-URL" patterns (non-recommended but common).
+// We synthesise an Authorization: ****** from the first match so the
+// captured profile covers this credential for authenticated replay.
+var oauthQueryParamNames = []string{
+	"access_token", "accesstoken",
+	"id_token",
+	"token",
+	"auth_token", "authtoken",
+}
+
+// authProfileFromURLQueryParams extracts a bearer token embedded as a URL
+// query parameter and returns it as an Authorization header in the auth
+// profile. Returns an empty profile when no recognised parameter is present.
+func authProfileFromURLQueryParams(rawURL string) model.ScanAuthProfile {
+	profile := model.ScanAuthProfile{}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.RawQuery == "" {
+		return profile
+	}
+	q := parsed.Query()
+	for _, name := range oauthQueryParamNames {
+		if v := strings.TrimSpace(q.Get(name)); v != "" {
+			if profile.Headers == nil {
+				profile.Headers = map[string]string{}
+			}
+			profile.Headers["Authorization"] = "Bearer " + v
+			break
+		}
+	}
+	return profile
 }
