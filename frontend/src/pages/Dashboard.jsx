@@ -147,6 +147,22 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   }, [toast]);
 
+  // Import scan template seeded from the Proxy site map.
+  useEffect(() => {
+    const raw = localStorage.getItem("proxy_scan_template");
+    if (!raw) return;
+    try {
+      const tpl = JSON.parse(raw);
+      localStorage.removeItem("proxy_scan_template");
+      if (tpl.target) setTarget(tpl.target);
+      if (tpl.includeHosts) setIncludeHosts(tpl.includeHosts);
+      toast(
+        `Scan template loaded from site map — target set to ${tpl.target}. Configure options and start your scan.`,
+        { type: "info", duration: 6000 },
+      );
+    } catch { /* ignore */ }
+  }, [toast]);
+
   useEffect(() => {
     if (isScanActive && scanStartedAt) {
       timerRef.current = setInterval(() => {

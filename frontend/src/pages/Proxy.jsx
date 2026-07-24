@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ContextMenu from "../components/ContextMenu";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const TABS = [
   { id: "history", label: "HTTP history" },
+  { id: "site-map", label: "Site map" },
   { id: "browser", label: "Proxy browser" },
   { id: "passive", label: "Passive findings" },
   { id: "repeater", label: "Repeater" },
@@ -254,6 +256,32 @@ export default function Proxy() {
     navigate("/");
   }
 
+  function sendToRepeater(requestId) {
+    setSelectedId(requestId);
+    setTab("repeater");
+  }
+
+  function sendToIntruder(requestId) {
+    setSelectedId(requestId);
+    setTab("intruder");
+  }
+
+  function useScanTemplate(host) {
+    try {
+      const parsed = new URL(host);
+      localStorage.setItem(
+        "proxy_scan_template",
+        JSON.stringify({ target: host, includeHosts: parsed.hostname }),
+      );
+    } catch {
+      localStorage.setItem(
+        "proxy_scan_template",
+        JSON.stringify({ target: host, includeHosts: host }),
+      );
+    }
+    navigate("/");
+  }
+
   return (
     <div className="page page--wide">
       <section className="hero-panel">
@@ -338,6 +366,16 @@ export default function Proxy() {
           busy={busy}
           selected={selected}
           onSendToDashboard={sendToDashboard}
+          onSendToRepeater={sendToRepeater}
+          onSendToIntruder={sendToIntruder}
+        />
+      )}
+
+      {tab === "site-map" && (
+        <SiteMapTab
+          requests={requests}
+          onRefresh={loadRequests}
+          onUseScanTemplate={useScanTemplate}
         />
       )}
 
@@ -413,14 +451,66 @@ export default function Proxy() {
   );
 }
 
-function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, selected, onSendToDashboard }) {
+function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, selected, onSendToDashboard, onSendToRepeater, onSendToIntruder }) {
+  const [ctxMenu, setCtxMenu] = useState(null); // { x, y, request }
+
+  function handleContextMenu(e, request) {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, request });
+  }
+
+  function closeCtxMenu() {
+    setCtxMenu(null);
+  }
+
+  function copyURL() {
+    if (!ctxMenu) return;
+    navigator.clipboard.writeText(ctxMenu.request.url).catch(() => {});
+  }
+
+  function copyAsCurl() {
+    if (!ctxMenu) return;
+    const curl = `curl -X ${ctxMenu.request.method} '${ctxMenu.request.url}'`;
+    navigator.clipboard.writeText(curl).catch(() => {});
+  }
+
+  const ctxItems = ctxMenu ? [
+    {
+      label: "Send to Repeater",
+      icon: "↺",
+      onClick: () => { onSelect(ctxMenu.request.id); onSendToRepeater(ctxMenu.request.id); },
+    },
+    {
+      label: "Send to Intruder",
+      icon: "⚡",
+      onClick: () => { onSelect(ctxMenu.request.id); onSendToIntruder(ctxMenu.request.id); },
+    },
+    { separator: true },
+    {
+      label: "Copy URL",
+      icon: "⎘",
+      shortcut: "Ctrl+C",
+      onClick: copyURL,
+    },
+    {
+      label: "Copy as cURL",
+      icon: "❯",
+      onClick: copyAsCurl,
+    },
+    {
+      label: "Open URL in new tab",
+      icon: "↗",
+      onClick: () => window.open(ctxMenu.request.url, "_blank", "noopener,noreferrer"),
+    },
+  ] : [];
+
   return (
     <div className="two-column-grid">
       <section className="card">
         <div className="toolbar" style={{ marginBottom: 12 }}>
           <div>
             <h2>HTTP history</h2>
-            <p className="meta">Capture review queue for selecting replayable or fuzz-worthy flows.</p>
+            <p className="meta">Capture review queue for selecting replayable or fuzz-worthy flows. Right-click any row for quick actions.</p>
           </div>
           <div className="button-row">
             <button type="button" className="button-secondary" onClick={onRefresh} disabled={busy}>Refresh</button>
@@ -445,6 +535,7 @@ function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, 
                   <tr
                     key={request.id}
                     onClick={() => onSelect(request.id)}
+                    onContextMenu={(e) => handleContextMenu(e, request)}
                     style={{ cursor: "pointer", background: request.id === selectedId ? "rgba(89,208,255,0.08)" : "transparent" }}
                   >
                     <td>{formatTime(request.capturedAt)}</td>
@@ -467,8 +558,11 @@ function HistoryTab({ requests, selectedId, onSelect, onRefresh, onClear, busy, 
             <strong> → Use for Authenticated Scan</strong> shortcut so you can hand the
             live session directly to the Operator Dashboard.
           </p>
+          <p className="meta" style={{ marginTop: 6 }}>Right-click any row to send it to Repeater, Intruder, or copy it as a cURL command.</p>
         </section>
       )}
+
+      <ContextMenu items={ctxItems} position={ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null} onClose={closeCtxMenu} />
     </div>
   );
 }
@@ -1530,6 +1624,106 @@ function PassiveFindingsTab({ apiBase, apiKey, workspaceId }) {
   );
 }
 
+function SiteMapTab({ requests, onRefresh, onUseScanTemplate }) {
+  const [expanded, setExpanded] = useState({});
+
+  const siteMap = useMemo(() => buildSiteMap(requests), [requests]);
+  const hosts = useMemo(() => Object.keys(siteMap).sort(), [siteMap]);
+
+  function toggleHost(host) {
+    setExpanded((prev) => ({ ...prev, [host]: prev[host] === false ? true : false }));
+  }
+
+  return (
+    <section className="card">
+      <div className="toolbar" style={{ marginBottom: 16 }}>
+        <div>
+          <h2>Site map</h2>
+          <p className="meta">
+            Auto-generated from proxy history — shows every discovered host, path, and HTTP method.
+            Click <strong>→ Use as Scan Template</strong> on any host to pre-configure the Operator Dashboard for a targeted scan.
+          </p>
+        </div>
+        <div className="button-row">
+          <span className="chip chip--muted">{hosts.length} host{hosts.length !== 1 ? "s" : ""} · {requests.length} req{requests.length !== 1 ? "s" : ""}</span>
+          <button type="button" className="button-secondary" onClick={onRefresh}>↺ Refresh</button>
+        </div>
+      </div>
+
+      {hosts.length === 0 ? (
+        <div className="empty-state">
+          No traffic captured yet. Browse through the proxy to populate the site map.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {hosts.map((host) => {
+            const paths = Object.keys(siteMap[host]).sort();
+            const isExpanded = expanded[host] !== false;
+            return (
+              <div key={host} className="site-map-host">
+                <div className="site-map-host__header" onClick={() => toggleHost(host)}>
+                  <span style={{ fontSize: "0.7rem", color: "var(--ink-muted)", userSelect: "none", flexShrink: 0 }}>
+                    {isExpanded ? "▼" : "▶"}
+                  </span>
+                  <span className="site-map-host__name">{host}</span>
+                  <span className="chip chip--muted" style={{ flexShrink: 0 }}>
+                    {paths.length} path{paths.length !== 1 ? "s" : ""}
+                  </span>
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    style={{ padding: "0.25rem 0.8rem", fontSize: "0.78rem", flexShrink: 0 }}
+                    onClick={(e) => { e.stopPropagation(); onUseScanTemplate(host); }}
+                  >
+                    → Use as Scan Template
+                  </button>
+                </div>
+
+                {isExpanded && (
+                  <div style={{ borderTop: "1px solid var(--border)" }}>
+                    {paths.map((path) => {
+                      const entries = siteMap[host][path];
+                      return (
+                        <div key={path} className="site-map-path">
+                          <span className="site-map-path__url">{path}</span>
+                          <div style={{ display: "flex", gap: 4, flexShrink: 0, flexWrap: "wrap" }}>
+                            {entries.map((e, i) => (
+                              <span key={i} className="chip chip--muted" style={{ fontSize: "0.72rem" }}>
+                                {e.method} {e.status || "—"}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function buildSiteMap(requests) {
+  const map = {};
+  for (const req of requests) {
+    try {
+      const parsed = new URL(req.url);
+      const host = `${parsed.protocol}//${parsed.host}`;
+      const path = parsed.pathname || "/";
+      if (!map[host]) map[host] = {};
+      if (!map[host][path]) map[host][path] = [];
+      if (!map[host][path].find((e) => e.method === req.method)) {
+        map[host][path].push({ method: req.method, status: req.responseStatus });
+      }
+    } catch { /* ignore invalid URLs */ }
+  }
+  return map;
+}
+
 function headersToText(headers) {
   if (!headers) return "";
   return Object.entries(headers).map(([key, value]) => `${key}: ${value}`).join("\n");
@@ -1619,7 +1813,6 @@ function extractAuthFromRequest(req) {
     cookiesJson: Object.keys(cookies).length > 0 ? JSON.stringify(cookies, null, 2) : "",
     target,
   };
-}
 }
 
 function applyDecoderAction(action, value) {
