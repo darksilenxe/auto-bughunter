@@ -57,7 +57,7 @@ func TestValidateAuthProfileAllowsCustomLoginSteps(t *testing.T) {
 
 func TestMergeScanAuthProfileUsesCapturedSessionAndExplicitOverrides(t *testing.T) {
 	captured := model.ScanAuthProfile{
-		Headers:   map[string]string{"Authorization": "******", "X-Csrf-Token": "proxy-csrf"},
+		Headers:   map[string]string{"Authorization": "TestAuthValue", "X-Csrf-Token": "proxy-csrf"},
 		Cookies:   map[string]string{"session": "proxy-session"},
 		UserAgent: "ProxyBrowser/1.0",
 	}
@@ -69,7 +69,7 @@ func TestMergeScanAuthProfileUsesCapturedSessionAndExplicitOverrides(t *testing.
 
 	merged := mergeScanAuthProfile(explicit, captured)
 
-	if got := merged.Headers["Authorization"]; got != "******" {
+	if got := merged.Headers["Authorization"]; got != "TestAuthValue" {
 		t.Fatalf("expected captured authorization header to remain, got %q", got)
 	}
 	if got := merged.Headers["X-Csrf-Token"]; got != "manual-csrf" {

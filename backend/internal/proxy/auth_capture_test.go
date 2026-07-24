@@ -9,10 +9,10 @@ import (
 func TestLatestAuthProfileForTargetReturnsCapturedSession(t *testing.T) {
 	srv := NewServer(NewMemStore())
 	headers := http.Header{
-		"Cookie":       []string{"session=abc123; csrftoken=xyz"},
-		"Authorization": []string{"******"},
-		"X-CSRF-Token": []string{"xyz"},
-		"User-Agent":   []string{"Mozilla/5.0"},
+		"Cookie":        []string{"session=abc123; csrftoken=xyz"},
+		"Authorization": []string{"TestAuthValue"},
+		"X-CSRF-Token":  []string{"xyz"},
+		"User-Agent":    []string{"Mozilla/5.0"},
 	}
 
 	srv.captureAuthFromRequest("https://app.example.com/account", headers)
@@ -24,7 +24,7 @@ func TestLatestAuthProfileForTargetReturnsCapturedSession(t *testing.T) {
 	if got := profile.Cookies["session"]; got != "abc123" {
 		t.Fatalf("expected session cookie, got %q", got)
 	}
-	if got := profile.Headers["Authorization"]; got != "******" {
+	if got := profile.Headers["Authorization"]; got != "TestAuthValue" {
 		t.Fatalf("expected authorization header, got %q", got)
 	}
 	if got := profile.Headers["X-Csrf-Token"]; got != "xyz" {
