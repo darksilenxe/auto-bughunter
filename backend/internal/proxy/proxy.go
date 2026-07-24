@@ -227,6 +227,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// after OAuth login, JSON token responses from token endpoints, etc.).
 	s.captureAuthFromResponse(r.URL.String(), resp.Header, respBodyBytes)
 
+	// For redirect responses (3xx), also inspect the Location header for
+	// OAuth tokens. This catches the implicit-grant flow where the
+	// authorization server redirects to the app's callback URL with the
+	// access token in a URL fragment or query param:
+	//   Location: https://app/auth/redirection#access_token=TOKEN
+	// It is also a no-op for the authorization code flow where Location
+	// carries ?code=… (not a bearer token) — those are captured later via
+	// the Set-Cookie / JSON body of the callback response.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		s.captureAuthFromRedirectLocation(resp.Header.Get("Location"))
+	}
+
 	// Write response back to client.
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -467,6 +479,12 @@ func (s *Server) proxyDecryptedRequest(clientTLS net.Conn, req *http.Request) er
 	// Capture any auth material issued by the server (session cookies set
 	// after OAuth login, JSON token responses from token endpoints, etc.).
 	s.captureAuthFromResponse(req.URL.String(), resp.Header, respBodyBytes)
+
+	// For redirect responses (3xx), inspect the Location header for OAuth
+	// tokens (implicit flow) or no-op for ?code= (authorization code flow).
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		s.captureAuthFromRedirectLocation(resp.Header.Get("Location"))
+	}
 
 	// Write the response back to the client over the same TLS connection.
 	out := &http.Response{
