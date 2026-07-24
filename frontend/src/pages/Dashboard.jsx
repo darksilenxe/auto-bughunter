@@ -130,6 +130,39 @@ export default function Dashboard() {
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
 
+  // Import OAuth session captured from the Proxy page via localStorage handoff.
+  useEffect(() => {
+    const raw = localStorage.getItem("proxy_auth_handoff");
+    if (!raw) return;
+    try {
+      const auth = JSON.parse(raw);
+      localStorage.removeItem("proxy_auth_handoff");
+      if (auth.target) setTarget(auth.target);
+      if (auth.headersJson) setHeadersJson(auth.headersJson);
+      if (auth.cookiesJson) setCookiesJson(auth.cookiesJson);
+      toast(
+        "OAuth session imported from Proxy — review the pre-filled auth fields then start your scan.",
+        { type: "success", duration: 6000 },
+      );
+    } catch { /* ignore */ }
+  }, [toast]);
+
+  // Import scan template seeded from the Proxy site map.
+  useEffect(() => {
+    const raw = localStorage.getItem("proxy_scan_template");
+    if (!raw) return;
+    try {
+      const tpl = JSON.parse(raw);
+      localStorage.removeItem("proxy_scan_template");
+      if (tpl.target) setTarget(tpl.target);
+      if (tpl.includeHosts) setIncludeHosts(tpl.includeHosts);
+      toast(
+        `Scan template loaded from site map — target set to ${tpl.target}. Configure options and start your scan.`,
+        { type: "info", duration: 6000 },
+      );
+    } catch { /* ignore */ }
+  }, [toast]);
+
   useEffect(() => {
     if (isScanActive && scanStartedAt) {
       timerRef.current = setInterval(() => {

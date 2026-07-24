@@ -1652,3 +1652,124 @@ details summary {
   background: var(--surface2, rgba(255,255,255,0.07));
   color: var(--ink);
 }
+
+/* ── Context menu ───────────────────────────────────── */
+.context-menu {
+  position: fixed;
+  z-index: 4000;
+  background: var(--bg-card-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 4px 0;
+  min-width: 210px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(89, 208, 255, 0.08);
+  animation: ctx-in 0.1s ease;
+}
+
+@keyframes ctx-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 14px;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+
+.context-menu__item:hover:not(:disabled) {
+  background: rgba(89, 208, 255, 0.09);
+  color: var(--accent);
+}
+
+.context-menu__item:disabled {
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.context-menu__icon {
+  font-size: 0.9rem;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.context-menu__sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.context-menu__shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+/* ── Site map tree ──────────────────────────────────── */
+.site-map-host {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.site-map-host__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 0.12s;
+  user-select: none;
+}
+
+.site-map-host__header:hover {
+  background: rgba(89, 208, 255, 0.05);
+}
+
+.site-map-host__name {
+  font-family: monospace;
+  font-weight: 600;
+  color: var(--accent);
+  flex: 1;
+  word-break: break-all;
+}
+
+.site-map-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px 7px 32px;
+  border-bottom: 1px solid rgba(115, 146, 194, 0.07);
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.site-map-path:last-child {
+  border-bottom: none;
+}
+
+.site-map-path:hover {
+  background: rgba(89, 208, 255, 0.04);
+}
+
+.site-map-path__url {
+  font-family: monospace;
+  flex: 1;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
