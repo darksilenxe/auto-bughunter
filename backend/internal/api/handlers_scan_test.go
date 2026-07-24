@@ -55,6 +55,37 @@ func TestValidateAuthProfileAllowsCustomLoginSteps(t *testing.T) {
 	}
 }
 
+func TestMergeScanAuthProfileUsesCapturedSessionAndExplicitOverrides(t *testing.T) {
+	captured := model.ScanAuthProfile{
+		Headers:   map[string]string{"Authorization": "TestAuthValue", "X-Csrf-Token": "proxy-csrf"},
+		Cookies:   map[string]string{"session": "proxy-session"},
+		UserAgent: "ProxyBrowser/1.0",
+	}
+	explicit := model.ScanAuthProfile{
+		Headers:   map[string]string{"X-Csrf-Token": "manual-csrf"},
+		Cookies:   map[string]string{"feature": "enabled"},
+		UserAgent: "ManualAgent/2.0",
+	}
+
+	merged := mergeScanAuthProfile(explicit, captured)
+
+	if got := merged.Headers["Authorization"]; got != "TestAuthValue" {
+		t.Fatalf("expected captured authorization header to remain, got %q", got)
+	}
+	if got := merged.Headers["X-Csrf-Token"]; got != "manual-csrf" {
+		t.Fatalf("expected explicit csrf header to override capture, got %q", got)
+	}
+	if got := merged.Cookies["session"]; got != "proxy-session" {
+		t.Fatalf("expected captured session cookie, got %q", got)
+	}
+	if got := merged.Cookies["feature"]; got != "enabled" {
+		t.Fatalf("expected explicit cookie, got %q", got)
+	}
+	if merged.UserAgent != "ManualAgent/2.0" {
+		t.Fatalf("expected explicit user agent to override capture, got %q", merged.UserAgent)
+	}
+}
+
 // TestFilterDismissedFindings_RemovesRejectedFinding verifies that a finding
 // previously marked "rejected" is filtered out of subsequent scan results.
 func TestFilterDismissedFindings_RemovesRejectedFinding(t *testing.T) {
@@ -134,4 +165,3 @@ func TestFilterDismissedFindings_EmptyVerifsIsNoop(t *testing.T) {
 		t.Fatalf("expected 1 finding to remain, got %d", len(got))
 	}
 }
-

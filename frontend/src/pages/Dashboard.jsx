@@ -563,6 +563,9 @@ export default function Dashboard() {
                 <input type="password" value={basicAuthPassword} onChange={(e) => setBasicAuthPassword(e.target.value)} />
               </label>
             </div>
+            <p className="meta" style={{ margin: "4px 0 0" }}>
+              If you authenticate through the built-in proxy first, the scan will automatically reuse the latest captured session for this target and merge it with any auth entered here.
+            </p>
 
             <details>
               <summary>Login steps / browser automation {loginSteps.length ? `(${loginSteps.length})` : ""}</summary>
