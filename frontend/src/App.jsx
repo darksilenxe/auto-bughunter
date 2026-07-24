@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import CommandPalette from "./components/CommandPalette";
 import ErrorBoundary from "./components/ErrorBoundary";
 import MatrixRain from "./components/MatrixRain";
@@ -62,6 +62,7 @@ export default function App() {
               <Route path="/scan-timeline"  element={<ScanTimeline />} />
               <Route path="/surface-map"    element={<SurfaceMap />} />
               <Route path="/accuracy"       element={<Accuracy />} />
+              <Route path="/auth/redirect"  element={<Navigate to="/" replace />} />
             </Routes>
           </ErrorBoundary>
         </main>
