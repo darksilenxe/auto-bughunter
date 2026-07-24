@@ -328,3 +328,75 @@ func authProfileFromURLQueryParams(rawURL string) model.ScanAuthProfile {
 	}
 	return profile
 }
+
+// authProfileFromURLFragment extracts OAuth bearer tokens that appear in the
+// URL fragment (hash portion), as used by the OAuth 2.0 implicit grant
+// (RFC 6749 §4.2.2). Authorization servers encode the token response as a
+// query-string inside the fragment, e.g.:
+//
+//	https://app.example.com/auth/redirection#access_token=TOKEN&token_type=bearer
+//
+// Browsers never send the fragment to the server, so the proxy can only see
+// these tokens when they appear inside a redirect Location header issued by
+// the OAuth provider. Returns an empty profile when no recognised field is
+// found in the fragment.
+func authProfileFromURLFragment(rawURL string) model.ScanAuthProfile {
+	profile := model.ScanAuthProfile{}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Fragment == "" {
+		return profile
+	}
+	q, err := url.ParseQuery(parsed.Fragment)
+	if err != nil {
+		return profile
+	}
+	for _, name := range oauthQueryParamNames {
+		if v := strings.TrimSpace(q.Get(name)); v != "" {
+			if profile.Headers == nil {
+				profile.Headers = map[string]string{}
+			}
+			profile.Headers["Authorization"] = "Bearer " + v
+			break
+		}
+	}
+	return profile
+}
+
+// captureAuthFromRedirectLocation extracts OAuth material from the Location
+// URL of a redirect response (HTTP 3xx) and stores it keyed to the redirect
+// target host. This is the only opportunity to capture tokens delivered via
+// the OAuth 2.0 implicit grant, where the authorization server issues a
+// redirect such as:
+//
+//	HTTP/1.1 302 Found
+//	Location: https://app.example.com/auth/redirection#access_token=TOKEN
+//
+// Browsers strip the fragment before making the follow-up GET, so the token
+// never appears in any subsequent HTTP request — it must be captured here,
+// from the OAuth provider's response, and stored under the application host
+// (app.example.com) so it is available when the scanner probes that host.
+func (s *Server) captureAuthFromRedirectLocation(locationURL string) {
+	if s == nil || strings.TrimSpace(locationURL) == "" {
+		return
+	}
+	key := authCaptureKey(locationURL)
+	if key == "" {
+		return
+	}
+	// Extract tokens from query params (some implicit-flow providers) and
+	// from the URL fragment (standard implicit flow per RFC 6749 §4.2.2).
+	profile := authProfileFromURLQueryParams(locationURL)
+	if fragProfile := authProfileFromURLFragment(locationURL); !isEmptyAuthProfile(fragProfile) {
+		profile = mergeAuthProfiles(profile, fragProfile)
+	}
+	if isEmptyAuthProfile(profile) {
+		return
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	existing := s.authCaptures[key]
+	s.authCaptures[key] = capturedAuthSession{
+		Profile:    mergeAuthProfiles(existing.Profile, profile),
+		CapturedAt: time.Now().UTC(),
+	}
+}
