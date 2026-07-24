@@ -20,8 +20,9 @@ import (
 // Bodies are capped at maxCaptureBody bytes; all saves are fire-and-forget
 // goroutines so they never block the scanner's critical path.
 type RecordingTransport struct {
-	Wrapped http.RoundTripper
-	Store   Store
+	Wrapped      http.RoundTripper
+	Store        Store
+	PassiveStore *PassiveScanStore
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -69,7 +70,7 @@ func (rt *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
 	}
 
-	go rt.save(&model.ProxyRequest{
+	captured := &model.ProxyRequest{
 		ID:              uuid.NewString(),
 		CapturedAt:      capturedAt,
 		Method:          method,
@@ -79,7 +80,13 @@ func (rt *RecordingTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		ResponseStatus:  resp.StatusCode,
 		ResponseHeaders: flattenHeaders(resp.Header),
 		ResponseBody:    string(respBodyBytes),
-	})
+	}
+	// Feed scanner-generated traffic into the passive findings store so live
+	// scans can consume proxy-derived findings in the same run.
+	if rt.PassiveStore != nil {
+		rt.PassiveStore.Analyze(captured)
+	}
+	go rt.save(captured)
 
 	return resp, nil
 }

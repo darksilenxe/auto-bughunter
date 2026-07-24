@@ -426,6 +426,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 	if proxyStore != nil {
 		scanService.SetProxyStore(proxyStore)
 	}
+	scanService.SetPassiveScanStore(passiveStore)
 	go s.runCampaignScheduler()
 	return s
 }
@@ -2350,6 +2351,13 @@ func (s *Server) runAgents(ctx context.Context, input agent.AgentInput) ([]agent
 		planner = aiPlanner
 	}
 	orchestrator := agent.NewOrchestrator(planner, s.agentFactory, s.maxRounds)
+	// Preserve historical static-pipeline behavior when AI planning is disabled:
+	// execute the full registered order instead of early-convergence stopping.
+	if !useAI {
+		orchestrator.MaxNoNoveltyRounds = 0
+		orchestrator.MaxConsecutiveFailureRounds = 0
+		orchestrator.MinMarginalScore = 0
+	}
 	if input.Options.AutonomyMaxNoNoveltyRounds > 0 {
 		orchestrator.MaxNoNoveltyRounds = input.Options.AutonomyMaxNoNoveltyRounds
 	}

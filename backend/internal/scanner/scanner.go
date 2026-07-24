@@ -28,6 +28,7 @@ type Service struct {
 	cfg            Config
 	oast           oast.Provider
 	proxyStore     proxy.Store
+	passiveStore   *proxy.PassiveScanStore
 	scannerProxy   ProxyConfig
 	proxyTransport http.RoundTripper
 	// bundledProxyPort is the port the in-process intercepting proxy
@@ -35,6 +36,50 @@ type Service struct {
 	// should be skipped (when scanner traffic already flows through the
 	// bundled proxy) so the same request isn't captured twice.
 	bundledProxyPort string
+}
+
+func hostFromRawURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(u.Hostname()))
+}
+
+func (s *Service) passiveFindingsForTargetSince(target string, since time.Time) []model.Finding {
+	if s == nil || s.passiveStore == nil {
+		return nil
+	}
+	targetHost := hostFromRawURL(target)
+	if targetHost == "" {
+		return nil
+	}
+	passive := s.passiveStore.List()
+	if len(passive) == 0 {
+		return nil
+	}
+	out := make([]model.Finding, 0, len(passive))
+	seen := make(map[string]struct{}, len(passive))
+	for _, pf := range passive {
+		if pf.DiscoveredAt.Before(since) {
+			continue
+		}
+		affectedHost := hostFromRawURL(pf.AffectedURL)
+		if affectedHost != targetHost {
+			continue
+		}
+		f := pf.Finding
+		if strings.TrimSpace(f.AffectedURL) == "" {
+			f.AffectedURL = pf.AffectedURL
+		}
+		key := f.ID + "|" + f.AffectedURL
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, f)
+	}
+	return out
 }
 
 const supplementalResourceFetchMaxURLs = 8
@@ -57,6 +102,11 @@ func (s *Service) OAST() oast.Provider { return s.oast }
 // by the scanner are recorded and visible in the Network Graph UI. Safe to
 // call with nil to disable recording.
 func (s *Service) SetProxyStore(store proxy.Store) { s.proxyStore = store }
+
+// SetPassiveScanStore attaches a passive-scan findings store so scanner
+// requests captured by RecordingTransport can be analyzed and fed back into
+// the current scan's finding set.
+func (s *Service) SetPassiveScanStore(store *proxy.PassiveScanStore) { s.passiveStore = store }
 
 // SetScannerProxy configures an optional upstream HTTP(S) proxy that all
 // scanner-initiated traffic will be routed through. bundledProxyPort is the
@@ -276,6 +326,7 @@ func NewService(cfg Config) *Service {
 }
 
 func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, error) {
+	scanStartedAt := time.Now().UTC()
 	u, err := url.Parse(input.Target)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("invalid target URL")
@@ -577,6 +628,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// re-queued into a bounded second probe pass below.
 	gaps := DetectSurfaceGaps(input.Session.SurfaceInventory())
 	findings = append(findings, s.runGapReQueuePass(ctx, input, bodyText, gaps)...)
+	findings = append(findings, s.passiveFindingsForTargetSince(input.Target, scanStartedAt)...)
 
 	// Persist probe records for the Probe Coverage and Findings probe-history
 	// UIs. Fire-and-forget; never blocks the caller.
@@ -1088,7 +1140,7 @@ func (s *Service) doRequestWithSession(ctx context.Context, req *http.Request, o
 		if base == nil {
 			base = http.DefaultTransport
 		}
-		wrapped.Transport = &proxy.RecordingTransport{Wrapped: base, Store: s.proxyStore}
+		wrapped.Transport = &proxy.RecordingTransport{Wrapped: base, Store: s.proxyStore, PassiveStore: s.passiveStore}
 		client = &wrapped
 	}
 	maxRetries := s.cfg.DefaultMaxRetries
