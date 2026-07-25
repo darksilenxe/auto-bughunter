@@ -1527,7 +1527,7 @@ func (p *Postgres) GetRejectedFindingsByTarget(ctx context.Context, target strin
 	rows, err := p.queryContext(ctx, `
 		SELECT fv.id, fv.scan_id, fv.finding_id, fv.status, fv.notes, fv.verified_by, fv.owner, fv.created_at
 		FROM finding_verifications fv
-		JOIN scan_jobs sj ON sj.id = fv.scan_id
+		JOIN scans sj ON sj.id = fv.scan_id
 		WHERE fv.status IN ('rejected', 'suppressed')
 		  AND sj.target = $1
 		ORDER BY fv.created_at DESC
