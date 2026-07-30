@@ -137,3 +137,46 @@ func TestValidate_AllowsMatchingURLHost(t *testing.T) {
 		t.Fatalf("expected matching host URL to pass validation, got %v", err)
 	}
 }
+
+func TestValidate_RejectsCurlOutputIntoPythonScratchDir(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "curl",
+		Args: []string{
+			"-s",
+			"-o",
+			filepath.Join(paths.ToolsDir(), "x.py"),
+			"https://example.com/payload.py",
+		},
+	}, "https://example.com", ValidationPolicy{})
+	if err == nil || !strings.Contains(err.Error(), "not permitted under") {
+		t.Fatalf("expected curl output path rejection for python scratch dir, got %v", err)
+	}
+}
+
+func TestValidate_RejectsWgetOutputIntoPythonScratchDir(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "wget",
+		Args: []string{
+			"--output-document=" + filepath.Join(paths.ToolsDir(), "x.py"),
+			"https://example.com/payload.py",
+		},
+	}, "https://example.com", ValidationPolicy{})
+	if err == nil || !strings.Contains(err.Error(), "not permitted under") {
+		t.Fatalf("expected wget output path rejection for python scratch dir, got %v", err)
+	}
+}
+
+func TestValidate_AllowsCurlOutputOutsidePythonScratchDir(t *testing.T) {
+	err := ValidateWithPolicy(CommandSpec{
+		Binary: "curl",
+		Args: []string{
+			"-s",
+			"-o",
+			"/tmp/other-output.txt",
+			"https://example.com/data.txt",
+		},
+	}, "https://example.com", ValidationPolicy{})
+	if err != nil {
+		t.Fatalf("expected curl output outside python scratch dir to pass, got %v", err)
+	}
+}

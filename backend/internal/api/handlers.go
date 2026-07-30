@@ -93,6 +93,8 @@ type Server struct {
 	defaultDailyProbeLimit     int
 	cancelMu                   sync.Mutex
 	cancelFuncs                map[string]context.CancelFunc
+	proxyBrowseTokenMu         sync.Mutex
+	proxyBrowseTokens          map[string]proxyBrowseTokenRecord
 }
 
 const (
@@ -416,6 +418,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 		cancelFuncs:                map[string]context.CancelFunc{},
+		proxyBrowseTokens:         map[string]proxyBrowseTokenRecord{},
 	}
 	s.mcpServer = mcp.NewServer(s.aiClient)
 	s.mcpServer.SetContextProvider(func() []mcp.Resource {
@@ -453,6 +456,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/proxy/anticsrf-referer", s.handleProxyAntiCSRFReferer)
 	mux.HandleFunc("/api/proxy/dom-invader", s.handleProxyDOMInvader)
 	mux.HandleFunc("/api/proxy/browse", s.handleProxyBrowse)
+	mux.HandleFunc("/api/proxy/browse-token", s.handleProxyBrowseToken)
 	mux.HandleFunc("/api/proxy/passive-findings", s.handleProxyPassiveFindings)
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)

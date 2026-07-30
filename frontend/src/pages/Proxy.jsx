@@ -1380,7 +1380,7 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
   const [iframeSrc, setIframeSrc] = useState(null);
   const [lastFetchedUrl, setLastFetchedUrl] = useState("");
 
-  function navigate(targetUrl) {
+  async function navigate(targetUrl) {
     const trimmed = targetUrl.trim();
     if (!trimmed || trimmed === "https://" || trimmed === "http://") {
       setError("Enter a URL to browse.");
@@ -1388,17 +1388,31 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
     }
     setError("");
     setLoading(true);
-    // Point the iframe directly at the backend browse endpoint so the browser
-    // handles content-type, encoding, and sub-resource loading natively.
-    // The api_key query param is accepted by the auth middleware alongside
-    // the X-API-Key header so the iframe can authenticate without custom headers.
-    const browseUrl =
-      `${apiBase}/api/proxy/browse` +
-      `?url=${encodeURIComponent(trimmed)}` +
-      `&api_key=${encodeURIComponent(apiKey)}`;
-    setIframeSrc(browseUrl);
-    setLastFetchedUrl(trimmed);
-    onRefreshHistory();
+    try {
+      const tokenRes = await fetch(`${apiBase}/api/proxy/browse-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          "X-Workspace-ID": workspaceId,
+        },
+        body: JSON.stringify({ url: trimmed }),
+      });
+      const tokenData = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok || !tokenData.token) {
+        throw new Error(tokenData.error || "Failed to create browse token.");
+      }
+      const browseUrl =
+        `${apiBase}/api/proxy/browse` +
+        `?url=${encodeURIComponent(trimmed)}` +
+        `&browse_token=${encodeURIComponent(tokenData.token)}`;
+      setIframeSrc(browseUrl);
+      setLastFetchedUrl(trimmed);
+      onRefreshHistory();
+    } catch (err) {
+      setLoading(false);
+      setError(err.message || "Failed to load page.");
+    }
   }
 
   function handleKeyDown(e) {
@@ -1450,7 +1464,7 @@ function BrowserTab({ apiBase, apiKey, workspaceId, onRefreshHistory }) {
           key={iframeSrc}
           src={iframeSrc}
           title={`Proxy browser — ${lastFetchedUrl}`}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          sandbox="allow-scripts allow-forms allow-popups"
           onLoad={() => setLoading(false)}
           onError={() => { setLoading(false); setError("Failed to load page."); }}
           style={{
