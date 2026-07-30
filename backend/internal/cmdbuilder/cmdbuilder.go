@@ -361,57 +361,6 @@ func validateToolFlags(binary string, args []string) error {
 	if len(allowed) == 0 {
 		return nil
 	}
-
-	func validateNoScratchScriptWrites(binary string, args []string) error {
-		switch binary {
-		case "python3", "python":
-			return nil
-		case "curl":
-			return rejectScratchDirOutput(binary, args, map[string]bool{
-				"-o":       true,
-				"--output": true,
-			})
-		case "wget":
-			return rejectScratchDirOutput(binary, args, map[string]bool{
-				"-O":                true,
-				"--output-document": true,
-			})
-		default:
-			return nil
-		}
-	}
-
-	func rejectScratchDirOutput(binary string, args []string, outputFlags map[string]bool) error {
-		for i, arg := range args {
-			flag, value, hasValue := extractFlagWithOptionalValue(arg)
-			if !outputFlags[flag] {
-				continue
-			}
-			if !hasValue {
-				if i+1 >= len(args) {
-					continue
-				}
-				value = args[i+1]
-			}
-			if isPathInOrEqualTo(value, pythonToolScratchDir()) {
-				return fmt.Errorf("%s output path %q is not permitted under %s", binary, value, pythonToolScratchDir())
-			}
-		}
-		return nil
-	}
-
-	func isPathInOrEqualTo(pathValue, dir string) bool {
-		p := strings.TrimSpace(pathValue)
-		if p == "" {
-			return false
-		}
-		p = filepath.Clean(p)
-		base := filepath.Clean(dir)
-		if p == base {
-			return true
-		}
-		return strings.HasPrefix(p, base+string(os.PathSeparator))
-	}
 	for _, arg := range args {
 		flag, ok := extractFlagToken(arg)
 		if !ok {
@@ -435,23 +384,6 @@ func extractFlagToken(arg string) (string, bool) {
 	if trimmed == "" || trimmed == "-" || !strings.HasPrefix(trimmed, "-") {
 		return "", false
 	}
-
-	func extractFlagWithOptionalValue(arg string) (flag string, value string, hasValue bool) {
-		token, ok := extractFlagToken(arg)
-		if !ok {
-			return "", "", false
-		}
-		if eq := strings.IndexByte(strings.TrimSpace(arg), '='); eq >= 0 {
-			trimmed := strings.TrimSpace(arg)
-			return token, strings.TrimSpace(trimmed[eq+1:]), true
-		}
-		shortAttached := strings.HasPrefix(token, "-") && !strings.HasPrefix(token, "--") && len(token) == 2
-		trimmed := strings.TrimSpace(arg)
-		if shortAttached && strings.HasPrefix(trimmed, token) && len(trimmed) > len(token) {
-			return token, strings.TrimSpace(trimmed[len(token):]), true
-		}
-		return token, "", false
-	}
 	// Negative numeric values are treated as values, not flags.
 	if len(trimmed) > 1 && trimmed[1] >= '0' && trimmed[1] <= '9' {
 		return "", false
@@ -466,6 +398,73 @@ func extractFlagToken(arg string) (string, bool) {
 		return trimmed[:eq], true
 	}
 	return trimmed, true
+}
+
+func validateNoScratchScriptWrites(binary string, args []string) error {
+	switch binary {
+	case "python3", "python":
+		return nil
+	case "curl":
+		return rejectScratchDirOutput(binary, args, map[string]bool{
+			"-o":       true,
+			"--output": true,
+		})
+	case "wget":
+		return rejectScratchDirOutput(binary, args, map[string]bool{
+			"-O":                true,
+			"--output-document": true,
+		})
+	default:
+		return nil
+	}
+}
+
+func rejectScratchDirOutput(binary string, args []string, outputFlags map[string]bool) error {
+	for i, arg := range args {
+		flag, value, hasValue := extractFlagWithOptionalValue(arg)
+		if !outputFlags[flag] {
+			continue
+		}
+		if !hasValue {
+			if i+1 >= len(args) {
+				continue
+			}
+			value = args[i+1]
+		}
+		if isPathInOrEqualTo(value, pythonToolScratchDir()) {
+			return fmt.Errorf("%s output path %q is not permitted under %s", binary, value, pythonToolScratchDir())
+		}
+	}
+	return nil
+}
+
+func isPathInOrEqualTo(pathValue, dir string) bool {
+	p := strings.TrimSpace(pathValue)
+	if p == "" {
+		return false
+	}
+	p = filepath.Clean(p)
+	base := filepath.Clean(dir)
+	if p == base {
+		return true
+	}
+	return strings.HasPrefix(p, base+string(os.PathSeparator))
+}
+
+func extractFlagWithOptionalValue(arg string) (flag string, value string, hasValue bool) {
+	token, ok := extractFlagToken(arg)
+	if !ok {
+		return "", "", false
+	}
+	trimmed := strings.TrimSpace(arg)
+	if eq := strings.IndexByte(trimmed, '='); eq >= 0 {
+		return token, strings.TrimSpace(trimmed[eq+1:]), true
+	}
+	shortAttached := strings.HasPrefix(token, "-") && !strings.HasPrefix(token, "--") && len(token) == 2
+	if shortAttached && strings.HasPrefix(trimmed, token) && len(trimmed) > len(token) {
+		return token, strings.TrimSpace(trimmed[len(token):]), true
+	}
+	return token, "", false
 }
 
 func isAllowedShortFlagVariant(flag string, allowed map[string]bool) bool {

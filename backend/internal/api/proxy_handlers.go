@@ -392,20 +392,13 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
-	if rawURL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url query parameter is required"})
+	rawURL, ok := proxyBrowseURLFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid browse token"})
 		return
 	}
-
-	// Ensure the URL has a scheme so url.Parse produces a useful result.
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		rawURL = "https://" + rawURL
-	}
-
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid URL"})
+	if _, err := normalizeBrowseURL(rawURL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -468,12 +461,12 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 		bodyBytes = injectBaseHref(bodyBytes, rawURL)
 	}
 
-	// Serve the raw body with the original Content-Type.  Strip security
-	// headers that would block the response from being displayed in an iframe.
+	// Serve the raw body with the original Content-Type and enforce sandboxing
+	// via CSP so hostile pages cannot execute with operator-console origin.
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Proxy-Status", fmt.Sprintf("%d", resp.StatusCode))
-	w.Header().Del("X-Frame-Options")
-	w.Header().Del("Content-Security-Policy")
+	w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-popups")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(bodyBytes)
 
@@ -481,6 +474,58 @@ func (s *Server) handleProxyBrowse(w http.ResponseWriter, r *http.Request) {
 	// feeds the passive findings store alongside traffic captured by the proxy
 	// server itself.
 	s.proxyServer.AnalyzeResponse(rawURL, resp.StatusCode, resp.Header, bodyBytes)
+}
+
+func (s *Server) handleProxyBrowseToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	p, ok := principalFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing API principal"})
+		return
+	}
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	rawURL, err := normalizeBrowseURL(req.URL)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := safety.ValidateOutboundURL(rawURL); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "URL blocked by outbound safety policy: " + err.Error()})
+		return
+	}
+	token, expiresAt, err := s.issueProxyBrowseToken(p, rawURL)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create browse token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"token":     token,
+		"expiresAt": expiresAt.Format(time.RFC3339),
+	})
+}
+
+func normalizeBrowseURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("url is required")
+	}
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		trimmed = "https://" + trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("invalid URL")
+	}
+	return trimmed, nil
 }
 
 // reHeadTag matches the first <head …> or <HEAD …> opening tag in HTML.

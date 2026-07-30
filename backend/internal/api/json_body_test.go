@@ -31,4 +31,9 @@ func TestExtractAPIKeyOnlyAllowsQueryForBrowserOnlyEndpoints(t *testing.T) {
 	if got := extractAPIKey(allowed); got != "stream" {
 		t.Fatalf("expected events query api key, got %q", got)
 	}
+
+	browse := httptest.NewRequest(http.MethodGet, "/api/proxy/browse?api_key=leaky", nil)
+	if got := extractAPIKey(browse); got != "" {
+		t.Fatalf("expected proxy browse query api key to be ignored, got %q", got)
+	}
 }

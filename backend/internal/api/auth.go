@@ -3,9 +3,12 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -26,7 +29,10 @@ type principal struct {
 
 type contextKey string
 
-const principalContextKey contextKey = "apiPrincipal"
+const (
+	principalContextKey      contextKey = "apiPrincipal"
+	proxyBrowseURLContextKey contextKey = "proxyBrowseURL"
+)
 
 type APIKeyStore interface {
 	CreateAPIKey(ctx context.Context, workspaceID, name string, role model.APIKeyRole) (*model.APIKeyRecord, string, error)
@@ -45,6 +51,14 @@ type apiRateLimiter struct {
 	perTargetCount    map[string]int
 	maxPerUser        int
 	maxPerTarget      int
+}
+
+const proxyBrowseTokenTTL = 90 * time.Second
+
+type proxyBrowseTokenRecord struct {
+	Principal principal
+	TargetURL string
+	ExpiresAt time.Time
 }
 
 func newAPIRateLimiter() *apiRateLimiter {
@@ -104,6 +118,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// probes) work without needing an API key.
 		if r.URL.Path == "/api/health" {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if p, browseURL, ok := s.consumeProxyBrowseToken(r); ok {
+			ctx := context.WithValue(r.Context(), principalContextKey, p)
+			ctx = context.WithValue(ctx, proxyBrowseURLContextKey, browseURL)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		rawKey := extractAPIKey(r)
@@ -289,8 +309,64 @@ func allowQueryAPIKey(r *http.Request) bool {
 		return false
 	}
 	path := r.URL.Path
-	return strings.HasPrefix(path, "/api/scan/") && strings.HasSuffix(path, "/events") ||
-		path == "/api/proxy/browse"
+	return strings.HasPrefix(path, "/api/scan/") && strings.HasSuffix(path, "/events")
+}
+
+func (s *Server) issueProxyBrowseToken(p principal, targetURL string) (string, time.Time, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", time.Time{}, fmt.Errorf("generate proxy browse token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	expiresAt := time.Now().UTC().Add(proxyBrowseTokenTTL)
+	s.proxyBrowseTokenMu.Lock()
+	if s.proxyBrowseTokens == nil {
+		s.proxyBrowseTokens = map[string]proxyBrowseTokenRecord{}
+	}
+	s.proxyBrowseTokens[token] = proxyBrowseTokenRecord{
+		Principal: p,
+		TargetURL: strings.TrimSpace(targetURL),
+		ExpiresAt: expiresAt,
+	}
+	s.proxyBrowseTokenMu.Unlock()
+	return token, expiresAt, nil
+}
+
+func (s *Server) consumeProxyBrowseToken(r *http.Request) (principal, string, bool) {
+	if r.Method != http.MethodGet || r.URL.Path != "/api/proxy/browse" {
+		return principal{}, "", false
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("browse_token"))
+	if token == "" {
+		return principal{}, "", false
+	}
+	targetURL, err := normalizeBrowseURL(r.URL.Query().Get("url"))
+	if err != nil {
+		return principal{}, "", false
+	}
+	now := time.Now().UTC()
+	s.proxyBrowseTokenMu.Lock()
+	defer s.proxyBrowseTokenMu.Unlock()
+	record, ok := s.proxyBrowseTokens[token]
+	if !ok {
+		return principal{}, "", false
+	}
+	delete(s.proxyBrowseTokens, token) // one-time use
+	if now.After(record.ExpiresAt) {
+		return principal{}, "", false
+	}
+	if !strings.EqualFold(strings.TrimSpace(record.TargetURL), targetURL) {
+		return principal{}, "", false
+	}
+	return record.Principal, record.TargetURL, true
+}
+
+func proxyBrowseURLFromContext(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(proxyBrowseURLContextKey).(string)
+	if !ok || strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	return v, true
 }
 
 func normalizeAPIKeyRole(raw string) model.APIKeyRole {
