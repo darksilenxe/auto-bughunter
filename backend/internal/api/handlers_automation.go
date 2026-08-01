@@ -2120,20 +2120,30 @@ func (s *Server) applyAutoSuppressionHeuristics(ctx context.Context, findings []
 	return out
 }
 
-func (s *Server) runCampaignScheduler() {
+func (s *Server) runCampaignScheduler(ctx context.Context) {
 	if s.repo == nil || s.campaignPoll <= 0 {
 		return
 	}
 	ticker := time.NewTicker(s.campaignPoll)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		now := time.Now().UTC()
-		_, _ = s.repo.ReclaimStaleAutomationCampaignLeases(context.Background(), now.Add(-4*s.campaignPoll), 100)
-		campaigns, err := s.repo.ListDueAutomationCampaigns(context.Background(), now, 25)
+		tickCtx, tickCancel := context.WithTimeout(ctx, 30*time.Second)
+		_, _ = s.repo.ReclaimStaleAutomationCampaignLeases(tickCtx, now.Add(-4*s.campaignPoll), 100)
+		campaigns, err := s.repo.ListDueAutomationCampaigns(tickCtx, now, 25)
+		tickCancel()
 		if err != nil || len(campaigns) == 0 {
 			continue
 		}
 		for _, c := range campaigns {
+			if ctx.Err() != nil {
+				return
+			}
 			if strings.TrimSpace(c.RunWindow) != "" && !inCampaignWindow(now, c) {
 				nextRun := computeNextCampaignRun(now.Add(15*time.Minute), model.AutomationCampaignUpsertRequest{
 					IntervalMin:     c.IntervalMin,
@@ -2142,27 +2152,40 @@ func (s *Server) runCampaignScheduler() {
 					RunWindow:       c.RunWindow,
 					BlackoutWindows: c.BlackoutWindows,
 				})
-				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				dbCtx, dbCancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = s.repo.UpdateAutomationCampaignRun(dbCtx, c.ID, now, nextRun)
+				dbCancel()
 				continue
 			}
 			if inCampaignBlackout(now, c) {
 				nextRun := now.Add(30 * time.Minute)
-				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				dbCtx, dbCancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = s.repo.UpdateAutomationCampaignRun(dbCtx, c.ID, now, nextRun)
+				dbCancel()
 				continue
 			}
 			leaseUntil := now.Add(2 * s.campaignPoll)
-			ok, err := s.repo.TryLeaseAutomationCampaign(context.Background(), c.ID, leaseUntil)
+			leaseCtx, leaseCancel := context.WithTimeout(ctx, 15*time.Second)
+			ok, err := s.repo.TryLeaseAutomationCampaign(leaseCtx, c.ID, leaseUntil)
+			leaseCancel()
 			if err != nil || !ok {
 				continue
 			}
 			c.Options.AutomationMode = normalizeAutomationMode(c.Options.AutomationMode)
 			c.Options = s.applySafetyModePolicy(c.Options)
 			c.PolicyPack = normalizePolicyPackName(c.PolicyPack)
-			c.Options, c.PolicyVersion = s.applyAutomationPolicyPack(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.PolicyPack, c.Options)
+			policyCtx, policyCancel := context.WithTimeout(ctx, 30*time.Second)
+			c.Options, c.PolicyVersion = s.applyAutomationPolicyPack(policyCtx, firstNonEmpty(c.WorkspaceID, "default"), c.PolicyPack, c.Options)
+			policyCancel()
 			c.Options.MinExpectedROIUSD = maxFloat(c.Options.MinExpectedROIUSD, s.defaultMinROI)
-			if blocked, reason := s.shouldDeferForDailyBudget(context.Background(), firstNonEmpty(c.WorkspaceID, "default"), c.Options); blocked {
+			budgetCtx, budgetCancel := context.WithTimeout(ctx, 15*time.Second)
+			blocked, reason := s.shouldDeferForDailyBudget(budgetCtx, firstNonEmpty(c.WorkspaceID, "default"), c.Options)
+			budgetCancel()
+			if blocked {
 				backoff := 30 * time.Minute
-				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, reason, now, backoff)
+				deferCtx, deferCancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(deferCtx, c.ID, reason, now, backoff)
+				deferCancel()
 				continue
 			}
 			runDueAt := c.NextRunAt
@@ -2179,9 +2202,14 @@ func (s *Server) runCampaignScheduler() {
 				strings.TrimSpace(c.Target),
 				strings.TrimSpace(c.ID),
 			}, "::")
-			if existing, err := s.repo.GetRecentJobByIdempotencyKey(context.Background(), runKey, idempotencyTarget, now.Add(-7*24*time.Hour)); err == nil && existing != nil {
+			idempCtx, idempCancel := context.WithTimeout(ctx, 15*time.Second)
+			existing, idempErr := s.repo.GetRecentJobByIdempotencyKey(idempCtx, runKey, idempotencyTarget, now.Add(-7*24*time.Hour))
+			idempCancel()
+			if idempErr == nil && existing != nil {
 				nextRun := resolveCampaignNextRunAfterDispatch(now, c)
-				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), c.ID, now, nextRun)
+				updateCtx, updateCancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = s.repo.UpdateAutomationCampaignRun(updateCtx, c.ID, now, nextRun)
+				updateCancel()
 				continue
 			}
 			jobID := uuid.NewString()
@@ -2202,27 +2230,40 @@ func (s *Server) runCampaignScheduler() {
 					maxInt(1, c.PolicyVersion),
 				),
 			}
-			if err := s.repo.CreateJob(context.Background(), job); err != nil {
+			createCtx, createCancel := context.WithTimeout(ctx, 15*time.Second)
+			createErr := s.repo.CreateJob(createCtx, job)
+			createCancel()
+			if createErr != nil {
 				backoff := campaignRetryBackoff(c.RetryCount)
-				_ = s.repo.MarkAutomationCampaignDispatchFailure(context.Background(), c.ID, err.Error(), now, backoff)
+				failCtx, failCancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = s.repo.MarkAutomationCampaignDispatchFailure(failCtx, c.ID, createErr.Error(), now, backoff)
+				failCancel()
 				continue
 			}
-			_ = s.repo.SaveIdempotencyRecord(context.Background(), runKey, idempotencyTarget, jobID, now)
+			saveCtx, saveCancel := context.WithTimeout(ctx, 15*time.Second)
+			_ = s.repo.SaveIdempotencyRecord(saveCtx, runKey, idempotencyTarget, jobID, now)
+			saveCancel()
 			hbNow := now
-			_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), c.ID, "running", runKey, &hbNow)
+			queueCtx, queueCancel := context.WithTimeout(ctx, 15*time.Second)
+			_ = s.repo.UpdateAutomationCampaignQueueState(queueCtx, c.ID, "running", runKey, &hbNow)
+			queueCancel()
 			s.appendAuditEvent(jobID, "automation-campaign", fmt.Sprintf("Campaign scheduled run: %s", c.ID))
-			go func(campaign model.AutomationCampaign, scanJobID string, idempotencyKey string) {
+			go func(campaign model.AutomationCampaign, scanJobID string, idempotencyKey string, schedCtx context.Context) {
 				stopHB := make(chan struct{})
 				go func() {
 					beatTicker := time.NewTicker(maxDuration(5*time.Second, s.campaignPoll/2))
 					defer beatTicker.Stop()
 					for {
 						select {
+						case <-schedCtx.Done():
+							return
 						case <-stopHB:
 							return
 						case beat := <-beatTicker.C:
 							leaseUntil := beat.Add(2 * s.campaignPoll)
-							ok, _ := s.repo.HeartbeatAutomationCampaignLease(context.Background(), campaign.ID, beat, leaseUntil)
+							hbCtx, hbCancel := context.WithTimeout(schedCtx, 10*time.Second)
+							ok, _ := s.repo.HeartbeatAutomationCampaignLease(hbCtx, campaign.ID, beat, leaseUntil)
+							hbCancel()
 							if !ok {
 								return
 							}
@@ -2232,9 +2273,14 @@ func (s *Server) runCampaignScheduler() {
 				s.runJob(scanJobID, campaign.Target, campaign.AuthProfile, nil, campaign.Options, campaign.Scope)
 				close(stopHB)
 				nextRun := resolveCampaignNextRunAfterDispatch(time.Now().UTC(), campaign)
-				_ = s.repo.UpdateAutomationCampaignRun(context.Background(), campaign.ID, time.Now().UTC(), nextRun)
-				_ = s.repo.UpdateAutomationCampaignQueueState(context.Background(), campaign.ID, "queued", idempotencyKey, nil)
-			}(c, jobID, runKey)
+				// Post-job cleanup: use a fresh context because the scheduler context
+				// may already be cancelled during shutdown, but these writes are needed
+				// to leave the campaign in a consistent state.
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cleanupCancel()
+				_ = s.repo.UpdateAutomationCampaignRun(cleanupCtx, campaign.ID, time.Now().UTC(), nextRun)
+				_ = s.repo.UpdateAutomationCampaignQueueState(cleanupCtx, campaign.ID, "queued", idempotencyKey, nil)
+			}(c, jobID, runKey, ctx)
 		}
 	}
 }

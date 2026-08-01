@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/memory"
@@ -336,7 +337,9 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 			if store != nil {
 				prCopy := pr
 				go func() {
-					_ = store.UpsertProbe(context.Background(), memory.ProbeMemory{
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					_ = store.UpsertProbe(ctx, memory.ProbeMemory{
 						ID:        probeMemoryID(input.Target, prCopy.Category, prCopy.Payload),
 						Target:    input.Target,
 						ScanID:    input.ScanID,

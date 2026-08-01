@@ -166,7 +166,7 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       LOG_LEVEL: ${NUCLEI_SERVICE_LOG_LEVEL:-INFO}
     ports:
-      - "8093:8093"
+      - "127.0.0.1:8093:8093"
     volumes:
       - nuclei_templates:/root/nuclei-templates
       - sidecar_certs:/certs:ro
@@ -203,7 +203,7 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       LOG_LEVEL: ${ZAP_SERVICE_LOG_LEVEL:-INFO}
     ports:
-      - "8094:8094"
+      - "127.0.0.1:8094:8094"
     volumes:
       - sidecar_certs:/certs:ro
     restart: unless-stopped
@@ -242,7 +242,7 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       LOG_LEVEL: ${SEMGREP_SERVICE_LOG_LEVEL:-INFO}
     ports:
-      - "8095:8095"
+      - "127.0.0.1:8095:8095"
     volumes:
       - sidecar_certs:/certs:ro
     restart: unless-stopped
@@ -279,7 +279,7 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       LOG_LEVEL: ${UI_SIMULATION_LOG_LEVEL:-INFO}
     ports:
-      - "8096:8096"
+      - "127.0.0.1:8096:8096"
     volumes:
       - sidecar_certs:/certs:ro
     restart: unless-stopped
@@ -319,7 +319,7 @@ services:
       SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
       LOG_LEVEL: ${DOM_INVADER_LOG_LEVEL:-INFO}
     ports:
-      - "8097:8097"
+      - "127.0.0.1:8097:8097"
     volumes:
       - sidecar_certs:/certs:ro
     restart: unless-stopped
