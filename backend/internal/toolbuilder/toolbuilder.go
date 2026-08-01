@@ -68,18 +68,32 @@ type Finding struct {
 // ────────────────────────────────────────────────────────────────────────────
 
 var scriptBlockedPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),      // no spawning sub-processes
-	regexp.MustCompile(`(?i)\bfrom\s+subprocess\s+import\b`), // no spawning sub-processes
-	regexp.MustCompile(`(?i)\bsubprocess\.`),                // no subprocess API usage
-	regexp.MustCompile(`(?i)\bos\.system\s*\(`),             // no os.system calls
-	regexp.MustCompile(`(?i)__import__\s*\(`),               // no dynamic imports
-	regexp.MustCompile(`(?i)\beval\s*\(`),                   // no eval
-	regexp.MustCompile(`(?i)\bexec\s*\(`),                   // no exec
-	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),        // no opening absolute paths (allow relative)
-	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),        // no raw socket connects (use urllib)
-	regexp.MustCompile(`(?i)rm\s+-rf`),                      // no recursive deletes
-	regexp.MustCompile(`(?i)/etc/passwd`),                   // no passwd access
-	regexp.MustCompile(`(?i)/root`),                         // no /root access
+	regexp.MustCompile(`(?i)\bimport\s+subprocess\b`),           // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bfrom\s+subprocess\s+import\b`),   // no spawning sub-processes
+	regexp.MustCompile(`(?i)\bsubprocess\.`),                    // no subprocess API usage
+	regexp.MustCompile(`(?i)\bos\.system\s*\(`),                 // no os.system calls
+	regexp.MustCompile(`(?i)\bos\.popen\s*\(`),                  // no os.popen calls
+	regexp.MustCompile(`(?i)\bos\.execv\s*\(`),                  // no os.execv process replacement
+	regexp.MustCompile(`(?i)\bos\.execve\s*\(`),                 // no os.execve process replacement
+	regexp.MustCompile(`(?i)\bos\.execvp\s*\(`),                 // no os.execvp process replacement
+	regexp.MustCompile(`(?i)\bos\.spawnl\s*\(`),                 // no os.spawn* calls
+	regexp.MustCompile(`(?i)\bimport\s+importlib\b`),            // no dynamic module loading
+	regexp.MustCompile(`(?i)\bfrom\s+importlib\s+import\b`),    // no dynamic module loading
+	regexp.MustCompile(`(?i)\bimportlib\.`),                     // no importlib API usage
+	regexp.MustCompile(`(?i)\bimport\s+ctypes\b`),               // no ctypes (native code execution)
+	regexp.MustCompile(`(?i)\bfrom\s+ctypes\s+import\b`),       // no ctypes (native code execution)
+	regexp.MustCompile(`(?i)\bctypes\.`),                        // no ctypes API usage
+	regexp.MustCompile(`(?i)\bimport\s+pty\b`),                  // no pty (pseudo-terminal / shell)
+	regexp.MustCompile(`(?i)\bfrom\s+pty\s+import\b`),          // no pty (pseudo-terminal / shell)
+	regexp.MustCompile(`(?i)\bpty\.spawn\s*\(`),                 // no pty.spawn shell invocation
+	regexp.MustCompile(`(?i)__import__\s*\(`),                   // no dynamic imports
+	regexp.MustCompile(`(?i)\beval\s*\(`),                       // no eval
+	regexp.MustCompile(`(?i)\bexec\s*\(`),                       // no exec
+	regexp.MustCompile(`(?i)\bopen\s*\(['"][/\\\\]`),            // no opening absolute paths (allow relative)
+	regexp.MustCompile(`(?i)\bsocket\.connect\s*\(`),            // no raw socket connects (use urllib)
+	regexp.MustCompile(`(?i)rm\s+-rf`),                          // no recursive deletes
+	regexp.MustCompile(`(?i)/etc/passwd`),                       // no passwd access
+	regexp.MustCompile(`(?i)/root`),                             // no /root access
 }
 
 func validateScript(code string) error {
