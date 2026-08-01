@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Exec-mode override — Docker socket access for sidecar exec shims.
+#
+# Apply this override on top of the base compose file ONLY when running in
+# exec mode (USE_HTTP_TOOL_SERVICES=false). In exec mode the backend shim
+# scripts (backend/scripts/shims/*) call `docker compose exec -T <svc> <tool>`
+# to invoke security tools inside their sidecar containers, which requires:
+#
+#   1. The Docker daemon socket mounted into the backend container.
+#   2. The compose file itself mounted so `docker compose exec` knows the
+#      project topology.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.exec-mode.yml up --build
+#
+# Security note: Mounting the Docker daemon socket is root-equivalent on the
+# host. This override must not be used in multi-tenant deployments. Prefer
+# HTTP mode (the default, USE_HTTP_TOOL_SERVICES=true) which requires neither
+# mount and is safe in shared environments.
+# ---------------------------------------------------------------------------
+
+services:
+  backend:
+    volumes:
+      # Docker daemon socket — required for `docker compose exec` shims.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Compose project file — required so exec shims know the service map.
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
+    environment:
+      # Tell docker compose (used by sidecar-exec shims) where to find the
+      # compose file and which project name to use when exec-ing into sidecars.
+      COMPOSE_FILE: /app/docker-compose.yml

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -60,8 +61,15 @@ func (c *captureServer) handler(response string) http.HandlerFunc {
 		}
 		userMessage, _ := messages[len(messages)-1].(map[string]any)
 		content, _ := userMessage["content"].(string)
+		// Some AI methods (AdaptTechniqueCommands, GenerateTool, PlanToolCall)
+		// emit the trusted JSON context followed by XML-delimited untrusted data.
+		// Extract only the leading JSON object for comparison.
+		jsonPart := content
+		if idx := strings.Index(content, "\n<"); idx != -1 {
+			jsonPart = content[:idx]
+		}
 		var payload map[string]any
-		if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		if err := json.Unmarshal([]byte(jsonPart), &payload); err != nil {
 			c.t.Fatalf("decode user payload: %v", err)
 		}
 		c.mu.Lock()

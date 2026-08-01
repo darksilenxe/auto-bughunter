@@ -21,9 +21,14 @@ services:
     environment:
       POSTGRES_DB: autobughunter
       POSTGRES_USER: auto
-      POSTGRES_PASSWORD: auto
+      # Require a strong password via the environment; no default is provided
+      # so docker compose fails fast if POSTGRES_PASSWORD is not set in .env.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
     ports:
-      - "5432:5432"
+      # Bind to loopback only — the backend reaches postgres over the internal
+      # compose network; this port is only needed for direct host-side DB
+      # client access (e.g. psql, pgAdmin) during development.
+      - "127.0.0.1:5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +41,9 @@ services:
   neo4j:
     image: neo4j:5.26.1
     environment:
-      NEO4J_AUTH: ${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-neo4jpass}
+      # Require strong credentials via the environment; no default password is
+      # provided so docker compose fails fast if NEO4J_PASSWORD is not set.
+      NEO4J_AUTH: ${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env (see .env.example)}
       # Keep the JVM + page cache comfortably below the Kali override's 1 GiB
       # memory cap; otherwise Neo4j can abort during JVM bootstrap with exit 3.
       # NOTE: Neo4j 5.x config keys are lowercase; the Docker image translates
@@ -46,8 +53,11 @@ services:
       NEO4J_server_memory_heap_max__size: 512m
       NEO4J_server_memory_pagecache_size: 256m
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      # Bind to loopback only — the backend reaches Neo4j over the internal
+      # compose network; these ports are only needed for direct host-side
+      # browser/Bolt access during development.
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     volumes:
       - neo4j_data:/data
     healthcheck:
@@ -382,25 +392,24 @@ services:
       - "8081:8081"
     # The backend can communicate with tool sidecars in two modes:
     #
-    # 1. HTTP mode (USE_HTTP_TOOL_SERVICES=true): Tools expose HTTP endpoints
-    #    (e.g., nuclei-service:8093). No Docker socket required. Secure and
-    #    production-ready.
+    # 1. HTTP mode (USE_HTTP_TOOL_SERVICES=true, default): Tools expose HTTP
+    #    endpoints (e.g., nuclei-service:8093). No Docker socket required.
+    #    Secure and production-ready. This is the default configuration.
     #
-    # 2. Exec mode (USE_HTTP_TOOL_SERVICES=false, default): Shim scripts call
+    # 2. Exec mode (USE_HTTP_TOOL_SERVICES=false): Shim scripts call
     #    `docker compose exec -T <svc> <tool>` using the Docker socket. Requires
-    #    docker-cli in backend image and socket mount below.
+    #    docker-cli in backend image and socket mount. To enable exec mode, apply
+    #    the docker-compose.exec-mode.yml override:
+    #
+    #      docker compose -f docker-compose.yml -f docker-compose.exec-mode.yml up
+    #
+    #    Security note (exec mode only): Docker socket access is root-equivalent
+    #    on the host. Acceptable for self-hosted scanner usage; not recommended
+    #    in multi-tenant deployments. HTTP mode eliminates this requirement.
     #
     # The backend remains the single orchestrator: it is the only service that
     # talks to tool sidecars. No sidecar talks to another sidecar directly.
-    #
-    # Security note (exec mode only): Docker socket access is root-equivalent on
-    # the host. Acceptable for self-hosted scanner usage; not recommended in
-    # multi-tenant deployments. HTTP mode eliminates this requirement entirely.
     volumes:
-      # Docker socket - ONLY needed when USE_HTTP_TOOL_SERVICES=false
-      # Comment out these two lines when using HTTP mode:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./docker-compose.yml:/app/docker-compose.yml:ro
       # Shared scratch dir used to hand wordlist files to the ffuf/gobuster
       # sidecars. Mounted at the same path inside both backend and the
       # consumer sidecars so `-w <path>` resolves identically on both
@@ -429,9 +438,6 @@ services:
       # CA bundle the backend trusts for sidecar HTTPS connections. Loaded
       # by backend/internal/sidecartls; falls back to plain HTTP when unset.
       SIDECAR_CA_BUNDLE: /etc/auto-bughunter/sidecar-ca/server.crt
-      # Tell docker compose (used by sidecar-exec shims) where to find the
-      # compose file and which project name to use when exec-ing into sidecars.
-      COMPOSE_FILE: /app/docker-compose.yml
       # Metasploit RPC — set MSF_RPC_URL and MSF_RPC_PASSWORD to enable live
       # Metasploit module execution. Leave MSF_RPC_URL empty to run only the
       # built-in native Go web exploit probes (no msfrpcd required).

@@ -55,3 +55,66 @@ func TestValidateScript_AllowsSafeStdlibScript(t *testing.T) {
 		t.Fatalf("expected safe script to pass validation, got %v", err)
 	}
 }
+
+func TestValidateScript_RejectsOsPopen(t *testing.T) {
+	cases := []string{
+		"import os\nos.popen('id').read()",
+		"result = os.popen('whoami')",
+	}
+	for _, code := range cases {
+		if err := validateScript(code); err == nil {
+			t.Fatalf("expected os.popen variant to be rejected: %q", code)
+		}
+	}
+}
+
+func TestValidateScript_RejectsOsExec(t *testing.T) {
+	cases := []string{
+		"import os\nos.execv('/bin/sh', ['/bin/sh'])",
+		"os.execve('/bin/sh', [], {})",
+		"os.execvp('bash', ['bash'])",
+	}
+	for _, code := range cases {
+		if err := validateScript(code); err == nil {
+			t.Fatalf("expected os.exec* variant to be rejected: %q", code)
+		}
+	}
+}
+
+func TestValidateScript_RejectsImportlib(t *testing.T) {
+	cases := []string{
+		"import importlib\nimportlib.import_module('os')",
+		"from importlib import import_module",
+		"m = importlib.util.spec_from_file_location('x','x.py')",
+	}
+	for _, code := range cases {
+		if err := validateScript(code); err == nil {
+			t.Fatalf("expected importlib variant to be rejected: %q", code)
+		}
+	}
+}
+
+func TestValidateScript_RejectsCtypes(t *testing.T) {
+	cases := []string{
+		"import ctypes\nctypes.CDLL('libc.so.6')",
+		"from ctypes import CDLL",
+		"ctypes.windll.kernel32.WinExec(b'cmd',1)",
+	}
+	for _, code := range cases {
+		if err := validateScript(code); err == nil {
+			t.Fatalf("expected ctypes variant to be rejected: %q", code)
+		}
+	}
+}
+
+func TestValidateScript_RejectsPtySpawn(t *testing.T) {
+	cases := []string{
+		"import pty\npty.spawn('/bin/sh')",
+		"from pty import spawn\nspawn('bash')",
+	}
+	for _, code := range cases {
+		if err := validateScript(code); err == nil {
+			t.Fatalf("expected pty.spawn variant to be rejected: %q", code)
+		}
+	}
+}
