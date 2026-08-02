@@ -12,8 +12,10 @@ import (
 )
 
 type ScanningAgent struct {
-	scanService *scanner.Service
-	enabled     bool
+	scanService  *scanner.Service
+	fpClassifier scanner.FPClassifierClient    // optional; nil disables AI FP correction
+	fpCalibrator scanner.ProbeCalibratorService // optional; nil disables end-of-scan calibration
+	enabled      bool
 }
 
 // scanningChecks lists the check performed by this agent. An AI advisor
@@ -27,6 +29,23 @@ func NewScanningAgent(scanService *scanner.Service, enabled bool) *ScanningAgent
 	return &ScanningAgent{
 		scanService: scanService,
 		enabled:     enabled,
+	}
+}
+
+// newScanningAgentWithFP creates a ScanningAgent with optional AI FP
+// classification and ML calibration dependencies. Called by Factory.SetAIClient
+// so the scanning pipeline benefits from AI FP correction when configured.
+func newScanningAgentWithFP(
+	scanService *scanner.Service,
+	fpClassifier scanner.FPClassifierClient,
+	fpCalibrator scanner.ProbeCalibratorService,
+	enabled bool,
+) *ScanningAgent {
+	return &ScanningAgent{
+		scanService:  scanService,
+		fpClassifier: fpClassifier,
+		fpCalibrator: fpCalibrator,
+		enabled:      enabled,
 	}
 }
 
@@ -54,6 +73,8 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Emit:          input.Emit,
 		ProbeRecorder: input.ProbeRecorder,
 		ScanID:        input.ScanID,
+		FPClassifier:  a.fpClassifier,
+		FPCalibrator:  a.fpCalibrator,
 	})
 	if err != nil {
 		if hasAuth(input.AuthProfile) {
@@ -65,6 +86,8 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 				Emit:          input.Emit,
 				ProbeRecorder: input.ProbeRecorder,
 				ScanID:        input.ScanID,
+				FPClassifier:  a.fpClassifier,
+				FPCalibrator:  a.fpCalibrator,
 			})
 			if fallbackErr == nil {
 				output.Findings = append(output.Findings, unauthFindings...)

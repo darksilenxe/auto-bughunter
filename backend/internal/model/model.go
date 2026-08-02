@@ -230,6 +230,14 @@ type ScanOptions struct {
 	UseAttackPathAgent     bool `json:"useAttackPathAgent,omitempty"`
 	UseFalsePositiveReview bool `json:"useFalsePositiveReview,omitempty"`
 	UseRemediationPlanner  bool `json:"useRemediationPlanner,omitempty"`
+	// UseAIFPCorrection enables per-scan AI-guided false-positive detection
+	// and probe auto-correction. When enabled, scanner.Run builds a per-scan
+	// FPSignalStore that tracks fired/suppressed counts per (probe,
+	// URL-pattern), applies a rule-based rate estimator, and—for borderline
+	// cases—calls the configured AI provider to decide whether a candidate
+	// finding is a false positive. Confirmed FP corrections are fed to the ML
+	// calibration pipeline at scan end to improve future accuracy.
+	UseAIFPCorrection bool `json:"useAIFpCorrection,omitempty"`
 	// SupplementalResourceURLs allows operators to fetch additional explicit
 	// HTTP(S) resources during a scan (for example, partner-hosted JS or docs)
 	// while still enforcing scan scope and outbound SSRF protections.
