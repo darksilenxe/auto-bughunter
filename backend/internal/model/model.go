@@ -299,6 +299,14 @@ type ScanOptions struct {
 	// technologies, and emits informational findings for potentially relevant
 	// newly published CVEs not already present in scan findings.
 	UseRecentCVEFeed bool `json:"useRecentCveFeed,omitempty"`
+	// UsePostScanValidation enables the post_scan_validator agent, which runs a
+	// two-pass re-evaluation after the deterministic scan completes:
+	//   Pass A (FP Re-Test): re-probes low-confidence findings to annotate them
+	//   as confirmed or not-confirmed, adjusting their confidence score.
+	//   Pass B (FN Gap Sweep): probes un-covered endpoints from the seed surface
+	//   with a lightweight category sweep to surface missed vulnerabilities.
+	// Defaults to false so existing scan behavior is unchanged.
+	UsePostScanValidation bool `json:"usePostScanValidation,omitempty"`
 	// UnsafeDynamicCommandFlags disables only per-tool command-flag allow-list
 	// checks for cmdbuilder-executed dynamic commands. Core protections remain:
 	// binary allow-list, blocked injection/path patterns, python sandboxing, and
