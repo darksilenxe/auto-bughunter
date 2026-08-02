@@ -203,7 +203,13 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 
 	// ── Newly agentic: analysis / post-processing agents ─────────────────
 	f.Register("scanning", func() Agent {
-		return advisor.Wrap(NewScanningAgent(scanService, true), scanningChecks)
+		// Pass the AI client and ML service so the scanning agent can enable
+		// AI-guided FP correction (UseAIFPCorrection scan option) without
+		// requiring a direct dependency between the scanner and ai/ml packages.
+		return advisor.Wrap(
+			newScanningAgentWithFP(scanService, c, f.mlService, true),
+			scanningChecks,
+		)
 	})
 	f.Register("advanced_coverage", func() Agent {
 		return advisor.Wrap(NewAdvancedCoverageAgent(scanService, true), advancedCoverageChecks)

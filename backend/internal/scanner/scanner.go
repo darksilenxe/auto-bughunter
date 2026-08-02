@@ -234,6 +234,15 @@ type RunInput struct {
 	ProbeRecorder ProbeRecorder
 	// ScanID is the parent scan job ID. Required when ProbeRecorder is set.
 	ScanID string
+	// FPClassifier, when non-nil, enables AI-guided false-positive
+	// classification for borderline findings when UseAIFPCorrection is set in
+	// Options. Satisfied by *ai.Client (declared as an interface to avoid a
+	// direct dependency on the ai package from the scanner package).
+	FPClassifier FPClassifierClient
+	// FPCalibrator, when non-nil, receives the confirmed FP-correction probe
+	// records at scan end so the ML model can learn from them. Satisfied by
+	// *ml.Service.
+	FPCalibrator ProbeCalibratorService
 }
 
 func NewService(cfg Config) *Service {
@@ -344,6 +353,15 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// Ensure a session exists for the lifetime of this scan.
 	if input.Session == nil {
 		input.Session = NewScanSessionWithTransport(s.proxyTransport)
+	}
+
+	// When UseAIFPCorrection is enabled, build a per-scan ProbeCorrection
+	// and inject it into the context so SubmitVerifiedFinding can apply
+	// FP correction to every candidate finding produced by this scan.
+	var fpCorrector *ProbeCorrection
+	if input.Options.UseAIFPCorrection {
+		fpCorrector = NewProbeCorrection(input.FPClassifier)
+		ctx = WithProbeCorrection(ctx, fpCorrector)
 	}
 
 	if input.Options.RequestDelayMillis > 0 {
@@ -633,6 +651,14 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// Persist probe records for the Probe Coverage and Findings probe-history
 	// UIs. Fire-and-forget; never blocks the caller.
 	s.saveProbeRecords(input.ProbeRecorder, input.ScanID, input.Target, findings)
+
+	// Feed confirmed FP-correction records to the ML calibration pipeline so
+	// the model learns from false positives identified during this scan.
+	if fpCorrector != nil && input.FPCalibrator != nil {
+		if corrected := fpCorrector.DrainCorrectedRecords(); len(corrected) > 0 {
+			input.FPCalibrator.CalibrateProbeSignals(ctx, corrected)
+		}
+	}
 
 	return findings, nil
 }

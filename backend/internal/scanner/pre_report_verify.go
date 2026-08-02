@@ -53,6 +53,10 @@ type VerificationOutcome struct {
 	// EmittedFinding is the (possibly modified) finding that was submitted
 	// to the aggregator, or a zero value if Suppressed is true.
 	EmittedFinding model.Finding
+	// CorrectionHint is a short human-readable explanation provided by the
+	// AI false-positive classifier when a finding is suppressed via
+	// UseAIFPCorrection. Empty when the standard proof-policy path ran.
+	CorrectionHint string
 }
 
 // EvidenceSignal enumerates the categories of evidence a probe may attach
@@ -494,11 +498,26 @@ func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) Verificati
 		outcome.EmittedFinding = cand.Finding
 	}
 
-	// 9) Metrics.
+	// 9) AI-guided FP correction (when UseAIFPCorrection is enabled and a
+	// ProbeCorrection is present in the request context). Always records the
+	// outcome signal into the per-scan FP store; may additionally suppress
+	// the finding when the rule-based estimator or AI classifier identifies
+	// it as a false positive.
 	probeName := cand.ProbeName
 	if probeName == "" {
 		probeName = "unknown"
 	}
+	if pc := probeCorrectionFromCtx(ctx); pc != nil {
+		if corrected := pc.Evaluate(ctx, cand, probeName, &outcome); corrected {
+			// Stamp the (now-suppressed) finding with correction metadata for
+			// audit purposes. These fields appear only on the finding snapshot
+			// stored inside ProbeCorrection; EmittedFinding is already zeroed.
+			cand.Finding.EvidenceFields["fpCorrection.reason"] = outcome.Reason
+			cand.Finding.EvidenceFields["fpCorrection.hint"] = outcome.CorrectionHint
+		}
+	}
+
+	// 10) Metrics.
 	globalVerificationCounters.record(probeName, canonicalCategoryLower(cand.Finding.Category), outcome)
 
 	return outcome

@@ -134,3 +134,36 @@ type ProbeResult struct {
 	// Finding is non-nil when Confirmed is true.
 	Finding *Finding `json:"finding,omitempty"`
 }
+
+// FPClassificationInput provides the context passed to the AI false-positive
+// classifier for borderline findings.
+type FPClassificationInput struct {
+	// ProbeName is the scanner probe that produced the candidate finding.
+	ProbeName string `json:"probeName"`
+	// Category is the vulnerability class (e.g. "xss", "sqli").
+	Category string `json:"category"`
+	// Title is the candidate finding title.
+	Title string `json:"title"`
+	// Evidence is the candidate finding's evidence string.
+	Evidence string `json:"evidence"`
+	// FPRate is the observed suppressed/fired ratio for this probe+URL-pattern
+	// within the current scan. Value is in [0, 1].
+	FPRate float64 `json:"fpRate"`
+	// FPSamples is the number of probe firings that produced the FPRate estimate.
+	FPSamples int `json:"fpSamples"`
+	// Signals lists the EvidenceSignal names observed by the probe.
+	Signals []string `json:"signals,omitempty"`
+	// PolicyReason is the proof-policy verdict reason from SubmitVerifiedFinding.
+	PolicyReason string `json:"policyReason,omitempty"`
+}
+
+// FPClassification is the AI's verdict on whether a candidate finding is a
+// false positive.
+type FPClassification struct {
+	// IsFalsePositive is true when the AI assesses the finding as a false positive.
+	IsFalsePositive bool `json:"isFalsePositive"`
+	// Confidence is the AI's confidence in its verdict in [0, 1].
+	Confidence float64 `json:"confidence"`
+	// CorrectionHint is a short human-readable explanation of the verdict.
+	CorrectionHint string `json:"correctionHint,omitempty"`
+}
