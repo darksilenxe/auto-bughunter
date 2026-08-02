@@ -106,6 +106,7 @@ export default function Dashboard() {
   const [useFalsePositiveReview, setUseFalsePositiveReview] = useState(true);
   const [useRemediationPlanner, setUseRemediationPlanner] = useState(false);
   const [useRecentCVEFeed, setUseRecentCVEFeed] = useState(true);
+  const [usePostScanValidation, setUsePostScanValidation] = useState(false);
   const [useAIToolCalling, setUseAIToolCalling] = useState(false);
   const [workspaceId, setWorkspaceId] = useState("default");
   const [policyPack, setPolicyPack] = useState("bugbounty");
@@ -199,7 +200,7 @@ export default function Dashboard() {
       basicAuthUsername, basicAuthPassword,
       includeHosts, excludeHosts, excludePaths, programRules,
       useNuclei, useZap, useXSSMap, useUISimulation, useMLTriage, useAttackPath,
-      useFalsePositiveReview, useRemediationPlanner, useRecentCVEFeed, useAIToolCalling,
+      useFalsePositiveReview, useRemediationPlanner, useRecentCVEFeed, usePostScanValidation, useAIToolCalling,
       aggressiveExploitation, humanPaced, strictReporting, minReportConfidence,
       loginSteps, impactGoals,
     };
@@ -232,6 +233,7 @@ export default function Dashboard() {
     if (cfg.useFalsePositiveReview !== undefined) setUseFalsePositiveReview(cfg.useFalsePositiveReview);
     if (cfg.useRemediationPlanner !== undefined) setUseRemediationPlanner(cfg.useRemediationPlanner);
     if (cfg.useRecentCVEFeed !== undefined) setUseRecentCVEFeed(cfg.useRecentCVEFeed);
+    if (cfg.usePostScanValidation !== undefined) setUsePostScanValidation(cfg.usePostScanValidation);
     if (cfg.useAIToolCalling !== undefined) setUseAIToolCalling(cfg.useAIToolCalling);
     if (cfg.aggressiveExploitation !== undefined) setAggressiveExploitation(cfg.aggressiveExploitation);
     if (cfg.humanPaced !== undefined) setHumanPaced(cfg.humanPaced);
@@ -355,6 +357,7 @@ export default function Dashboard() {
         useFalsePositiveReview,
         useRemediationPlanner,
         useRecentCveFeed: useRecentCVEFeed || undefined,
+        usePostScanValidation: usePostScanValidation || undefined,
         useAIToolCalling,
         aggressiveExploitation,
         humanPaced: humanPaced || undefined,
@@ -679,6 +682,7 @@ export default function Dashboard() {
                 <label className="check"><input type="checkbox" checked={useFalsePositiveReview} onChange={(e) => setUseFalsePositiveReview(e.target.checked)} />False-positive review</label>
                 <label className="check"><input type="checkbox" checked={useRemediationPlanner} onChange={(e) => setUseRemediationPlanner(e.target.checked)} />Remediation planner</label>
                 <label className="check"><input type="checkbox" checked={useRecentCVEFeed} onChange={(e) => setUseRecentCVEFeed(e.target.checked)} />Recent/undiscovered CVE discovery</label>
+                <label className="check"><input type="checkbox" checked={usePostScanValidation} onChange={(e) => setUsePostScanValidation(e.target.checked)} />Post-scan re-evaluation (FP re-test + FN gap sweep)</label>
                 <label className="check"><input type="checkbox" checked={useAIToolCalling} onChange={(e) => setUseAIToolCalling(e.target.checked)} />AI tool-calling (build &amp; run custom probes)</label>
                 <label className="check"><input type="checkbox" checked={aggressiveExploitation} onChange={(e) => setAggressiveExploitation(e.target.checked)} />Aggressive exploitation</label>
                 <label className="check"><input type="checkbox" checked={humanPaced} onChange={(e) => setHumanPaced(e.target.checked)} />Human-paced (1–2 min between tools)</label>

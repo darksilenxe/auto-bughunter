@@ -110,6 +110,13 @@ func NewFactory(scanService *scanner.Service, mlService *ml.Service) *Factory {
 	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(nil, nil, true) })
 	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(nil, nil, true) })
 
+	// PostScanValidatorAgent: two-pass post-scan re-evaluation (FP re-test +
+	// FN gap sweep). Registered with nil AI client by default; SetAIClient
+	// upgrades Pass B to include AI-guided hypothesis generation.
+	f.Register("post_scan_validator", func() Agent {
+		return NewPostScanValidatorAgent(scanService, nil, true)
+	})
+
 	return f
 }
 
@@ -151,6 +158,12 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	// provider routing in ai.Client (planningComplete).
 	f.Register("openhack_expert", func() Agent { return NewOpenHackExpertAgent(c, nil, true) })
 	f.Register("openhack_triage", func() Agent { return NewOpenHackTriageAgent(c, nil, true) })
+
+	// PostScanValidatorAgent: upgrade Pass B to AI-guided hypothesis
+	// generation now that an AI client is available.
+	f.Register("post_scan_validator", func() Agent {
+		return NewPostScanValidatorAgent(scanService, c, true)
+	})
 
 	// Wrap all static/deterministic agents with an AgentAdvisor so that every
 	// agent in the pipeline benefits from AI-guided check ordering, pre-run
@@ -244,6 +257,11 @@ func (f *Factory) SetAIClient(c *ai.Client, scanService *scanner.Service) {
 	})
 	f.Register("remediation_planner", func() Agent {
 		return advisor.Wrap(NewRemediationPlannerAgent(f.mlService, true), remediationPlannerChecks)
+	})
+
+	// ── Newly agentic: post-scan validation ──────────────────────────────
+	f.Register("post_scan_validator", func() Agent {
+		return advisor.Wrap(NewPostScanValidatorAgent(scanService, c, true), postScanValidatorChecks)
 	})
 }
 
