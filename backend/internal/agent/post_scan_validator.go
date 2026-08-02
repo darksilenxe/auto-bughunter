@@ -42,6 +42,16 @@ const maxFNSweepEndpoints = 20
 // finding's numerical confidence qualifies it for Pass A re-testing.
 const fpRetestConfidenceThreshold = 0.65
 
+// verifyHypothesisFn is the signature of the oracle used in both passes.
+// It is a field on PostScanValidatorAgent so tests can inject a mock without
+// needing a real scan service or a network-accessible server.
+type verifyHypothesisFn func(
+	ctx context.Context,
+	endpoint, paramName, payloadHint, category string,
+	auth model.ScanAuthProfile,
+	options model.ScanOptions,
+) *model.Finding
+
 // PostScanValidatorAgent runs a two-pass post-scan re-evaluation after the
 // deterministic scan completes:
 //
@@ -60,6 +70,9 @@ type PostScanValidatorAgent struct {
 	aiClient    *ai.Client
 	scanService *scanner.Service
 	enabled     bool
+	// verifyFn is the oracle called by both passes.  It defaults to
+	// scanService.RunHypothesisVerification and can be replaced in tests.
+	verifyFn verifyHypothesisFn
 }
 
 // NewPostScanValidatorAgent constructs a PostScanValidatorAgent.
@@ -67,11 +80,15 @@ type PostScanValidatorAgent struct {
 // scanService is absent.  AI-guided hypothesis generation in Pass B is skipped
 // when aiClient is nil.
 func NewPostScanValidatorAgent(scanService *scanner.Service, aiClient *ai.Client, enabled bool) *PostScanValidatorAgent {
-	return &PostScanValidatorAgent{
+	a := &PostScanValidatorAgent{
 		aiClient:    aiClient,
 		scanService: scanService,
 		enabled:     enabled,
 	}
+	if scanService != nil {
+		a.verifyFn = scanService.RunHypothesisVerification
+	}
+	return a
 }
 
 func (a *PostScanValidatorAgent) Name() string  { return "post_scan_validator" }
@@ -91,7 +108,7 @@ func (a *PostScanValidatorAgent) Run(ctx context.Context, input AgentInput) (Age
 		output.DebugNotes = "PostScanValidatorAgent: skipped — UsePostScanValidation is false"
 		return output, nil
 	}
-	if a.scanService == nil {
+	if a.scanService == nil && a.verifyFn == nil {
 		output.DebugNotes = "PostScanValidatorAgent: skipped — scanService not configured"
 		return output, nil
 	}
@@ -203,7 +220,7 @@ func (a *PostScanValidatorAgent) runPassA(ctx context.Context, input AgentInput)
 		paramName := strings.TrimSpace(f.AffectedParameter)
 		category := strings.ToLower(strings.TrimSpace(f.Category))
 
-		confirmed := a.scanService.RunHypothesisVerification(
+		confirmed := a.verifyFn(
 			ctx, ep, paramName, "", category,
 			input.AuthProfile, input.Options,
 		)
@@ -302,7 +319,7 @@ func (a *PostScanValidatorAgent) runPassB(ctx context.Context, input AgentInput)
 				return found
 			default:
 			}
-			f := a.scanService.RunHypothesisVerification(
+			f := a.verifyFn(
 				ctx, ep, "", "", cat, input.AuthProfile, input.Options,
 			)
 			if f == nil {
@@ -331,7 +348,7 @@ func (a *PostScanValidatorAgent) runPassB(ctx context.Context, input AgentInput)
 		if ep == "" || !scope.IsURLInScope(ep, input.Scope) {
 			continue
 		}
-		f := a.scanService.RunHypothesisVerification(
+		f := a.verifyFn(
 			ctx, ep, h.ParamName, h.PayloadHint, h.Category,
 			input.AuthProfile, input.Options,
 		)

@@ -12,10 +12,6 @@ import (
 	"auto-bughunter/backend/internal/scanner"
 )
 
-// xssTestMarker is the literal payload that scanner.verifyXSSHypothesis looks
-// for in the response body.  Tests that need confirmation must echo it back.
-const xssTestMarker = `"><svg/onload=abh_xss_7f9e2()><!--abh_xss_7f9e2-->`
-
 // newTestScanService returns a scanner.Service suitable for unit tests.
 // No external binaries or sidecars are required because only
 // RunHypothesisVerification is exercised.
@@ -158,29 +154,27 @@ func TestPostScanValidatorAgent_PassA_NotConfirmed(t *testing.T) {
 // confirms the finding, its retestResult is set to "confirmed" and confidence
 // is raised to at least 0.80.
 func TestPostScanValidatorAgent_PassA_Confirmed(t *testing.T) {
-	// Test server echoes the q parameter back verbatim so the XSS oracle
-	// detects the marker and returns a finding.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query().Get("q")
-		fmt.Fprintf(w, "<html>%s</html>", q)
-	}))
-	defer srv.Close()
-
+	// Inject a verifyFn that always confirms (returns a synthetic finding).
+	// This sidesteps safety.ValidateOutboundURL which blocks loopback IPs used
+	// by httptest.Server; the agent logic under test is the annotation step.
 	svc := newTestScanService()
 	a := NewPostScanValidatorAgent(svc, nil, true)
+	a.verifyFn = func(_ context.Context, endpoint, _, _, _ string, _ model.ScanAuthProfile, _ model.ScanOptions) *model.Finding {
+		return &model.Finding{ID: "verify-confirmed", Category: "xss", AffectedURL: endpoint}
+	}
 
 	const origConf = 0.50
 	out, err := a.Run(context.Background(), AgentInput{
-		Target: srv.URL,
+		Target: "http://example.com",
 		Options: model.ScanOptions{
 			UsePostScanValidation: true,
 		},
 		AllFindings: []model.Finding{
 			{
-				ID:               "f1",
-				Category:         "xss",
-				Confidence:       origConf,
-				AffectedURL:      srv.URL,
+				ID:                "f1",
+				Category:          "xss",
+				Confidence:        origConf,
+				AffectedURL:       "http://example.com/search",
 				AffectedParameter: "q",
 			},
 		},
@@ -206,22 +200,23 @@ func TestPostScanValidatorAgent_PassA_Confirmed(t *testing.T) {
 
 // TestPostScanValidatorAgent_PassB_UnprobedEndpoint verifies that Pass B
 // emits at least one finding when an un-probed endpoint is in
-// SeedRuntimeEndpoints and the server echoes back the XSS marker.
+// SeedRuntimeEndpoints and the verifyFn confirms the probe.
 func TestPostScanValidatorAgent_PassB_UnprobedEndpoint(t *testing.T) {
-	// Server echoes back query params → XSS oracle confirms.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query().Get("q")
-		fmt.Fprintf(w, "<html>%s</html>", q)
-	}))
-	defer srv.Close()
-
+	// Inject a verifyFn that confirms the "cors" category so Pass B emits a
+	// finding.  This sidesteps safety.ValidateOutboundURL's loopback block.
 	svc := newTestScanService()
 	a := NewPostScanValidatorAgent(svc, nil, true)
+	a.verifyFn = func(_ context.Context, endpoint, _, _, category string, _ model.ScanAuthProfile, _ model.ScanOptions) *model.Finding {
+		if category == "cors" {
+			return &model.Finding{ID: "sweep-cors", Category: "cors", AffectedURL: endpoint}
+		}
+		return nil
+	}
 
-	unprobedEP := srv.URL + "/api/v1/search"
+	unprobedEP := "http://example.com/api/v1/search"
 
 	out, err := a.Run(context.Background(), AgentInput{
-		Target: srv.URL,
+		Target: "http://example.com",
 		Options: model.ScanOptions{
 			UsePostScanValidation: true,
 			SeedRuntimeEndpoints:  []string{unprobedEP},
@@ -233,7 +228,7 @@ func TestPostScanValidatorAgent_PassB_UnprobedEndpoint(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// Pass B should have found at least one new finding.
+	// Pass B should have found at least one new finding for the endpoint.
 	fnNew := 0
 	for _, f := range out.Findings {
 		if f.EvidenceFields["sweepEndpoint"] == unprobedEP {
