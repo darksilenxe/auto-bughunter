@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/ai"
 	"auto-bughunter/backend/internal/memory"
@@ -253,8 +254,10 @@ func (a *ReasoningIterationAgent) Run(ctx context.Context, input AgentInput) (Ag
 			for _, f := range roundFindings {
 				f := f
 				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
 					emb := memory.EncodeMulti(input.Target, f.Category, f.Title)
-					_ = store.UpsertFinding(context.Background(), memory.FindingMemory{
+					_ = store.UpsertFinding(ctx, memory.FindingMemory{
 						ID:        f.ID,
 						Target:    input.Target,
 						ScanID:    input.ScanID,

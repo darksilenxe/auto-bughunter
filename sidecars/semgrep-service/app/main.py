@@ -28,8 +28,16 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger("semgrep-service")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
-# Optional shared-secret auth between the backend and this sidecar
+# Required shared-secret auth between the backend and this sidecar.
+# Refuse to start if the token is not configured — an empty token would
+# allow any unauthenticated caller to scan arbitrary code snippets.
 SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
+if not SIDECAR_AUTH_TOKEN:
+    logger.critical(
+        "SIDECAR_AUTH_TOKEN is not set or empty. "
+        "Refusing to start to prevent unauthenticated access."
+    )
+    raise SystemExit(1)
 _AUTH_EXEMPT_PATHS = {"/health"}
 
 # Maximum execution timeout (seconds)
@@ -76,7 +84,7 @@ app = FastAPI(title="Semgrep SAST HTTP Wrapper", version="1.0.0")
 
 @app.middleware("http")
 async def _require_sidecar_token(request: Request, call_next):
-    if SIDECAR_AUTH_TOKEN and request.url.path not in _AUTH_EXEMPT_PATHS:
+    if request.url.path not in _AUTH_EXEMPT_PATHS:
         provided = _extract_bearer_token(request)
         if not provided or not hmac.compare_digest(provided, SIDECAR_AUTH_TOKEN):
             return JSONResponse(

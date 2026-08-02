@@ -93,6 +93,7 @@ type Server struct {
 	defaultDailyProbeLimit     int
 	cancelMu                   sync.Mutex
 	cancelFuncs                map[string]context.CancelFunc
+	schedulerCancel            context.CancelFunc
 	proxyBrowseTokenMu         sync.Mutex
 	proxyBrowseTokens          map[string]proxyBrowseTokenRecord
 }
@@ -430,7 +431,9 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		scanService.SetProxyStore(proxyStore)
 	}
 	scanService.SetPassiveScanStore(passiveStore)
-	go s.runCampaignScheduler()
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	s.schedulerCancel = schedulerCancel
+	go s.runCampaignScheduler(schedulerCtx)
 	return s
 }
 

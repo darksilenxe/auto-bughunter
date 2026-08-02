@@ -19,15 +19,17 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import logging
 import os
 import random
 import re
+import socket
 import time
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from playwright.async_api import (
     BrowserContext,
@@ -41,8 +43,16 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger("ui-simulation-service")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
-# Optional shared-secret auth between the backend and this sidecar
+# Required shared-secret auth between the backend and this sidecar.
+# Refuse to start if the token is not configured — an empty token would
+# allow any unauthenticated caller to drive headless Chromium at arbitrary URLs.
 SIDECAR_AUTH_TOKEN = os.getenv("SIDECAR_AUTH_TOKEN", "").strip()
+if not SIDECAR_AUTH_TOKEN:
+    logger.critical(
+        "SIDECAR_AUTH_TOKEN is not set or empty. "
+        "Refusing to start to prevent unauthenticated access."
+    )
+    raise SystemExit(1)
 _AUTH_EXEMPT_PATHS = {"/health"}
 
 # Maximum per-session execution time (seconds)
@@ -97,12 +107,86 @@ def _extract_bearer_token(request: Request) -> str:
     return parts[1].strip()
 
 
+# ---------------------------------------------------------------------------
+# SSRF target validation
+# ---------------------------------------------------------------------------
+
+# Networks that must never be reachable from a scan-triggered browser session.
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local / cloud metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),     # Shared Address Space (RFC 6598)
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validate_target_url(target: str) -> None:
+    """Raise HTTPException(400) if target is not a safe, public-internet URL.
+
+    Checks performed:
+    - Scheme must be http or https.
+    - Hostname must be present.
+    - If the hostname is a literal IP address, it must not fall within any
+      private, loopback, link-local, or reserved network.
+    - DNS resolution is attempted; all resolved addresses are checked against
+      the blocked networks to prevent DNS rebinding / SSRF via hostname.
+    """
+    try:
+        parsed = urlparse(target)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid target URL: {exc}") from exc
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Target scheme must be http or https, got: {parsed.scheme!r}",
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Target URL has no hostname")
+
+    # Collect IP addresses to check: literal IP + DNS-resolved addresses.
+    addresses_to_check: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        addresses_to_check.append(addr)
+    except ValueError:
+        # Not a literal IP — resolve via DNS.
+        try:
+            resolved = socket.getaddrinfo(hostname, None)
+            for family, _type, _proto, _canonname, sockaddr in resolved:
+                try:
+                    addresses_to_check.append(ipaddress.ip_address(sockaddr[0]))
+                except ValueError:
+                    pass
+        except OSError:
+            # DNS resolution failure is treated as safe (the browser will also fail).
+            return
+
+    for addr in addresses_to_check:
+        for net in _BLOCKED_NETWORKS:
+            if addr in net:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Target resolves to a disallowed network address ({addr}); "
+                           "SSRF to internal/private networks is not permitted.",
+                )
+
+
 app = FastAPI(title="UI Simulation Service", version="1.0.0")
 
 
 @app.middleware("http")
 async def _require_sidecar_token(request: Request, call_next):
-    if SIDECAR_AUTH_TOKEN and request.url.path not in _AUTH_EXEMPT_PATHS:
+    if request.url.path not in _AUTH_EXEMPT_PATHS:
         provided = _extract_bearer_token(request)
         if not provided or not hmac.compare_digest(provided, SIDECAR_AUTH_TOKEN):
             return JSONResponse(
@@ -194,6 +278,7 @@ async def simulate(req: SimulateRequest) -> SimulateResponse:
     human-like manner: navigate pages, click interactive elements, fill and
     submit forms, scroll content, and collect all network endpoints seen.
     """
+    _validate_target_url(req.target)
     logger.info("ui-simulation start target=%s max_pages=%d timeout=%ds",
                 req.target, req.max_pages, req.timeout)
     result = await _run_simulation(req)

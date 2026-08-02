@@ -39,12 +39,16 @@ type ProbeRecorder interface {
 // recordProbeAsync persists a probe result in a background goroutine so that
 // storage latency never blocks the scan loop. Errors are silently discarded
 // because probe records are best-effort supplemental training data.
+// A 30-second timeout is used so that a hung DB call does not leak the goroutine
+// indefinitely when the parent scan is cancelled.
 func recordProbeAsync(recorder ProbeRecorder, scanID string, pr model.ProbeResult) {
 	if recorder == nil || strings.TrimSpace(scanID) == "" {
 		return
 	}
 	go func() {
-		_ = recorder.SaveProbeRecord(context.Background(), scanID, pr)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = recorder.SaveProbeRecord(ctx, scanID, pr)
 	}()
 }
 
