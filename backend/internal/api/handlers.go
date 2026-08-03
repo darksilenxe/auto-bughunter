@@ -3769,19 +3769,23 @@ func enrichFindings(findings []model.Finding) []model.Finding {
 }
 
 // shadowPreReportVerify runs each finding through the shared pre-report
-// verifier without modifying the finding. It derives evidence signals from
-// the finding's existing evidence fields so per-probe metrics accumulate
-// even for probes that have not yet been migrated to author VerifyCandidate
-// directly.
+// verifier so per-probe metrics accumulate even for probes that have not yet
+// been migrated to author VerifyCandidate directly. The emitted finding is not
+// re-ranked/suppressed by this pass, but verifier-stamp fields are backfilled
+// when absent so Phase 3 evidence records can carry verifiedBy metadata.
 func shadowPreReportVerify(findings []model.Finding) {
-	for _, f := range findings {
+	for i := range findings {
+		f := findings[i]
 		signals := deriveShadowSignals(f)
-		probe := f.EvidenceFields["probeName"]
+		probe := strings.TrimSpace(f.EvidenceFields["oracleName"])
+		if probe == "" {
+			probe = strings.TrimSpace(f.EvidenceFields["probeName"])
+		}
 		if strings.TrimSpace(probe) == "" {
 			probe = "shadow:" + strings.ToLower(strings.TrimSpace(f.Category))
 		}
-		// Copy so the verifier's in-place mutation of evidence fields does
-		// not touch the emitted finding.
+		// Copy so the verifier's full mutation does not touch the emitted
+		// finding; we only selectively backfill verifier-stamp fields below.
 		copyF := f
 		if copyF.EvidenceFields != nil {
 			ef := make(map[string]string, len(copyF.EvidenceFields))
@@ -3796,6 +3800,19 @@ func shadowPreReportVerify(findings []model.Finding) {
 			AllowNoReplayEmission: true,
 			ProbeName:             probe,
 		})
+		if findings[i].EvidenceFields == nil {
+			findings[i].EvidenceFields = map[string]string{}
+		}
+		if findings[i].EvidenceFields["preReport.verifiedBy"] == "" {
+			if stamp := strings.TrimSpace(copyF.EvidenceFields["preReport.verifiedBy"]); stamp != "" {
+				findings[i].EvidenceFields["preReport.verifiedBy"] = stamp
+			}
+		}
+		if findings[i].EvidenceFields["verifiedBy"] == "" {
+			if stamp := strings.TrimSpace(copyF.EvidenceFields["verifiedBy"]); stamp != "" {
+				findings[i].EvidenceFields["verifiedBy"] = stamp
+			}
+		}
 	}
 }
 

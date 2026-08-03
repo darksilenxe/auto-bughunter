@@ -57,5 +57,33 @@ func TestEnrichFindingsShadowPreReportPopulatesMetrics(t *testing.T) {
 		if _, ok := f.EvidenceFields["preReport.verified"]; ok {
 			t.Errorf("shadow verifier must not mutate emitted finding %q", f.ID)
 		}
+		if f.EvidenceFields["preReport.verifiedBy"] == "" || f.EvidenceFields["verifiedBy"] == "" {
+			t.Errorf("expected verifier stamp fields to be backfilled for %q", f.ID)
+		}
+	}
+}
+
+func TestEnrichFindingsShadowPreReportUsesOracleNameForStamp(t *testing.T) {
+	in := []model.Finding{
+		{
+			ID:       "fp-1",
+			Category: "input-validation",
+			Title:    "oracle-backed finding",
+			Severity: model.Severity("High"),
+			EvidenceFields: map[string]string{
+				"oracleName": "dom_xss_probe",
+			},
+		},
+	}
+
+	out := enrichFindings(in)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(out))
+	}
+	if got := out[0].EvidenceFields["preReport.verifiedBy"]; got != "dom_xss_probe@v1" {
+		t.Fatalf("expected preReport.verifiedBy to use oracleName, got %q", got)
+	}
+	if got := out[0].EvidenceFields["verifiedBy"]; got != "dom_xss_probe@v1" {
+		t.Fatalf("expected verifiedBy to use oracleName, got %q", got)
 	}
 }

@@ -41,8 +41,10 @@ audit — every applicable probe file now emits a Phase 3-compliant
 EvidenceRecord (✅) or is marked not-applicable (➖). The first 20 table
 rows (all ✅ schema probes through `dangling_markup.go` plus `deserialization_probe.go`
 and `file_upload_probe.go`) have been stamped on 2026-08-03: `stamp` column
-updated to ✅ for all 17 applicable rows in the first 20. Remaining rows
-still carry ⚠️ in the `stamp` column as follow-up work.
+updated to ✅ for all 17 applicable rows in the first 20. The next 20
+applicable rows (`dom_xss_probe.go` through `xssi_jsonp_probe.go`) were
+stamped on 2026-08-03 via shadow pre-report verifier stamp propagation using
+`oracleName` → `verifiedBy`.
 
 | Probe file | schema | stamp | Notes |
 | --- | :---: | :---: | --- |
@@ -68,30 +70,30 @@ still carry ⚠️ in the `stamp` column as follow-up work.
 | `dangling_markup.go` | ✅ | ✅ | Migrated in this PR as the Phase 3 reference. |
 | `deserialization_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=deserialization` added. |
 | `dns_san_probe.go` | ➖ | ➖ | Certificate metadata. |
-| `dom_xss_probe.go` | ✅ | ⚠️ | Migrated: `payloadClass=dom-xss` added. |
+| `dom_xss_probe.go` | ✅ | ✅ | Migrated: `payloadClass=dom-xss` added. |
 | `file_upload_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=upload-bypass` added. |
-| `formula_injection.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
-| `http_methods_probe.go` | ✅ | ⚠️ | Migrated: `method` added from allowed/overridden verb set. |
-| `jwt_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=jwt_probe` added. |
-| `jwt_advanced_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=jwt_advanced_probe` added via `jwtAdvancedFinding`. |
-| `login_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=login_probe` added. |
-| `magic_link_invite_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=token`, `oracleName=magic_link_invite_probe` added. |
-| `mfa_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=mfa_probe` added. |
-| `oauth_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=redirect_uri`\|`state`\|`code_challenge`, `payloadClass`, `oracleName=oauth_probe` added. |
-| `oauth_session_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=oauth_session_probe` added. |
-| `password_reset_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=token`, `oracleName=password_reset_probe` added. |
+| `formula_injection.go` | ✅ | ✅ | Migrated in this PR as the Phase 3 reference. |
+| `http_methods_probe.go` | ✅ | ✅ | Migrated: `method` added from allowed/overridden verb set. |
+| `jwt_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=jwt_probe` added. |
+| `jwt_advanced_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=jwt_advanced_probe` added via `jwtAdvancedFinding`. |
+| `login_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=login_probe` added. |
+| `magic_link_invite_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param=token`, `oracleName=magic_link_invite_probe` added. |
+| `mfa_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=mfa_probe` added. |
+| `oauth_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param=redirect_uri`\|`state`\|`code_challenge`, `payloadClass`, `oracleName=oauth_probe` added. |
+| `oauth_session_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=oauth_session_probe` added. |
+| `password_reset_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param=token`, `oracleName=password_reset_probe` added. |
 | `postmessage_probe.go` | ➖ | ➖ | Browser observation. |
-| `reverse_tabnabbing_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `responseShape=html`, `oracleName=reverse_tabnabbing_probe` added. |
-| `saml_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=SAMLResponse`, `oracleName=saml_probe` added. |
-| `security_headers_probe.go` | ✅ | ⚠️ | Migrated: `method=GET`, `url`, `oracleName=security_headers_probe` added. |
-| `session_lifecycle_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=session_lifecycle_probe` added. |
-| `smtp_injection_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param`, `payloadClass=smtp-crlf`, `oracleName=smtp_injection_probe` added. |
-| `ssi_injection_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `payloadClass=ssi-injection`, `oracleName=ssi_injection_probe` added (had `param` already). |
+| `reverse_tabnabbing_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `responseShape=html`, `oracleName=reverse_tabnabbing_probe` added. |
+| `saml_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param=SAMLResponse`, `oracleName=saml_probe` added. |
+| `security_headers_probe.go` | ✅ | ✅ | Migrated: `method=GET`, `url`, `oracleName=security_headers_probe` added. |
+| `session_lifecycle_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=session_lifecycle_probe` added. |
+| `smtp_injection_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param`, `payloadClass=smtp-crlf`, `oracleName=smtp_injection_probe` added. |
+| `ssi_injection_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `payloadClass=ssi-injection`, `oracleName=ssi_injection_probe` added (had `param` already). |
 | `tls_config_probe.go` | ➖ | ➖ | Transport metadata. |
 | `ui_simulation_probe.go` | ➖ | ➖ | Browser-only. |
-| `verbose_error_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param`, `responseShape` (already present), `oracleName=verbose_error_probe` added. |
-| `websocket_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=websocket_probe` added. |
-| `xssi_jsonp_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `param=callback`, `oracleName=xssi_jsonp_probe` added. |
+| `verbose_error_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param`, `responseShape` (already present), `oracleName=verbose_error_probe` added. |
+| `websocket_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `oracleName=websocket_probe` added. |
+| `xssi_jsonp_probe.go` | ✅ | ✅ | Migrated: `method`, `url`, `param=callback`, `oracleName=xssi_jsonp_probe` added. |
 
 ## Reference migration
 
