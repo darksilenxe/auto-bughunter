@@ -124,8 +124,14 @@ func TestOAuthProbe_StateAndPKCEAcceptedWithValidAndRejectedControls(t *testing.
 		switch f.ID {
 		case "oauth-csrf-no-state":
 			sawState = true
+			if f.EvidenceFields["differentialConfirmed"] != "true" || f.EvidenceFields["controlAcceptedMatched"] != "true" {
+				t.Fatalf("expected differential confirmation on state finding, got %+v", f.EvidenceFields)
+			}
 		case "oauth-pkce-downgrade":
 			sawPKCE = true
+			if f.EvidenceFields["differentialConfirmed"] != "true" || f.EvidenceFields["validControlMatched"] != "true" {
+				t.Fatalf("expected differential confirmation on PKCE finding, got %+v", f.EvidenceFields)
+			}
 		}
 	}
 	if !sawState || !sawPKCE {

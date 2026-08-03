@@ -31,12 +31,33 @@ var fpRetestEvidenceTiers = map[string]bool{
 }
 
 // fnSweepCategories are the lightweight probe categories used in Pass B.
-// They are deliberately broad but fast — the deterministic oracle only emits
-// a finding when the signal is unambiguous.
-var fnSweepCategories = []string{"xss", "cors", "open_redirect", "ssrf"}
+// They are deliberately limited to categories supported by
+// RunHypothesisVerification so the sweep spends its budget only on probes that
+// can emit deterministic findings.
+var fnSweepCategories = []string{
+	"xss",
+	"cors",
+	"open_redirect",
+	"sqli",
+	"ldap",
+	"xpath",
+	"formula_injection",
+	"prototype_pollution",
+	"clickjacking",
+	"command_injection",
+	"ssi_injection",
+	"smtp_injection",
+}
 
 // maxFNSweepEndpoints caps the number of un-probed endpoints Pass B will target.
 const maxFNSweepEndpoints = 20
+
+type fnSweepTarget struct {
+	endpoint   string
+	paramName  string
+	reason     string
+	categories []string
+}
 
 // fpRetestConfidenceThreshold is the exclusive upper bound below which a
 // finding's numerical confidence qualifies it for Pass A re-testing.
@@ -251,88 +272,63 @@ func (a *PostScanValidatorAgent) runPassA(ctx context.Context, input AgentInput)
 // runPassB sweeps un-probed endpoints with a lightweight multi-category probe
 // set to surface false negatives missed by the deterministic scan.
 func (a *PostScanValidatorAgent) runPassB(ctx context.Context, input AgentInput) []model.Finding {
-	// Build the set of AffectedURLs already covered by existing findings.
-	covered := make(map[string]bool, len(input.AllFindings))
-	for _, f := range input.AllFindings {
-		if u := strings.TrimSpace(f.AffectedURL); u != "" {
-			covered[normalizeURLKey(u)] = true
-		}
-	}
-
-	// Collect un-probed in-scope endpoints from the seed surface.
-	surface := append([]string{input.Target}, input.Options.SeedRuntimeEndpoints...)
-	seenKey := make(map[string]bool)
-	var unprobed []string
-	for _, raw := range surface {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		if !scope.IsURLInScope(raw, input.Scope) {
-			continue
-		}
-		key := normalizeURLKey(raw)
-		if seenKey[key] || covered[key] {
-			continue
-		}
-		seenKey[key] = true
-		unprobed = append(unprobed, raw)
-	}
-
-	if len(unprobed) == 0 {
+	targets := collectFNSweepTargets(input)
+	if len(targets) == 0 {
 		return nil
 	}
 
-	// Rank by path depth + param count heuristic; cap at maxFNSweepEndpoints.
-	sort.Slice(unprobed, func(i, j int) bool {
-		return endpointROI(unprobed[i]) > endpointROI(unprobed[j])
-	})
-	if len(unprobed) > maxFNSweepEndpoints {
-		unprobed = unprobed[:maxFNSweepEndpoints]
-	}
-
-	log.Printf("post_scan_validator: Pass B — sweeping %d un-probed endpoint(s)", len(unprobed))
+	log.Printf("post_scan_validator: Pass B — sweeping %d gap target(s)", len(targets))
 	Emit(input.Emit, model.ScanEvent{
 		Type:      model.ScanEventInfo,
 		AgentName: "post_scan_validator",
-		Message:   fmt.Sprintf("Pass B: sweeping %d un-probed endpoint(s) for false negatives", len(unprobed)),
+		Message:   fmt.Sprintf("Pass B: sweeping %d gap-derived endpoint(s) for false negatives", len(targets)),
 	})
 
 	// Optional AI-guided hypothesis generation for the un-covered surface.
 	var aiHypotheses []ai.VulnerabilityHypothesis
 	if a.aiClient != nil {
-		aiHypotheses = a.aiClient.Hypothesize(ctx, input.Target, input.AllFindings, unprobed)
+		uncovered := make([]string, 0, len(targets))
+		for _, target := range targets {
+			uncovered = appendUnique(uncovered, target.endpoint)
+		}
+		aiHypotheses = a.aiClient.Hypothesize(ctx, input.Target, input.AllFindings, uncovered)
 	}
 
 	var found []model.Finding
 
-	// Lightweight category sweep on each un-probed endpoint.
-	for _, ep := range unprobed {
+	// Lightweight category sweep on each gap-derived target.
+	for _, target := range targets {
 		select {
 		case <-ctx.Done():
 			return found
 		default:
 		}
-		for _, cat := range fnSweepCategories {
+		for _, cat := range target.categories {
 			select {
 			case <-ctx.Done():
 				return found
 			default:
 			}
 			f := a.verifyFn(
-				ctx, ep, "", "", cat, input.AuthProfile, input.Options,
+				ctx, target.endpoint, target.paramName, "", cat, input.AuthProfile, input.Options,
 			)
 			if f == nil {
 				continue
 			}
-			f.ID = fmt.Sprintf("psv-fn-%s-%s", cat, sanitizeIDSegment(ep))
+			f.ID = fmt.Sprintf("psv-fn-%s-%s", cat, sanitizeIDSegment(target.endpoint))
 			f.Sources = appendUnique(f.Sources, "post_scan_validator")
 			f.Sources = appendUnique(f.Sources, "fn_sweep")
 			if f.EvidenceFields == nil {
 				f.EvidenceFields = map[string]string{}
 			}
 			f.EvidenceFields["sweepCategory"] = cat
-			f.EvidenceFields["sweepEndpoint"] = ep
+			f.EvidenceFields["sweepEndpoint"] = target.endpoint
+			if target.paramName != "" {
+				f.EvidenceFields["sweepParam"] = target.paramName
+			}
+			if target.reason != "" {
+				f.EvidenceFields["sweepReason"] = target.reason
+			}
 			found = append(found, *f)
 		}
 	}
@@ -366,6 +362,107 @@ func (a *PostScanValidatorAgent) runPassB(ctx context.Context, input AgentInput)
 	}
 
 	return found
+}
+
+func collectFNSweepTargets(input AgentInput) []fnSweepTarget {
+	seen := map[string]bool{}
+	var targets []fnSweepTarget
+	for _, gap := range scanner.SelectHighROIGaps(scanner.LatestSurfaceGaps(), maxFNSweepEndpoints) {
+		endpoint := strings.TrimSpace(gap.Entry.URL)
+		if endpoint == "" || !scope.IsURLInScope(endpoint, input.Scope) {
+			continue
+		}
+		paramName := ""
+		if gap.Reason == scanner.SurfaceGapParamNotFuzzed {
+			paramName = strings.TrimSpace(gap.MissingItem)
+		}
+		key := strings.ToLower(endpoint + "|" + paramName)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, fnSweepTarget{
+			endpoint:   endpoint,
+			paramName:  paramName,
+			reason:     string(gap.Reason),
+			categories: fnSweepCategoriesForGap(gap),
+		})
+	}
+	if len(targets) > 0 {
+		return targets
+	}
+
+	// Fallback: when no Phase 2 gap snapshot is available, retain the original
+	// endpoint-only sweep over uncovered runtime seeds.
+	covered := make(map[string]bool, len(input.AllFindings))
+	for _, f := range input.AllFindings {
+		if u := strings.TrimSpace(f.AffectedURL); u != "" {
+			covered[normalizeURLKey(u)] = true
+		}
+	}
+	surface := append([]string{input.Target}, input.Options.SeedRuntimeEndpoints...)
+	for _, raw := range surface {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || !scope.IsURLInScope(raw, input.Scope) {
+			continue
+		}
+		key := normalizeURLKey(raw)
+		if seen[key] || covered[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, fnSweepTarget{
+			endpoint:   raw,
+			categories: append([]string(nil), fnSweepCategories...),
+		})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return endpointROI(targets[i].endpoint) > endpointROI(targets[j].endpoint)
+	})
+	if len(targets) > maxFNSweepEndpoints {
+		targets = targets[:maxFNSweepEndpoints]
+	}
+	return targets
+}
+
+func fnSweepCategoriesForGap(gap scanner.SurfaceGap) []string {
+	out := make([]string, 0, len(fnSweepCategories))
+	target := strings.ToLower(strings.TrimSpace(gap.Entry.URL + " " + gap.MissingItem))
+	add := func(cat string) {
+		for _, existing := range out {
+			if existing == cat {
+				return
+			}
+		}
+		out = append(out, cat)
+	}
+	if strings.Contains(target, "redirect") || strings.Contains(target, "return") || strings.Contains(target, "callback") {
+		add("open_redirect")
+	}
+	if strings.Contains(target, "auth") || strings.Contains(target, "oauth") || strings.Contains(target, "token") ||
+		strings.Contains(target, "login") || strings.Contains(target, "session") {
+		add("cors")
+		add("sqli")
+	}
+	if strings.Contains(target, "html") || strings.Contains(target, "search") || strings.Contains(target, "q=") {
+		add("xss")
+	}
+	if gap.Reason == scanner.SurfaceGapMethodNotTested {
+		add("clickjacking")
+		add("command_injection")
+	}
+	if gap.Reason == scanner.SurfaceGapParamNotFuzzed {
+		add("prototype_pollution")
+		add("formula_injection")
+		add("ldap")
+		add("xpath")
+		add("ssi_injection")
+		add("smtp_injection")
+	}
+	for _, cat := range fnSweepCategories {
+		add(cat)
+	}
+	return out
 }
 
 // needsRetest returns true when a finding should be re-probed by Pass A:

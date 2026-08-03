@@ -186,7 +186,11 @@ func (s *Service) RunOAuthProbe(
 					candidateAccepted := oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback)
 					controlAccepted := oauthAuthorizeLooksSuccessful(controlAcceptedObs, legitimateCallback)
 					controlRejected := oauthResponseHasError(controlRejectedObs.body) || controlRejectedObs.status >= http.StatusBadRequest
-					if candidateAccepted && controlAccepted && controlRejected {
+					candidateMatchesValid := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) ==
+						oauthAuthorizeAcceptanceSignature(controlAcceptedObs, legitimateCallback)
+					candidateDiffersFromRejected := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) !=
+						oauthAuthorizeAcceptanceSignature(controlRejectedObs, legitimateCallback)
+					if candidateAccepted && controlAccepted && controlRejected && candidateMatchesValid && candidateDiffersFromRejected {
 						finding := oauthFinding(
 							fid,
 							ep,
@@ -207,19 +211,21 @@ func (s *Service) RunOAuthProbe(
 								"Compare the result with a valid `state` request and confirm the server does not reject the missing-state variant.",
 							},
 							map[string]string{
-								"stateAbsent":           "true",
-								"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
-								"url":                   probeURL,
-								"param":                 "state",
-								"controlAcceptedStatus": fmt.Sprintf("%d", controlAcceptedObs.status),
-								"controlRejected":       fmt.Sprintf("%v", controlRejected),
-								"controlRejectedStatus": fmt.Sprintf("%d", controlRejectedObs.status),
-								"tokenCarrierTested":    "state",
+								"stateAbsent":            "true",
+								"responseStatus":         fmt.Sprintf("%d", candidateObs.status),
+								"url":                    probeURL,
+								"param":                  "state",
+								"controlAcceptedStatus":  fmt.Sprintf("%d", controlAcceptedObs.status),
+								"controlAcceptedMatched": fmt.Sprintf("%t", candidateMatchesValid),
+								"controlRejected":        fmt.Sprintf("%v", controlRejected),
+								"controlRejectedStatus":  fmt.Sprintf("%d", controlRejectedObs.status),
+								"differentialConfirmed":  fmt.Sprintf("%t", candidateDiffersFromRejected),
+								"tokenCarrierTested":     "state",
 							},
 						)
 						verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
 							Finding:               finding,
-							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal},
+							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceBodyDelta, EvidenceErrorSignal},
 							AllowNoReplayEmission: true,
 							ProbeName:             "oauth_probe",
 						})
@@ -250,7 +256,11 @@ func (s *Service) RunOAuthProbe(
 					candidateAccepted := oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback)
 					validControlAccepted := oauthAuthorizeLooksSuccessful(validControlObs, legitimateCallback)
 					invalidControlRejected := oauthResponseHasError(invalidControlObs.body) || invalidControlObs.status >= http.StatusBadRequest
-					if candidateAccepted && validControlAccepted && invalidControlRejected {
+					candidateMatchesValid := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) ==
+						oauthAuthorizeAcceptanceSignature(validControlObs, legitimateCallback)
+					candidateDiffersFromRejected := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) !=
+						oauthAuthorizeAcceptanceSignature(invalidControlObs, legitimateCallback)
+					if candidateAccepted && validControlAccepted && invalidControlRejected && candidateMatchesValid && candidateDiffersFromRejected {
 						finding := oauthFinding(
 							fid,
 							ep,
@@ -275,13 +285,15 @@ func (s *Service) RunOAuthProbe(
 								"url":                    probeURL,
 								"param":                  "code_challenge",
 								"validControlStatus":     fmt.Sprintf("%d", validControlObs.status),
+								"validControlMatched":    fmt.Sprintf("%t", candidateMatchesValid),
 								"invalidControlRejected": fmt.Sprintf("%v", invalidControlRejected),
 								"invalidControlStatus":   fmt.Sprintf("%d", invalidControlObs.status),
+								"differentialConfirmed":  fmt.Sprintf("%t", candidateDiffersFromRejected),
 							},
 						)
 						verify := SubmitVerifiedFinding(ctx, VerifyCandidate{
 							Finding:               finding,
-							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal},
+							Signals:               []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceBodyDelta, EvidenceErrorSignal},
 							AllowNoReplayEmission: true,
 							ProbeName:             "oauth_probe",
 						})
@@ -479,6 +491,27 @@ func oauthAuthorizeLooksSuccessful(obs oauthAuthorizeObservation, legitimateCall
 		}
 	}
 	return false
+}
+
+func oauthAuthorizeAcceptanceSignature(obs oauthAuthorizeObservation, legitimateCallback string) string {
+	callbackHit := "false"
+	if legitimateCallback != "" {
+		callback := strings.ToLower(strings.TrimSpace(legitimateCallback))
+		if strings.Contains(strings.ToLower(obs.location), callback) {
+			callbackHit = "true"
+		}
+	}
+	body := strings.ToLower(strings.TrimSpace(obs.body))
+	location := strings.ToLower(strings.TrimSpace(obs.location))
+	return strings.Join([]string{
+		fmt.Sprintf("status:%d", obs.status/100),
+		fmt.Sprintf("success:%t", oauthAuthorizeLooksSuccessful(obs, legitimateCallback)),
+		fmt.Sprintf("callback:%s", callbackHit),
+		fmt.Sprintf("code:%t", strings.Contains(location, "code=") || strings.Contains(body, `"code"`)),
+		fmt.Sprintf("access_token:%t", strings.Contains(location, "access_token=") || strings.Contains(body, `"access_token"`)),
+		fmt.Sprintf("id_token:%t", strings.Contains(location, "id_token=") || strings.Contains(body, `"id_token"`)),
+		fmt.Sprintf("error:%t", oauthResponseHasError(body)),
+	}, "|")
 }
 
 func is2xxOrRedirect(code int) bool {

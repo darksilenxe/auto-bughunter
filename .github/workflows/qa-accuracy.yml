@@ -62,10 +62,17 @@ jobs:
           /tmp/accuracy-bench \
             -corpus cmd/accuracy-bench/testdata/corpus \
             -actuals cmd/accuracy-bench/testdata/actuals \
+            -baseline cmd/accuracy-bench/testdata/baseline/report.json \
+            -delta-output-md /tmp/accuracy-out/delta.md \
+            -fail-on-regression \
+            -tolerance ${{ inputs.tolerance || '0.02' }} \
             -output-json /tmp/accuracy-out/report.json \
             -output-md /tmp/accuracy-out/report.md
       - name: Show report summary
-        run: cat /tmp/accuracy-out/report.md
+        run: |
+          cat /tmp/accuracy-out/report.md
+          echo
+          cat /tmp/accuracy-out/delta.md
       - name: Upload accuracy report
         uses: actions/upload-artifact@v4
         with:

@@ -19,3 +19,7 @@ The two fixtures checked in here are intentionally minimal:
 so the nightly workflow runs green today. Real per-run actuals should be
 produced by the nightly job once vulnerable targets are deployed and the
 scanner is pointed at them.
+
+The nightly workflow now also diffs the generated report against the committed
+baseline at `/home/runner/work/auto-bughunter/auto-bughunter/backend/cmd/accuracy-bench/testdata/baseline/report.json`
+and fails on regressions beyond tolerance.

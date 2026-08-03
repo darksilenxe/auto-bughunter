@@ -192,26 +192,23 @@ func (s *Service) RunOAuthSessionProbe(
 		if !scope.IsURLInScope(probeURL, scanScope) {
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		candidateObs, err := oauthFetchAuthorizeObservation(ctx, s, probeURL, auth, options)
 		if err != nil {
 			continue
 		}
-		ApplyAuthProfile(req, auth)
-		resp, err := s.doRequestWithRetry(ctx, req, options)
-		if err != nil || resp == nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, oauthSessionBodyLimit))
-		_ = resp.Body.Close()
-
-		bodyStr := string(body)
-		locationHdr := resp.Header.Get("Location")
-		implicitAccepted := is2xxOrRedirect(resp.StatusCode) && !oauthResponseHasError(bodyStr)
+		locationHdr := candidateObs.location
+		bodyStr := candidateObs.body
+		implicitAccepted := oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback)
 		tokenInResponse := strings.Contains(locationHdr, "access_token=") ||
 			strings.Contains(bodyStr, "access_token") ||
 			strings.Contains(bodyStr, `"token_type"`)
-
-		if implicitAccepted && tokenInResponse {
+		validCodeControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_abc", "code", "openid", ""), auth, options)
+		rejectedControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_abc", "unsupported_response_type", "openid", ""), auth, options)
+		validCodeAccepted := oauthAuthorizeLooksSuccessful(validCodeControlObs, legitimateCallback)
+		validCodeLeaksToken := strings.Contains(strings.ToLower(validCodeControlObs.location), "access_token=") ||
+			strings.Contains(strings.ToLower(validCodeControlObs.body), "access_token")
+		rejectedControlRejected := oauthResponseHasError(rejectedControlObs.body) || rejectedControlObs.status >= http.StatusBadRequest
+		if implicitAccepted && tokenInResponse && validCodeAccepted && !validCodeLeaksToken && rejectedControlRejected {
 			emitted[fid] = true
 			appendVerified(oauthSessionFinding(
 				fid, ep, model.SeverityMedium,
@@ -222,7 +219,7 @@ func (s *Service) RunOAuthSessionProbe(
 						"(HTTP %d). Tokens in URLs are recorded in browser history, "+
 						"server access logs, and Referer headers, enabling token theft by "+
 						"any party with access to those artifacts.",
-					ep, resp.StatusCode,
+					ep, candidateObs.status,
 				),
 				"CWE-522",
 				[]string{
@@ -231,11 +228,15 @@ func (s *Service) RunOAuthSessionProbe(
 					"Access the browser history or server access log to confirm the token was recorded.",
 				},
 				map[string]string{
-					"authorizeEndpoint": ep,
-					"responseStatus":    fmt.Sprintf("%d", resp.StatusCode),
-					"tokenInLocation":   fmt.Sprintf("%v", strings.Contains(locationHdr, "access_token=")),
+					"authorizeEndpoint":      ep,
+					"responseStatus":         fmt.Sprintf("%d", candidateObs.status),
+					"tokenInLocation":        fmt.Sprintf("%v", strings.Contains(locationHdr, "access_token=")),
+					"validCodeControlStatus": fmt.Sprintf("%d", validCodeControlObs.status),
+					"validCodeLeaksToken":    fmt.Sprintf("%t", validCodeLeaksToken),
+					"rejectedControlStatus":  fmt.Sprintf("%d", rejectedControlObs.status),
+					"differentialConfirmed":  "true",
 				},
-			), []EvidenceSignal{EvidenceStatusDelta, EvidenceReflection})
+			), []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceBodyDelta, EvidenceReflection, EvidenceErrorSignal})
 		}
 	}
 
@@ -260,9 +261,14 @@ func (s *Service) RunOAuthSessionProbe(
 		})
 		validControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, validControlURL, auth, options)
 		rejectedControlObs, _ := oauthFetchAuthorizeObservation(ctx, s, buildOAuthAuthorizeURL(ep, legitimateCallback, "state_xyz", "unsupported_response_type", "openid", ""), auth, options)
+		candidateMatchesValid := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) ==
+			oauthAuthorizeAcceptanceSignature(validControlObs, legitimateCallback)
+		candidateDiffersFromRejected := oauthAuthorizeAcceptanceSignature(candidateObs, legitimateCallback) !=
+			oauthAuthorizeAcceptanceSignature(rejectedControlObs, legitimateCallback)
 		if oauthAuthorizeLooksSuccessful(candidateObs, legitimateCallback) &&
 			oauthAuthorizeLooksSuccessful(validControlObs, legitimateCallback) &&
-			(oauthResponseHasError(rejectedControlObs.body) || rejectedControlObs.status >= http.StatusBadRequest) {
+			(oauthResponseHasError(rejectedControlObs.body) || rejectedControlObs.status >= http.StatusBadRequest) &&
+			candidateMatchesValid && candidateDiffersFromRejected {
 			emitted[fid] = true
 			appendVerified(oauthSessionFinding(
 				fid, ep, model.SeverityMedium,
@@ -288,9 +294,11 @@ func (s *Service) RunOAuthSessionProbe(
 					"nonceAbsent":           "true",
 					"responseStatus":        fmt.Sprintf("%d", candidateObs.status),
 					"validControlStatus":    fmt.Sprintf("%d", validControlObs.status),
+					"validControlMatched":   fmt.Sprintf("%t", candidateMatchesValid),
 					"rejectedControlStatus": fmt.Sprintf("%d", rejectedControlObs.status),
+					"differentialConfirmed": fmt.Sprintf("%t", candidateDiffersFromRejected),
 				},
-			), []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceErrorSignal})
+			), []EvidenceSignal{EvidenceStatusDelta, EvidenceHeaderDelta, EvidenceBodyDelta, EvidenceErrorSignal})
 		}
 	}
 

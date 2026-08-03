@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"auto-bughunter/backend/internal/model"
@@ -105,14 +104,24 @@ func TestOAuthSessionProbe_AuthCodeReplay_Accepted(t *testing.T) {
 // returns an access_token in the implicit flow response body.
 func TestOAuthSessionProbe_ImplicitFlow_Accepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.RawQuery, "response_type=token") {
-			// Return access_token in body — simulates implicit grant accepted.
+		if r.URL.Path == "/oauth/callback" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":"` + r.URL.Query().Get("code") + `"}`))
+			return
+		}
+		switch r.URL.Query().Get("response_type") {
+		case "token":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"access_token":"implicittoken123","token_type":"bearer"}`))
-			return
+		case "code":
+			http.Redirect(w, r, r.URL.Query().Get("redirect_uri")+"?code=abc123&state="+r.URL.Query().Get("state"), http.StatusFound)
+		case "unsupported_response_type":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unsupported_response_type"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	svc := NewService(Config{})
@@ -129,6 +138,9 @@ func TestOAuthSessionProbe_ImplicitFlow_Accepted(t *testing.T) {
 			found = true
 			if f.Severity != model.SeverityMedium {
 				t.Fatalf("expected Medium severity, got %s", f.Severity)
+			}
+			if f.EvidenceFields["differentialConfirmed"] != "true" || f.EvidenceFields["validCodeLeaksToken"] != "false" {
+				t.Fatalf("expected differential confirmation on implicit-flow finding, got %+v", f.EvidenceFields)
 			}
 		}
 	}
@@ -174,6 +186,9 @@ func TestOAuthSessionProbe_NonceOmission_AcceptedWithControlReplay(t *testing.T)
 		if f.ID == "oidc-nonce-omission" {
 			if f.EvidenceFields["preReport.verifiedBy"] == "" {
 				t.Fatalf("expected verifier stamp on nonce omission finding, got %+v", f.EvidenceFields)
+			}
+			if f.EvidenceFields["differentialConfirmed"] != "true" || f.EvidenceFields["validControlMatched"] != "true" {
+				t.Fatalf("expected differential confirmation on nonce omission finding, got %+v", f.EvidenceFields)
 			}
 			return
 		}
