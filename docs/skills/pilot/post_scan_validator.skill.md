@@ -16,10 +16,14 @@ improve finding accuracy by reducing false positives and surfacing false negativ
   and re-probe each one via the scanner's deterministic oracle.  Annotate the
   copy with `retestResult=confirmed` (confidence raised to ≥ 0.80) or
   `retestResult=not-confirmed` (confidence reduced by 0.20, floor 0.10).
-- **Pass B (FN Gap Sweep):** Identify endpoints from `SeedRuntimeEndpoints`
-  (and `Target`) that have no corresponding `AffectedURL` in any existing
-  finding.  Rank candidates by path depth + parameter count; probe the top 20
-  with a lightweight category sweep (xss, cors, open_redirect, ssrf).
+- **Pass B (FN Gap Sweep):** Prefer the latest Phase 2 `SurfaceGap` snapshot
+  (`DetectSurfaceGaps` / `SelectHighROIGaps`) over simple “no finding on this
+  URL” heuristics.  Probe the top 20 gap-derived targets, carrying through
+  missing-parameter context when present, with a lightweight deterministic
+  category sweep (`xss`, `cors`, `open_redirect`, `sqli`, `ldap`, `xpath`,
+  `formula_injection`, `prototype_pollution`, `clickjacking`,
+  `command_injection`, `ssi_injection`, `smtp_injection`).  When no gap
+  snapshot is available, fall back to the old uncovered-seed-endpoint sweep.
 - When an `aiClient` is configured, generate and verify AI hypotheses for the
   un-covered surface alongside the deterministic sweep.
 
@@ -28,7 +32,8 @@ improve finding accuracy by reducing false positives and surfacing false negativ
 - `ScanOptions.UsePostScanValidation = true` (gate flag; defaults to false).
 - A configured `scanService` (`*scanner.Service`); agent is a no-op without it.
 - `AllFindings` populated with the full post-scan finding set.
-- `Target` and `Options.SeedRuntimeEndpoints` for the Pass B surface.
+- `Target` and `Options.SeedRuntimeEndpoints` for the Pass B fallback surface.
+- The latest Phase 2 surface-gap snapshot when available.
 - `Scope` for in-scope validation before every active probe.
 
 ## 4) Expected outputs

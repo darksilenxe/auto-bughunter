@@ -52,8 +52,10 @@ type SurfaceGap struct {
 // is intentionally not exposed — like the other Phase 1 counters, this
 // is a rolling process-wide view surfaced to AutomationMetrics.Extra.
 type probedKeyRegistry struct {
-	keys   sync.Map // string -> struct{}, dedup of NormalizeSurfaceKey
-	params sync.Map // "<key>|<param>" -> struct{}
+	keys     sync.Map // string -> struct{}, dedup of NormalizeSurfaceKey
+	params   sync.Map // "<key>|<param>" -> struct{}
+	gapsMu   sync.Mutex
+	lastGaps []SurfaceGap
 	// probedTotal counts every RecordProbedKey call for a coverage
 	// KPI that surfaces "probes issued" independent of dedup.
 	probedTotal atomic.Uint64
@@ -91,13 +93,13 @@ func RecordProbedKey(method, rawURL, param string) {
 // SurfaceCoverageMetrics is the snapshot exposed to
 // AutomationMetrics.Extra so operators can see recall risk directly.
 type SurfaceCoverageMetrics struct {
-	InventoryTotal    uint64  `json:"inventoryTotal"`
-	ProbedUnique      uint64  `json:"probedUnique"`
-	ProbedTotal       uint64  `json:"probedTotal"`
-	CoverageRatio     float64 `json:"coverageRatio"`
-	GapUnprobed       uint64  `json:"gapUnprobed"`
-	GapParamMissing   uint64  `json:"gapParamMissing"`
-	GapMethodMissing  uint64  `json:"gapMethodMissing"`
+	InventoryTotal   uint64  `json:"inventoryTotal"`
+	ProbedUnique     uint64  `json:"probedUnique"`
+	ProbedTotal      uint64  `json:"probedTotal"`
+	CoverageRatio    float64 `json:"coverageRatio"`
+	GapUnprobed      uint64  `json:"gapUnprobed"`
+	GapParamMissing  uint64  `json:"gapParamMissing"`
+	GapMethodMissing uint64  `json:"gapMethodMissing"`
 }
 
 // GetSurfaceCoverageMetrics returns the most recently observed coverage
@@ -130,12 +132,25 @@ func GetSurfaceCoverageMetrics() SurfaceCoverageMetrics {
 func ResetSurfaceCoverageMetrics() {
 	globalProbedKeys.keys = sync.Map{}
 	globalProbedKeys.params = sync.Map{}
+	globalProbedKeys.gapsMu.Lock()
+	globalProbedKeys.lastGaps = nil
+	globalProbedKeys.gapsMu.Unlock()
 	globalProbedKeys.probedTotal.Store(0)
 	globalProbedKeys.lastInventoryTotal.Store(0)
 	globalProbedKeys.lastProbedUnique.Store(0)
 	globalProbedKeys.lastUnprobed.Store(0)
 	globalProbedKeys.lastParamNotFuzzed.Store(0)
 	globalProbedKeys.lastMethodNotTested.Store(0)
+}
+
+// LatestSurfaceGaps returns a copy of the most recently detected gap list.
+// Like the other surface-coverage metrics, this is a rolling process-wide
+// snapshot intended for immediate post-scan consumers such as the
+// post_scan_validator agent.
+func LatestSurfaceGaps() []SurfaceGap {
+	globalProbedKeys.gapsMu.Lock()
+	defer globalProbedKeys.gapsMu.Unlock()
+	return cloneSurfaceGaps(globalProbedKeys.lastGaps)
 }
 
 // DetectSurfaceGaps compares the inventory with the process-wide
@@ -223,5 +238,17 @@ func DetectSurfaceGaps(inv *SurfaceInventory) []SurfaceGap {
 	globalProbedKeys.lastUnprobed.Store(unprobed)
 	globalProbedKeys.lastParamNotFuzzed.Store(paramMissing)
 	globalProbedKeys.lastMethodNotTested.Store(methodMissing)
+	globalProbedKeys.gapsMu.Lock()
+	globalProbedKeys.lastGaps = cloneSurfaceGaps(gaps)
+	globalProbedKeys.gapsMu.Unlock()
 	return gaps
+}
+
+func cloneSurfaceGaps(in []SurfaceGap) []SurfaceGap {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SurfaceGap, len(in))
+	copy(out, in)
+	return out
 }

@@ -202,6 +202,7 @@ func TestPostScanValidatorAgent_PassA_Confirmed(t *testing.T) {
 // emits at least one finding when an un-probed endpoint is in
 // SeedRuntimeEndpoints and the verifyFn confirms the probe.
 func TestPostScanValidatorAgent_PassB_UnprobedEndpoint(t *testing.T) {
+	scanner.ResetSurfaceCoverageMetrics()
 	// Inject a verifyFn that confirms the "cors" category so Pass B emits a
 	// finding.  This sidesteps safety.ValidateOutboundURL's loopback block.
 	svc := newTestScanService()
@@ -240,9 +241,51 @@ func TestPostScanValidatorAgent_PassB_UnprobedEndpoint(t *testing.T) {
 	}
 }
 
+func TestPostScanValidatorAgent_PassB_UsesLatestSurfaceGapsAndExpandedCategories(t *testing.T) {
+	scanner.ResetSurfaceCoverageMetrics()
+	inv := scanner.NewSurfaceInventory()
+	gapURL := "http://example.com/oauth/authorize?redirect=/callback"
+	inv.Add(http.MethodGet, gapURL, []string{"redirect", "state"}, scanner.SurfaceSourceRuntimeXHR)
+	scanner.RecordProbedKey(http.MethodGet, gapURL, "")
+	scanner.DetectSurfaceGaps(inv)
+
+	svc := newTestScanService()
+	a := NewPostScanValidatorAgent(svc, nil, true)
+	a.verifyFn = func(_ context.Context, endpoint, paramName, _, category string, _ model.ScanAuthProfile, _ model.ScanOptions) *model.Finding {
+		if endpoint == gapURL && paramName == "redirect" && category == "open_redirect" {
+			return &model.Finding{ID: "gap-open-redirect", Category: "open_redirect", AffectedURL: endpoint}
+		}
+		return nil
+	}
+
+	out, err := a.Run(context.Background(), AgentInput{
+		Target: "http://example.com",
+		Scope:  model.ScanScope{IncludeHosts: []string{"example.com"}},
+		Options: model.ScanOptions{
+			UsePostScanValidation: true,
+		},
+		AllFindings: []model.Finding{
+			{ID: "existing", Category: "discovery", AffectedURL: gapURL},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, f := range out.Findings {
+		if f.EvidenceFields["sweepEndpoint"] == gapURL && f.EvidenceFields["sweepParam"] == "redirect" && f.EvidenceFields["sweepCategory"] == "open_redirect" {
+			if f.EvidenceFields["sweepReason"] != string(scanner.SurfaceGapParamNotFuzzed) {
+				t.Fatalf("expected sweepReason=%q, got %+v", scanner.SurfaceGapParamNotFuzzed, f.EvidenceFields)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected Pass B to consume latest surface gaps and emit open_redirect sweep finding, got %+v", out.Findings)
+}
+
 // TestPostScanValidatorAgent_PassB_SkippedWhenCovered verifies that Pass B
 // does not re-probe endpoints already covered by an existing finding.
 func TestPostScanValidatorAgent_PassB_SkippedWhenCovered(t *testing.T) {
+	scanner.ResetSurfaceCoverageMetrics()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
 		fmt.Fprintf(w, "<html>%s</html>", q)
