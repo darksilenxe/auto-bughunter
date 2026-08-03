@@ -141,5 +141,12 @@ doneProbes:
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
-	return []model.Finding{finding}
+	// Phase 3 stamp: route through SubmitVerifiedFinding so verifiedBy is
+	// written to EvidenceFields. Error-signal (XPath parser error) and
+	// sink-observed (user input reached XPath evaluation) are always present.
+	emitted, ok := phase1SubmitVerified(ctx, finding, "xpath-injection", []EvidenceSignal{EvidenceErrorSignal, EvidenceSinkObserved}, "active-xpath-injection")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }

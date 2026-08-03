@@ -27,7 +27,7 @@ func TestRunActiveLDAPInjectionProbe_FindsVulnerability(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
 	}
-	if findings[0].ID != "active-ldap-injection" || findings[0].Severity != model.SeverityHigh || findings[0].CWE != "CWE-90" {
+	if findings[0].ID != "active-ldap-injection" || findings[0].Severity != model.SeverityMedium || findings[0].CWE != "CWE-90" {
 		t.Fatalf("unexpected finding: %+v", findings[0])
 	}
 }

@@ -147,7 +147,15 @@ func (s *Service) runDanglingMarkupProbe(ctx context.Context, input RunInput, bo
 				},
 			}
 			AttachDifferentialEvidence(&finding, diffOutcome)
-			return []model.Finding{finding}
+			// Phase 3 stamp: route through SubmitVerifiedFinding so
+			// verifiedBy is written to EvidenceFields. Reflection
+			// (payload echoed) and sink-observed (HTML attribute/text
+			// position confirmed) satisfy the evidence minimum.
+			emitted, ok := phase1SubmitVerified(ctx, finding, "xss", []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved}, "dangling-markup-probe")
+			if !ok {
+				continue
+			}
+			return []model.Finding{emitted}
 		}
 	}
 	return nil

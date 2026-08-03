@@ -192,7 +192,19 @@ func (s *Service) runActiveLDAPInjectionProbe(ctx context.Context, input RunInpu
 		BusinessTags: []string{"authentication", "directory-services"},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
-	return []model.Finding{finding}
+	// Phase 3 stamp: route through SubmitVerifiedFinding so verifiedBy is
+	// written to EvidenceFields. Error-signal (LDAP error) and sink-observed
+	// (injection into LDAP query) are always present; body-delta captures the
+	// bypass heuristic variant where status/body changed relative to baseline.
+	signals := []EvidenceSignal{EvidenceErrorSignal, EvidenceSinkObserved, EvidenceBodyDelta}
+	if strings.Contains(first.signature, "bypass") {
+		signals = append(signals, EvidenceStatusDelta)
+	}
+	emitted, ok := phase1SubmitVerified(ctx, finding, "ldap-injection", signals, "active-ldap-injection")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 func ldapQueryURL(base *url.URL, param, value string) string {

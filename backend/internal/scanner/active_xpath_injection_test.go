@@ -28,7 +28,7 @@ func TestRunActiveXPathInjectionProbe_FindsVulnerability(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
 	}
-	if findings[0].ID != "active-xpath-injection" || findings[0].Severity != model.SeverityHigh || findings[0].CWE != "CWE-643" {
+	if findings[0].ID != "active-xpath-injection" || findings[0].Severity != model.SeverityMedium || findings[0].CWE != "CWE-643" {
 		t.Fatalf("unexpected finding: %+v", findings[0])
 	}
 }

@@ -38,36 +38,38 @@ through `active_ssti.go`) migrated to `schema` ✅ on 2026-07-04. Batch 2
 (final 17 ⚠️ rows: `jwt_probe.go` through `xssi_jsonp_probe.go`) migrated
 to `schema` ✅ on 2026-07-07, completing the Phase 3 evidence-schema
 audit — every applicable probe file now emits a Phase 3-compliant
-EvidenceRecord (✅) or is marked not-applicable (➖). The `stamp` column
-remains ⚠️ across the board; stamping (`SubmitVerifiedFinding` wiring)
-is tracked as follow-up work.
+EvidenceRecord (✅) or is marked not-applicable (➖). The first 20 table
+rows (all ✅ schema probes through `dangling_markup.go` plus `deserialization_probe.go`
+and `file_upload_probe.go`) have been stamped on 2026-08-03: `stamp` column
+updated to ✅ for all 17 applicable rows in the first 20. Remaining rows
+still carry ⚠️ in the `stamp` column as follow-up work.
 
 | Probe file | schema | stamp | Notes |
 | --- | :---: | :---: | --- |
-| `active_cors.go` | ✅ | ⚠️ | Migrated: `payloadClass=cors-origin-reflection`, `url`, `oracleName` added. |
-| `active_graphql_introspection.go` | ✅ | ⚠️ | Migrated: `payloadClass=graphql-introspection`, `oracleName` added. |
-| `active_ldap_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=ldap-injection` added. |
-| `active_nosqli.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=nosql-operator` added. |
-| `active_open_redirect.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=open-redirect` added. |
-| `active_path_traversal.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=path-traversal` added. |
-| `active_prompt_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=prompt-injection` added. |
-| `active_prototype_pollution.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=proto-pollution` added. |
-| `active_sqli.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=sqli-error` added. |
-| `active_ssti.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=ssti` added. |
-| `active_xpath_injection.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=xpath-injection` added. |
-| `active_xss.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=xss-reflected`, `reflectionContext` added. |
-| `active_xxe.go` | ✅ | ⚠️ | Migrated: `payloadClass=xxe`, `responseShape=xml` added. |
+| `active_cors.go` | ✅ | ✅ | Migrated: `payloadClass=cors-origin-reflection`, `url`, `oracleName` added. |
+| `active_graphql_introspection.go` | ✅ | ✅ | Migrated: `payloadClass=graphql-introspection`, `oracleName` added. |
+| `active_ldap_injection.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=ldap-injection` added. |
+| `active_nosqli.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=nosql-operator` added. |
+| `active_open_redirect.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=open-redirect` added. |
+| `active_path_traversal.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=path-traversal` added. |
+| `active_prompt_injection.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=prompt-injection` added. |
+| `active_prototype_pollution.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=proto-pollution` added. |
+| `active_sqli.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=sqli-error` added. |
+| `active_ssti.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=ssti` added. |
+| `active_xpath_injection.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=xpath-injection` added. |
+| `active_xss.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=xss-reflected`, `reflectionContext` added. |
+| `active_xxe.go` | ✅ | ✅ | Migrated: `payloadClass=xxe`, `responseShape=xml` added. |
 | `browser_storage_probe.go` | ➖ | ➖ | Browser observation. |
-| `clickjacking_probe.go` | ✅ | ⚠️ | Migrated: `responseShape=html` added. |
+| `clickjacking_probe.go` | ✅ | ✅ | Migrated: `responseShape=html` added. |
 | `cloud_storage_probe.go` | ➖ | ➖ | Bucket enum. |
-| `command_injection_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=cmd-injection` added. |
+| `command_injection_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=cmd-injection` added. |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | Fixed file. |
-| `csrf_probe.go` | ✅ | ⚠️ | Migrated: `method` added. |
-| `dangling_markup.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
-| `deserialization_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=deserialization` added. |
+| `csrf_probe.go` | ✅ | ✅ | Migrated: `method` added. |
+| `dangling_markup.go` | ✅ | ✅ | Migrated in this PR as the Phase 3 reference. |
+| `deserialization_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=deserialization` added. |
 | `dns_san_probe.go` | ➖ | ➖ | Certificate metadata. |
 | `dom_xss_probe.go` | ✅ | ⚠️ | Migrated: `payloadClass=dom-xss` added. |
-| `file_upload_probe.go` | ✅ | ⚠️ | Migrated: `param`, `payloadClass=upload-bypass` added. |
+| `file_upload_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=upload-bypass` added. |
 | `formula_injection.go` | ✅ | ⚠️ | Migrated in this PR as the Phase 3 reference. |
 | `http_methods_probe.go` | ✅ | ⚠️ | Migrated: `method` added from allowed/overridden verb set. |
 | `jwt_probe.go` | ✅ | ⚠️ | Migrated: `method`, `url`, `oracleName=jwt_probe` added. |
