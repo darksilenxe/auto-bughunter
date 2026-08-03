@@ -244,7 +244,21 @@ func (s *Service) runFileUploadProbe(ctx context.Context, input RunInput, bodyTe
 					},
 				}
 				AttachDifferentialEvidence(&finding, diffOutcome)
-				findings = append(findings, finding)
+				// Phase 3 stamp: route through SubmitVerifiedFinding so
+				// verifiedBy is written to EvidenceFields. Body-delta
+				// (upload accepted / execution marker) and sink-observed
+				// (server processed the bypass payload) are always present;
+				// confirmed RCE adds a reflection signal (execution output
+				// reflected in response body).
+				uploadSignals := []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}
+				if assessment.Executed != "" {
+					uploadSignals = append(uploadSignals, EvidenceReflection)
+				}
+				stampedUpload, ok := phase1SubmitVerified(ctx, finding, "file-upload", uploadSignals, "file-upload-probe")
+				if !ok {
+					continue
+				}
+				findings = append(findings, stampedUpload)
 			}
 		}
 	}

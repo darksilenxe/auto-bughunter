@@ -382,7 +382,23 @@ doneDirectScan:
 		},
 	}
 	AttachDifferentialEvidence(&finding, diffOutcome)
-	return []model.Finding{finding}
+	// Phase 3 stamp: route through SubmitVerifiedFinding so verifiedBy is
+	// written to EvidenceFields. Reflection (trigger echoed back) and
+	// sink-observed (model executed injected instruction) are always present;
+	// OAST hits additionally carry an out-of-band confirmation signal.
+	signals := []EvidenceSignal{EvidenceReflection, EvidenceSinkObserved}
+	if first.label == "oast-confirmation" {
+		signals = append(signals, EvidenceOASTHit)
+	}
+	if !first.direct {
+		// Indirect/stored: body delta instead of direct reflection.
+		signals = append(signals, EvidenceBodyDelta)
+	}
+	emitted, ok := phase1SubmitVerified(ctx, finding, "prompt-injection", signals, "active-prompt-injection")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // appendQueryParam appends a key=value pair to a URL's query string.

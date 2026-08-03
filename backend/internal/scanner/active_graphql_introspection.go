@@ -118,7 +118,7 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 		"Use the returned schema to enumerate every query/mutation/field that may need authorization tightening.",
 	}
 	curl := buildCurlReproducer(http.MethodPost, first.url, input.AuthProfile, "application/json", graphqlIntrospectionQuery)
-	return []model.Finding{{
+	finding := model.Finding{
 		ID:                "active-graphql-introspection",
 		Category:          "api",
 		Severity:          model.SeverityMedium,
@@ -145,7 +145,16 @@ func (s *Service) runActiveGraphQLIntrospectionProbe(ctx context.Context, input 
 			"oracleName":     "active_graphql_introspection",
 			"oracleVersion":  "v1",
 		},
-	}}
+	}
+	// Phase 3 stamp: route through SubmitVerifiedFinding so verifiedBy is
+	// written to EvidenceFields. The body-delta (schema confirmed) and
+	// sink-observed (schema is an information-disclosure sink) signals satisfy
+	// the evidence minimum for this category.
+	emitted, ok := phase1SubmitVerified(ctx, finding, "api", []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}, "active-graphql-introspection")
+	if !ok {
+		return nil
+	}
+	return []model.Finding{emitted}
 }
 
 // filterGraphQLCandidates keeps only the URLs whose path looks like a

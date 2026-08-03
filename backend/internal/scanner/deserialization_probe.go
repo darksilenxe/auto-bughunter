@@ -227,7 +227,20 @@ func (s *Service) RunDeserializationProbe(
 				},
 			}
 			AttachDifferentialEvidence(&finding, diffOutcome)
-			findings = append(findings, finding)
+			// Phase 3 stamp: route through SubmitVerifiedFinding so
+			// verifiedBy is written to EvidenceFields. Body-delta
+			// (indicator in active probe response) and sink-observed
+			// (deserializer processed the payload) are always present;
+			// error-signal captures ysoserial gadget class references.
+			desSignals := []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}
+			if strings.Contains(indicator, "gadget class") {
+				desSignals = append(desSignals, EvidenceErrorSignal)
+			}
+			stamped, ok := phase1SubmitVerified(ctx, finding, "deserialization", desSignals, "deserialization-probe")
+			if !ok {
+				continue
+			}
+			findings = append(findings, stamped)
 		}
 
 		// Passive check: scan the existing response body for serialization markers
@@ -249,7 +262,7 @@ func (s *Service) RunDeserializationProbe(
 					}
 					if indicator, lang := detectDeserializationSignal(string(body), ""); indicator != "" {
 						emitted[fid] = true
-						findings = append(findings, model.Finding{
+						passiveFinding := model.Finding{
 							ID:       fid,
 							Category: "information-disclosure",
 							Severity: model.SeverityMedium,
@@ -280,7 +293,14 @@ func (s *Service) RunDeserializationProbe(
 								"oracleName":     "deserialization_probe",
 								"oracleVersion":  "v1",
 							},
-						})
+						}
+						// Phase 3 stamp: passive/informational findings are
+						// body-delta observations (serialization marker found
+						// in the baseline GET response).
+						stampedPassive, ok := phase1SubmitVerified(ctx, passiveFinding, "information-disclosure", []EvidenceSignal{EvidenceBodyDelta, EvidenceSinkObserved}, "deserialization-probe")
+						if ok {
+							findings = append(findings, stampedPassive)
+						}
 					}
 				}
 			}
