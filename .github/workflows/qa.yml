@@ -63,13 +63,17 @@ jobs:
       - name: go test
         run: go test ./...
 
-      - name: Accuracy benchmark fixture gate
+      - name: Accuracy benchmark regression gate
         run: |
           go test ./internal/accuracybench/... ./cmd/accuracy-bench/...
           go build -o /tmp/accuracy-bench ./cmd/accuracy-bench
           /tmp/accuracy-bench \
             -corpus ./cmd/accuracy-bench/testdata/corpus \
             -actuals ./cmd/accuracy-bench/testdata/actuals \
+            -baseline ./cmd/accuracy-bench/testdata/baseline/report.json \
+            -delta-output-md /tmp/accuracy-delta.md \
+            -fail-on-regression \
+            -tolerance 0.02 \
             -output-json /tmp/accuracy-report.json \
             -output-md /tmp/accuracy-report.md
 

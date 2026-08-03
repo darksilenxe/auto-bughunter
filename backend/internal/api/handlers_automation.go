@@ -1079,7 +1079,7 @@ func (s *Server) handleAutomationMetrics(w http.ResponseWriter, r *http.Request)
 		}
 		if job.Options.StrictReporting {
 			strictScans++
-			if filtered, suppressed, _, applied := applyStrictReportingFilter(job, nil); applied && filtered != nil {
+			if filtered, suppressed, _, applied := applyStrictReportingFilter(job, nil, false); applied && filtered != nil {
 				strictSuppressed += suppressed
 			}
 		}

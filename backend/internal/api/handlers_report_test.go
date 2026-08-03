@@ -333,7 +333,7 @@ func TestHandleScanReport_NotFound(t *testing.T) {
 
 func TestHandleScanReport_SingleFindingMarkdown(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := authRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based?strict=false", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusOK {
@@ -356,7 +356,7 @@ func TestHandleScanReport_SingleFindingNotFound(t *testing.T) {
 
 func TestHandleScanReport_BugBountyZip(t *testing.T) {
 	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
-	req := authRequest(http.MethodGet, "/api/report/scan-1/bugbounty.zip", nil)
+	req := authRequest(http.MethodGet, "/api/report/scan-1/bugbounty.zip?strict=false", nil)
 	rec := httptest.NewRecorder()
 	srv.handleScanReport(rec, req)
 	if rec.Code != http.StatusOK {
@@ -435,7 +435,7 @@ func TestApplyStrictReportingFilterSuppressesUnverifiedHighSeverity(t *testing.T
 			"evidenceQuality": "valid",
 		},
 	}}
-	out, suppressed, _, strict := applyStrictReportingFilter(job, nil)
+	out, suppressed, _, strict := applyStrictReportingFilter(job, nil, false)
 	if !strict {
 		t.Fatal("expected strict filter to apply")
 	}
@@ -454,13 +454,15 @@ func TestApplyStrictReportingFilterKeepsVerifiedHighSeverity(t *testing.T) {
 		Severity:   model.SeverityHigh,
 		Confidence: 0.95,
 		Title:      "OAuth token replay",
+		Sources:    []string{"scanner", "burp"},
 		EvidenceFields: map[string]string{
 			"evidenceQuality":      "valid",
 			"preReport.verified":   "true",
 			"preReport.verifiedBy": "oauth_session_probe@v1",
+			"preReport.pocTranscript": "POST /oauth/token -> 200",
 		},
 	}}
-	out, suppressed, _, _ := applyStrictReportingFilter(job, nil)
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil, false)
 	if suppressed != 0 || len(out.Findings) != 1 {
 		t.Fatalf("expected verified finding to survive strict filter, suppressed=%d findings=%d", suppressed, len(out.Findings))
 	}
@@ -483,9 +485,84 @@ func TestApplyStrictReportingFilterSuppressesProofGapsForAuthFlowFindings(t *tes
 			"proofPolicyMissing":   "nonce",
 		},
 	}}
-	out, suppressed, _, _ := applyStrictReportingFilter(job, nil)
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil, false)
 	if suppressed != 1 || len(out.Findings) != 0 {
 		t.Fatalf("expected proof-gap auth-flow finding to be suppressed, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
+func TestApplyStrictReportingFilterSuppressesUncorroboratedHighSeverity(t *testing.T) {
+	job := sampleReportJob()
+	job.Options.StrictReporting = true
+	job.Options.MinReportConfidence = 0.7
+	job.Findings = []model.Finding{{
+		ID:         "f1",
+		Category:   "authentication",
+		Severity:   model.SeverityHigh,
+		Confidence: 0.95,
+		Title:      "OAuth token replay",
+		EvidenceFields: map[string]string{
+			"evidenceQuality":        "valid",
+			"preReport.verified":     "true",
+			"preReport.verifiedBy":   "oauth_session_probe@v1",
+			"preReport.pocTranscript": "POST /oauth/token -> 200",
+		},
+	}}
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil, false)
+	if suppressed != 1 || len(out.Findings) != 0 {
+		t.Fatalf("expected uncorroborated high-severity finding to be suppressed, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
+func TestApplyStrictReportingFilterSuppressesHighSeverityWithoutReplayableProof(t *testing.T) {
+	job := sampleReportJob()
+	job.Options.StrictReporting = true
+	job.Options.MinReportConfidence = 0.7
+	job.Findings = []model.Finding{{
+		ID:         "f1",
+		Category:   "authentication",
+		Severity:   model.SeverityHigh,
+		Confidence: 0.95,
+		Title:      "OAuth token replay",
+		Sources:    []string{"scanner", "burp"},
+		EvidenceFields: map[string]string{
+			"evidenceQuality":      "valid",
+			"preReport.verified":   "true",
+			"preReport.verifiedBy": "oauth_session_probe@v1",
+		},
+	}}
+	out, suppressed, _, _ := applyStrictReportingFilter(job, nil, false)
+	if suppressed != 1 || len(out.Findings) != 0 {
+		t.Fatalf("expected high-severity finding without replayable proof to be suppressed, suppressed=%d findings=%d", suppressed, len(out.Findings))
+	}
+}
+
+func TestHandleScanReport_SingleFindingSuppressedByDefaultStrictMode(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := authRequest(http.MethodGet, "/api/report/scan-1/finding/sqlmap-error-based", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "strict reporting") {
+		t.Fatalf("expected strict-reporting suppression message, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleScanReport_DefaultPDFAppliesStrictReportingByDefault(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := authRequest(http.MethodGet, "/api/report/scan-1", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Strict-Reporting"); got != "true" {
+		t.Fatalf("expected strict-reporting header, got %q", got)
+	}
+	if got := rec.Header().Get("X-Strict-Reporting-Suppressed"); got != "1" {
+		t.Fatalf("expected 1 suppressed finding, got %q", got)
 	}
 }
 
