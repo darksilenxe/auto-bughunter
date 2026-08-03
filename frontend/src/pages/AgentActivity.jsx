@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useScan } from "../context/ScanContext";
 
 const AGENT_EVENT_TYPES = new Set([
@@ -10,6 +10,8 @@ const AGENT_EVENT_TYPES = new Set([
   "command",
   "command_result",
   "finding",
+  "thinking",
+  "discovery",
 ]);
 
 const EVENT_TYPE_LABELS = {
@@ -21,6 +23,8 @@ const EVENT_TYPE_LABELS = {
   command: "$ Command",
   command_result: "⇐ Output",
   finding: "⚑ Finding",
+  thinking: "💭 Thinking",
+  discovery: "🔍 Discovery",
 };
 
 const EVENT_TYPE_ACCENT = {
@@ -32,6 +36,8 @@ const EVENT_TYPE_ACCENT = {
   command: "#4db8ff",
   command_result: "#ccc",
   finding: "#f87171",
+  thinking: "#a78bfa",
+  discovery: "#34d399",
 };
 
 function fmtMs(ms) {
@@ -47,6 +53,8 @@ export default function AgentActivity() {
   const [agentFilter, setAgentFilter] = useState("all");
   const [groupByAgent, setGroupByAgent] = useState(false);
   const [search, setSearch] = useState("");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const bottomRef = useRef(null);
 
   const agentEvents = liveEvents.filter((e) => AGENT_EVENT_TYPES.has(e.type));
 
@@ -100,6 +108,13 @@ export default function AgentActivity() {
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
   }, [filtered, groupByAgent]);
 
+  // Auto-scroll to bottom when new events arrive
+  useEffect(() => {
+    if (autoScroll && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [filtered.length, autoScroll]);
+
   function toggleType(t) {
     setTypeFilter((prev) => {
       const next = new Set(prev);
@@ -138,6 +153,28 @@ export default function AgentActivity() {
             </pre>
           </div>
         )}
+        {evt.type === "thinking" && evt.message && (
+          <div style={{ marginTop: "0.25rem", padding: "0.75rem", background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: "4px" }}>
+            <div style={{ fontSize: "0.75rem", color: "#a78bfa", marginBottom: "0.35rem", fontWeight: 600 }}>Chain-of-thought</div>
+            <pre style={{ margin: 0, fontSize: "0.85rem", color: "#c4b5fd", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{evt.message}</pre>
+          </div>
+        )}
+        {evt.type === "discovery" && (
+          <div style={{ marginTop: "0.25rem" }}>
+            {evt.message && (
+              <div style={{ fontSize: "0.85rem", color: "#34d399", marginBottom: evt.metadata ? "0.4rem" : 0 }}>{evt.message}</div>
+            )}
+            {evt.metadata && Object.keys(evt.metadata).length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                {Object.entries(evt.metadata).map(([k, v]) => (
+                  <span key={k} style={{ fontSize: "0.75rem", background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)", borderRadius: "4px", padding: "0.15rem 0.5rem", color: "#6ee7b7" }}>
+                    <span style={{ color: "#4ade80", fontWeight: 600 }}>{k}</span>: {v}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {evt.type === "reasoning_loop" && evt.metadata && Object.keys(evt.metadata).length > 0 && (
           <div style={{ marginTop: "0.5rem", display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
             {Object.entries(evt.metadata).map(([k, v]) => (
@@ -173,6 +210,13 @@ export default function AgentActivity() {
                 onClick={() => setGroupByAgent((p) => !p)}
               >
                 Group by agent
+              </button>
+              <button
+                type="button"
+                className={`filter-chip ${autoScroll ? "is-active" : ""}`}
+                onClick={() => setAutoScroll((p) => !p)}
+              >
+                Auto-scroll
               </button>
             </div>
           </div>
@@ -248,6 +292,7 @@ export default function AgentActivity() {
         ) : (
           <div className="command-list" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {filtered.map((evt, idx) => renderEvent(evt, idx))}
+            <div ref={bottomRef} />
           </div>
         )}
       </div>

@@ -114,6 +114,11 @@ export default function Dashboard() {
   const [humanPaced, setHumanPaced] = useState(false);
   const [strictReporting, setStrictReporting] = useState(false);
   const [minReportConfidence, setMinReportConfidence] = useState("");
+  const [passiveOnly, setPassiveOnly] = useState(false);
+  const [wafBypass, setWafBypass] = useState(false);
+  const [useLiveScan, setUseLiveScan] = useState(false);
+  const [liveScanDepth, setLiveScanDepth] = useState("standard");
+  const [liveScanConcurrency, setLiveScanConcurrency] = useState("");
   const [loginSteps, setLoginSteps] = useState([]);
   const [impactGoals, setImpactGoals] = useState(DEFAULT_IMPACT_GOALS);
 
@@ -202,6 +207,7 @@ export default function Dashboard() {
       useNuclei, useZap, useXSSMap, useUISimulation, useMLTriage, useAttackPath,
       useFalsePositiveReview, useRemediationPlanner, useRecentCVEFeed, usePostScanValidation, useAIToolCalling,
       aggressiveExploitation, humanPaced, strictReporting, minReportConfidence,
+      passiveOnly, wafBypass, useLiveScan, liveScanDepth, liveScanConcurrency,
       loginSteps, impactGoals,
     };
   }
@@ -239,6 +245,11 @@ export default function Dashboard() {
     if (cfg.humanPaced !== undefined) setHumanPaced(cfg.humanPaced);
     if (cfg.strictReporting !== undefined) setStrictReporting(cfg.strictReporting);
     if (cfg.minReportConfidence !== undefined) setMinReportConfidence(cfg.minReportConfidence);
+    if (cfg.passiveOnly !== undefined) setPassiveOnly(cfg.passiveOnly);
+    if (cfg.wafBypass !== undefined) setWafBypass(cfg.wafBypass);
+    if (cfg.useLiveScan !== undefined) setUseLiveScan(cfg.useLiveScan);
+    if (cfg.liveScanDepth !== undefined) setLiveScanDepth(cfg.liveScanDepth);
+    if (cfg.liveScanConcurrency !== undefined) setLiveScanConcurrency(cfg.liveScanConcurrency);
     if (Array.isArray(cfg.loginSteps)) setLoginSteps(cfg.loginSteps.map((s) => ({ ...s })));
     if (Array.isArray(cfg.impactGoals)) setImpactGoals(cfg.impactGoals);
   }
@@ -363,6 +374,11 @@ export default function Dashboard() {
         humanPaced: humanPaced || undefined,
         strictReporting: strictReporting || undefined,
         minReportConfidence: strictReporting && minReportConfidence.trim() ? Number(minReportConfidence) : undefined,
+        passiveOnly: passiveOnly || undefined,
+        wafBypass: wafBypass || undefined,
+        useLiveScan: useLiveScan || undefined,
+        liveScanDepth: useLiveScan && liveScanDepth ? liveScanDepth : undefined,
+        liveScanConcurrency: useLiveScan && liveScanConcurrency ? Number(liveScanConcurrency) : undefined,
         impactGoals,
       },
       scope: {
@@ -693,6 +709,42 @@ export default function Dashboard() {
                   <label>
                     Min confidence (0.0–1.0)
                     <input type="number" min="0" max="1" step="0.05" value={minReportConfidence} onChange={(e) => setMinReportConfidence(e.target.value)} placeholder="0.75" />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div className="surface">
+              <div className="toolbar" style={{ marginBottom: 12 }}>
+                <strong>Probe methodology</strong>
+                <span className="chip chip--muted">Scan behavior &amp; technique variation</span>
+              </div>
+              <div className="form-grid form-grid--wide">
+                <label className="check">
+                  <input type="checkbox" checked={passiveOnly} onChange={(e) => { setPassiveOnly(e.target.checked); if (e.target.checked) setAggressiveExploitation(false); }} />
+                  Passive-only mode (no active probes — headers, cookies, TLS, secrets-in-JS only)
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={wafBypass} onChange={(e) => setWafBypass(e.target.checked)} />
+                  WAF bypass variants (polymorphic payloads for XSS, SQLi, SSTI when blocked)
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={useLiveScan} onChange={(e) => setUseLiveScan(e.target.checked)} />
+                  Live scan (probe endpoints immediately as they are discovered — Burp Live Audit style)
+                </label>
+              </div>
+              {useLiveScan && (
+                <div className="form-grid" style={{ marginTop: 12 }}>
+                  <label>
+                    Live scan depth
+                    <select value={liveScanDepth} onChange={(e) => setLiveScanDepth(e.target.value)}>
+                      <option value="shallow">Shallow — XSS reflection &amp; open-redirect only</option>
+                      <option value="standard">Standard — + SQLi, SSTI, host-header injection, TRACE/XST</option>
+                    </select>
+                  </label>
+                  <label>
+                    Live scan concurrency
+                    <input type="number" min="1" max="20" value={liveScanConcurrency} onChange={(e) => setLiveScanConcurrency(e.target.value)} placeholder="3 (default)" />
                   </label>
                 </div>
               )}

@@ -6,7 +6,6 @@ import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 const TABS = [
   { id: "history", label: "HTTP history" },
   { id: "site-map", label: "Site map" },
-  { id: "browser", label: "Proxy browser" },
   { id: "passive", label: "Passive findings" },
   { id: "repeater", label: "Repeater" },
   { id: "intruder", label: "Intruder" },
@@ -378,8 +377,6 @@ export default function Proxy() {
           onUseScanTemplate={useScanTemplate}
         />
       )}
-
-      {tab === "browser" && <BrowserTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} onRefreshHistory={loadRequests} />}
 
       {tab === "passive" && <PassiveFindingsTab apiBase={API_BASE} apiKey={API_KEY} workspaceId={WORKSPACE_ID} />}
 
@@ -1313,8 +1310,36 @@ function ConfigureTab({ settings }) {
     anchor.remove();
     URL.revokeObjectURL(objectURL);
   };
+
+  function openProxyBrowser() {
+    const width = 1280;
+    const height = 900;
+    const left = Math.max(0, Math.floor((window.screen.width - width) / 2));
+    const top = Math.max(0, Math.floor((window.screen.height - height) / 2));
+    window.open(
+      `/proxy-browser?proxyHost=${encodeURIComponent(settings.host)}&proxyPort=${encodeURIComponent(settings.port)}&mitm=${settings.mitmEnabled ? "1" : "0"}`,
+      "proxy-browser",
+      `width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,scrollbars=1,resizable=1`,
+    );
+  }
+
   return (
-    <div className="two-column-grid">
+    <div>
+      <section className="card" style={{ marginBottom: "1rem" }}>
+        <h2>Pop-out proxy browser</h2>
+        <p className="meta" style={{ marginTop: 6 }}>
+          Open a dedicated browser window pre-configured to route all traffic through the intercepting proxy.
+          The CA certificate is automatically trusted so HTTPS sites are captured without certificate warnings.
+        </p>
+        <div className="button-row" style={{ marginTop: 12 }}>
+          <button type="button" onClick={openProxyBrowser}>⎋ Open proxy browser</button>
+          {settings.mitmEnabled && (
+            <button type="button" onClick={downloadCA} className="button-secondary">Download CA certificate</button>
+          )}
+        </div>
+      </section>
+
+      <div className="two-column-grid">
       <section className="card">
         <h2>Browser bootstrap</h2>
         {settings.mitmEnabled && (
@@ -1369,6 +1394,7 @@ PROXY_CA_AUTOGENERATE=true`}</pre>
           </>
         )}
       </section>
+      </div>
     </div>
   );
 }
