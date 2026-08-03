@@ -456,9 +456,9 @@ func TestApplyStrictReportingFilterKeepsVerifiedHighSeverity(t *testing.T) {
 		Title:      "OAuth token replay",
 		Sources:    []string{"scanner", "burp"},
 		EvidenceFields: map[string]string{
-			"evidenceQuality":      "valid",
-			"preReport.verified":   "true",
-			"preReport.verifiedBy": "oauth_session_probe@v1",
+			"evidenceQuality":         "valid",
+			"preReport.verified":      "true",
+			"preReport.verifiedBy":    "oauth_session_probe@v1",
 			"preReport.pocTranscript": "POST /oauth/token -> 200",
 		},
 	}}
@@ -502,9 +502,9 @@ func TestApplyStrictReportingFilterSuppressesUncorroboratedHighSeverity(t *testi
 		Confidence: 0.95,
 		Title:      "OAuth token replay",
 		EvidenceFields: map[string]string{
-			"evidenceQuality":        "valid",
-			"preReport.verified":     "true",
-			"preReport.verifiedBy":   "oauth_session_probe@v1",
+			"evidenceQuality":         "valid",
+			"preReport.verified":      "true",
+			"preReport.verifiedBy":    "oauth_session_probe@v1",
 			"preReport.pocTranscript": "POST /oauth/token -> 200",
 		},
 	}}
