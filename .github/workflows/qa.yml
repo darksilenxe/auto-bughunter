@@ -65,17 +65,38 @@ jobs:
 
       - name: Accuracy benchmark regression gate
         run: |
+          mkdir -p /tmp/accuracy-out
           go test ./internal/accuracybench/... ./cmd/accuracy-bench/...
           go build -o /tmp/accuracy-bench ./cmd/accuracy-bench
+          set +e
           /tmp/accuracy-bench \
             -corpus ./cmd/accuracy-bench/testdata/corpus \
             -actuals ./cmd/accuracy-bench/testdata/actuals \
             -baseline ./cmd/accuracy-bench/testdata/baseline/report.json \
-            -delta-output-md /tmp/accuracy-delta.md \
+            -delta-output-md /tmp/accuracy-out/delta.md \
             -fail-on-regression \
             -tolerance 0.02 \
-            -output-json /tmp/accuracy-report.json \
-            -output-md /tmp/accuracy-report.md
+            -output-json /tmp/accuracy-out/report.json \
+            -output-md /tmp/accuracy-out/report.md
+          status=$?
+          set -e
+          if [ -f /tmp/accuracy-out/report.md ]; then
+            cat /tmp/accuracy-out/report.md
+          fi
+          if [ -f /tmp/accuracy-out/delta.md ]; then
+            echo
+            cat /tmp/accuracy-out/delta.md
+          fi
+          exit $status
+
+      - name: Upload accuracy benchmark diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-accuracy-diagnostics
+          path: /tmp/accuracy-out
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Replay planner regression gate
         run: |
