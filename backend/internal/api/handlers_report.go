@@ -22,11 +22,11 @@ import (
 // Query-string overrides (?strict=true&minConfidence=0.85) take precedence
 // over the values stored on job.Options so operators can experiment without
 // mutating persisted scan options.
-func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.ScanJob, int, float64, bool) {
+func applyStrictReportingFilter(job *model.ScanJob, r *http.Request, defaultStrict bool) (*model.ScanJob, int, float64, bool) {
 	if job == nil {
 		return job, 0, 0, false
 	}
-	strict := job.Options.StrictReporting
+	strict := job.Options.StrictReporting || defaultStrict
 	threshold := job.Options.MinReportConfidence
 	if r != nil {
 		q := r.URL.Query()
@@ -75,6 +75,15 @@ func applyStrictReportingFilter(job *model.ScanJob, r *http.Request) (*model.Sca
 	return &clone, suppressed, threshold, true
 }
 
+func strictReportingDefaultForReportFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", "pdf", "md", "markdown", "html", "csv", "sarif":
+		return true
+	default:
+		return false
+	}
+}
+
 func isStrictReportingExempt(f model.Finding) bool {
 	switch strings.ToLower(strings.TrimSpace(f.Category)) {
 	case "governance", "operations":
@@ -101,10 +110,36 @@ func strictReportingSuppressionReason(f model.Finding, threshold float64) string
 	if highImpact && !verified {
 		return "high_severity_not_verified"
 	}
+	if highImpact && !findingHasHighSeverityCorroboration(f) {
+		return "high_severity_uncorroborated"
+	}
+	if highImpact && !findingHasReplayableProof(f) {
+		return "high_severity_missing_replayable_proof"
+	}
 	if (highImpact || strictCategoryNeedsProof(f.Category)) && hasProofGap {
 		return "missing_required_proof"
 	}
 	return ""
+}
+
+func findingHasReplayableProof(f model.Finding) bool {
+	switch strings.ToLower(strings.TrimSpace(f.Category)) {
+	case "governance", "operations":
+		return true
+	}
+	if strings.TrimSpace(f.PoC) != "" && len(f.ReproductionSteps) > 0 {
+		return true
+	}
+	if f.EvidenceFields != nil && strings.TrimSpace(f.EvidenceFields["preReport.pocTranscript"]) != "" {
+		return true
+	}
+	for _, artifact := range f.ProofArtifacts {
+		switch strings.ToLower(strings.TrimSpace(artifact.Type)) {
+		case "poc-transcript", "cve_poc", "curl", "script":
+			return true
+		}
+	}
+	return false
 }
 
 func strictVerifierStamp(f model.Finding) string {
@@ -194,7 +229,7 @@ func (s *Server) serveMainReport(w http.ResponseWriter, r *http.Request, scanID 
 		return
 	}
 
-	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r)
+	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r, strictReportingDefaultForReportFormat(format))
 	if strictApplied {
 		w.Header().Set("X-Strict-Reporting", "true")
 		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))
@@ -354,6 +389,8 @@ func (s *Server) serveSingleFindingReport(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	original := job
+
 	finding, found := report.FindingByID(job.Findings, findingID)
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "finding not found"})
@@ -361,6 +398,23 @@ func (s *Server) serveSingleFindingReport(w http.ResponseWriter, r *http.Request
 	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r, strictReportingDefaultForReportFormat(format))
+	if strictApplied {
+		w.Header().Set("X-Strict-Reporting", "true")
+		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))
+		w.Header().Set("X-Strict-Reporting-Suppressed", fmt.Sprintf("%d", suppressed))
+	}
+	finding, found = report.FindingByID(job.Findings, findingID)
+	if !found {
+		if strictApplied {
+			if _, existed := report.FindingByID(original.Findings, findingID); existed {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "finding suppressed by strict reporting; pass strict=false to override"})
+				return
+			}
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "finding not found"})
+		return
+	}
 	platform := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("platform")))
 	switch format {
 	case "json":
@@ -390,7 +444,7 @@ func (s *Server) serveBugBountyZip(w http.ResponseWriter, r *http.Request, scanI
 	if !ok {
 		return
 	}
-	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r)
+	job, suppressed, threshold, strictApplied := applyStrictReportingFilter(job, r, true)
 	if strictApplied {
 		w.Header().Set("X-Strict-Reporting", "true")
 		w.Header().Set("X-Strict-Reporting-Min-Confidence", fmt.Sprintf("%.2f", threshold))

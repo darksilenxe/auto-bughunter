@@ -167,7 +167,7 @@ func TestApplyStrictReportingFilter_FiltersLowConfidence(t *testing.T) {
 			{ID: "4", Confidence: 0.0, Severity: model.SeverityInfo, Title: "ops-kept", Category: "operations"},
 		},
 	}
-	filtered, suppressed, threshold, applied := applyStrictReportingFilter(job, nil)
+	filtered, suppressed, threshold, applied := applyStrictReportingFilter(job, nil, false)
 	if !applied || filtered == nil {
 		t.Fatal("expected strict filter to apply")
 	}
@@ -192,7 +192,7 @@ func TestApplyStrictReportingFilter_QueryOverrideEnables(t *testing.T) {
 	}
 	req := httptest.NewRequest("GET", "/api/report/abc?strict=true&minConfidence=0.6", nil).
 		WithContext(context.Background())
-	filtered, suppressed, threshold, applied := applyStrictReportingFilter(job, req)
+	filtered, suppressed, threshold, applied := applyStrictReportingFilter(job, req, false)
 	if !applied {
 		t.Fatal("expected strict filter to be applied via query string")
 	}
