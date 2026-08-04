@@ -63,6 +63,7 @@ stamped on 2026-08-03 via shadow pre-report verifier stamp propagation using
 | `active_xxe.go` | ✅ | ✅ | Migrated: `payloadClass=xxe`, `responseShape=xml` added. |
 | `browser_storage_probe.go` | ➖ | ➖ | Browser observation. |
 | `clickjacking_probe.go` | ✅ | ✅ | Migrated: `responseShape=html` added. |
+| `h2c_smuggling_probe.go` | ✅ | ➖ | New probe; evidence fields include `findingType`, `validationType`, `oracleName`. Stamp deferred. |
 | `cloud_storage_probe.go` | ➖ | ➖ | Bucket enum. |
 | `command_injection_probe.go` | ✅ | ✅ | Migrated: `param`, `payloadClass=cmd-injection` added. |
 | `cross_domain_policy_probe.go` | ➖ | ➖ | Fixed file. |

@@ -366,6 +366,8 @@ func canonicalCategory(category string) string {
 		return "csrf"
 	case "clickjacking", "ui_redress", "ui_redressing":
 		return "clickjacking"
+	case "h2c_smuggling", "h2c_smuggler", "http2_cleartext_smuggling", "request_smuggling":
+		return "h2c_smuggling"
 	case "prototype_pollution", "prototype_polution", "prototype-pollution", "prototypepollution":
 		return "prototype_pollution"
 	case "authentication", "auth", "session_auth", "oauth", "oidc":

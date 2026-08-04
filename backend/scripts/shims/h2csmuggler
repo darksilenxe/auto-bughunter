@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shim — runs h2csmuggler inside the `h2csmuggler-service` Docker Compose sidecar.
+exec /usr/local/bin/sidecar-exec h2csmuggler-service h2csmuggler "$@"
