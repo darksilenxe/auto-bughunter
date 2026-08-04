@@ -528,6 +528,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
 	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
 	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
+	findings = append(findings, s.runH2CSmugglingProbe(ctx, input)...)
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)

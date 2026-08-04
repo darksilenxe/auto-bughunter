@@ -344,6 +344,45 @@ services:
       retries: 3
       start_period: 60s
 
+  # h2csmuggler Service — optional sidecar that probes targets for HTTP/2
+  # cleartext (h2c) upgrade acceptance and request-smuggling anomalies.
+  # Consumed by the scanner's h2c_smuggling_probe via the toolclient.
+  # Gated behind the `h2csmuggler` compose profile so it doesn't start
+  # by default:
+  #   docker compose --profile h2csmuggler up -d h2csmuggler-service
+  h2csmuggler-service:
+    build:
+      context: ./sidecars/h2csmuggler-service
+    profiles: ["h2csmuggler"]
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${H2CSMUGGLER_LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8098:8098"
+    volumes:
+      - sidecar_certs:/certs:ro
+    restart: unless-stopped
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8098"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import ssl,urllib.request; ctx=ssl.create_default_context(cafile='/certs/server.crt'); urllib.request.urlopen('https://h2csmuggler-service:8098/health', timeout=10, context=ctx)\""]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models.
   # Gated behind the `ollama` compose profile so it doesn't start by default
