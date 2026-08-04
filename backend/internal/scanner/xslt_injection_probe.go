@@ -107,6 +107,8 @@ func (s *Service) runXSLTInjectionProbe(ctx context.Context, input RunInput, bod
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
 				probed = append(probed, ep)
+				// Phase 2 coverage accounting.
+				RecordProbedKey(http.MethodPost, ep, "")
 				if err == nil && resp != nil {
 					_ = resp.Body.Close()
 				}
@@ -148,6 +150,8 @@ func (s *Service) runXSLTInjectionProbe(ctx context.Context, input RunInput, bod
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			attempts++
+			// Phase 2 coverage accounting.
+			RecordProbedKey(http.MethodPost, ep, "")
 			if err != nil || resp == nil {
 				continue
 			}

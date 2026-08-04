@@ -92,6 +92,8 @@ func (s *Service) runDOMClobberingProbe(ctx context.Context, input RunInput, bod
 			if err != nil {
 				continue
 			}
+			// Phase 2 coverage accounting.
+			RecordProbedKey(http.MethodGet, testURL, param)
 
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 			if err != nil {

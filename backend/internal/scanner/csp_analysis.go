@@ -1,12 +1,15 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
 )
 
 var cspMetaTagPattern = regexp.MustCompile(`(?is)<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]+content=["']([^"']+)["']`)
@@ -97,4 +100,54 @@ func cspFinding(target, id string, severity model.Severity, title, description, 
 			"csp":            csp,
 		},
 	}
+}
+
+// cspAnalysisSeededMax is the maximum number of seeded runtime endpoints the
+// helper fetches for per-path CSP analysis. Kept small because each fetch is
+// an extra HTTP round-trip for a passive (header-only) check.
+const cspAnalysisSeededMax = 10
+
+// runCSPAnalysisSeeded fetches up to cspAnalysisSeededMax seeded runtime
+// endpoints and runs the passive CSP analysis probe against each response
+// header. This closes false-negatives where an admin or API sub-path carries
+// a weaker Content-Security-Policy than the root page.
+func (s *Service) runCSPAnalysisSeeded(ctx context.Context, input RunInput, max int) []model.Finding {
+	if max <= 0 {
+		max = cspAnalysisSeededMax
+	}
+	seeds := input.Options.SeedRuntimeEndpoints
+	if len(seeds) == 0 {
+		return nil
+	}
+	seen := map[string]bool{input.Target: true}
+	var findings []model.Finding
+	count := 0
+	for _, u := range seeds {
+		if count >= max {
+			break
+		}
+		if seen[u] || !scope.IsURLInScope(u, input.Scope) {
+			continue
+		}
+		seen[u] = true
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		ApplyAuthProfile(req, input.AuthProfile)
+		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		if err != nil || resp == nil {
+			continue
+		}
+		header := resp.Header.Clone()
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+		count++
+		seededInput := input
+		seededInput.Target = u
+		// Phase 2 coverage accounting.
+		RecordProbedKey(http.MethodGet, u, "")
+		findings = append(findings, s.runCSPAnalysisProbe(seededInput, header, string(bodyBytes))...)
+	}
+	return findings
 }

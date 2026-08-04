@@ -1,12 +1,16 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scope"
 )
 
 // scriptTagPattern matches <script ...> opening tags (including self-closing
@@ -48,6 +52,8 @@ func (s *Service) runSRIProbe(input RunInput, bodyText string) []model.Finding {
 	if err != nil || base.Host == "" {
 		return nil
 	}
+	// Phase 2 coverage accounting.
+	RecordProbedKey("GET", input.Target, "")
 
 	var missing []sriResource
 	seen := map[string]bool{}
@@ -146,4 +152,51 @@ func (s *Service) runSRIProbe(input RunInput, bodyText string) []model.Finding {
 			},
 		},
 	}
+}
+
+// sriSeededMax is the maximum number of seeded runtime endpoints the helper
+// fetches for per-page SRI analysis. Kept small because each fetch is an
+// extra HTTP round-trip for a passive body scan.
+const sriSeededMax = 10
+
+// runSRISeeded fetches up to sriSeededMax seeded runtime endpoints and runs
+// the passive SRI probe against each response body. SPA sub-routes often load
+// different third-party scripts than the root page — this closes false-
+// negatives for missing SRI on those pages.
+func (s *Service) runSRISeeded(ctx context.Context, input RunInput, max int) []model.Finding {
+	if max <= 0 {
+		max = sriSeededMax
+	}
+	seeds := input.Options.SeedRuntimeEndpoints
+	if len(seeds) == 0 {
+		return nil
+	}
+	seen := map[string]bool{input.Target: true}
+	var findings []model.Finding
+	count := 0
+	for _, u := range seeds {
+		if count >= max {
+			break
+		}
+		if seen[u] || !scope.IsURLInScope(u, input.Scope) {
+			continue
+		}
+		seen[u] = true
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		ApplyAuthProfile(req, input.AuthProfile)
+		resp, err := s.doRequestWithRetry(ctx, req, input.Options)
+		if err != nil || resp == nil {
+			continue
+		}
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		_ = resp.Body.Close()
+		count++
+		seededInput := input
+		seededInput.Target = u
+		findings = append(findings, s.runSRIProbe(seededInput, string(bodyBytes))...)
+	}
+	return findings
 }

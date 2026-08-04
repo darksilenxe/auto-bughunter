@@ -60,8 +60,8 @@ func TestRunH2CSmugglingProbe_H2CUpgradeAccepted(t *testing.T) {
 	if findings[0].Category != "h2c-smuggling" {
 		t.Errorf("unexpected category: %s", findings[0].Category)
 	}
-	if findings[0].Severity != model.SeverityMedium {
-		t.Errorf("unexpected severity (expected medium after proof-policy downgrade): %s", findings[0].Severity)
+	if findings[0].Severity != model.SeverityHigh {
+		t.Errorf("unexpected severity (expected high — proof-policy coverage 2/3 >= 0.66, no downgrade): %s", findings[0].Severity)
 	}
 	if findings[0].CWE != "CWE-444" {
 		t.Errorf("unexpected CWE: %s", findings[0].CWE)
@@ -100,8 +100,8 @@ func TestRunH2CSmugglingProbe_SmugglingAnomaly(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
 	}
-	if findings[0].Severity != model.SeverityHigh {
-		t.Errorf("expected high severity for smuggling anomaly after proof-policy downgrade, got %s", findings[0].Severity)
+	if findings[0].Severity != model.SeverityCritical {
+		t.Errorf("expected critical severity for smuggling anomaly (proof-policy coverage 3/3 = 1.0, no downgrade), got %s", findings[0].Severity)
 	}
 }
 

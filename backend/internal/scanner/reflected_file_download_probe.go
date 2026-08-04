@@ -86,6 +86,8 @@ func (s *Service) runReflectedFileDownloadProbe(ctx context.Context, input RunIn
 				ApplyAuthProfile(req, input.AuthProfile)
 				resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 				attempts++
+				// Phase 2 coverage accounting.
+				RecordProbedKey(http.MethodGet, probeURL, param)
 				if err != nil || resp == nil {
 					continue
 				}

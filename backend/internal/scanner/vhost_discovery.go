@@ -59,6 +59,8 @@ func (s *Service) runVhostDiscoveryProbe(ctx context.Context, input RunInput, _ 
 			Message: "Probing for hidden virtual hosts via Host header rotation",
 		})
 	}
+	// Phase 2 coverage accounting.
+	RecordProbedKey(http.MethodGet, input.Target, "")
 
 	baseline, ok := s.fetchWithHost(ctx, input, base.String(), "")
 	if !ok {

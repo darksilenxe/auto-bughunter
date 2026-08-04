@@ -67,6 +67,8 @@ func (s *Service) runCachePoisoningProbe(ctx context.Context, input RunInput, _ 
 			Message: "Probing for web cache poisoning via unkeyed header reflection",
 		})
 	}
+	// Phase 2 coverage accounting.
+	RecordProbedKey(http.MethodGet, input.Target, "")
 
 	baseClient := s.httpClient
 	if input.Session != nil {

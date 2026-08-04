@@ -73,6 +73,9 @@ func (s *Service) runCSSInjectionProbe(ctx context.Context, input RunInput, body
 			ApplyAuthProfile(req, input.AuthProfile)
 			resp, err := s.doRequestWithRetry(ctx, req, input.Options)
 			attempts++
+			// Phase 2 coverage accounting: record this probe key so the
+			// surface-gap detector subtracts it from the inventory.
+			RecordProbedKey(http.MethodGet, probeURL, param)
 			if err != nil || resp == nil {
 				continue
 			}

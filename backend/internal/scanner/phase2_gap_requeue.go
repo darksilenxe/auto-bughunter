@@ -74,9 +74,13 @@ func (s *Service) runGapReQueuePass(ctx context.Context, input RunInput, bodyTex
 	findings = append(findings, s.runActiveXSSProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runActiveXXEProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.gapReQueueClickjackingProbe(ctx, gapInput, newURLs)...)
+	findings = append(findings, s.gapReQueueCachePoisoningProbe(ctx, gapInput, newURLs)...)
+	findings = append(findings, s.gapReQueueVhostProbe(ctx, gapInput, newURLs)...)
 	findings = append(findings, s.runCommandInjectionProbe(ctx, gapInput, bodyText)...)
+	findings = append(findings, s.runCSSInjectionProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runDanglingMarkupProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.RunDeserializationProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
+	findings = append(findings, s.runDOMClobberingProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.RunDOMXSSProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
 	findings = append(findings, s.runFileUploadProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runFormulaInjectionProbe(ctx, gapInput, bodyText)...)
@@ -87,13 +91,17 @@ func (s *Service) runGapReQueuePass(ctx context.Context, input RunInput, bodyTex
 	findings = append(findings, s.RunOAuthProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
 	findings = append(findings, s.RunOAuthSessionProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
 	findings = append(findings, s.runPasswordResetProbe(ctx, gapInput)...)
+	findings = append(findings, s.runRateLimitProbe(ctx, gapInput, bodyText)...)
+	findings = append(findings, s.runReflectedFileDownloadProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.RunSAMLProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
 	findings = append(findings, s.RunSessionLifecycleProbe(ctx, gapInput.Target, gapInput.Scope, gapInput.Options, gapInput.AuthProfile, gapInput.Emit)...)
 	findings = append(findings, s.runSMTPInjectionProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runSSIInjectionProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runVerboseErrorProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runWebSocketProbe(ctx, gapInput, bodyText)...)
+	findings = append(findings, s.runXSLTInjectionProbe(ctx, gapInput, bodyText)...)
 	findings = append(findings, s.runXSSIJSONPProbe(ctx, gapInput, bodyText)...)
+	findings = append(findings, s.runZipSlipProbe(ctx, gapInput, bodyText)...)
 
 	for i := range findings {
 		if !strings.Contains(strings.ToLower(findings[i].Description), "gap-requeue") {
@@ -194,6 +202,49 @@ func (s *Service) gapReQueueClickjackingProbe(ctx context.Context, input RunInpu
 		urlInput := input
 		urlInput.Target = u
 		findings = append(findings, s.runClickjackingProbe(urlInput, header)...)
+	}
+	return findings
+}
+
+// gapReQueueCachePoisoningMax bounds how many re-queued gap URLs receive a
+// cache-poisoning header-injection check on the second pass.
+const gapReQueueCachePoisoningMax = 5
+
+// gapReQueueCachePoisoningProbe runs the cache-poisoning probe against each
+// of the supplied gap URLs (up to gapReQueueCachePoisoningMax), mirroring the
+// pattern used by gapReQueueClickjackingProbe. This ensures endpoints
+// discovered late (via runtime-XHR extraction or the hidden-parameter miner)
+// still receive unkeyed-header reflection checks within the same scan.
+func (s *Service) gapReQueueCachePoisoningProbe(ctx context.Context, input RunInput, urls []string) []model.Finding {
+	var findings []model.Finding
+	for i, u := range urls {
+		if i >= gapReQueueCachePoisoningMax {
+			break
+		}
+		urlInput := input
+		urlInput.Target = u
+		findings = append(findings, s.runCachePoisoningProbe(ctx, urlInput, "")...)
+	}
+	return findings
+}
+
+// gapReQueueVhostMax bounds how many re-queued gap URLs receive a virtual-host
+// discovery check on the second pass.
+const gapReQueueVhostMax = 5
+
+// gapReQueueVhostProbe runs the vhost-discovery probe against each of the
+// supplied gap URLs (up to gapReQueueVhostMax). This ensures late-discovered
+// endpoints also get Host-header rotation coverage, catching hidden virtual
+// hosts that are only reachable via sub-paths not present at scan start.
+func (s *Service) gapReQueueVhostProbe(ctx context.Context, input RunInput, urls []string) []model.Finding {
+	var findings []model.Finding
+	for i, u := range urls {
+		if i >= gapReQueueVhostMax {
+			break
+		}
+		urlInput := input
+		urlInput.Target = u
+		findings = append(findings, s.runVhostDiscoveryProbe(ctx, urlInput, "")...)
 	}
 	return findings
 }

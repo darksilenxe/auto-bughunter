@@ -87,6 +87,8 @@ func (s *Service) runZipSlipProbe(ctx context.Context, input RunInput, bodyText 
 		if !scope.IsURLInScope(ep, input.Scope) {
 			continue
 		}
+		// Phase 2 coverage accounting.
+		RecordProbedKey(http.MethodPost, ep, "")
 
 		fid := "zip-slip-" + hhSlug(ep)
 		if emitted[fid] {

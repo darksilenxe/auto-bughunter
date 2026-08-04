@@ -83,6 +83,9 @@ func (s *Service) runRateLimitProbe(ctx context.Context, input RunInput, body st
 			continue
 		}
 
+		// Phase 2 coverage accounting: record this endpoint as probed so
+		// the surface-gap detector subtracts it from the inventory.
+		RecordProbedKey(http.MethodPost, ep, "")
 		throttled, lastStatus, lastBody, sent := s.rateLimitBurst(ctx, input, ep, rateLimitMaxRequests)
 		if sent == 0 {
 			continue
