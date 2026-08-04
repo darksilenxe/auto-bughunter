@@ -533,6 +533,7 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// baseline. This closes FNs where an admin/API sub-path carries a weaker
 	// policy than the root page.
 	findings = append(findings, s.runCSPAnalysisSeeded(ctx, input, 10)...)
+	findings = append(findings, s.runH2CSmugglingProbe(ctx, input)...)
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
