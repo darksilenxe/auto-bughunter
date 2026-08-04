@@ -276,6 +276,30 @@ var rulesByCategory = map[string][]requirement{
 				strings.TrimSpace(f.EvidenceFields["browserValidation.textChanged"]) == "true"
 		}},
 	},
+	// h2c_smuggling covers HTTP/2 cleartext upgrade acceptance and
+	// request-smuggling anomalies detected by the h2csmuggler-service sidecar.
+	// Two rules required: (1) the sidecar oracle must be named and the
+	// finding-type recorded; (2) an affected URL must be present. A third
+	// optional rule (anomalous-path evidence) raises coverage for full
+	// h2c-smuggling-anomaly findings.
+	"h2c_smuggling": {
+		{name: "oracle_and_finding_type", hit: func(blob string, f model.Finding) bool {
+			return strings.EqualFold(strings.TrimSpace(f.EvidenceFields["oracleName"]), "h2c_smuggling_probe") ||
+				hasAny(blob, "h2c-upgrade-accepted", "h2c-upgrade-echoed", "h2c-smuggling-anomaly",
+					"h2c upgrade", "switching protocols", "upgrade: h2c", "http/2 cleartext")
+		}},
+		{name: "affected_url", hit: func(blob string, f model.Finding) bool {
+			return strings.TrimSpace(f.AffectedURL) != "" || hasAny(blob, "http://", "https://")
+		}},
+		// Optional but satisfiable: anomalous-path differential evidence from
+		// the smuggling step. Present for h2c-smuggling-anomaly findings.
+		{name: "anomalous_path_or_protocol_differential", hit: func(blob string, f model.Finding) bool {
+			return hasAny(blob, "anomalous_paths", "http/2", "protocol", "different status",
+				"baseline_status", "smuggle", "differential", "bypass") ||
+				strings.TrimSpace(f.EvidenceFields["evidence.anomalous_paths"]) != "" ||
+				strings.TrimSpace(f.EvidenceFields["evidence.baseline_status"]) != ""
+		}},
+	},
 }
 
 // categoryMinCoverage defines the minimum proof-policy coverage fraction
@@ -299,6 +323,10 @@ var categoryMinCoverage = map[string]float64{
 	"prototype_pollution": 0.50,
 	"headers":             0.50,
 	"wordlist":            0.50,
+	// h2c smuggling: 2 of 3 rules required (oracle+type + affected URL); the
+	// anomalous-path differential rule is optional. 0.66 ensures the two
+	// mandatory evidence items must both be satisfied for a valid finding.
+	"h2c_smuggling": 0.66,
 }
 
 func EvaluateFinding(f model.Finding) Result {
