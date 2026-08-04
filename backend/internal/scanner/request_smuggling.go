@@ -60,6 +60,8 @@ func (s *Service) runRequestSmugglingProbe(ctx context.Context, input RunInput, 
 			Message: "Probing for HTTP request smuggling (CL.TE/TE.CL desync) via timing differential",
 		})
 	}
+	// Phase 2 coverage accounting.
+	RecordProbedKey("POST", input.Target, "")
 
 	path := u.EscapedPath()
 	if path == "" {

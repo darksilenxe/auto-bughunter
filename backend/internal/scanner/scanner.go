@@ -528,6 +528,11 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
 	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
 	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
+	// CSP misconfigurations can vary per sub-path, so run the passive CSP
+	// check against seeded runtime endpoints (up to 10) in addition to the
+	// baseline. This closes FNs where an admin/API sub-path carries a weaker
+	// policy than the root page.
+	findings = append(findings, s.runCSPAnalysisSeeded(ctx, input, 10)...)
 	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
@@ -560,6 +565,10 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	findings = append(findings, s.runCSSInjectionProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runReflectedFileDownloadProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runSRIProbe(input, bodyText)...)
+	// SRI coverage varies per page — seeded endpoints may load different
+	// third-party scripts. Run the passive SRI check against them too
+	// (up to 10 pages, fetching body text on demand).
+	findings = append(findings, s.runSRISeeded(ctx, input, 10)...)
 	findings = append(findings, s.runMassAssignmentProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runAccountEnumerationProbe(ctx, input, bodyText)...)
 	findings = append(findings, s.runWebSocketProbe(ctx, input, bodyText)...)

@@ -102,6 +102,17 @@ Snapshot generated 2026-07-06 (Batch 3 — all rows complete).
 | `verbose_error_probe.go` | ✅ | ➖ | ✅ | ✅ | `malformedInputs` are fixed error-triggering payload shapes (SQL syntax, null byte, oversized int), not generic parameter names, so miner-param merging doesn't apply the same way as a query-fuzz wordlist (`param` ➖); `RecordProbedKey` records every (method, url, param) attempt. Now re-invoked by the gap-requeue pass. |
 | `websocket_probe.go` | ✅ | ➖ | ✅ | ✅ | `websocketCandidates` now also merges any `ws://`/`wss://` URL present in `options.SeedRuntimeEndpoints`; `RecordProbedKey` records every handshake URL attempted. Now re-invoked by the gap-requeue pass. |
 | `xssi_jsonp_probe.go` | ✅ | ✅ | ✅ | ✅ | Migrated: miner params merged in front of `jsonpCallbackParams`; `RecordProbedKey` added for both the JSONP-callback loop and the XSSI-array check. Now re-invoked by the gap-requeue pass. |
+| `cache_poisoning.go` | ➖ | ➖ | ✅ | ✅ | Single-URL header-injection check (no per-parameter loop, so `inv`/`param` ➖); `RecordProbedKey(GET, target, "")` added at probe entry. `gapReQueueCachePoisoningProbe` (budget 5) re-runs it against high-ROI gap URLs, mirroring `gapReQueueClickjackingProbe`. |
+| `css_injection_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes `SeedRuntimeEndpoints` for candidate URLs; payload is a fixed CSS breakout string (not a per-parameter wordlist), so `param` ➖; `RecordProbedKey(GET, probeURL, param)` added in the per-candidate loop. Now re-invoked by the gap-requeue pass. |
+| `csp_analysis.go` | ➖ | ➖ | ✅ | ✅ | Passive header-only check; `RecordProbedKey(GET, u, "")` added in `runCSPAnalysisSeeded`. `scanner.go` now calls `runCSPAnalysisSeeded` (bound 10) so seeded runtime endpoints also get per-path CSP coverage. |
+| `dom_clobbering_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes `SeedRuntimeEndpoints`; payload is a fixed named-element injection (not a param wordlist), so `param` ➖; `RecordProbedKey(GET, testURL, param)` added in the per-candidate loop. Now re-invoked by the gap-requeue pass. |
+| `rate_limit_probe.go` | ✅ | ➖ | ✅ | ✅ | Endpoints discovered via `loginDiscoverEndpoints` + `SeedRuntimeEndpoints`; fixed JSON burst payload (not a query-param wordlist), so `param` ➖; `RecordProbedKey(POST, ep, "")` added per candidate. Now re-invoked by the gap-requeue pass. |
+| `reflected_file_download_probe.go` | ✅ | ➖ | ✅ | ✅ | Consumes `SeedRuntimeEndpoints`; parameter list is fixed (`rfdParams`), so `param` ➖; `RecordProbedKey(GET, probeURL, param)` added in the per-candidate loop. Now re-invoked by the gap-requeue pass. |
+| `request_smuggling.go` | ➖ | ➖ | ✅ | ➖ | Single-URL raw-socket timing check (no per-endpoint enumeration, no param loop); `RecordProbedKey("POST", target, "")` added at probe entry. Gap-requeue not applicable — the probe already runs against a single target with no enumerable surface to re-walk. |
+| `sri_probe.go` | ➖ | ➖ | ✅ | ✅ | Passive body scan; `RecordProbedKey("GET", target, "")` added at entry. `runSRISeeded` (bound 10) now fetches seeded endpoints for per-page SRI coverage; `scanner.go` calls it after the baseline. |
+| `vhost_discovery.go` | ➖ | ➖ | ✅ | ✅ | Single-URL Host-header rotation (no per-parameter loop, so `inv`/`param` ➖); `RecordProbedKey(GET, target, "")` added at probe entry. `gapReQueueVhostProbe` (budget 5) re-runs it against high-ROI gap URLs. |
+| `xslt_injection_probe.go` | ✅ | ➖ | ✅ | ✅ | XSLT candidates are URL-shaped (no per-parameter query fuzz), so `param` ➖; `RecordProbedKey(POST, ep, "")` added in both the OAST and file-read candidate loops. Now re-invoked by the gap-requeue pass. |
+| `zip_slip_probe.go` | ✅ | ➖ | ✅ | ✅ | Upload endpoints discovered via `discoverUploadEndpoints` + `SeedRuntimeEndpoints`; archive entry-names are fixed traversal paths (not a query-param wordlist), so `param` ➖; `RecordProbedKey(POST, ep, "")` added per candidate. Now re-invoked by the gap-requeue pass. |
 
 ## Reference migration
 
@@ -181,6 +192,24 @@ Batch 3 closed out every remaining row in the table:
   gap-requeue pass to walk.
 
 Every row in the table is now ✅ or ➖ — no `⚠️` rows remain.
+
+Batch 4 (this PR) added the 12 probes that existed in the scanner but were
+previously absent from the audit table:
+
+- Added `RecordProbedKey` to the per-candidate loops of `css_injection_probe.go`,
+  `rate_limit_probe.go`, `reflected_file_download_probe.go`,
+  `xslt_injection_probe.go`, `zip_slip_probe.go`, and `dom_clobbering_probe.go`
+  and wired all six into `runGapReQueuePass` so late-discovered endpoints receive
+  a bounded second probe pass.
+- Added `RecordProbedKey` to the single-URL probes `cache_poisoning.go`,
+  `request_smuggling.go`, and `vhost_discovery.go`; added
+  `gapReQueueCachePoisoningProbe` and `gapReQueueVhostProbe` (each bounded to
+  5 URLs) in `phase2_gap_requeue.go` so late-discovered pages also get cache-
+  poisoning and vhost-discovery coverage.
+- Added `RecordProbedKey` to `sri_probe.go` and introduced `runSRISeeded`
+  (bound 10) for per-page SRI coverage of seeded runtime endpoints.
+- Added `runCSPAnalysisSeeded` (bound 10) to `csp_analysis.go` and called it
+  from `scanner.go` so seeded runtime endpoints receive per-path CSP analysis.
 
 ## Appendix — audit one-liner
 
