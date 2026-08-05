@@ -77,6 +77,23 @@ type Finding struct {
 	// from the finding's category/CWE by mitre.AnnotateFinding so the field
 	// behaves like a sibling of CWE/OWASPCategory.
 	MITRETechniques []string `json:"mitreTechniques,omitempty"`
+	// StableFingerprint is a deterministic SHA-256 digest of the finding's
+	// category, affected URL, affected parameter, and payload class. It
+	// stays constant across scan runs for the same issue so drift tracking
+	// and deduplication can use exact-match before fuzzy clustering.
+	StableFingerprint string `json:"stableFingerprint,omitempty"`
+	// AttackChainIDs holds the IDs of ExploitChain objects that this
+	// finding participates in, enabling the report renderer to link from
+	// an individual finding directly to the chains it feeds.
+	AttackChainIDs []string `json:"attackChainIds,omitempty"`
+	// ChainRole describes this finding's role within any attack chain it
+	// belongs to. Canonical values: "entry-point", "pivot", "impact".
+	ChainRole string `json:"chainRole,omitempty"`
+	// TimeToExploit is a human-readable estimate of the time an attacker
+	// would need to exploit this finding (e.g. "minutes", "hours", "days").
+	// Derived deterministically from Exploitability and Confidence during
+	// enrichment.
+	TimeToExploit string `json:"timeToExploit,omitempty"`
 }
 
 // ReportTemplateOptions allows callers to customize the cover/branding sections

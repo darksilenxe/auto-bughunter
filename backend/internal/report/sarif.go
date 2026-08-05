@@ -43,6 +43,7 @@ type sarifRule struct {
 	ShortDescription sarifText              `json:"shortDescription"`
 	FullDescription  sarifText              `json:"fullDescription,omitempty"`
 	HelpURI          string                 `json:"helpUri,omitempty"`
+	Help             *sarifText             `json:"help,omitempty"`
 	Properties       map[string]interface{} `json:"properties,omitempty"`
 }
 
@@ -50,15 +51,43 @@ type sarifText struct {
 	Text string `json:"text"`
 }
 
+type sarifFix struct {
+	Description    sarifText            `json:"description"`
+	ArtifactChanges []sarifArtifactChange `json:"artifactChanges,omitempty"`
+}
+
+type sarifArtifactChange struct {
+	ArtifactLocation sarifArtifactLocation `json:"artifactLocation"`
+	Replacements     []sarifReplacement    `json:"replacements,omitempty"`
+}
+
+type sarifReplacement struct {
+	DeletedRegion sarifRegion `json:"deletedRegion"`
+	InsertedContent sarifText  `json:"insertedContent,omitempty"`
+}
+
+type sarifRegion struct {
+	StartLine   int `json:"startLine,omitempty"`
+	StartColumn int `json:"startColumn,omitempty"`
+}
+
 type sarifResult struct {
-	RuleID     string                 `json:"ruleId"`
-	Level      string                 `json:"level"`
-	Message    sarifText              `json:"message"`
-	Locations  []sarifLocation        `json:"locations,omitempty"`
-	Properties map[string]interface{} `json:"properties,omitempty"`
+	RuleID           string                 `json:"ruleId"`
+	Level            string                 `json:"level"`
+	Message          sarifText              `json:"message"`
+	Locations        []sarifLocation        `json:"locations,omitempty"`
+	RelatedLocations []sarifRelatedLocation `json:"relatedLocations,omitempty"`
+	Fixes            []sarifFix             `json:"fixes,omitempty"`
+	Properties       map[string]interface{} `json:"properties,omitempty"`
 }
 
 type sarifLocation struct {
+	PhysicalLocation sarifPhysicalLocation `json:"physicalLocation"`
+}
+
+type sarifRelatedLocation struct {
+	ID               int                   `json:"id"`
+	Message          sarifText             `json:"message,omitempty"`
 	PhysicalLocation sarifPhysicalLocation `json:"physicalLocation"`
 }
 
@@ -91,12 +120,28 @@ func RenderSARIF(job *model.ScanJob, opts model.ReportTemplateOptions, ctx ...Re
 				FullDescription:  sarifText{Text: f.Description},
 				Properties:       map[string]interface{}{},
 			}
+			// Build a rich tags list from CWE, OWASP, and MITRE techniques.
+			tags := make([]string, 0, 4)
 			if f.CWE != "" {
 				rule.Properties["cwe"] = f.CWE
-				rule.Properties["tags"] = []string{f.CWE}
+				tags = append(tags, f.CWE)
 			}
 			if f.OWASPCategory != "" {
 				rule.Properties["owasp"] = f.OWASPCategory
+				tags = append(tags, f.OWASPCategory)
+			}
+			for _, t := range f.MITRETechniques {
+				tags = append(tags, t)
+			}
+			if len(tags) > 0 {
+				rule.Properties["tags"] = tags
+			}
+			// Populate the human-readable help text with the recommendation so
+			// SARIF consumers (GitHub Code Scanning, DefectDojo) surface it.
+			if f.Recommendation != "" {
+				rule.Help = &sarifText{Text: f.Recommendation}
+			} else if len(f.ReproductionSteps) > 0 {
+				rule.Help = &sarifText{Text: strings.Join(f.ReproductionSteps, " | ")}
 			}
 			rules = append(rules, rule)
 		}
@@ -111,12 +156,43 @@ func RenderSARIF(job *model.ScanJob, opts model.ReportTemplateOptions, ctx ...Re
 				"category":   f.Category,
 			},
 		}
+		if f.StableFingerprint != "" {
+			res.Properties["stableFingerprint"] = f.StableFingerprint
+		}
+		if f.TimeToExploit != "" {
+			res.Properties["timeToExploit"] = f.TimeToExploit
+		}
 		if uri := nonEmpty(f.AffectedURL, jobTarget(job)); uri != "" {
 			res.Locations = []sarifLocation{{
 				PhysicalLocation: sarifPhysicalLocation{
 					ArtifactLocation: sarifArtifactLocation{URI: uri},
 				},
 			}}
+		}
+		// relatedLocations: add the affected parameter as a second location
+		// so reviewers can see exactly where the vulnerable input is.
+		if f.AffectedParameter != "" && f.AffectedURL != "" {
+			res.RelatedLocations = []sarifRelatedLocation{{
+				ID:      1,
+				Message: sarifText{Text: "Vulnerable parameter: " + f.AffectedParameter},
+				PhysicalLocation: sarifPhysicalLocation{
+					ArtifactLocation: sarifArtifactLocation{URI: f.AffectedURL},
+				},
+			}}
+		}
+		// fixes: populate from ReproductionSteps/Recommendation so GitHub
+		// Code Scanning and other SARIF consumers can surface remediation hints.
+		if f.Recommendation != "" {
+			fix := sarifFix{
+				Description: sarifText{Text: f.Recommendation},
+			}
+			res.Fixes = append(res.Fixes, fix)
+		}
+		if len(f.ReproductionSteps) > 0 && f.Recommendation == "" {
+			fix := sarifFix{
+				Description: sarifText{Text: strings.Join(f.ReproductionSteps, "; ")},
+			}
+			res.Fixes = append(res.Fixes, fix)
 		}
 		results = append(results, res)
 	}
