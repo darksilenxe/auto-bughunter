@@ -374,27 +374,32 @@ func RenderPentestPDF(job *model.ScanJob, opts model.ReportTemplateOptions, ctx 
 		pdf.CellFormat(contentW, 7, "E. Compliance Crosswalk", "", 1, "L", false, 0, "")
 		pdf.SetFont("Helvetica", "", 8)
 		pdf.SetTextColor(60, 60, 60)
-		pdf.MultiCell(contentW, 5, latin1("Findings mapped to PCI DSS v4.0, HIPAA Security Rule, and SOC 2 (Common Criteria) controls. Empty cells indicate no deterministic mapping for the underlying CWE."), "", "L", false)
-		// Header row
-		pdf.SetFont("Helvetica", "B", 8)
+		pdf.MultiCell(contentW, 5, latin1("Findings mapped to PCI DSS v4.0, HIPAA Security Rule, SOC 2 (Common Criteria), GDPR, and NIST SP 800-53 Rev 5 controls. Empty cells indicate no deterministic mapping for the underlying CWE."), "", "L", false)
+		// Header row — squeeze column widths to fit the two new columns.
+		findingColW := contentW - 126
+		pdf.SetFont("Helvetica", "B", 7)
 		pdf.SetFillColor(241, 245, 249)
-		pdf.CellFormat(20, 6, "Severity", "1", 0, "C", true, 0, "")
-		pdf.CellFormat(contentW-110, 6, "Finding", "1", 0, "L", true, 0, "")
-		pdf.CellFormat(22, 6, "CWE", "1", 0, "C", true, 0, "")
-		pdf.CellFormat(22, 6, "PCI DSS", "1", 0, "C", true, 0, "")
-		pdf.CellFormat(22, 6, "HIPAA", "1", 0, "C", true, 0, "")
-		pdf.CellFormat(24, 6, "SOC 2", "1", 1, "C", true, 0, "")
-		pdf.SetFont("Helvetica", "", 7)
+		pdf.CellFormat(18, 6, "Severity", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(findingColW, 6, "Finding", "1", 0, "L", true, 0, "")
+		pdf.CellFormat(18, 6, "CWE", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(18, 6, "PCI DSS", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(18, 6, "HIPAA", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(18, 6, "SOC 2", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(18, 6, "GDPR", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(18, 6, "NIST", "1", 1, "C", true, 0, "")
+		pdf.SetFont("Helvetica", "", 6)
 		for _, m := range data.ComplianceMatrix {
 			c := severityColors[m.Severity]
 			pdf.SetTextColor(c[0], c[1], c[2])
-			pdf.CellFormat(20, 5, latin1(sevDisplay(m.Severity)), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(sevDisplay(m.Severity)), "1", 0, "C", false, 0, "")
 			pdf.SetTextColor(60, 60, 60)
-			pdf.CellFormat(contentW-110, 5, latin1(truncate(m.FindingTitle, 60)), "1", 0, "L", false, 0, "")
-			pdf.CellFormat(22, 5, latin1(m.CWE), "1", 0, "C", false, 0, "")
-			pdf.CellFormat(22, 5, latin1(truncate(m.PCI, 18)), "1", 0, "L", false, 0, "")
-			pdf.CellFormat(22, 5, latin1(truncate(m.HIPAA, 18)), "1", 0, "L", false, 0, "")
-			pdf.CellFormat(24, 5, latin1(truncate(m.SOC2, 20)), "1", 1, "L", false, 0, "")
+			pdf.CellFormat(findingColW, 5, latin1(truncate(m.FindingTitle, 50)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(m.CWE), "1", 0, "C", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(truncate(m.PCI, 15)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(truncate(m.HIPAA, 15)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(truncate(m.SOC2, 15)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(truncate(m.GDPR, 15)), "1", 0, "L", false, 0, "")
+			pdf.CellFormat(18, 5, latin1(truncate(m.NIST, 15)), "1", 1, "L", false, 0, "")
 		}
 	}
 

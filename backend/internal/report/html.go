@@ -229,10 +229,10 @@ func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions, ctx
 	// Compliance crosswalk appendix
 	if len(data.ComplianceMatrix) > 0 {
 		b.WriteString("<h2>Appendix C — Compliance Crosswalk</h2>\n")
-		b.WriteString("<p class=\"meta\">Findings mapped to PCI DSS v4.0, HIPAA Security Rule, and SOC 2 (Common Criteria) controls. Empty cells indicate no deterministic mapping for the underlying CWE.</p>\n")
-		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th></tr>")
+		b.WriteString("<p class=\"meta\">Findings mapped to PCI DSS v4.0, HIPAA Security Rule, SOC 2 (Common Criteria), GDPR, and NIST SP 800-53 Rev 5 controls. Empty cells indicate no deterministic mapping for the underlying CWE.</p>\n")
+		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th><th>GDPR</th><th>NIST</th></tr>")
 		for _, m := range data.ComplianceMatrix {
-			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
 				strings.ToLower(string(m.Severity)),
 				sevDisplay(m.Severity),
 				html.EscapeString(m.FindingTitle),
@@ -241,6 +241,8 @@ func RenderPentestHTML(job *model.ScanJob, opts model.ReportTemplateOptions, ctx
 				html.EscapeString(m.PCI),
 				html.EscapeString(m.HIPAA),
 				html.EscapeString(m.SOC2),
+				html.EscapeString(m.GDPR),
+				html.EscapeString(m.NIST),
 			))
 		}
 		b.WriteString("</table>\n")
@@ -270,16 +272,17 @@ func RenderComplianceHTML(job *model.ScanJob, opts model.ReportTemplateOptions, 
 	if job != nil {
 		b.WriteString("<p class=\"meta\"><strong>Target:</strong> " + html.EscapeString(job.Target) + " &nbsp; <strong>Scan ID:</strong> " + html.EscapeString(job.ID) + "</p>")
 	}
-	b.WriteString("<h2>Crosswalk</h2><p>Each finding is mapped to the most relevant PCI DSS v4.0 requirement, HIPAA Security Rule citation, and SOC 2 Common Criteria control.</p>")
+	b.WriteString("<h2>Crosswalk</h2><p>Each finding is mapped to the most relevant PCI DSS v4.0 requirement, HIPAA Security Rule citation, SOC 2 Common Criteria control, GDPR article, and NIST SP 800-53 Rev 5 control.</p>")
 	if len(data.ComplianceMatrix) == 0 {
 		b.WriteString("<p><em>No findings to map.</em></p>")
 	} else {
-		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th></tr>")
+		b.WriteString("<table><tr><th>Severity</th><th>Finding</th><th>CWE</th><th>OWASP</th><th>PCI DSS</th><th>HIPAA</th><th>SOC 2</th><th>GDPR</th><th>NIST</th></tr>")
 		for _, m := range data.ComplianceMatrix {
-			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+			b.WriteString(fmt.Sprintf("<tr><td class=\"sev-%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
 				strings.ToLower(string(m.Severity)), sevDisplay(m.Severity),
 				html.EscapeString(m.FindingTitle), html.EscapeString(m.CWE), html.EscapeString(m.OWASP),
-				html.EscapeString(m.PCI), html.EscapeString(m.HIPAA), html.EscapeString(m.SOC2)))
+				html.EscapeString(m.PCI), html.EscapeString(m.HIPAA), html.EscapeString(m.SOC2),
+				html.EscapeString(m.GDPR), html.EscapeString(m.NIST)))
 		}
 		b.WriteString("</table>")
 	}

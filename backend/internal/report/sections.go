@@ -72,6 +72,8 @@ type ComplianceMapping struct {
 	PCI          string
 	HIPAA        string
 	SOC2         string
+	GDPR         string
+	NIST         string
 }
 
 // FindingsDelta describes how the current scan's findings compare to the
@@ -323,9 +325,9 @@ func assetGroupKey(f model.Finding, fallbackTarget string) string {
 }
 
 // BuildComplianceMatrix maps each finding's CWE/OWASP into the corresponding
-// PCI DSS, HIPAA, and SOC 2 control identifiers. The mapping is intentionally
-// deterministic and conservative: when no mapping is known, the cell is left
-// empty rather than guessed.
+// PCI DSS, HIPAA, SOC 2, GDPR, and NIST SP 800-53 control identifiers. The
+// mapping is intentionally deterministic and conservative: when no mapping is
+// known, the cell is left empty rather than guessed.
 func BuildComplianceMatrix(findings []model.Finding) []ComplianceMapping {
 	out := make([]ComplianceMapping, 0, len(findings))
 	for _, f := range findings {
@@ -337,6 +339,8 @@ func BuildComplianceMatrix(findings []model.Finding) []ComplianceMapping {
 			PCI:          pciControl(f.CWE),
 			HIPAA:        hipaaControl(f.CWE),
 			SOC2:         soc2Control(f.CWE),
+			GDPR:         gdprControl(f.CWE),
+			NIST:         nistControl(f.CWE),
 		})
 	}
 	return out
@@ -346,11 +350,11 @@ func BuildComplianceMatrix(findings []model.Finding) []ComplianceMapping {
 // requirement.
 func pciControl(cwe string) string {
 	switch strings.ToUpper(strings.TrimSpace(cwe)) {
-	case "CWE-89", "CWE-79", "CWE-78", "CWE-94", "CWE-91":
+	case "CWE-89", "CWE-79", "CWE-78", "CWE-94", "CWE-91", "CWE-643", "CWE-90", "CWE-943", "CWE-97", "CWE-93", "CWE-1236":
 		return "6.2.4 / 6.4.1 (secure software development & WAF)"
 	case "CWE-22", "CWE-20":
 		return "6.2.4 (input validation)"
-	case "CWE-287", "CWE-306", "CWE-862", "CWE-863":
+	case "CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-347":
 		return "8.2 / 8.3 (authentication & authorization)"
 	case "CWE-200", "CWE-209":
 		return "3.4 / 6.4.3 (data exposure)"
@@ -362,15 +366,37 @@ func pciControl(cwe string) string {
 		return "7.1 (least-privilege access)"
 	case "CWE-918":
 		return "1.4.4 (egress filtering)"
+	case "CWE-434":
+		return "6.2.4 / 12.5 (secure file upload)"
+	case "CWE-611":
+		return "6.2.4 (XXE / XML input validation)"
+	case "CWE-693", "CWE-614", "CWE-1021":
+		return "6.4.1 (secure configuration / HTTP headers)"
+	case "CWE-284":
+		return "7.1 / 7.2 (access control)"
+	case "CWE-601":
+		return "6.2.4 (open redirect)"
+	case "CWE-16":
+		return "2.2 / 6.3 (secure configuration)"
+	case "CWE-362":
+		return "6.2.4 (race condition / concurrency)"
+	case "CWE-942":
+		return "6.4.1 (CORS configuration)"
+	case "CWE-1035":
+		return "6.3 (vulnerable components)"
+	case "CWE-1385":
+		return "6.2.4 (WebSocket security)"
+	case "CWE-1336":
+		return "6.2.4 (AI / LLM input validation)"
 	}
 	return ""
 }
 
 func hipaaControl(cwe string) string {
 	switch strings.ToUpper(strings.TrimSpace(cwe)) {
-	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-22":
+	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-22", "CWE-643", "CWE-90", "CWE-943", "CWE-97", "CWE-93", "CWE-1236":
 		return "164.312(c)(1) Integrity"
-	case "CWE-287", "CWE-306", "CWE-862", "CWE-863":
+	case "CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-347":
 		return "164.312(d) Person/Entity Authentication"
 	case "CWE-200", "CWE-209":
 		return "164.312(a)(1) Access Control"
@@ -380,15 +406,31 @@ func hipaaControl(cwe string) string {
 		return "164.308(a)(4) Information Access Management"
 	case "CWE-918":
 		return "164.312(a)(1) Access Control"
+	case "CWE-434":
+		return "164.312(c)(1) Integrity"
+	case "CWE-611":
+		return "164.312(c)(1) Integrity"
+	case "CWE-352":
+		return "164.312(c)(1) Integrity"
+	case "CWE-284":
+		return "164.312(a)(1) Access Control"
+	case "CWE-601":
+		return "164.312(a)(1) Access Control"
+	case "CWE-16":
+		return "164.308(a)(1) Security Management Process"
+	case "CWE-693", "CWE-614", "CWE-1021":
+		return "164.312(a)(2)(iv) Encryption and Decryption"
+	case "CWE-1035":
+		return "164.308(a)(1) Security Management Process"
 	}
 	return ""
 }
 
 func soc2Control(cwe string) string {
 	switch strings.ToUpper(strings.TrimSpace(cwe)) {
-	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-22", "CWE-352":
+	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-22", "CWE-352", "CWE-643", "CWE-90", "CWE-943", "CWE-97", "CWE-93", "CWE-1236":
 		return "CC6.6 / CC7.1 (secure SDLC)"
-	case "CWE-287", "CWE-306", "CWE-862", "CWE-863":
+	case "CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-347":
 		return "CC6.1 (logical access)"
 	case "CWE-200", "CWE-209":
 		return "CC6.7 (data confidentiality)"
@@ -398,6 +440,101 @@ func soc2Control(cwe string) string {
 		return "CC6.3 (least privilege)"
 	case "CWE-918":
 		return "CC6.6 (perimeter protections)"
+	case "CWE-434":
+		return "CC6.6 / CC7.1 (file upload controls)"
+	case "CWE-611":
+		return "CC6.6 (input validation)"
+	case "CWE-284":
+		return "CC6.1 / CC6.3 (access control)"
+	case "CWE-601":
+		return "CC6.6 (open redirect)"
+	case "CWE-16":
+		return "CC7.1 (configuration management)"
+	case "CWE-693", "CWE-614", "CWE-1021":
+		return "CC6.7 / CC7.1 (secure configuration)"
+	case "CWE-362":
+		return "CC7.1 (availability / integrity)"
+	case "CWE-942":
+		return "CC6.6 (CORS configuration)"
+	case "CWE-1035":
+		return "CC9.1 (vendor risk management)"
+	case "CWE-1336":
+		return "CC6.6 (AI/LLM input controls)"
+	}
+	return ""
+}
+
+// gdprControl maps a CWE identifier to the most relevant GDPR article/recital.
+func gdprControl(cwe string) string {
+	switch strings.ToUpper(strings.TrimSpace(cwe)) {
+	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-22", "CWE-643", "CWE-90", "CWE-943", "CWE-97", "CWE-93":
+		return "Art. 32 (security of processing)"
+	case "CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-347":
+		return "Art. 32 (access controls)"
+	case "CWE-200", "CWE-209":
+		return "Art. 5(1)(f) / Art. 32 (confidentiality)"
+	case "CWE-327", "CWE-326", "CWE-310":
+		return "Art. 32(1)(a) (encryption of personal data)"
+	case "CWE-918":
+		return "Art. 32 (security of processing)"
+	case "CWE-434":
+		return "Art. 32 (security of processing)"
+	case "CWE-611":
+		return "Art. 32 (security of processing)"
+	case "CWE-352":
+		return "Art. 32 (integrity)"
+	case "CWE-284":
+		return "Art. 25 (data protection by design) / Art. 32"
+	case "CWE-693", "CWE-614", "CWE-1021":
+		return "Art. 32 (technical measures)"
+	case "CWE-1035":
+		return "Art. 28 (processor obligations) / Art. 32"
+	}
+	return ""
+}
+
+// nistControl maps a CWE identifier to the most relevant NIST SP 800-53 Rev 5
+// control family and identifier.
+func nistControl(cwe string) string {
+	switch strings.ToUpper(strings.TrimSpace(cwe)) {
+	case "CWE-89", "CWE-79", "CWE-94", "CWE-78", "CWE-643", "CWE-90", "CWE-943", "CWE-97", "CWE-93", "CWE-1236":
+		return "SI-10 (Information Input Validation)"
+	case "CWE-22", "CWE-20":
+		return "SI-10 (Information Input Validation)"
+	case "CWE-287", "CWE-306", "CWE-862", "CWE-863", "CWE-347":
+		return "IA-2 / IA-5 (Identification and Authentication)"
+	case "CWE-200", "CWE-209":
+		return "AC-3 / SC-28 (Information Exposure)"
+	case "CWE-352":
+		return "SC-8 / SI-10 (CSRF)"
+	case "CWE-327", "CWE-326", "CWE-310":
+		return "SC-8 / SC-28 (Cryptographic Protection)"
+	case "CWE-732":
+		return "AC-3 / AC-6 (Least Privilege)"
+	case "CWE-918":
+		return "SC-7 (Boundary Protection)"
+	case "CWE-434":
+		return "SI-3 / SI-10 (Malicious Code / File Upload)"
+	case "CWE-611":
+		return "SI-10 (XXE / Input Validation)"
+	case "CWE-284":
+		return "AC-3 / AC-4 (Access Enforcement)"
+	case "CWE-601":
+		return "SI-10 (Open Redirect)"
+	case "CWE-16":
+		return "CM-6 / CM-7 (Configuration Management)"
+	case "CWE-693", "CWE-614", "CWE-1021":
+		return "SC-8 / CM-6 (Secure Configuration)"
+	case "CWE-362":
+		return "SI-16 (Concurrency / Race Condition)"
+	case "CWE-942":
+		return "SC-7 / AC-4 (CORS)"
+	case "CWE-1035":
+		return "SA-12 (Supply Chain Risk Management)"
+	case "CWE-1385":
+		return "SC-8 (WebSocket / Transmission Confidentiality)"
+	case "CWE-1336":
+		return "SI-10 (AI/LLM Input Validation)"
 	}
 	return ""
 }

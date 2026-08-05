@@ -232,11 +232,11 @@ func RenderPentestMarkdown(job *model.ScanJob, opts model.ReportTemplateOptions,
 
 	if len(data.ComplianceMatrix) > 0 {
 		b.WriteString("## Appendix E — Compliance Crosswalk\n\n")
-		b.WriteString("Findings mapped to PCI DSS v4.0, HIPAA Security Rule, and SOC 2 (Common Criteria) controls. Empty cells indicate no deterministic mapping is available for the underlying CWE.\n\n")
-		b.WriteString("| Severity | Finding | CWE | OWASP | PCI DSS | HIPAA | SOC 2 |\n")
-		b.WriteString("|----------|---------|-----|-------|---------|-------|-------|\n")
+		b.WriteString("Findings mapped to PCI DSS v4.0, HIPAA Security Rule, SOC 2 (Common Criteria), GDPR, and NIST SP 800-53 Rev 5 controls. Empty cells indicate no deterministic mapping is available for the underlying CWE.\n\n")
+		b.WriteString("| Severity | Finding | CWE | OWASP | PCI DSS | HIPAA | SOC 2 | GDPR | NIST |\n")
+		b.WriteString("|----------|---------|-----|-------|---------|-------|-------|------|------|\n")
 		for _, m := range data.ComplianceMatrix {
-			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n",
+			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 				sevDisplay(m.Severity),
 				mdEscapeCell(m.FindingTitle),
 				mdEscapeCell(m.CWE),
@@ -244,6 +244,8 @@ func RenderPentestMarkdown(job *model.ScanJob, opts model.ReportTemplateOptions,
 				mdEscapeCell(m.PCI),
 				mdEscapeCell(m.HIPAA),
 				mdEscapeCell(m.SOC2),
+				mdEscapeCell(m.GDPR),
+				mdEscapeCell(m.NIST),
 			))
 		}
 		b.WriteString("\n")
@@ -423,14 +425,14 @@ func RenderComplianceMarkdown(job *model.ScanJob, opts model.ReportTemplateOptio
 	b.WriteString("\n")
 
 	b.WriteString("## Crosswalk\n\n")
-	b.WriteString("Each finding is mapped to the most relevant PCI DSS v4.0 requirement, HIPAA Security Rule citation, and SOC 2 Common Criteria control. Empty cells indicate that no deterministic mapping is available for the underlying CWE; the assessor should review those findings manually.\n\n")
+	b.WriteString("Each finding is mapped to the most relevant PCI DSS v4.0 requirement, HIPAA Security Rule citation, SOC 2 Common Criteria control, GDPR article, and NIST SP 800-53 Rev 5 control. Empty cells indicate that no deterministic mapping is available for the underlying CWE; the assessor should review those findings manually.\n\n")
 	if len(data.ComplianceMatrix) == 0 {
 		b.WriteString("_No findings to map._\n")
 	} else {
-		b.WriteString("| Severity | Finding | CWE | OWASP | PCI DSS | HIPAA | SOC 2 |\n")
-		b.WriteString("|----------|---------|-----|-------|---------|-------|-------|\n")
+		b.WriteString("| Severity | Finding | CWE | OWASP | PCI DSS | HIPAA | SOC 2 | GDPR | NIST |\n")
+		b.WriteString("|----------|---------|-----|-------|---------|-------|-------|------|------|\n")
 		for _, m := range data.ComplianceMatrix {
-			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n",
+			b.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 				sevDisplay(m.Severity),
 				mdEscapeCell(m.FindingTitle),
 				mdEscapeCell(m.CWE),
@@ -438,6 +440,8 @@ func RenderComplianceMarkdown(job *model.ScanJob, opts model.ReportTemplateOptio
 				mdEscapeCell(m.PCI),
 				mdEscapeCell(m.HIPAA),
 				mdEscapeCell(m.SOC2),
+				mdEscapeCell(m.GDPR),
+				mdEscapeCell(m.NIST),
 			))
 		}
 	}
