@@ -338,46 +338,46 @@ func platformBanner(platform string) string {
 	case "intigriti":
 		return "> **Submission target:** Intigriti. Map the CWE listed under *Vulnerability Details* to the matching Intigriti severity guideline.\n\n"
 	}
-
-	// PlatformFieldMapping returns the canonical Auto Bughunter section -> platform
-	// field mapping used by the bug-bounty template engine.
-	func PlatformFieldMapping(platform string) map[string]string {
-		switch strings.ToLower(strings.TrimSpace(platform)) {
-		case "hackerone":
-			return map[string]string{
-				"Asset":                 "affected_endpoints",
-				"Impact":                "impact",
-				"Proof of Concept":      "steps_to_reproduce",
-				"Summary":               "weakness_description",
-				"Suggested Remediation": "suggested_fix",
-				"Title":                 "title",
-				"Vulnerability Details": "vulnerability_information",
-			}
-		case "bugcrowd":
-			return map[string]string{
-				"Asset":                 "target",
-				"Impact":                "business_impact",
-				"Proof of Concept":      "steps_to_reproduce",
-				"Summary":               "vulnerability_summary",
-				"Suggested Remediation": "remediation_recommendation",
-				"Title":                 "submission_title",
-				"Vulnerability Details": "vrt_vulnerability_type",
-			}
-		case "intigriti":
-			return map[string]string{
-				"Asset":                 "asset",
-				"Impact":                "impact",
-				"Proof of Concept":      "reproduction_steps",
-				"Summary":               "summary",
-				"Suggested Remediation": "recommendation",
-				"Title":                 "title",
-				"Vulnerability Details": "vulnerability_type",
-			}
-		default:
-			return nil
-		}
-	}
 	return ""
+}
+
+// PlatformFieldMapping returns the canonical Auto Bughunter section -> platform
+// field mapping used by the bug-bounty template engine.
+func PlatformFieldMapping(platform string) map[string]string {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "hackerone":
+		return map[string]string{
+			"Asset":                 "affected_endpoints",
+			"Impact":                "impact",
+			"Proof of Concept":      "steps_to_reproduce",
+			"Summary":               "weakness_description",
+			"Suggested Remediation": "suggested_fix",
+			"Title":                 "title",
+			"Vulnerability Details": "vulnerability_information",
+		}
+	case "bugcrowd":
+		return map[string]string{
+			"Asset":                 "target",
+			"Impact":                "business_impact",
+			"Proof of Concept":      "steps_to_reproduce",
+			"Summary":               "vulnerability_summary",
+			"Suggested Remediation": "remediation_recommendation",
+			"Title":                 "submission_title",
+			"Vulnerability Details": "vrt_vulnerability_type",
+		}
+	case "intigriti":
+		return map[string]string{
+			"Asset":                 "asset",
+			"Impact":                "impact",
+			"Proof of Concept":      "reproduction_steps",
+			"Summary":               "summary",
+			"Suggested Remediation": "recommendation",
+			"Title":                 "title",
+			"Vulnerability Details": "vulnerability_type",
+		}
+	default:
+		return nil
+	}
 }
 
 var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
@@ -449,37 +449,6 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 		index.WriteString(banner)
 	}
 
-	func renderCoverageHeatmapMarkdown(cm *model.CoverageMap) string {
-		if cm == nil || len(cm.Areas) == 0 {
-			return ""
-		}
-		areas := append([]model.CoverageMapArea(nil), cm.Areas...)
-		sort.SliceStable(areas, func(i, j int) bool {
-			if areas[i].ROIScore == areas[j].ROIScore {
-				return areas[i].Key < areas[j].Key
-			}
-			return areas[i].ROIScore > areas[j].ROIScore
-		})
-		var b strings.Builder
-		b.WriteString("# Coverage Heatmap\n\n")
-		b.WriteString(fmt.Sprintf("- **Target:** %s\n", cm.Target))
-		b.WriteString(fmt.Sprintf("- **Generated At:** %s\n", cm.GeneratedAt.UTC().Format(time.RFC3339)))
-		b.WriteString(fmt.Sprintf("- **Coverage Ratio:** %.2f\n\n", cm.CoverageRatio))
-		b.WriteString("| Surface | Type | ROI | Probed | Source |\n")
-		b.WriteString("|---|---|---:|:---:|---|\n")
-		limit := len(areas)
-		if limit > 50 {
-			limit = 50
-		}
-		for _, area := range areas[:limit] {
-			probed := "❌"
-			if area.Probed {
-				probed = "✅"
-			}
-			b.WriteString(fmt.Sprintf("| %s | %s | %.2f | %s | %s |\n", area.Key, area.Type, area.ROIScore, probed, area.Source))
-		}
-		return b.String()
-	}
 	if job != nil {
 		index.WriteString("**Target:** " + job.Target + "  \n")
 		index.WriteString("**Scan ID:** " + job.ID + "  \n")
@@ -555,4 +524,36 @@ func payoutRationale(f model.Finding, rank int, pack *model.ProgramProfilePack) 
 		}
 	}
 	return strings.Join(parts, " — ")
+}
+
+func renderCoverageHeatmapMarkdown(cm *model.CoverageMap) string {
+	if cm == nil || len(cm.Areas) == 0 {
+		return ""
+	}
+	areas := append([]model.CoverageMapArea(nil), cm.Areas...)
+	sort.SliceStable(areas, func(i, j int) bool {
+		if areas[i].ROIScore == areas[j].ROIScore {
+			return areas[i].Key < areas[j].Key
+		}
+		return areas[i].ROIScore > areas[j].ROIScore
+	})
+	var b strings.Builder
+	b.WriteString("# Coverage Heatmap\n\n")
+	b.WriteString(fmt.Sprintf("- **Target:** %s\n", cm.Target))
+	b.WriteString(fmt.Sprintf("- **Generated At:** %s\n", cm.GeneratedAt.UTC().Format(time.RFC3339)))
+	b.WriteString(fmt.Sprintf("- **Coverage Ratio:** %.2f\n\n", cm.CoverageRatio))
+	b.WriteString("| Surface | Type | ROI | Probed | Source |\n")
+	b.WriteString("|---|---|---:|:---:|---|\n")
+	limit := len(areas)
+	if limit > 50 {
+		limit = 50
+	}
+	for _, area := range areas[:limit] {
+		probed := "❌"
+		if area.Probed {
+			probed = "✅"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %.2f | %s | %s |\n", area.Key, area.Type, area.ROIScore, probed, area.Source))
+	}
+	return b.String()
 }

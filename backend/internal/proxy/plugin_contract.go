@@ -24,17 +24,6 @@ func ValidateInterceptPluginManifest(m InterceptPluginManifest) error {
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("manifest.name is required")
 	}
-
-	// ValidateInterceptPluginSet validates a whole plugin set; empty sets are valid
-	// to preserve baseline no-plugin behavior in compatibility harness runs.
-	func ValidateInterceptPluginSet(manifests []InterceptPluginManifest) error {
-		for _, m := range manifests {
-			if err := ValidateInterceptPluginManifest(m); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	if strings.TrimSpace(m.Version) == "" {
 		return fmt.Errorf("manifest.version is required")
 	}
@@ -43,6 +32,17 @@ func ValidateInterceptPluginManifest(m InterceptPluginManifest) error {
 	}
 	if strings.TrimSpace(m.APIVersion) != InterceptPluginAPIVersion {
 		return fmt.Errorf("unsupported plugin apiVersion %q (supported: %s)", m.APIVersion, InterceptPluginAPIVersion)
+	}
+	return nil
+}
+
+// ValidateInterceptPluginSet validates a whole plugin set; empty sets are valid
+// to preserve baseline no-plugin behavior in compatibility harness runs.
+func ValidateInterceptPluginSet(manifests []InterceptPluginManifest) error {
+	for _, m := range manifests {
+		if err := ValidateInterceptPluginManifest(m); err != nil {
+			return err
+		}
 	}
 	return nil
 }
