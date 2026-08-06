@@ -208,6 +208,12 @@ func (s *Server) handleScanReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.serveSingleFindingReport(w, r, scanID, parts[2])
+	case len(parts) == 4 && parts[1] == "finding" && parts[3] == "submit":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		s.serveSubmitFinding(w, r, scanID, parts[2])
 	case len(parts) == 1:
 		s.serveMainReport(w, r, scanID)
 	default:

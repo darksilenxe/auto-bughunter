@@ -3,8 +3,10 @@ package report
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,6 +70,18 @@ func RenderBugBountyMarkdownForPlatform(f model.Finding, target, platform string
 
 	if banner := platformBanner(platform); banner != "" {
 		b.WriteString(banner)
+	}
+	if mapping := PlatformFieldMapping(platform); len(mapping) > 0 {
+		b.WriteString("## Platform Field Mapping\n\n")
+		keys := make([]string, 0, len(mapping))
+		for k := range mapping {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			b.WriteString(fmt.Sprintf("- **%s** → `%s`\n", k, mapping[k]))
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString("## Summary\n\n")
@@ -324,6 +338,45 @@ func platformBanner(platform string) string {
 	case "intigriti":
 		return "> **Submission target:** Intigriti. Map the CWE listed under *Vulnerability Details* to the matching Intigriti severity guideline.\n\n"
 	}
+
+	// PlatformFieldMapping returns the canonical Auto Bughunter section -> platform
+	// field mapping used by the bug-bounty template engine.
+	func PlatformFieldMapping(platform string) map[string]string {
+		switch strings.ToLower(strings.TrimSpace(platform)) {
+		case "hackerone":
+			return map[string]string{
+				"Asset":                 "affected_endpoints",
+				"Impact":                "impact",
+				"Proof of Concept":      "steps_to_reproduce",
+				"Summary":               "weakness_description",
+				"Suggested Remediation": "suggested_fix",
+				"Title":                 "title",
+				"Vulnerability Details": "vulnerability_information",
+			}
+		case "bugcrowd":
+			return map[string]string{
+				"Asset":                 "target",
+				"Impact":                "business_impact",
+				"Proof of Concept":      "steps_to_reproduce",
+				"Summary":               "vulnerability_summary",
+				"Suggested Remediation": "remediation_recommendation",
+				"Title":                 "submission_title",
+				"Vulnerability Details": "vrt_vulnerability_type",
+			}
+		case "intigriti":
+			return map[string]string{
+				"Asset":                 "asset",
+				"Impact":                "impact",
+				"Proof of Concept":      "reproduction_steps",
+				"Summary":               "summary",
+				"Suggested Remediation": "recommendation",
+				"Title":                 "title",
+				"Vulnerability Details": "vulnerability_type",
+			}
+		default:
+			return nil
+		}
+	}
 	return ""
 }
 
@@ -367,10 +420,65 @@ func RenderBugBountyZipForPlatform(job *model.ScanJob, platform string) ([]byte,
 		pack = job.Options.ProgramProfilePack
 	}
 
+	if job != nil && job.CoverageMap != nil {
+		raw, err := json.MarshalIndent(job.CoverageMap, "", "  ")
+		if err == nil {
+			cmWriter, err := zw.Create("COVERAGE_MAP.json")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := cmWriter.Write(raw); err != nil {
+				return nil, err
+			}
+		}
+		heatmap := renderCoverageHeatmapMarkdown(job.CoverageMap)
+		if strings.TrimSpace(heatmap) != "" {
+			hmWriter, err := zw.Create("COVERAGE_HEATMAP.md")
+			if err != nil {
+				return nil, err
+			}
+			if _, err := hmWriter.Write([]byte(heatmap)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	var index strings.Builder
 	index.WriteString("# Bug Bounty Submission Bundle\n\n")
 	if banner := platformBanner(platform); banner != "" {
 		index.WriteString(banner)
+	}
+
+	func renderCoverageHeatmapMarkdown(cm *model.CoverageMap) string {
+		if cm == nil || len(cm.Areas) == 0 {
+			return ""
+		}
+		areas := append([]model.CoverageMapArea(nil), cm.Areas...)
+		sort.SliceStable(areas, func(i, j int) bool {
+			if areas[i].ROIScore == areas[j].ROIScore {
+				return areas[i].Key < areas[j].Key
+			}
+			return areas[i].ROIScore > areas[j].ROIScore
+		})
+		var b strings.Builder
+		b.WriteString("# Coverage Heatmap\n\n")
+		b.WriteString(fmt.Sprintf("- **Target:** %s\n", cm.Target))
+		b.WriteString(fmt.Sprintf("- **Generated At:** %s\n", cm.GeneratedAt.UTC().Format(time.RFC3339)))
+		b.WriteString(fmt.Sprintf("- **Coverage Ratio:** %.2f\n\n", cm.CoverageRatio))
+		b.WriteString("| Surface | Type | ROI | Probed | Source |\n")
+		b.WriteString("|---|---|---:|:---:|---|\n")
+		limit := len(areas)
+		if limit > 50 {
+			limit = 50
+		}
+		for _, area := range areas[:limit] {
+			probed := "❌"
+			if area.Probed {
+				probed = "✅"
+			}
+			b.WriteString(fmt.Sprintf("| %s | %s | %.2f | %s | %s |\n", area.Key, area.Type, area.ROIScore, probed, area.Source))
+		}
+		return b.String()
 	}
 	if job != nil {
 		index.WriteString("**Target:** " + job.Target + "  \n")

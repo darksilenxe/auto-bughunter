@@ -566,6 +566,64 @@ func TestHandleScanReport_DefaultPDFAppliesStrictReportingByDefault(t *testing.T
 	}
 }
 
+func TestHandleScanReport_SubmitFindingBlockedBelowReadinessThreshold(t *testing.T) {
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-1": sampleReportJob()})
+	req := authRequest(http.MethodPost, "/api/report/scan-1/finding/sqlmap-error-based/submit?platform=hackerone", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "readiness") {
+		t.Fatalf("expected readiness message, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleScanReport_SubmitFindingSuccess(t *testing.T) {
+	platformServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"h1-9"}`))
+	}))
+	defer platformServer.Close()
+	t.Setenv("ABH_SUBMIT_HACKERONE_URL", platformServer.URL)
+	t.Setenv("ABH_SUBMIT_HACKERONE_API_KEY", "test-token")
+
+	completed := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	job := &model.ScanJob{
+		ID:          "scan-ready",
+		Target:      "https://example.com",
+		Status:      "completed",
+		StartedAt:   time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+		CompletedAt: &completed,
+		Findings: []model.Finding{{
+			ID:                "f-ready",
+			Title:             "SQL Injection in login",
+			Description:       "SQL injection via username parameter.",
+			Severity:          model.SeverityHigh,
+			AffectedURL:       "https://example.com/login",
+			AffectedParameter: "username",
+			ReproductionSteps: []string{"POST /login with payload"},
+			Evidence:          "response contains SQL error",
+			CWE:               "CWE-89",
+			CVSSScore:         9.1,
+			Impact:            "database read access",
+			Recommendation:    "use prepared statements",
+			ProofArtifacts:    []model.ProofArtifact{{Type: "curl", Label: "reproducer", Value: "curl ..."}},
+			Confidence:        0.95,
+		}},
+	}
+	srv := newReportServer(t, map[string]*model.ScanJob{"scan-ready": job})
+	req := authRequest(http.MethodPost, "/api/report/scan-ready/finding/f-ready/submit?platform=hackerone", nil)
+	rec := httptest.NewRecorder()
+	srv.handleScanReport(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "submitted") {
+		t.Fatalf("expected submitted response, got %s", rec.Body.String())
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

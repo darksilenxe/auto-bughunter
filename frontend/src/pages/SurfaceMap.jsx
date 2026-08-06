@@ -32,6 +32,7 @@ export default function SurfaceMap() {
   const [sevFilter, setSevFilter] = useState("all");
 
   const findings = job?.findings || [];
+  const coverageMap = job?.coverageMap;
 
   // Build domain → path-prefix → [findings] tree
   const tree = useMemo(() => {
@@ -249,6 +250,50 @@ export default function SurfaceMap() {
           </div>
         )}
       </section>
+
+      {coverageMap?.areas?.length > 0 && (
+        <section className="card">
+          <div className="toolbar" style={{ marginBottom: 12 }}>
+            <div>
+              <h2>Coverage heatmap</h2>
+              <p className="meta">
+                Ranked by ROI score (likelihood × impact). Unprobed rows are the highest-priority follow-up targets.
+              </p>
+            </div>
+            <div className="filter-row">
+              <span className="chip chip--muted">Coverage {(Number(coverageMap.coverageRatio || 0) * 100).toFixed(0)}%</span>
+              <span className="chip chip--muted">{coverageMap.probedAreas || 0}/{coverageMap.totalAreas || coverageMap.areas.length} probed</span>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Surface</th>
+                  <th>Type</th>
+                  <th>Source</th>
+                  <th>ROI</th>
+                  <th>Probed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...(coverageMap.areas || [])]
+                  .sort((a, b) => (Number(b.roiScore || 0) - Number(a.roiScore || 0)))
+                  .slice(0, 50)
+                  .map((area, idx) => (
+                    <tr key={`${area.key}-${idx}`}>
+                      <td style={{ wordBreak: "break-word", maxWidth: 320 }}>{area.key}</td>
+                      <td>{area.type}</td>
+                      <td>{area.source || "—"}</td>
+                      <td>{Number(area.roiScore || 0).toFixed(2)}</td>
+                      <td>{area.probed ? "✅" : "❌"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
