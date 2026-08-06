@@ -67,6 +67,8 @@ This roadmap now focuses on finishing the remaining productization and enterpris
 
 Focus areas: governance, authorization proof, auditability, and false-positive reduction.
 
+> **Phases in this wave:** [Phase A — Prove Exploitability](#phase-a--prove-exploitability) · [Phase B — Sharpen Signal-to-Noise](#phase-b--sharpen-signal-to-noise) · [Phase F — Safer Autonomous Operation](#phase-f--safer-autonomous-operation) (foundations)
+
 ### Deliverables
 
 1. Policy guardrails by default
@@ -98,11 +100,67 @@ Focus areas: governance, authorization proof, auditability, and false-positive r
 - [x] Gate high-severity publication on corroboration + exploitability requirements by policy.
 - [x] Add strict-reporting toggles with measurable false-positive reduction telemetry.
 
+### Phase A — Prove Exploitability
+
+*Goal: Every high/critical finding ships with a reproducible attack chain and concrete impact evidence.*
+
+**Deliverables**
+
+1. Safe PoC generation — auto-generate sandboxed, replay-safe, audit-logged PoCs per finding, gated on `AllowDestructiveChecks=false` safe mode.
+2. Verification traces — capture full request/response proof bundles alongside each PoC.
+3. Strengthened `proofpolicy` gates — require a minimum evidence coverage score before a finding is promoted to `verified`.
+4. Exploit-validation sandbox — isolated container environment for live PoC replay with no exfiltration risk.
+5. `exploit_chain` as first-class finding field — attach `exploit_chain` agent output to every high-severity finding.
+
+**Acceptance criteria**
+
+- ≥80% of high/critical findings include a machine-readable PoC + trace bundle.
+- Exploit validation rate KPI is tracked in dashboards.
+- Sandbox replay is available in UI with a one-click rerun action.
+
+**Implementation checklist**
+
+- [ ] Add safe PoC generator to `exploit_chain` agent output with `AllowDestructiveChecks` gate.
+- [ ] Capture request/response proof bundle as a structured `VerificationTrace` field on `Finding`.
+- [ ] Raise `proofpolicy` minimum evidence coverage threshold for `high`/`critical` severity findings.
+- [ ] Wire exploit-validation sandbox container (isolated, no exfiltration) and expose replay API.
+- [ ] Surface PoC bundle and exploit chain in finding detail UI and export bundles.
+- [ ] Add exploit validation rate to Core Product KPI dashboard.
+
+### Phase B — Sharpen Signal-to-Noise
+
+*Goal: Continuous false-positive feedback loops and per-probe precision/recall tracking.*
+
+**Deliverables**
+
+1. Per-probe precision/recall ledger — record TP/FP/FN outcome labels from analyst triage.
+2. Auto-throttle for noisy probes — suspend probes whose FP rate exceeds threshold (e.g., >30% FP over rolling 50 results).
+3. Ledger UI surface — per-probe stats, category breakdowns, trending noisiest checks.
+4. Feedback loop into ML agents — analyst overrides update `ml_triage` and `false_positive_review` ranking weights.
+5. Noisy probe dashboard alert — alert when a probe degrades below precision floor.
+
+**Acceptance criteria**
+
+- Analyst override rate KPI falls measurably after throttle is active.
+- Noisy probes are auto-throttled within one campaign cycle.
+- Per-probe precision/recall stats are visible in the operator UI.
+
+**Implementation checklist**
+
+- [ ] Add `ProbeOutcomeLedger` storage schema: probe key → rolling TP/FP/FN counts.
+- [ ] Instrument analyst triage actions (accept/reject/suppress) to write outcome labels.
+- [ ] Implement auto-throttle: skip probes above FP threshold and record throttle decision.
+- [ ] Expose ledger API endpoint and wire into UI as a "Probe Health" dashboard panel.
+- [ ] Feed ledger outcome weights into `ml_triage` and `false_positive_review` agent prompts.
+- [ ] Add "noisy probe" alert type to campaign notification system.
+
 ---
 
 ## Wave 2 — Orchestration Intelligence + Bug Bounty Specialization
 
 Focus areas: adaptive automation, explainability, and bug bounty outcome performance.
+
+> **Phases in this wave:** [Phase A — Prove Exploitability](#phase-a--prove-exploitability) (completion) · [Phase B — Sharpen Signal-to-Noise](#phase-b--sharpen-signal-to-noise) (completion) · [Phase C — Coverage Map](#phase-c--coverage-map) · [Phase D — Bug Bounty-Native Output](#phase-d--bug-bounty-native-output)
 
 ### Deliverables
 
@@ -141,11 +199,68 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - [ ] Define intercept-proxy plugin SDK contracts (hook surface + API schema + manifest format) and publish creator docs.
 - [ ] Add compatibility harness for plugin API versions and baseline no-plugin regression checks.
 
+### Phase C — Coverage Map
+
+*Goal: Build a structured map of app attack surface and use it to direct probe budget.*
+
+**Deliverables**
+
+1. Coverage map artifact — per-scan output listing auth states explored, roles tested, hidden APIs discovered, and JS runtime endpoints found.
+2. Likelihood × impact scoring — score each surface area and expose as a ranked coverage heatmap.
+3. Adaptive scheduling integration — wire adaptive probe agent to spend remaining budget on the highest-ROI uncovered surface areas.
+4. Coverage delta tracking — alert when new attack surface appears across scans (drift detection).
+5. Unified surface-coverage model — integrate `reconnaissance`, `js_sast`, and runtime XHR seeding outputs into a single queryable model.
+
+**Acceptance criteria**
+
+- Every scan produces a queryable coverage map artifact accessible via API and UI.
+- Adaptive probe agent uses coverage map scores for scheduling decisions.
+- Coverage delta alerts fire when new surface area is detected.
+
+**Implementation checklist**
+
+- [ ] Define `CoverageMap` data model: surface areas keyed by type (auth-state, role, endpoint, JS-runtime), each with likelihood/impact scores and probed flag.
+- [ ] Emit `CoverageMap` artifact at end of scan from `reconnaissance`, `js_sast`, and runtime XHR seeding data.
+- [ ] Score each surface area by `likelihood × impact` and persist as ranked list.
+- [ ] Integrate coverage map scores into adaptive probe agent scheduling decisions.
+- [ ] Add coverage delta comparison across successive scans for the same target.
+- [ ] Expose coverage map heatmap in UI and include in export bundles.
+- [ ] Add coverage delta drift alert to campaign notification system.
+
+### Phase D — Bug Bounty-Native Output
+
+*Goal: One-click export to HackerOne/Bugcrowd-style reports with all required fields pre-filled.*
+
+**Deliverables**
+
+1. Platform-specific report templates — HackerOne, Bugcrowd, and Intigriti templates with mandatory field mapping.
+2. Auto-populated report fields — severity rationale, CVSS breakdown, business impact narrative, clear repro steps, remediation guidance, and proof bundle.
+3. Submission readiness score — per-finding score that flags missing fields before export.
+4. Duplicate pre-check — similarity check against previously submitted findings before every submission.
+5. One-click API submission adapters — HackerOne/Bugcrowd API submission gated by configured API key.
+
+**Acceptance criteria**
+
+- Export wizard completes in <2 minutes per finding.
+- Submission readiness score ≥90% before one-click submit is enabled.
+- Duplicate pre-check fires before every submission attempt.
+
+**Implementation checklist**
+
+- [ ] Add platform report template engine with HackerOne, Bugcrowd, and Intigriti field mappings.
+- [ ] Auto-populate severity rationale, CVSS, business impact, repro steps, remediation, and proof bundle from finding data.
+- [ ] Implement `SubmissionReadinessScore` function and surface score + missing-field list in UI.
+- [ ] Add pre-submission duplicate similarity check against historical submissions.
+- [ ] Implement HackerOne and Bugcrowd API submission adapters gated by per-program API key config.
+- [ ] Wire export wizard UI with readiness gate that blocks one-click submit below 90%.
+
 ---
 
 ## Wave 3 — Integrations + Decision Intelligence + Scale Moat
 
 Focus areas: ecosystem fit, executive value, reliability, and defensible quality leadership.
+
+> **Phases in this wave:** [Phase E — Continuous Learning](#phase-e--continuous-learning) · [Phase F — Safer Autonomous Operation](#phase-f--safer-autonomous-operation) (completion) · [Phase G — Team-Grade Operations + Competitive Differentiation](#phase-g--team-grade-operations--competitive-differentiation)
 
 ### Deliverables
 
@@ -210,13 +325,106 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
 - [ ] Add plugin signing/review flow and compatibility matrix enforcement across backend/frontend/plugin API versions.
 - [ ] Add plugin API compatibility tests, no-plugin regression gate, and per-tier plugin performance benchmark thresholds.
 
+### Phase E — Continuous Learning
+
+*Goal: Platform learns from accepted vs rejected bounty submissions and improves ranking.*
+
+**Deliverables**
+
+1. Bounty outcome ingestion — ingest program responses (accepted, duplicate, N/A, payout) via webhook or manual tagging.
+2. ML model fine-tuning pipeline — feed outcomes into `ml_triage` with versioned model checkpoints.
+3. Regression gates for model promotion — new model versions must match or exceed baseline precision/recall before deployment.
+4. Versioned probe configurations — version and benchmark probe configs alongside model versions.
+5. Living capability matrix — detection rate per vulnerability class across benchmark targets, updated on each release.
+
+**Acceptance criteria**
+
+- Model retrain-and-promote cycle is fully automated end-to-end.
+- Regression gate blocks any model that regresses >2% on benchmark.
+- Payout-weighted finding rank improves measurably over baseline.
+
+**Implementation checklist**
+
+- [ ] Add bounty outcome webhook endpoint and manual tagging UI for accepted/duplicate/N/A/payout.
+- [ ] Wire outcome labels into `ml_triage` fine-tuning pipeline with versioned checkpoint storage.
+- [ ] Implement model promotion gate: block deployment if precision/recall regresses >2% vs baseline.
+- [ ] Version and archive probe configurations alongside each model checkpoint.
+- [ ] Publish living capability matrix as a release artifact with per-class detection rates.
+
+### Phase F — Safer Autonomous Operation
+
+*Goal: Auditable guardrails and full transparency for every autonomous agent decision.*
+
+**Deliverables**
+
+1. "Why this probe ran" metadata — attach policy profile, scope reason, ROI score, and triggering signal to every agent action.
+2. Anomaly-based autonomy pause — halt scan on scope ambiguity, legal-risk signals, or unexpected behavior spikes.
+3. Immutable decision log — every agent action, scope check, and policy evaluation recorded per campaign with timestamp.
+4. Guardrail events in UI and exports — surface autonomy-pause events and decision traces in audit trail and export bundles.
+
+**Acceptance criteria**
+
+- Every finding links to a full agent-decision trace.
+- Autonomy-pause fires correctly on scope ambiguity and anomaly conditions.
+- Audit export is complete, timestamped, and tamper-evident.
+
+**Implementation checklist**
+
+- [ ] Add `AgentDecisionTrace` struct: fields for policy profile, scope check result, ROI score, triggering signal, and timestamp.
+- [ ] Attach decision trace to every finding and agent action record.
+- [ ] Implement anomaly-based autonomy pause: define anomaly signals (scope overlap, request spike, legal-risk keywords) and halt-on-trigger logic.
+- [ ] Persist immutable decision log per campaign in append-only storage.
+- [ ] Expose decision traces in finding detail UI panel and include in audit export bundles.
+- [ ] Add autonomy-pause event type to campaign notification and audit trail.
+
+### Phase G — Team-Grade Operations + Competitive Differentiation
+
+*Goal: Portfolio management, drift detection, and copilot-mode for live engagements.*
+
+**Deliverables**
+
+1. Multi-project portfolio view — aggregate findings, risk trends, and coverage maps across all active programs.
+2. Cross-asset deduplication — suppress duplicate findings across different targets within the same program.
+3. SLA-based remediation planning — assign remediation owners with deadline tracking and alert escalation.
+4. Drift detection — alert when a previously-remediated finding re-appears (regression scanner).
+5. "Next best action" copilot — surface ranked probe suggestions with rationale during live manual engagements.
+6. Attack-path graph UI — interactive first-class visualization of multi-step exploit chains.
+
+**Acceptance criteria**
+
+- Portfolio view aggregates findings and risk trends across ≥2 projects.
+- Drift detection fires on simulated remediation regression.
+- Next-best-action copilot surfaces suggestions with rationale during manual sessions.
+- Attack-path graph is interactive and navigable in the UI.
+
+**Implementation checklist**
+
+- [ ] Build multi-project portfolio view: aggregate findings, severity distribution, coverage maps, and risk trends.
+- [ ] Implement cross-asset deduplication: fingerprint-based similarity matching across targets in the same program.
+- [ ] Add SLA-based remediation tracking: owner assignment, deadline dates, escalation alerts.
+- [ ] Implement drift detection: re-scan check against previously-remediated findings and fire regression alerts.
+- [ ] Build "next best action" copilot: rank uncovered surface areas + open finding chains and surface top-N suggestions in-session.
+- [ ] Promote attack-path graph to first-class UI feature: interactive node/edge visualization with drill-down into finding detail.
+
 ---
 
 ## Sequencing and Release Mapping
 
-- **Release A (Wave 1):** Trust + quality foundations
-- **Release B (Wave 2):** Orchestration intelligence + bug bounty specialization
-- **Release C (Wave 3):** Integrations + decision intelligence + scale moat
+- **Release A (Wave 1):** Trust + quality foundations — includes Phase A (Prove Exploitability, foundations), Phase B (Sharpen Signal-to-Noise, foundations), Phase F (Safer Autonomous Operation, foundations)
+- **Release B (Wave 2):** Orchestration intelligence + bug bounty specialization — completes Phase A and Phase B; adds Phase C (Coverage Map) and Phase D (Bug Bounty-Native Output)
+- **Release C (Wave 3):** Integrations + decision intelligence + scale moat — adds Phase E (Continuous Learning), completes Phase F (Safer Autonomous Operation), adds Phase G (Team-Grade Operations + Competitive Differentiation)
+
+### Phase → Wave mapping
+
+| Phase | Wave(s) | Theme |
+|---|---|---|
+| A — Prove Exploitability | Wave 1 finish + Wave 2 | PoC generation, exploit-validation sandbox |
+| B — Sharpen Signal-to-Noise | Wave 1 finish + Wave 2 | FP feedback loops, per-probe precision/recall |
+| C — Coverage Map | Wave 2 | Surface heatmap, adaptive budget scheduling |
+| D — Bug Bounty-Native Output | Wave 2 | HackerOne/Bugcrowd templates, submission readiness |
+| E — Continuous Learning | Wave 3 | Outcome-driven model tuning, regression gates |
+| F — Safer Autonomous Operation | Wave 1 + Wave 3 | Auditable traces, autonomy pause, decision logs |
+| G — Team-Grade + Differentiation | Wave 3 | Portfolio, drift, copilot, attack-path graph UI |
 
 ## Out of Scope for this roadmap artifact
 
