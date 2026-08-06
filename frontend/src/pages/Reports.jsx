@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import SecurityKnowledgePanel from "../components/SecurityKnowledgePanel";
 import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
@@ -19,6 +19,29 @@ function formatProofArtifactLine(artifact) {
   return `- **${label}**${value}${description}`;
 }
 
+function computeSubmissionReadiness(finding) {
+  let score = 0;
+  const missing = [];
+  const add = (points, present, label) => {
+    if (present) score += points;
+    else missing.push(label);
+  };
+  add(10, !!String(finding?.title || "").trim(), "title");
+  add(10, !!String(finding?.description || "").trim(), "description / summary");
+  add(10, !!finding?.severity && finding?.severity !== "info", "severity (non-informational)");
+  add(10, !!String(finding?.affectedUrl || "").trim(), "affected URL");
+  add(15, Array.isArray(finding?.reproductionSteps) && finding.reproductionSteps.length > 0, "step-by-step reproduction steps");
+  add(10, !!String(finding?.evidence || "").trim(), "raw evidence");
+  add(5, !!String(finding?.cwe || "").trim(), "CWE mapping");
+  add(5, Number(finding?.cvss || 0) > 0, "CVSS score");
+  add(5, !!String(finding?.impact || "").trim(), "business impact statement");
+  add(5, !!String(finding?.recommendation || "").trim(), "remediation recommendation");
+  add(5, Array.isArray(finding?.proofArtifacts) && finding.proofArtifacts.length > 0, "proof artifacts");
+  add(5, Number(finding?.confidence || 0) >= 0.7, "detection confidence >= 0.70");
+  add(5, !!String(finding?.affectedParameter || "").trim(), "affected parameter");
+  return { score: Math.min(100, score), missing, readyToSubmit: score >= 90 };
+}
+
 export default function Reports() {
   const { job, scanId, screenshots } = useScan();
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
@@ -36,6 +59,10 @@ export default function Reports() {
   const [showChecklist, setShowChecklist] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [previewURL, setPreviewURL] = useState("");
+  const [platform, setPlatform] = useState("hackerone");
+  const [duplicateGroups, setDuplicateGroups] = useState({});
+  const [duplicateStatus, setDuplicateStatus] = useState("");
+  const [submitStatus, setSubmitStatus] = useState({});
 
   const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
@@ -71,6 +98,7 @@ export default function Reports() {
     if (contact) params.set("contact", contact);
     if (programHandle) params.set("programHandle", programHandle);
     if (logoPath) params.set("logoPath", logoPath);
+    if (platform) params.set("platform", platform);
     return `${API_BASE}/api/report/${scanId}?${params.toString()}`;
   };
 
@@ -144,7 +172,7 @@ export default function Reports() {
   const copyBugBountySubmission = async (finding) => {
     const apiKey = getAPIKey();
     const workspaceId = getWorkspaceID();
-    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&workspaceId=${encodeURIComponent(workspaceId)}`;
+    const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&platform=${encodeURIComponent(platform)}&workspaceId=${encodeURIComponent(workspaceId)}`;
     try {
       const res = await fetch(url, { headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
       if (!res.ok) {
@@ -157,6 +185,26 @@ export default function Reports() {
       setTimeout(() => setCopyStatus((prev) => ({ ...prev, [finding.id]: "" })), 2000);
     } catch (err) {
       setCopyStatus((prev) => ({ ...prev, [finding.id]: `Error: ${err.message}` }));
+    }
+  };
+
+  const submitFinding = async (finding) => {
+    const readiness = readinessByFinding[finding.id] || { readyToSubmit: false };
+    if (!readiness.readyToSubmit) return;
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    setSubmitStatus((prev) => ({ ...prev, [finding.id]: "Submitting…" }));
+    try {
+      const url = `${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}/submit?platform=${encodeURIComponent(platform)}&workspaceId=${encodeURIComponent(workspaceId)}`;
+      const res = await fetch(url, { method: "POST", headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSubmitStatus((prev) => ({ ...prev, [finding.id]: data?.error || `HTTP ${res.status}` }));
+        return;
+      }
+      setSubmitStatus((prev) => ({ ...prev, [finding.id]: data?.status || "Submitted" }));
+    } catch (err) {
+      setSubmitStatus((prev) => ({ ...prev, [finding.id]: `Error: ${err.message}` }));
     }
   };
 
@@ -197,6 +245,32 @@ export default function Reports() {
   };
 
   const allChecked = SUBMISSION_CHECKS.every((c) => checklist[c.id]);
+  const readinessByFinding = useMemo(() => {
+    const out = {};
+    findings.forEach((f) => { out[f.id] = computeSubmissionReadiness(f); });
+    return out;
+  }, [findings]);
+
+  useEffect(() => {
+    if (!scanId) return;
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    setDuplicateStatus("Checking duplicates…");
+    fetch(`${API_BASE}/api/findings/duplicates?scanId=${encodeURIComponent(scanId)}&workspaceId=${encodeURIComponent(workspaceId)}`, {
+      headers: { "X-API-Key": apiKey, "X-Workspace-ID": workspaceId },
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => {
+        const grouped = {};
+        (data?.duplicateGroups || []).forEach((g) => { grouped[g.findingId] = g; });
+        setDuplicateGroups(grouped);
+        setDuplicateStatus("");
+      })
+      .catch((err) => {
+        setDuplicateStatus(`Duplicate check unavailable: ${err.message}`);
+        setDuplicateGroups({});
+      });
+  }, [scanId]);
 
   return (
     <div className="page page--wide">
@@ -298,11 +372,19 @@ export default function Reports() {
                 <option value="executive">Executive</option>
               </select>
             </label>
+            <label>
+              Submission platform
+              <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
+                <option value="hackerone">HackerOne</option>
+                <option value="bugcrowd">Bugcrowd</option>
+                <option value="intigriti">Intigriti</option>
+              </select>
+            </label>
           </div>
 
           <div className="button-row" style={{ marginTop: 16 }}>
             <button type="button" className="button-link" onClick={() => downloadWithAuth(reportURL(), filenameFor())}>Download report</button>
-            <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/bugbounty.zip?workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}.zip`)}>Download bounty bundle</button>
+            <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/bugbounty.zip?platform=${encodeURIComponent(platform)}&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}.zip`)}>Download bounty bundle</button>
             {format === "html" && (
               <button type="button" className="button-secondary" onClick={togglePreview}>
                 {showPreview ? "Hide preview" : "Preview HTML"}
@@ -344,6 +426,8 @@ export default function Reports() {
                 <tr>
                   <th>Finding</th>
                   <th>Proof state</th>
+                  <th>Readiness</th>
+                  <th>Duplicate check</th>
                   <th>Bounty score</th>
                   <th>Actions</th>
                 </tr>
@@ -358,6 +442,23 @@ export default function Reports() {
                     <td>
                       <span className={`proof-badge ${finding.proofState || "suspected"}`}>{proofStateLabel(finding.proofState)}</span>
                     </td>
+                    <td>
+                      {(() => {
+                        const readiness = readinessByFinding[finding.id] || { score: 0, readyToSubmit: false, missing: [] };
+                        return (
+                          <span className={`chip ${readiness.readyToSubmit ? "chip--goal" : "chip--muted"}`} title={readiness.missing?.join(", ") || "Ready"}>
+                            {readiness.score}/100
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td>
+                      {duplicateGroups[finding.id]?.candidates?.length ? (
+                        <span className="chip chip--warning">{duplicateGroups[finding.id].candidates.length} possible</span>
+                      ) : (
+                        <span className="chip chip--muted">none</span>
+                      )}
+                    </td>
                     <td>{(Number(finding.bountyScore || 0) * 100).toFixed(0)}%</td>
                     <td>
                       <div className="button-row">
@@ -367,8 +468,11 @@ export default function Reports() {
                         <button type="button" className="button-secondary" onClick={() => copyBugBountySubmission(finding)}>
                           {copyStatus[finding.id] || "Copy via API"}
                         </button>
-                        <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}-${finding.id}.md`)}>.md</button>
+                        <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=md&platform=${encodeURIComponent(platform)}&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}-${finding.id}.md`)}>.md</button>
                         <button type="button" className="button-link" onClick={() => downloadWithAuth(`${API_BASE}/api/report/${scanId}/finding/${encodeURIComponent(finding.id)}?format=pdf&workspaceId=${encodeURIComponent(getWorkspaceID())}`, `bugbounty-${scanId}-${finding.id}.pdf`)}>.pdf</button>
+                        <button type="button" className="button-link" disabled={!readinessByFinding[finding.id]?.readyToSubmit} onClick={() => submitFinding(finding)}>
+                          {submitStatus[finding.id] || "Submit"}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -376,6 +480,7 @@ export default function Reports() {
               </tbody>
             </table>
           </div>
+          {duplicateStatus && <p className="meta" style={{ marginTop: 10 }}>{duplicateStatus}</p>}
         </section>
       )}
 

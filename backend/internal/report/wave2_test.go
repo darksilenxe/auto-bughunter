@@ -1,8 +1,11 @@
 package report
 
 import (
+	"archive/zip"
+	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -192,5 +195,58 @@ func TestSubmissionReadinessScore_InfoSeverityPenalized(t *testing.T) {
 	// SeverityInfo should be penalized (-10 points).
 	if res.Score > 90 {
 		t.Errorf("info-severity should reduce score below 90, got %d", res.Score)
+	}
+}
+
+func TestPlatformFieldMappingKnownPlatforms(t *testing.T) {
+	for _, platform := range []string{"hackerone", "bugcrowd", "intigriti"} {
+		m := PlatformFieldMapping(platform)
+		if len(m) == 0 {
+			t.Fatalf("expected mapping for %s", platform)
+		}
+		if m["Title"] == "" {
+			t.Fatalf("expected title mapping for %s", platform)
+		}
+	}
+	if got := PlatformFieldMapping("unknown"); got != nil {
+		t.Fatalf("expected nil mapping for unknown platform, got %#v", got)
+	}
+}
+
+func TestRenderBugBountyZipForPlatform_EmitsCoverageArtifacts(t *testing.T) {
+	job := &model.ScanJob{
+		ID:     "scan-1",
+		Target: "https://example.com",
+		Findings: []model.Finding{
+			{ID: "f1", Title: "test", Severity: model.SeverityLow},
+		},
+		CoverageMap: &model.CoverageMap{
+			GeneratedAt:   time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC),
+			Target:        "https://example.com",
+			CoverageRatio: 0.5,
+			Areas: []model.CoverageMapArea{
+				{Type: model.CoverageAreaEndpoint, Key: "GET example.com/api", Source: "runtime_xhr", ROIScore: 0.9, Probed: false},
+			},
+		},
+	}
+	zipBytes, err := RenderBugBountyZipForPlatform(job, "hackerone")
+	if err != nil {
+		t.Fatalf("render zip: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		t.Fatalf("zip reader: %v", err)
+	}
+	var hasMap, hasHeatmap bool
+	for _, f := range zr.File {
+		if f.Name == "COVERAGE_MAP.json" {
+			hasMap = true
+		}
+		if f.Name == "COVERAGE_HEATMAP.md" {
+			hasHeatmap = true
+		}
+	}
+	if !hasMap || !hasHeatmap {
+		t.Fatalf("expected coverage artifacts, hasMap=%v hasHeatmap=%v", hasMap, hasHeatmap)
 	}
 }

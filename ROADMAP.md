@@ -196,8 +196,8 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - [x] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
 - [x] Add duplicate detection against prior submissions/scans with similarity thresholds.
 - [x] Close payout-feedback loop into prioritization scoring by program profile.
-- [ ] Define intercept-proxy plugin SDK contracts (hook surface + API schema + manifest format) and publish creator docs.
-- [ ] Add compatibility harness for plugin API versions and baseline no-plugin regression checks.
+- [x] Define intercept-proxy plugin SDK contracts (hook surface + API schema + manifest format) and publish creator docs.
+- [x] Add compatibility harness for plugin API versions and baseline no-plugin regression checks.
 
 ### Phase C — Coverage Map
 
@@ -224,7 +224,7 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 - [x] Score each surface area by `likelihood × impact` and persist as ranked list.
 - [x] Integrate coverage map scores into adaptive probe agent scheduling decisions.
 - [x] Add coverage delta comparison across successive scans for the same target.
-- [ ] Expose coverage map heatmap in UI and include in export bundles.
+- [x] Expose coverage map heatmap in UI and include in export bundles.
 - [x] Add coverage delta drift alert to campaign notification system.
 
 ### Phase D — Bug Bounty-Native Output
@@ -247,12 +247,12 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 
 **Implementation checklist**
 
-- [ ] Add platform report template engine with HackerOne, Bugcrowd, and Intigriti field mappings.
+- [x] Add platform report template engine with HackerOne, Bugcrowd, and Intigriti field mappings.
 - [x] Auto-populate severity rationale, CVSS, business impact, repro steps, remediation, and proof bundle from finding data.
 - [x] Implement `SubmissionReadinessScore` function and surface score + missing-field list in UI.
-- [ ] Add pre-submission duplicate similarity check against historical submissions.
-- [ ] Implement HackerOne and Bugcrowd API submission adapters gated by per-program API key config.
-- [ ] Wire export wizard UI with readiness gate that blocks one-click submit below 90%.
+- [x] Add pre-submission duplicate similarity check against historical submissions.
+- [x] Implement HackerOne and Bugcrowd API submission adapters gated by per-program API key config.
+- [x] Wire export wizard UI with readiness gate that blocks one-click submit below 90%.
 
 ---
 
