@@ -505,6 +505,33 @@ export default function Findings() {
                         />
                       </div>
 
+                      {/* Agent decision trace */}
+                      {finding.agentDecisionTrace && (
+                        <details>
+                          <summary>Agent decision trace</summary>
+                          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                            {finding.agentDecisionTrace.policyProfile && (
+                              <span className="chip chip--muted"><b>Policy:</b> {finding.agentDecisionTrace.policyProfile}</span>
+                            )}
+                            {finding.agentDecisionTrace.scopeCheck && (
+                              <span className="chip chip--muted"><b>Scope:</b> {finding.agentDecisionTrace.scopeCheck}</span>
+                            )}
+                            {finding.agentDecisionTrace.scopeReason && (
+                              <span className="chip chip--muted"><b>Scope reason:</b> {finding.agentDecisionTrace.scopeReason}</span>
+                            )}
+                            {finding.agentDecisionTrace.roiScore != null && finding.agentDecisionTrace.roiScore !== 0 && (
+                              <span className="chip chip--muted"><b>ROI:</b> {Number(finding.agentDecisionTrace.roiScore).toFixed(2)}</span>
+                            )}
+                            {finding.agentDecisionTrace.triggeringSignal && (
+                              <span className="chip chip--muted"><b>Trigger:</b> {finding.agentDecisionTrace.triggeringSignal}</span>
+                            )}
+                            {finding.agentDecisionTrace.timestamp && (
+                              <span className="chip chip--muted"><b>At:</b> {new Date(finding.agentDecisionTrace.timestamp).toLocaleString()}</span>
+                            )}
+                          </div>
+                        </details>
+                      )}
+
                       {/* Probe history */}
                       <details onToggle={(e) => { if (e.target.open) loadProbeHistory(finding.id); }}>
                         <summary>Probe history</summary>

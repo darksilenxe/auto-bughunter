@@ -21,6 +21,27 @@ function fmtDuration(ms) {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+function DecisionTraceBadges({ trace }) {
+  if (!trace) return null;
+  const items = [
+    trace.policyProfile && { label: "Policy", value: trace.policyProfile },
+    trace.scopeCheck && { label: "Scope", value: trace.scopeCheck },
+    trace.scopeReason && { label: "Scope reason", value: trace.scopeReason },
+    trace.roiScore != null && trace.roiScore !== 0 && { label: "ROI", value: Number(trace.roiScore).toFixed(2) },
+    trace.triggeringSignal && { label: "Trigger", value: trace.triggeringSignal },
+  ].filter(Boolean);
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: 6 }}>
+      {items.map((item) => (
+        <span key={item.label} style={{ fontSize: "0.72rem", background: "rgba(89,208,255,0.08)", border: "1px solid rgba(89,208,255,0.2)", borderRadius: 4, padding: "0.1rem 0.45rem", color: "#9cd9f5" }}>
+          <span style={{ color: "#59d0ff", fontWeight: 600 }}>{item.label}:</span> {item.value}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function ScanTimeline() {
   const { job } = useScan();
   const [hovered, setHovered] = useState(null);
@@ -157,12 +178,12 @@ export default function ScanTimeline() {
                 const isHovered = hovered === run._idx;
 
                 return (
-                  <div
-                    key={run._idx}
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
-                    onMouseEnter={() => setHovered(run._idx)}
-                    onMouseLeave={() => setHovered(null)}
-                  >
+                  <div key={run._idx}>
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                      onMouseEnter={() => setHovered(run._idx)}
+                      onMouseLeave={() => setHovered(null)}
+                    >
                     {/* Label */}
                     <div
                       style={{
@@ -213,6 +234,12 @@ export default function ScanTimeline() {
                         {run.status || "—"}
                       </span>
                     </div>
+                    </div>
+                  {isHovered && run.agentDecisionTrace && (
+                    <div style={{ paddingLeft: 204, paddingBottom: 6 }}>
+                      <DecisionTraceBadges trace={run.agentDecisionTrace} />
+                    </div>
+                  )}
                   </div>
                 );
               })}
@@ -220,6 +247,35 @@ export default function ScanTimeline() {
           </div>
         </div>
       </section>
+
+      {(job.auditTrail?.length > 0) && (
+        <section className="card">
+          <div className="toolbar" style={{ marginBottom: 16 }}>
+            <div>
+              <h2>Audit trail</h2>
+              <p className="meta">Decision-traced events recorded during this scan ({job.auditTrail.length} entries).</p>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {job.auditTrail.map((entry, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "6px 4px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                <span className="meta" style={{ flexShrink: 0, minWidth: 60, fontSize: "0.72rem" }}>
+                  {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—"}
+                </span>
+                <span style={{ flexShrink: 0, minWidth: 120, fontSize: "0.76rem", fontWeight: 600, color: "#59d0ff", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  {entry.stage || "—"}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: "0.84rem", color: "var(--ink-soft)" }}>{entry.message}</span>
+                  {entry.agentDecisionTrace && (
+                    <DecisionTraceBadges trace={entry.agentDecisionTrace} />
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
