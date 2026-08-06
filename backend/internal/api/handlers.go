@@ -419,7 +419,7 @@ func NewServer(scanService *scanner.Service, aiClient *ai.Client, mlService *ml.
 		defaultDailyRuntimeMinutes: maxInt(0, intFromEnv("AUTOMATION_DAILY_RUNTIME_LIMIT_MINUTES", 240)),
 		defaultDailyProbeLimit:     maxInt(0, intFromEnv("AUTOMATION_DAILY_PROBE_LIMIT", 5000)),
 		cancelFuncs:                map[string]context.CancelFunc{},
-		proxyBrowseTokens:         map[string]proxyBrowseTokenRecord{},
+		proxyBrowseTokens:          map[string]proxyBrowseTokenRecord{},
 	}
 	s.mcpServer = mcp.NewServer(s.aiClient)
 	s.mcpServer.SetContextProvider(func() []mcp.Resource {
@@ -1133,11 +1133,14 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	options = s.applySafetyModePolicy(options)
 	options = s.tuneScanOptions(context.Background(), target, options, persistedState, previousJob)
 	options, disabledForHealth := applyHealthAwareExecutionGating(options)
+	appendRunAudit := func(stage, message string) {
+		s.appendAuditEventWithDecisionTrace(id, stage, message, makeDecisionTrace(options, target, scanScope, 0, stage, time.Now().UTC()))
+	}
 	if len(disabledForHealth) > 0 {
-		s.appendAuditEvent(id, "health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
+		appendRunAudit("health-gate", "Disabled degraded integrations: "+strings.Join(disabledForHealth, ", "))
 	}
 	if hasOperatorOverrides(options) {
-		s.appendAuditEvent(id, "override", fmt.Sprintf("Operator overrides applied emergencyStop=%t plannerLock=%s force=%s suppress=%s fallbackRerun=%t",
+		appendRunAudit("override", fmt.Sprintf("Operator overrides applied emergencyStop=%t plannerLock=%s force=%s suppress=%s fallbackRerun=%t",
 			options.AutonomyEmergencyStop,
 			strings.TrimSpace(options.AutonomyPlannerLock),
 			strings.Join(limitStrings(options.AutonomyForceRunAgents, 8), ","),
@@ -1148,7 +1151,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "running"
 	_ = s.persistJob(job)
-	s.appendAuditEvent(id, "running", "Scan execution started")
+	appendRunAudit("running", "Scan execution started")
 
 	metrics.ScansTotal.Inc()
 	metrics.ActiveScans.Inc()
@@ -1178,7 +1181,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Type:    model.ScanEventInfo,
 				Message: "Scan failed: " + job.Error,
 			})
-			s.appendAuditEvent(id, "failed", "Scan execution panicked: "+job.Error)
+			appendRunAudit("failed", "Scan execution panicked: "+job.Error)
 			_ = s.persistJob(job)
 		}
 	}()
@@ -1204,12 +1207,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Type:    model.ScanEventInfo,
 				Message: "Scan cancelled by operator",
 			})
-			s.appendAuditEvent(id, "cancelled", "Scan cancelled by operator")
+			appendRunAudit("cancelled", "Scan cancelled by operator")
 			_ = s.persistJob(job)
 			return
 		case scanTimedOut:
 			partialTimeout = true
-			s.appendAuditEvent(id, "timeout", fmt.Sprintf("Scan exceeded the %s budget; finalizing with %d partial finding(s)", s.scanTimeout, len(findings)))
+			appendRunAudit("timeout", fmt.Sprintf("Scan exceeded the %s budget; finalizing with %d partial finding(s)", s.scanTimeout, len(findings)))
 			emit(model.ScanEvent{
 				Type:    model.ScanEventInfo,
 				Message: fmt.Sprintf("Scan timed out after %s — finalizing with %d partial finding(s)", s.scanTimeout, len(findings)),
@@ -1221,7 +1224,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 				Type:    model.ScanEventInfo,
 				Message: "Scan failed: " + err.Error(),
 			})
-			s.appendAuditEvent(id, "failed", "Scan execution failed: "+err.Error())
+			appendRunAudit("failed", "Scan execution failed: "+err.Error())
 			_ = s.persistJob(job)
 			return
 		}
@@ -1229,7 +1232,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 
 	job.Status = "finalizing"
 	_ = s.persistJob(job)
-	s.appendAuditEvent(id, "finalizing", fmt.Sprintf("Post-processing %d finding(s)", len(findings)))
+	appendRunAudit("finalizing", fmt.Sprintf("Post-processing %d finding(s)", len(findings)))
 	postProcessStart := time.Now()
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
@@ -1243,7 +1246,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	dedupedFindings, dedupSuppressed := deduplicateFindingsCrossAgent(job.Findings)
 	job.Findings = dedupedFindings
 	if dedupSuppressed > 0 {
-		s.appendAuditEvent(id, "dedup", fmt.Sprintf("Suppressed %d duplicate findings before scoring", dedupSuppressed))
+		appendRunAudit("dedup", fmt.Sprintf("Suppressed %d duplicate findings before scoring", dedupSuppressed))
 	}
 	job.Findings = applyEvidenceQualityTiers(job.Findings)
 	job.Findings = s.applyFeedbackConfidencePrioritization(context.Background(), job.Findings)
@@ -1269,12 +1272,12 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	for i := range job.Findings {
 		job.Findings[i] = scanner.AttachPythonPoC(job.Findings[i], authProfile)
 	}
-	job.AgentRuns = buildAgentTelemetry(outputs)
-	s.appendAuditEvent(id, "analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
+	job.AgentRuns = buildAgentTelemetry(outputs, options, target, scanScope)
+	appendRunAudit("analysis", fmt.Sprintf("Collected %d deduplicated findings", len(findings)))
 	if beforeDedupCount > 0 {
-		s.appendAuditEvent(id, "analysis", fmt.Sprintf("Cross-agent dedupe ratio %.2f", 1.0-float64(len(job.Findings))/float64(beforeDedupCount)))
+		appendRunAudit("analysis", fmt.Sprintf("Cross-agent dedupe ratio %.2f", 1.0-float64(len(job.Findings))/float64(beforeDedupCount)))
 	}
-	s.appendAuditEvent(id, "telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
+	appendRunAudit("telemetry", fmt.Sprintf("Captured telemetry for %d agents", len(job.AgentRuns)))
 	// Persist finding embeddings to the episodic vector memory store so
 	// future scans against the same target have richer hypothesis context.
 	if s.memoryStore != nil {
@@ -1283,7 +1286,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if previousJob != nil {
 		newItems, changedItems, resolvedItems, deltaFindings := buildDeltaFindings(previousJob.Findings, job.Findings)
 		job.Findings = append(job.Findings, deltaFindings...)
-		s.appendAuditEvent(id, "monitoring", fmt.Sprintf("Drift states: new=%d, changed=%d, resolved=%d", newItems, changedItems, resolvedItems))
+		appendRunAudit("monitoring", fmt.Sprintf("Drift states: new=%d, changed=%d, resolved=%d", newItems, changedItems, resolvedItems))
 	}
 	// Filter out historically-rejected or suppressed findings: look up
 	// operator-confirmed rejections and suppressions for this target across
@@ -1294,16 +1297,16 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		filtered, dismissed := filterDismissedFindings(job.Findings, dismissedVerifs)
 		job.Findings = filtered
 		if dismissed > 0 {
-			s.appendAuditEvent(id, "analysis", fmt.Sprintf("Filtered %d previously rejected/suppressed findings", dismissed))
+			appendRunAudit("analysis", fmt.Sprintf("Filtered %d previously rejected/suppressed findings", dismissed))
 		}
 	}
 	if len(job.Findings) > len(findings) {
-		s.appendAuditEvent(id, "monitoring", "Monitoring delta finding generated from previous completed scan")
+		appendRunAudit("monitoring", "Monitoring delta finding generated from previous completed scan")
 	}
 	assets := extractAssets(target, job.Findings)
 	if err := s.persistAssets(id, assets); err == nil {
 		job.Assets = assets
-		s.appendAuditEvent(id, "inventory", fmt.Sprintf("Persisted %d inventory assets", len(assets)))
+		appendRunAudit("inventory", fmt.Sprintf("Persisted %d inventory assets", len(assets)))
 		if previousJob != nil {
 			newAssets := diffAssets(previousJob.Assets, assets)
 			if len(newAssets) > 0 {
@@ -1323,9 +1326,9 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 						"reproStep":      "compare current vs previous asset inventory",
 					},
 				})
-				s.appendAuditEvent(id, "asset-monitoring", fmt.Sprintf("Detected %d new assets", len(newAssets)))
+				appendRunAudit("asset-monitoring", fmt.Sprintf("Detected %d new assets", len(newAssets)))
 				if shouldTriggerEventDrivenRescan(options) {
-					s.appendAuditEvent(id, "scheduling", "Triggered event-driven deep rescan from asset change detection")
+					appendRunAudit("scheduling", "Triggered event-driven deep rescan from asset change detection")
 					go s.scheduleRescan(target, job.WorkspaceID, job.RequestedBy, authProfile, options, scanScope, 5*time.Minute)
 				}
 			}
@@ -1333,16 +1336,17 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	}
 	job.AssetLinks = extractAssetLinks(target, job.Assets, job.Findings)
 	if len(job.AssetLinks) > 0 {
-		s.appendAuditEvent(id, "inventory-graph", fmt.Sprintf("Built %d asset relationship links", len(job.AssetLinks)))
+		appendRunAudit("inventory-graph", fmt.Sprintf("Built %d asset relationship links", len(job.AssetLinks)))
 	}
 	if s.attackGraphDB != nil {
 		graph := attackgraph.Build(job)
 		if err := s.persistAttackGraph(id, target, graph); err == nil {
 			job.AttackGraph = graph
-			s.appendAuditEvent(id, "attack-graph", fmt.Sprintf("Persisted attack graph nodes=%d edges=%d", len(graph.Nodes), len(graph.Edges)))
+			appendRunAudit("attack-graph", fmt.Sprintf("Persisted attack graph nodes=%d edges=%d", len(graph.Nodes), len(graph.Edges)))
 		} else {
 			log.Printf("api: scan %s intermediate attack graph persistence failed: %v", id, err)
 		}
+		job.Findings = attachDecisionTraceToFindings(job.Findings, options, target, scanScope)
 	}
 	job.Dashboard = buildDecisionDashboard(job)
 	// Attach the coverage map produced by the scanning agent.
@@ -1462,7 +1466,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if enrich.recs != nil {
 		job.ModelRecommendations = enrich.recs
 		job.NextActions = mergeActions(job.NextActions, job.ModelRecommendations.Copilot.SuggestedActions)
-		s.appendAuditEvent(id, "ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
+		appendRunAudit("ml-inference", fmt.Sprintf("ML mode=%s tools=%d prioritized=%d", job.ModelRecommendations.ModelMode, len(job.ModelRecommendations.ToolSelection), len(job.ModelRecommendations.PrioritizedFindings)))
 	}
 	if knowledgeCtx != nil {
 		if job.ModelRecommendations == nil {
@@ -1483,7 +1487,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	job.NextActions = mergeActions(job.NextActions, []string{
 		fmt.Sprintf("Review ROI gate: expected=$%.2f threshold=$%.2f mode=%s", expectedROI, minROI, normalizeAutomationMode(job.Options.AutomationMode)),
 	})
-	s.appendAuditEvent(id, "roi", fmt.Sprintf("ROI estimate expected=$%.2f threshold=$%.2f meets=%t basis=%s", expectedROI, minROI, meetsROIGate, roiBasis))
+	s.appendAuditEventWithDecisionTrace(id, "roi", fmt.Sprintf("ROI estimate expected=$%.2f threshold=$%.2f meets=%t basis=%s", expectedROI, minROI, meetsROIGate, roiBasis), makeDecisionTrace(options, target, scanScope, expectedROI, "roi", time.Now().UTC()))
 	policyGate := s.evaluatePolicyGate(job.Findings, job.PolicyPack)
 	if strings.EqualFold(policyGate.Status, "blocked") {
 		job.Findings = append(job.Findings, model.Finding{
@@ -1506,7 +1510,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 	if meetsROIGate {
 		openTickets, resolvedTickets = s.syncAutomationTickets(finCtx, ticketTarget, job.Findings)
 	} else {
-		s.appendAuditEvent(id, "ticketing", "Skipped automation ticket updates because ROI gate did not pass")
+		appendRunAudit("ticketing", "Skipped automation ticket updates because ROI gate did not pass")
 	}
 	if openTickets > 0 || resolvedTickets > 0 {
 		job.Findings = append(job.Findings, model.Finding{
@@ -1527,8 +1531,8 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		surfaceSnapshot = persistedState.SurfaceSnapshot
 	}
 	s.persistScanState(finCtx, target, job.Findings, outputs, options, surfaceSnapshot)
-	s.appendAuditEvent(id, "ai-summary", "AI summary generated")
-	s.appendAuditEvent(id, "report", "Automated penetration testing report generated")
+	appendRunAudit("ai-summary", "AI summary generated")
+	appendRunAudit("report", "Automated penetration testing report generated")
 	metrics.PostProcessDuration.Observe(time.Since(postProcessStart).Seconds())
 	completedAt := time.Now().UTC()
 	job.Status = "completed"
@@ -1560,7 +1564,7 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		completionAudit = "Scan finalized with partial results after timeout"
 		completionSuffix = " (partial — timed out)"
 	}
-	s.appendAuditEvent(id, "completed", completionAudit)
+	s.appendAuditEventWithDecisionTrace(id, "completed", completionAudit, makeDecisionTrace(options, target, scanScope, expectedROI, "completed", time.Now().UTC()))
 	emit(model.ScanEvent{
 		Type:    model.ScanEventInfo,
 		Message: fmt.Sprintf("Scan completed: %d findings%s", len(job.Findings), completionSuffix),
@@ -2331,17 +2335,17 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 	}
 
 	input := agent.AgentInput{
-		Target:         target,
-		ScanID:         scanID,
-		AuthProfile:    authProfile,
-		Options:        options,
-		Scope:          scanScope,
-		RoleProfiles:   roleProfiles,
-		AutonomyMemory: autonomyMemory,
-		Emit:           emit,
-		ProbeRecorder:  s.repo,
-		MemoryStore:    s.memoryStore,
-		OAST:           s.oast,
+		Target:              target,
+		ScanID:              scanID,
+		AuthProfile:         authProfile,
+		Options:             options,
+		Scope:               scanScope,
+		RoleProfiles:        roleProfiles,
+		AutonomyMemory:      autonomyMemory,
+		Emit:                emit,
+		ProbeRecorder:       s.repo,
+		MemoryStore:         s.memoryStore,
+		OAST:                s.oast,
 		PolicyTuningProfile: options.PolicyTuningProfile,
 		PriorSurfaceSnapshot: func() *model.SurfaceSnapshot {
 			if persistedState == nil {
@@ -3689,24 +3693,24 @@ func (s *Server) notifyNoisyProbes() {
 		return
 	}
 	type noisyProbeNote struct {
-		ProbeKey      string  `json:"probeKey"`
-		RollingFPRate float64 `json:"rollingFpRate"`
-		RollingWindow int     `json:"rollingWindow"`
-		ThrottleReason string `json:"throttleReason"`
+		ProbeKey       string  `json:"probeKey"`
+		RollingFPRate  float64 `json:"rollingFpRate"`
+		RollingWindow  int     `json:"rollingWindow"`
+		ThrottleReason string  `json:"throttleReason"`
 	}
 	notes := make([]noisyProbeNote, 0, len(noisy))
 	for _, e := range noisy {
 		notes = append(notes, noisyProbeNote{
-			ProbeKey:      e.ProbeKey,
-			RollingFPRate: e.RollingFPRate,
-			RollingWindow: e.RollingWindow,
+			ProbeKey:       e.ProbeKey,
+			RollingFPRate:  e.RollingFPRate,
+			RollingWindow:  e.RollingWindow,
 			ThrottleReason: e.ThrottleReason,
 		})
 	}
 	payload := map[string]any{
-		"alertType":  "noisy-probe-throttled",
-		"probes":     notes,
-		"createdAt":  time.Now().UTC().Format(time.RFC3339),
+		"alertType": "noisy-probe-throttled",
+		"probes":    notes,
+		"createdAt": time.Now().UTC().Format(time.RFC3339),
 	}
 	sendWebhookJSON(s.webhookURL, payload)
 	if s.slackWebhook != "" {
@@ -3809,19 +3813,28 @@ func shouldTriggerEventDrivenRescan(options model.ScanOptions) bool {
 }
 
 func (s *Server) appendAuditEvent(scanID, stage, message string) {
+	s.appendAuditEventWithDecisionTrace(scanID, stage, message, nil)
+}
+
+func (s *Server) appendAuditEventWithDecisionTrace(scanID, stage, message string, decisionTrace *model.AgentDecisionTrace) {
 	if strings.TrimSpace(scanID) == "" {
 		return
 	}
 	ctx, cancel := s.persistenceContext()
 	defer cancel()
+	ts := time.Now().UTC()
+	if decisionTrace != nil && decisionTrace.Timestamp.IsZero() {
+		decisionTrace.Timestamp = ts
+	}
 	_ = s.repo.AppendAuditEvent(ctx, scanID, model.ScanAuditEvent{
-		Stage:     stage,
-		Message:   message,
-		Timestamp: time.Now().UTC(),
+		Stage:              stage,
+		Message:            message,
+		Timestamp:          ts,
+		AgentDecisionTrace: decisionTrace,
 	})
 }
 
-func buildAgentTelemetry(outputs []agent.AgentOutput) []model.AgentRunTelemetry {
+func buildAgentTelemetry(outputs []agent.AgentOutput, options model.ScanOptions, target string, scanScope model.ScanScope) []model.AgentRunTelemetry {
 	telemetry := make([]model.AgentRunTelemetry, 0, len(outputs))
 	for _, out := range outputs {
 		t := out.Telemetry
@@ -3840,9 +3853,106 @@ func buildAgentTelemetry(outputs []agent.AgentOutput) []model.AgentRunTelemetry 
 		if v, ok := out.Metadata["skipped_reasons"]; ok && strings.TrimSpace(v) != "" {
 			t.SkippedReasons = strings.Split(v, ",")
 		}
+		trigger := strings.TrimSpace(out.AgentName)
+		if v, ok := out.Metadata["trigger_signal"]; ok && strings.TrimSpace(v) != "" {
+			trigger = strings.TrimSpace(v)
+		}
+		roi := 0.0
+		if v, ok := out.Metadata["roi_score"]; ok {
+			if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+				roi = parsed
+			}
+		}
+		stamp := t.StartedAt
+		if stamp.IsZero() {
+			stamp = out.StartedAt
+		}
+		if stamp.IsZero() {
+			stamp = time.Now().UTC()
+		}
+		t.AgentDecisionTrace = makeDecisionTrace(options, target, scanScope, roi, trigger, stamp)
 		telemetry = append(telemetry, t)
 	}
 	return telemetry
+}
+
+func attachDecisionTraceToFindings(findings []model.Finding, options model.ScanOptions, target string, scanScope model.ScanScope) []model.Finding {
+	stamped := make([]model.Finding, len(findings))
+	for i := range findings {
+		stamped[i] = findings[i]
+		roi := findingROIScore(stamped[i])
+		trigger := findingTriggerSignal(stamped[i])
+		stamp := time.Now().UTC()
+		if stamped[i].AgentDecisionTrace != nil && !stamped[i].AgentDecisionTrace.Timestamp.IsZero() {
+			stamp = stamped[i].AgentDecisionTrace.Timestamp
+		}
+		stamped[i].AgentDecisionTrace = makeDecisionTrace(options, target, scanScope, roi, trigger, stamp)
+	}
+	return stamped
+}
+
+func findingROIScore(f model.Finding) float64 {
+	if f.BountyScore > 0 {
+		return f.BountyScore
+	}
+	if f.ImpactScore > 0 {
+		return f.ImpactScore
+	}
+	return 0
+}
+
+func findingTriggerSignal(f model.Finding) string {
+	if len(f.Sources) > 0 && strings.TrimSpace(f.Sources[0]) != "" {
+		return strings.TrimSpace(f.Sources[0])
+	}
+	if strings.TrimSpace(f.Category) != "" {
+		return strings.TrimSpace(f.Category)
+	}
+	return "finding-generated"
+}
+
+func makeDecisionTrace(options model.ScanOptions, target string, scanScope model.ScanScope, roi float64, trigger string, ts time.Time) *model.AgentDecisionTrace {
+	scopeCheck, scopeReason := decisionScopeContext(target, scanScope)
+	return &model.AgentDecisionTrace{
+		PolicyProfile:    decisionPolicyProfile(options),
+		ScopeCheck:       scopeCheck,
+		ScopeReason:      scopeReason,
+		ROIScore:         roi,
+		TriggeringSignal: strings.TrimSpace(trigger),
+		Timestamp:        ts,
+	}
+}
+
+func decisionPolicyProfile(options model.ScanOptions) string {
+	if options.PolicyTuningProfile != nil && strings.TrimSpace(options.PolicyTuningProfile.PolicyPack) != "" {
+		if strings.TrimSpace(options.PolicyPack) != "" {
+			return strings.TrimSpace(options.PolicyPack) + ":" + strings.TrimSpace(options.PolicyTuningProfile.PolicyPack)
+		}
+		return strings.TrimSpace(options.PolicyTuningProfile.PolicyPack)
+	}
+	if strings.TrimSpace(options.PolicyPack) != "" {
+		return strings.TrimSpace(options.PolicyPack)
+	}
+	return "default"
+}
+
+func decisionScopeContext(target string, scanScope model.ScanScope) (result string, reason string) {
+	normalized := scope.Normalize(target, scanScope)
+	if scope.IsURLInScope(target, normalized) {
+		return "in_scope", fmt.Sprintf("target matched includeHosts=%d excludeHosts=%d excludePaths=%d", len(normalized.IncludeHosts), len(normalized.ExcludeHosts), len(normalized.ExcludePaths))
+	}
+	u, err := url.Parse(target)
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
+		return "out_of_scope", "invalid target URL"
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if len(normalized.IncludeHosts) > 0 && !scope.IsHostInScope(host, model.ScanScope{IncludeHosts: normalized.IncludeHosts}) {
+		return "out_of_scope", "host not present in includeHosts"
+	}
+	if scope.IsPathExcluded(u.Path, normalized) {
+		return "out_of_scope", "target path excluded by scope policy"
+	}
+	return "out_of_scope", "target did not pass scope filters"
 }
 
 func enrichFindings(findings []model.Finding) []model.Finding {
