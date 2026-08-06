@@ -508,6 +508,75 @@ func TestAppendAuditEventUsesBoundedPersistenceTimeout(t *testing.T) {
 	}
 }
 
+func TestAttachDecisionTraceToFindings(t *testing.T) {
+	options := model.ScanOptions{PolicyPack: "autonomous"}
+	findings := []model.Finding{
+		{
+			ID:          "f-1",
+			Category:    "xss",
+			Sources:     []string{"scanning"},
+			ImpactScore: 7.2,
+		},
+	}
+
+	stamped := attachDecisionTraceToFindings(findings, options, "https://example.com/app", model.ScanScope{IncludeHosts: []string{"example.com"}})
+	if len(stamped) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(stamped))
+	}
+	trace := stamped[0].AgentDecisionTrace
+	if trace == nil {
+		t.Fatal("expected finding decision trace")
+	}
+	if trace.PolicyProfile != "autonomous" {
+		t.Fatalf("expected policy profile autonomous, got %q", trace.PolicyProfile)
+	}
+	if trace.ScopeCheck != "in_scope" {
+		t.Fatalf("expected in_scope scope check, got %q", trace.ScopeCheck)
+	}
+	if trace.TriggeringSignal != "scanning" {
+		t.Fatalf("expected trigger signal scanning, got %q", trace.TriggeringSignal)
+	}
+	if trace.ROIScore != 7.2 {
+		t.Fatalf("expected ROI score 7.2, got %v", trace.ROIScore)
+	}
+	if trace.Timestamp.IsZero() {
+		t.Fatal("expected non-zero trace timestamp")
+	}
+}
+
+func TestBuildAgentTelemetryAttachesDecisionTrace(t *testing.T) {
+	outputs := []agent.AgentOutput{
+		{
+			AgentName: "scanning",
+			Metadata: map[string]string{
+				"roi_score":      "88.5",
+				"trigger_signal": "gap-requeue",
+			},
+			Telemetry: model.AgentRunTelemetry{
+				StartedAt: time.Now().UTC(),
+				Status:    "completed",
+			},
+		},
+	}
+
+	telemetry := buildAgentTelemetry(outputs, model.ScanOptions{PolicyPack: "safe"}, "https://example.com", model.ScanScope{IncludeHosts: []string{"example.com"}})
+	if len(telemetry) != 1 {
+		t.Fatalf("expected 1 telemetry record, got %d", len(telemetry))
+	}
+	trace := telemetry[0].AgentDecisionTrace
+	if trace == nil {
+		t.Fatal("expected telemetry decision trace")
+	}
+	if trace.PolicyProfile != "safe" {
+		t.Fatalf("expected policy profile safe, got %q", trace.PolicyProfile)
+	}
+	if trace.TriggeringSignal != "gap-requeue" {
+		t.Fatalf("expected trigger gap-requeue, got %q", trace.TriggeringSignal)
+	}
+	if trace.ROIScore != 88.5 {
+		t.Fatalf("expected ROI score 88.5, got %v", trace.ROIScore)
+	}
+}
 
 type auditBlockingRepo struct {
 	reportTestRepo

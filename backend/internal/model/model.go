@@ -105,6 +105,9 @@ type Finding struct {
 	// mode). The script describes the exact reproduction steps without
 	// modifying application state.
 	SafePoCScript string `json:"safePocScript,omitempty"`
+	// AgentDecisionTrace captures why this finding was generated, including the
+	// active policy profile, scope decision context, ROI signal, and trigger.
+	AgentDecisionTrace *AgentDecisionTrace `json:"agentDecisionTrace,omitempty"`
 }
 
 // VerificationTrace is the structured request/response proof bundle attached
@@ -1135,6 +1138,9 @@ type ScanAuditEvent struct {
 	Message   string            `json:"message"`
 	Timestamp time.Time         `json:"timestamp"`
 	Metadata  map[string]string `json:"metadata,omitempty"`
+	// AgentDecisionTrace captures the decision context that produced this audit
+	// event so autonomous actions remain explainable after scan completion.
+	AgentDecisionTrace *AgentDecisionTrace `json:"agentDecisionTrace,omitempty"`
 }
 
 type AgentRunTelemetry struct {
@@ -1149,6 +1155,20 @@ type AgentRunTelemetry struct {
 	Error            string            `json:"error,omitempty"`
 	TimedOut         bool              `json:"timedOut,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
+	// AgentDecisionTrace captures policy/scope/ROI/trigger context for this
+	// agent run record.
+	AgentDecisionTrace *AgentDecisionTrace `json:"agentDecisionTrace,omitempty"`
+}
+
+// AgentDecisionTrace provides a machine-readable "why this action ran" record
+// for Wave 3 decision transparency and auditability.
+type AgentDecisionTrace struct {
+	PolicyProfile    string    `json:"policyProfile,omitempty"`
+	ScopeCheck       string    `json:"scopeCheck,omitempty"`
+	ScopeReason      string    `json:"scopeReason,omitempty"`
+	ROIScore         float64   `json:"roiScore,omitempty"`
+	TriggeringSignal string    `json:"triggeringSignal,omitempty"`
+	Timestamp        time.Time `json:"timestamp"`
 }
 
 type DecisionDashboard struct {
