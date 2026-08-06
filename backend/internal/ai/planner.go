@@ -115,8 +115,15 @@ func buildPlannerSystemPrompt(target string, goals []model.ImpactGoal, policyPac
 		base += "\n\nDOMAIN CONTEXT (" + pack.Name + "): " + pack.SystemInstruction
 	}
 	if policyPack != "" {
-		if fragment, ok := policyPromptProfiles[strings.ToLower(strings.TrimSpace(policyPack))]; ok {
+		trimmed := strings.TrimSpace(policyPack)
+		if fragment, ok := policyPromptProfiles[strings.ToLower(trimmed)]; ok {
+			// Well-known policy pack: use the built-in fragment.
 			base += "\n\n" + fragment
+		} else {
+			// Unknown / operator-supplied pack string: treat the value itself
+			// as a raw prompt fragment (e.g. injected by a PolicyTuningProfile
+			// or a custom workspace pack).
+			base += "\n\nPOLICY CONTEXT: " + trimmed
 		}
 	}
 	return base

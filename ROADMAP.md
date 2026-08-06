@@ -189,9 +189,9 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 
 ### Remaining implementation checklist
 
-- [ ] Add runtime policy-aware model/prompt tuning profiles with audit traces.
+- [x] Add runtime policy-aware model/prompt tuning profiles with audit traces.
 - [x] Ship planner offline replay harness with baseline comparison output.
-- [ ] Add per-target adaptive strategy policy using historical drift and ROI signals.
+- [x] Add per-target adaptive strategy policy using historical drift and ROI signals.
 - [x] Surface “why agent ran” and “why ranked high” in UI and report exports.
 - [x] Add HackerOne/Bugcrowd-oriented submission bundles and severity rationale helpers.
 - [x] Add duplicate detection against prior submissions/scans with similarity thresholds.
@@ -219,13 +219,13 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 
 **Implementation checklist**
 
-- [ ] Define `CoverageMap` data model: surface areas keyed by type (auth-state, role, endpoint, JS-runtime), each with likelihood/impact scores and probed flag.
-- [ ] Emit `CoverageMap` artifact at end of scan from `reconnaissance`, `js_sast`, and runtime XHR seeding data.
-- [ ] Score each surface area by `likelihood × impact` and persist as ranked list.
-- [ ] Integrate coverage map scores into adaptive probe agent scheduling decisions.
-- [ ] Add coverage delta comparison across successive scans for the same target.
+- [x] Define `CoverageMap` data model: surface areas keyed by type (auth-state, role, endpoint, JS-runtime), each with likelihood/impact scores and probed flag.
+- [x] Emit `CoverageMap` artifact at end of scan from `reconnaissance`, `js_sast`, and runtime XHR seeding data.
+- [x] Score each surface area by `likelihood × impact` and persist as ranked list.
+- [x] Integrate coverage map scores into adaptive probe agent scheduling decisions.
+- [x] Add coverage delta comparison across successive scans for the same target.
 - [ ] Expose coverage map heatmap in UI and include in export bundles.
-- [ ] Add coverage delta drift alert to campaign notification system.
+- [x] Add coverage delta drift alert to campaign notification system.
 
 ### Phase D — Bug Bounty-Native Output
 
@@ -248,8 +248,8 @@ Focus areas: adaptive automation, explainability, and bug bounty outcome perform
 **Implementation checklist**
 
 - [ ] Add platform report template engine with HackerOne, Bugcrowd, and Intigriti field mappings.
-- [ ] Auto-populate severity rationale, CVSS, business impact, repro steps, remediation, and proof bundle from finding data.
-- [ ] Implement `SubmissionReadinessScore` function and surface score + missing-field list in UI.
+- [x] Auto-populate severity rationale, CVSS, business impact, repro steps, remediation, and proof bundle from finding data.
+- [x] Implement `SubmissionReadinessScore` function and surface score + missing-field list in UI.
 - [ ] Add pre-submission duplicate similarity check against historical submissions.
 - [ ] Implement HackerOne and Bugcrowd API submission adapters gated by per-program API key config.
 - [ ] Wire export wizard UI with readiness gate that blocks one-click submit below 90%.

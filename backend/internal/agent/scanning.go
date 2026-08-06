@@ -65,12 +65,18 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		Status:    "completed",
 	}
 
+	// Pre-create a session so we can read the CoverageMap that scanner.Run()
+	// stores on it at scan end.
+	session := scanner.NewScanSession()
+
 	findings, err := a.scanService.Run(ctx, scanner.RunInput{
-		Target:        input.Target,
-		AuthProfile:   input.AuthProfile,
-		Options:       input.Options,
-		Scope:         input.Scope,
-		Emit:          input.Emit,
+		Target:       input.Target,
+		AuthProfile:  input.AuthProfile,
+		RoleProfiles: input.RoleProfiles,
+		Options:      input.Options,
+		Scope:        input.Scope,
+		Emit:         input.Emit,
+		Session:      session,
 		ProbeRecorder: input.ProbeRecorder,
 		ScanID:        input.ScanID,
 		FPClassifier:  a.fpClassifier,
@@ -81,9 +87,11 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 			unauthFindings, fallbackErr := a.scanService.Run(ctx, scanner.RunInput{
 				Target:        input.Target,
 				AuthProfile:   model.ScanAuthProfile{},
+				RoleProfiles:  input.RoleProfiles,
 				Options:       input.Options,
 				Scope:         input.Scope,
 				Emit:          input.Emit,
+				Session:       session,
 				ProbeRecorder: input.ProbeRecorder,
 				ScanID:        input.ScanID,
 				FPClassifier:  a.fpClassifier,
@@ -161,6 +169,9 @@ func (a *ScanningAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	}
 
 	output.DebugNotes = "Built-in security checks executed."
+	// Attach the coverage map built by scanner.Run() so handlers.go can
+	// persist it on the ScanJob.
+	output.CoverageMap = session.GetCoverageMap()
 	return output, nil
 }
 

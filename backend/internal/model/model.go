@@ -408,6 +408,10 @@ type ScanOptions struct {
 	// "aggressive"). Propagated into the AI planner system prompt so it can
 	// select an appropriate probe/exploitation strategy.
 	PolicyPack string `json:"policyPack,omitempty"`
+	// PolicyTuningProfile, when set, overrides the AI model and injects a
+	// custom system-prompt augmentation for this scan. The applied profile is
+	// recorded in the scan audit trail for full decision traceability.
+	PolicyTuningProfile *PolicyTuningProfile `json:"policyTuningProfile,omitempty"`
 	// ProgramProfilePack carries per-program payout signals and vertical
 	// presets. When set, bounty scoring and impact-goal selection shift toward
 	// the highest-paying vulnerability classes for that program context.
@@ -477,6 +481,12 @@ type ScanJob struct {
 	ProgramName          string                  `json:"programName,omitempty"`
 	ProgramPolicyVersion string                  `json:"programPolicyVersion,omitempty"`
 	DisallowedTestTypes  []string                `json:"disallowedTestTypes,omitempty"`
+	// CoverageMap is the structured attack-surface coverage map produced at
+	// scan end. It lists every surface area explored (auth states, roles,
+	// endpoints, JS-runtime paths) together with their likelihood×impact
+	// score, probed flag, and source. Nil when the scan completed without
+	// coverage-map generation.
+	CoverageMap *CoverageMap `json:"coverageMap,omitempty"`
 }
 
 type APIKeyRole string
@@ -1226,4 +1236,153 @@ type ScanAnnotation struct {
 	Author      string    `json:"author,omitempty"`
 	Text        string    `json:"text"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — Coverage Map
+// ---------------------------------------------------------------------------
+
+// CoverageAreaType classifies the kind of attack-surface element recorded in a
+// CoverageMapArea. Operators and agents use this to reason about which axes
+// of coverage are missing.
+type CoverageAreaType string
+
+const (
+	// CoverageAreaAuthState represents a distinct authentication state (e.g.
+	// "unauthenticated", "user-role", "admin-role") explored during the scan.
+	CoverageAreaAuthState CoverageAreaType = "auth_state"
+	// CoverageAreaRole represents a distinct user role whose access paths were
+	// probed for IDOR/privilege-escalation vulnerabilities.
+	CoverageAreaRole CoverageAreaType = "role"
+	// CoverageAreaEndpoint represents a single URL+method combination found in
+	// the crawl or surface inventory.
+	CoverageAreaEndpoint CoverageAreaType = "endpoint"
+	// CoverageAreaJSRuntime represents an API endpoint discovered through
+	// runtime XHR interception of the SPA.
+	CoverageAreaJSRuntime CoverageAreaType = "js_runtime"
+)
+
+// CoverageMapArea is a single element of the attack surface together with its
+// likelihood×impact score and probe status.
+type CoverageMapArea struct {
+	// Type classifies this surface element.
+	Type CoverageAreaType `json:"type"`
+	// Key is a normalised, deduplicated identifier for this area (e.g.
+	// "GET /api/users", "admin-role", "unauthenticated").
+	Key string `json:"key"`
+	// Source is the discovery source (crawl, js_bundle, runtime_xhr, etc.).
+	Source string `json:"source,omitempty"`
+	// LikelihoodScore is the estimated probability that this area contains an
+	// exploitable vulnerability (0.0–1.0). Higher values = scan priority.
+	LikelihoodScore float64 `json:"likelihoodScore"`
+	// ImpactScore is the estimated business impact if a vulnerability is
+	// found here (0.0–1.0). Derived from HTTP method sensitivity, auth
+	// requirement, and data tags.
+	ImpactScore float64 `json:"impactScore"`
+	// ROIScore is LikelihoodScore × ImpactScore. Used to rank uncovered
+	// areas for adaptive probe budget allocation.
+	ROIScore float64 `json:"roiScore"`
+	// Probed is true when at least one active probe issued a request to this
+	// surface area during the scan.
+	Probed bool `json:"probed"`
+	// FindingCount is the number of findings associated with this surface
+	// area. Non-zero values confirm exploitation relevance.
+	FindingCount int `json:"findingCount,omitempty"`
+}
+
+// CoverageMap is the structured attack-surface coverage artifact produced at
+// scan end. It lists every surface area the scanner is aware of (auth states,
+// roles, HTTP endpoints, JS-runtime paths) with their likelihood×impact scores
+// and probed flags, so operators and agents can see at a glance which areas
+// received no attention and schedule follow-up scans accordingly.
+type CoverageMap struct {
+	// GeneratedAt is the RFC3339 timestamp at which the map was built.
+	GeneratedAt time.Time `json:"generatedAt"`
+	// Target is the primary scan target URL.
+	Target string `json:"target,omitempty"`
+	// Areas contains one entry per distinct surface element.
+	Areas []CoverageMapArea `json:"areas,omitempty"`
+	// TotalAreas is len(Areas) — provided as a pre-computed field so
+	// dashboard queries avoid re-counting.
+	TotalAreas int `json:"totalAreas"`
+	// ProbedAreas is the count of areas where Probed=true.
+	ProbedAreas int `json:"probedAreas"`
+	// CoverageRatio is ProbedAreas/TotalAreas (0.0–1.0). Zero when TotalAreas
+	// is zero.
+	CoverageRatio float64 `json:"coverageRatio"`
+	// HighROIUncovered lists the keys of the top uncovered areas sorted by
+	// ROIScore descending. Used by the adaptive probe agent and the dashboard
+	// heatmap.
+	HighROIUncovered []string `json:"highRoiUncovered,omitempty"`
+	// DeltaNewAreas lists area keys that appear in this scan but were absent
+	// from the previous scan's coverage map (new attack surface).
+	DeltaNewAreas []string `json:"deltaNewAreas,omitempty"`
+	// DeltaMissingAreas lists area keys that were present in the previous
+	// scan but are absent now (removed or de-scoped surface).
+	DeltaMissingAreas []string `json:"deltaMissingAreas,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2 — Policy-Aware Runtime Tuning Profiles
+// ---------------------------------------------------------------------------
+
+// PolicyTuningProfile allows workspace admins to override the AI model
+// selection and system-prompt augmentation on a per-policy-pack basis. When a
+// scan's PolicyPack matches a registered profile the planner will prefer the
+// named model and prepend the extra system-prompt text, and the decision is
+// recorded in the audit trail.
+type PolicyTuningProfile struct {
+	// PolicyPack is the policy profile name this tuning applies to (e.g.
+	// "safe", "autonomous", "aggressive", or a custom name).
+	PolicyPack string `json:"policyPack"`
+	// PreferredModel is the AI model identifier to prefer when this profile
+	// is active (e.g. "gpt-4o", "claude-3-5-sonnet"). Empty means no
+	// override — the workspace default is used.
+	PreferredModel string `json:"preferredModel,omitempty"`
+	// SystemPromptAugmentation is additional text appended after the base
+	// planner system prompt when this profile is active. Useful for adding
+	// domain-specific scanning guidance per policy.
+	SystemPromptAugmentation string `json:"systemPromptAugmentation,omitempty"`
+	// MaxRoundsOverride, when > 0, caps the orchestrator's planning rounds
+	// for this policy (overrides ScanOptions.AutonomyMaxNoNoveltyRounds).
+	MaxRoundsOverride int `json:"maxRoundsOverride,omitempty"`
+	// CreatedBy identifies the operator who registered the profile.
+	CreatedBy string `json:"createdBy,omitempty"`
+	// UpdatedAt is the last modification timestamp.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
+// PolicyTuningAuditEntry is recorded in the scan audit trail whenever a
+// PolicyTuningProfile is applied so decisions are fully traceable.
+type PolicyTuningAuditEntry struct {
+	// PolicyPack is the active pack name.
+	PolicyPack string `json:"policyPack"`
+	// AppliedModel is the model that was selected (may differ from the
+	// PreferredModel when it was unavailable).
+	AppliedModel string `json:"appliedModel,omitempty"`
+	// SystemPromptAugmented is true when a custom prompt fragment was
+	// injected.
+	SystemPromptAugmented bool `json:"systemPromptAugmented"`
+	// MaxRoundsOverride is the value applied (0 = not overridden).
+	MaxRoundsOverride int `json:"maxRoundsOverride,omitempty"`
+	// AppliedAt is when the profile was applied.
+	AppliedAt time.Time `json:"appliedAt"`
+}
+
+// ---------------------------------------------------------------------------
+// Phase D — Submission Readiness
+// ---------------------------------------------------------------------------
+
+// SubmissionReadinessResult is the output of SubmissionReadinessScore. It
+// carries the 0–100 readiness score and the list of missing-field descriptions
+// that prevented a perfect score.
+type SubmissionReadinessResult struct {
+	// Score is the submission-readiness score in [0, 100]. A score of 90+
+	// enables the one-click submit button in the export wizard.
+	Score int `json:"score"`
+	// MissingFields lists human-readable descriptions of fields or evidence
+	// items that are absent but expected for a well-formed submission.
+	MissingFields []string `json:"missingFields,omitempty"`
+	// ReadyToSubmit is true when Score >= 90.
+	ReadyToSubmit bool `json:"readyToSubmit"`
 }

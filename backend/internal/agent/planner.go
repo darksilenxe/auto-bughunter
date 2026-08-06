@@ -188,7 +188,20 @@ func (p *AIPlanner) Plan(ctx context.Context, input AgentInput, history []AgentO
 		})
 	}
 
-	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals, input.Options.PolicyPack)
+	// Apply policy tuning profile: inject the operator augmentation into the
+	// policyPack string so buildPlannerSystemPrompt uses it as a raw fragment.
+	activePolicyPack := input.Options.PolicyPack
+	if tp := input.PolicyTuningProfile; tp != nil && strings.TrimSpace(tp.SystemPromptAugmentation) != "" {
+		aug := strings.TrimSpace(tp.SystemPromptAugmentation)
+		if activePolicyPack != "" {
+			// Keep the existing pack fragment and append the operator augmentation.
+			activePolicyPack = activePolicyPack + "\n\nOPERATOR TUNING (" + tp.PolicyPack + "): " + aug
+		} else {
+			activePolicyPack = "OPERATOR TUNING (" + tp.PolicyPack + "): " + aug
+		}
+	}
+
+	specs, done, err := p.Caller.Plan(ctx, input.Target, findings, historySummary, p.AvailableAgents, input.Options.ImpactGoals, activePolicyPack)
 	if err != nil {
 		if p.Fallback != nil {
 			return p.Fallback.Plan(ctx, input, history)

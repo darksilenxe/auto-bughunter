@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"auto-bughunter/backend/internal/model"
 )
 
 // TokenStore holds harvested bearer/CSRF tokens discovered during a scan.
@@ -76,6 +78,10 @@ type ScanSession struct {
 	// detector. May be nil for callers that create a session outside
 	// scanner.Run(); every use site is nil-safe.
 	surfaceInventory *SurfaceInventory
+	// coverageMap is the structured attack-surface coverage map built by
+	// scanner.Run() at scan end. It is nil-safe; callers that create a
+	// session outside scanner.Run() will see a nil value.
+	coverageMap *model.CoverageMap
 }
 
 // NewScanSession creates a ScanSession backed by a stdlib cookie jar.
@@ -321,6 +327,26 @@ func (s *ScanSession) SurfaceInventory() *SurfaceInventory {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.surfaceInventory
+}
+
+// SetCoverageMap stores the structured coverage map built at scan end.
+func (s *ScanSession) SetCoverageMap(cm *model.CoverageMap) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.coverageMap = cm
+}
+
+// GetCoverageMap returns the coverage map stored by scanner.Run, or nil.
+func (s *ScanSession) GetCoverageMap() *model.CoverageMap {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.coverageMap
 }
 
 func discoveredParamsKey(rawURL string) string {

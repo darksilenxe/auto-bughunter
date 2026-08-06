@@ -1345,6 +1345,14 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		}
 	}
 	job.Dashboard = buildDecisionDashboard(job)
+	// Attach the coverage map produced by the scanning agent.
+	if cm := latestCoverageMap(outputs); cm != nil {
+		job.CoverageMap = cm
+		// Emit a coverage delta drift alert when new surface areas appear.
+		if len(cm.DeltaNewAreas) > 0 {
+			go s.notifyCoverageDelta(job.Target, cm.DeltaNewAreas)
+		}
+	}
 	// Best-effort post-scan enrichment (security-knowledge retrieval, AI
 	// summary, narrative report, ML recommendations). These calls run on
 	// external providers/sidecars or CPU-bound computations and must never
@@ -1564,7 +1572,13 @@ func (s *Server) runJob(id, target string, authProfile model.ScanAuthProfile, ro
 		s.eventBus.Cleanup(id)
 	}()
 	if job.Options.RescanIntervalMinutes > 0 {
-		nextOptions, adaptationNote := adaptOptionsFromDrift(job.Findings, options)
+		var roiProfile *model.TargetROIProfile
+		if persistedState != nil {
+			if prof, ok := persistedState.AutonomyMemory.TargetROISignals[target]; ok {
+				roiProfile = &prof
+			}
+		}
+		nextOptions, adaptationNote := adaptOptionsFromDrift(job.Findings, options, roiProfile)
 		if adaptationNote != "" {
 			s.appendAuditEvent(id, "drift-adaptation", adaptationNote)
 		}
@@ -2328,12 +2342,26 @@ func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target 
 		ProbeRecorder:  s.repo,
 		MemoryStore:    s.memoryStore,
 		OAST:           s.oast,
+		PolicyTuningProfile: options.PolicyTuningProfile,
 		PriorSurfaceSnapshot: func() *model.SurfaceSnapshot {
 			if persistedState == nil {
 				return nil
 			}
 			return persistedState.SurfaceSnapshot
 		}(),
+	}
+	// Emit a policy-tuning audit entry when a custom tuning profile is active
+	// so every AI model / prompt decision is fully traceable.
+	if tp := options.PolicyTuningProfile; tp != nil {
+		entry := model.PolicyTuningAuditEntry{
+			PolicyPack:            tp.PolicyPack,
+			AppliedModel:          tp.PreferredModel,
+			SystemPromptAugmented: strings.TrimSpace(tp.SystemPromptAugmentation) != "",
+			MaxRoundsOverride:     tp.MaxRoundsOverride,
+			AppliedAt:             time.Now().UTC(),
+		}
+		entryJSON, _ := json.Marshal(entry)
+		s.appendAuditEvent(scanID, "policy-tuning", "PolicyTuningProfile applied: "+string(entryJSON))
 	}
 	outputs, findings, err := s.runAgents(ctx, input)
 	if err != nil {
@@ -2607,6 +2635,17 @@ func latestSurfaceSnapshot(outputs []agent.AgentOutput) *model.SurfaceSnapshot {
 	for i := len(outputs) - 1; i >= 0; i-- {
 		if outputs[i].SurfaceSnapshot != nil {
 			return outputs[i].SurfaceSnapshot
+		}
+	}
+	return nil
+}
+
+// latestCoverageMap returns the most recent non-nil CoverageMap produced by
+// any agent output (typically the scanning agent).
+func latestCoverageMap(outputs []agent.AgentOutput) *model.CoverageMap {
+	for i := len(outputs) - 1; i >= 0; i-- {
+		if outputs[i].CoverageMap != nil {
+			return outputs[i].CoverageMap
 		}
 	}
 	return nil
@@ -3679,6 +3718,30 @@ func (s *Server) notifyNoisyProbes() {
 	}
 }
 
+// notifyCoverageDelta fires a coverage-delta drift alert (Wave 2 Phase C)
+// when new attack-surface areas appear in the latest scan's CoverageMap that
+// were absent from the previous scan. Sent via webhook and Slack if configured.
+func (s *Server) notifyCoverageDelta(target string, newAreas []string) {
+	if s.webhookURL == "" && s.slackWebhook == "" {
+		return
+	}
+	if len(newAreas) == 0 {
+		return
+	}
+	payload := map[string]any{
+		"type":      "coverage_delta",
+		"target":    target,
+		"newAreas":  newAreas,
+		"count":     len(newAreas),
+		"createdAt": time.Now().UTC().Format(time.RFC3339),
+	}
+	sendWebhookJSON(s.webhookURL, payload)
+	if s.slackWebhook != "" {
+		text := fmt.Sprintf(":new: *auto-bughunter coverage-delta alert:* %d new attack-surface area(s) on `%s`", len(newAreas), target)
+		sendWebhookJSON(s.slackWebhook, map[string]string{"text": text})
+	}
+}
+
 func sendWebhookJSON(target string, payload any) {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -4315,7 +4378,12 @@ func generateAutomationPostmortem(job *model.ScanJob, outputs []agent.AgentOutpu
 	}, "\n")
 }
 
-func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions) (model.ScanOptions, string) {
+// adaptOptionsFromDrift adjusts scan options for the next scheduled rescan
+// based on current findings drift and, optionally, per-target historical ROI
+// signals from the persistent scan state. When roi is non-nil its DriftScore
+// and HighPayoutCategories are used to further tune the next scan's impact
+// goals and exploration budget.
+func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions, roi *model.TargetROIProfile) (model.ScanOptions, string) {
 	newCount := 0
 	changedCount := 0
 	highNewOrChanged := 0
@@ -4324,17 +4392,23 @@ func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions) 
 		switch drift {
 		case "new":
 			newCount++
-			if f.Severity == model.SeverityHigh {
+			if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
 				highNewOrChanged++
 			}
 		case "changed":
 			changedCount++
-			if f.Severity == model.SeverityHigh {
+			if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
 				highNewOrChanged++
 			}
 		}
 	}
-	if highNewOrChanged == 0 && newCount < 3 && changedCount < 3 {
+
+	// ROI-signal tuning: apply even when the current scan has no drift if the
+	// target has a high historical DriftScore — it means new findings usually
+	// appear here and we should keep deep-scanning.
+	roiActive := roi != nil && (roi.DriftScore > 0.5 || len(roi.HighPayoutCategories) > 0)
+
+	if highNewOrChanged == 0 && newCount < 3 && changedCount < 3 && !roiActive {
 		return options, ""
 	}
 	adapted := options
@@ -4342,8 +4416,45 @@ func adaptOptionsFromDrift(findings []model.Finding, options model.ScanOptions) 
 	adapted.AutonomyExplorationBudgetPercent = maxInt(adapted.AutonomyExplorationBudgetPercent, 20)
 	adapted.RescanIntervalMinutes = maxInt(10, adapted.RescanIntervalMinutes/2)
 	adapted.MaxPerTargetConcurrency = minInt(maxInt(1, adapted.MaxPerTargetConcurrency), 1)
-	note := fmt.Sprintf("Adaptive drift strategy applied (new=%d changed=%d high=%d): deepScan=true, exploration>=20%%, tighter rescan cadence",
-		newCount, changedCount, highNewOrChanged)
+
+	noteParts := []string{fmt.Sprintf("new=%d changed=%d high=%d", newCount, changedCount, highNewOrChanged)}
+
+	// When historical ROI signals indicate high-value categories, inject them
+	// as impact goals so agents prioritise those paths in the next scan.
+	if roi != nil && len(roi.HighPayoutCategories) > 0 {
+		// Translate category names to ImpactGoals if possible.
+		catToGoal := map[string]model.ImpactGoal{
+			"access_control": model.ImpactGoalCrossTenantAccess,
+			"idor":           model.ImpactGoalCrossTenantAccess,
+			"auth_bypass":    model.ImpactGoalAuthBypass,
+			"xss":            model.ImpactGoalStoredXSS,
+			"ssrf":           model.ImpactGoalSSRFInternalAccess,
+			"injection":      model.ImpactGoalSensitiveDataExposure,
+			"sqli":           model.ImpactGoalSensitiveDataExposure,
+		}
+		goalSet := map[model.ImpactGoal]struct{}{}
+		for _, g := range adapted.ImpactGoals {
+			goalSet[g] = struct{}{}
+		}
+		for _, cat := range roi.HighPayoutCategories {
+			if goal, ok := catToGoal[strings.ToLower(cat)]; ok {
+				if _, exists := goalSet[goal]; !exists {
+					adapted.ImpactGoals = append(adapted.ImpactGoals, goal)
+					goalSet[goal] = struct{}{}
+				}
+			}
+		}
+		noteParts = append(noteParts, fmt.Sprintf("ROI categories=%v", roi.HighPayoutCategories))
+	}
+
+	// High historical drift → boost exploration budget further.
+	if roi != nil && roi.DriftScore > 0.5 {
+		boost := int(roi.DriftScore * 40) // 0.5→20%, 1.0→40%
+		adapted.AutonomyExplorationBudgetPercent = maxInt(adapted.AutonomyExplorationBudgetPercent, boost)
+		noteParts = append(noteParts, fmt.Sprintf("driftScore=%.2f explorationBudget=%d%%", roi.DriftScore, adapted.AutonomyExplorationBudgetPercent))
+	}
+
+	note := "Adaptive strategy applied (" + strings.Join(noteParts, " ") + "): deepScan=true, tighter rescan cadence"
 	return adapted, note
 }
 
