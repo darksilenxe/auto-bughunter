@@ -497,6 +497,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/agent/dispatch", s.handleAgentDispatch)
 	// IDE — generate PoC / exploit code using the configured coding model.
 	mux.HandleFunc("/api/ide/generate", s.handleIDEGenerate)
+	mux.HandleFunc("/api/probe-health", s.handleProbeHealth)
 	// Prometheus-format metrics — not gated by auth so Prometheus can scrape.
 	mux.Handle("/metrics", metrics.DefaultRegistry.Handler())
 	return withCORS(withRecovery(s.authMiddleware(s.rateLimitMiddleware(mux))))
@@ -1982,6 +1983,8 @@ func (s *Server) handleFindingVerification(w http.ResponseWriter, r *http.Reques
 	}
 	s.recordVerificationFeedback(r.Context(), job, req)
 	s.persistShadowDecision(r.Context(), job, req)
+	// Fire noisy-probe alert if any probe just crossed the throttle threshold.
+	go s.notifyNoisyProbes()
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": req.ID, "status": req.Status, "owner": req.Owner, "previousStatus": priorStatus})
 }
 
@@ -2010,6 +2013,27 @@ func (s *Server) recordVerificationFeedback(ctx context.Context, job *model.Scan
 		CreatedAt:   verification.CreatedAt,
 	}
 	_ = s.repo.SaveFeedback(ctx, feedback)
+
+	// Write analyst outcome label to the global ProbeOutcomeLedger (Wave 1
+	// Phase B). The probe key is derived from the finding's verifiedBy
+	// evidence field when present, otherwise the finding category is used.
+	probeKey := strings.TrimSpace(finding.EvidenceFields["preReport.verifiedBy"])
+	if probeKey == "" {
+		probeKey = strings.TrimSpace(finding.Category)
+	}
+	if probeKey != "" {
+		var ledgerLabel scanner.OutcomeLabel
+		var hasLabel bool
+		switch findingLifecycleAliases(verification.Status) {
+		case "accepted":
+			ledgerLabel, hasLabel = scanner.OutcomeTP, true
+		case "rejected", "suppressed":
+			ledgerLabel, hasLabel = scanner.OutcomeFP, true
+		}
+		if hasLabel {
+			scanner.GlobalProbeOutcomeLedger().RecordOutcome(probeKey, ledgerLabel)
+		}
+	}
 }
 
 func verificationFeedbackOutcome(status string) (outcome string, reason string, ok bool) {
@@ -2199,10 +2223,50 @@ func (s *Server) handleToolsUpdates(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// handleProbeHealth returns per-probe precision/recall statistics from the
+// global ProbeOutcomeLedger (Wave 1 Phase B — Probe Health dashboard panel).
+//
+// GET /api/probe-health           — returns all probe health entries sorted by
+//
+//	descending rolling FP rate (noisiest first).
+//
+// GET /api/probe-health?probe=<key> — returns stats for a single probe.
+func (s *Server) handleProbeHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ledger := scanner.GlobalProbeOutcomeLedger()
+	if probe := strings.TrimSpace(r.URL.Query().Get("probe")); probe != "" {
+		entry, ok := ledger.ProbeStats(probe)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "probe not found in ledger"})
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"probes": ledger.AllProbeHealth(),
+		"thresholds": map[string]any{
+			"throttleFpThreshold": ledger.ThrottleFPThreshold,
+			"throttleMinSamples":  ledger.ThrottleMinSamples,
+			"throttleWindowSize":  ledger.ThrottleWindowSize,
+		},
+	})
+}
+
 func (s *Server) runWithAuthProfiles(ctx context.Context, scanID string, target string, authProfile model.ScanAuthProfile, roleProfiles []model.RoleAuthProfile, options model.ScanOptions, scanScope model.ScanScope, persistedState *model.PersistentScanState, emit agent.Emitter) ([]agent.AgentOutput, []model.Finding, error) {
 	autonomyMemory := model.AutonomyMemory{}
 	if persistedState != nil {
 		autonomyMemory = persistedState.AutonomyMemory
+	}
+
+	// Propagate AllowDestructive from the scanner service config into Options
+	// so that agents (e.g. exploit_chain) can gate safe-mode behaviour without
+	// needing a direct reference to the scanner config.
+	if s.scanService != nil && s.scanService.AllowDestructive() {
+		options.AllowDestructiveChecks = true
 	}
 
 	// Adaptive strategy: if a prior surface snapshot exists, run a quick diff
@@ -3563,6 +3627,55 @@ func (s *Server) notifyFindings(job *model.ScanJob) {
 			lines = append(lines, fmt.Sprintf("• [%s] %s (%.2f)", strings.ToUpper(string(item.Severity)), item.Title, item.Confidence))
 		}
 		sendWebhookJSON(s.slackWebhook, map[string]string{"text": strings.Join(limitStrings(lines, 12), "\n")})
+	}
+}
+
+// notifyNoisyProbes fires a "noisy probe" alert (Wave 1 Phase B) when any
+// probe in the global ProbeOutcomeLedger is auto-throttled. Called after
+// analyst triage actions update the ledger. The alert is sent at most once per
+// throttle event (the ledger records ThrottledAt so duplicates are skipped by
+// comparing against the last notified set in the server state).
+func (s *Server) notifyNoisyProbes() {
+	if s.webhookURL == "" && s.slackWebhook == "" {
+		return
+	}
+	entries := scanner.GlobalProbeOutcomeLedger().AllProbeHealth()
+	var noisy []scanner.ProbeHealthEntry
+	for _, e := range entries {
+		if e.Throttled {
+			noisy = append(noisy, e)
+		}
+	}
+	if len(noisy) == 0 {
+		return
+	}
+	type noisyProbeNote struct {
+		ProbeKey      string  `json:"probeKey"`
+		RollingFPRate float64 `json:"rollingFpRate"`
+		RollingWindow int     `json:"rollingWindow"`
+		ThrottleReason string `json:"throttleReason"`
+	}
+	notes := make([]noisyProbeNote, 0, len(noisy))
+	for _, e := range noisy {
+		notes = append(notes, noisyProbeNote{
+			ProbeKey:      e.ProbeKey,
+			RollingFPRate: e.RollingFPRate,
+			RollingWindow: e.RollingWindow,
+			ThrottleReason: e.ThrottleReason,
+		})
+	}
+	payload := map[string]any{
+		"alertType":  "noisy-probe-throttled",
+		"probes":     notes,
+		"createdAt":  time.Now().UTC().Format(time.RFC3339),
+	}
+	sendWebhookJSON(s.webhookURL, payload)
+	if s.slackWebhook != "" {
+		lines := []string{fmt.Sprintf(":warning: *auto-bughunter noisy-probe alert:* %d probe(s) auto-throttled", len(noisy))}
+		for _, n := range notes {
+			lines = append(lines, fmt.Sprintf("• `%s` — rolling FP rate %.0f%% (%d samples)", n.ProbeKey, n.RollingFPRate*100, n.RollingWindow))
+		}
+		sendWebhookJSON(s.slackWebhook, map[string]string{"text": strings.Join(limitStrings(lines, 10), "\n")})
 	}
 }
 

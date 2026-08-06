@@ -94,6 +94,53 @@ type Finding struct {
 	// Derived deterministically from Exploitability and Confidence during
 	// enrichment.
 	TimeToExploit string `json:"timeToExploit,omitempty"`
+	// VerificationTrace is the structured request/response proof bundle
+	// captured during pre-report verification or PoC replay. Populated by
+	// the pre-report verifier when PoCReplayFunc succeeds, and by the
+	// exploit_chain agent's safe PoC generator. Only attached when evidence
+	// replay was actually attempted and the transcript is non-empty.
+	VerificationTrace *VerificationTrace `json:"verificationTrace,omitempty"`
+	// SafePoCScript is a replay-safe, audit-logged PoC script emitted by the
+	// exploit_chain agent. Only set when AllowDestructiveChecks=false (safe
+	// mode). The script describes the exact reproduction steps without
+	// modifying application state.
+	SafePoCScript string `json:"safePocScript,omitempty"`
+}
+
+// VerificationTrace is the structured request/response proof bundle attached
+// to a finding to provide reproducible, machine-readable exploit evidence.
+// It captures the exact HTTP interaction that confirmed the vulnerability.
+type VerificationTrace struct {
+	// RequestLine is the HTTP method + URL of the exploit request, e.g.
+	// "POST https://example.com/login".
+	RequestLine string `json:"requestLine,omitempty"`
+	// RequestHeaders holds selected headers from the exploit request that are
+	// relevant to the vulnerability (e.g. Content-Type, Authorization).
+	// Must not contain authentication secrets.
+	RequestHeaders map[string]string `json:"requestHeaders,omitempty"`
+	// RequestBody is the (possibly truncated) request body used in the
+	// exploit. Long bodies are truncated to 4 KB.
+	RequestBody string `json:"requestBody,omitempty"`
+	// ResponseStatus is the HTTP status code of the confirming response.
+	ResponseStatus int `json:"responseStatus,omitempty"`
+	// ResponseHeaders holds selected response headers (e.g. Set-Cookie,
+	// Content-Type, X-Frame-Options) relevant to the finding.
+	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
+	// ResponseSnippet is the first 2 KB of the response body or the
+	// relevant matched snippet, annotated with the confirming pattern.
+	ResponseSnippet string `json:"responseSnippet,omitempty"`
+	// LatencyMs is the round-trip latency in milliseconds for the exploit
+	// request. Relevant for timing-based findings (blind SQLi, DoS).
+	LatencyMs int64 `json:"latencyMs,omitempty"`
+	// ConfirmingPattern is the exact substring or regex that proved the
+	// vulnerability (e.g. the reflected XSS payload, the error message
+	// containing a stack trace, or the OAST callback token).
+	ConfirmingPattern string `json:"confirmingPattern,omitempty"`
+	// OASTCallbackToken is the unique token that was observed in an
+	// out-of-band interaction, confirming blind exploitation.
+	OASTCallbackToken string `json:"oastCallbackToken,omitempty"`
+	// CapturedAt is the RFC3339 timestamp at which the trace was captured.
+	CapturedAt string `json:"capturedAt,omitempty"`
 }
 
 // ReportTemplateOptions allows callers to customize the cover/branding sections
@@ -318,6 +365,13 @@ type ScanOptions struct {
 	// PoC request — no additional live requests are made beyond the scan's
 	// existing probes.
 	EnableCVEPoCExecution bool `json:"enableCvePocExecution,omitempty"`
+	// AllowDestructiveChecks enables destructive or high-impact probes such as
+	// SQLMap, commix, and live CVE PoC execution that may modify application
+	// state. When false (the default), agents operate in safe mode and emit
+	// replay-safe PoC scripts rather than firing live exploit payloads.
+	// This field mirrors the ALLOW_DESTRUCTIVE_CHECKS environment variable and
+	// is propagated from scanner.Config.AllowDestructive into agent inputs.
+	AllowDestructiveChecks bool `json:"allowDestructiveChecks,omitempty"`
 	// UseRecentCVEFeed enables external recent-CVE enrichment. When enabled, the
 	// cve_reverse_engineer agent fetches recently published CVEs from NVD,
 	// filters for web-app relevance, prioritizes entries matching detected stack
