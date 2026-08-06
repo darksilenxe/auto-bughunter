@@ -120,12 +120,12 @@ Focus areas: governance, authorization proof, auditability, and false-positive r
 
 **Implementation checklist**
 
-- [ ] Add safe PoC generator to `exploit_chain` agent output with `AllowDestructiveChecks` gate.
-- [ ] Capture request/response proof bundle as a structured `VerificationTrace` field on `Finding`.
-- [ ] Raise `proofpolicy` minimum evidence coverage threshold for `high`/`critical` severity findings.
+- [x] Add safe PoC generator to `exploit_chain` agent output with `AllowDestructiveChecks` gate.
+- [x] Capture request/response proof bundle as a structured `VerificationTrace` field on `Finding`.
+- [x] Raise `proofpolicy` minimum evidence coverage threshold for `high`/`critical` severity findings.
 - [ ] Wire exploit-validation sandbox container (isolated, no exfiltration) and expose replay API.
 - [ ] Surface PoC bundle and exploit chain in finding detail UI and export bundles.
-- [ ] Add exploit validation rate to Core Product KPI dashboard.
+- [x] Add exploit validation rate to Core Product KPI dashboard.
 
 ### Phase B — Sharpen Signal-to-Noise
 
@@ -147,12 +147,12 @@ Focus areas: governance, authorization proof, auditability, and false-positive r
 
 **Implementation checklist**
 
-- [ ] Add `ProbeOutcomeLedger` storage schema: probe key → rolling TP/FP/FN counts.
-- [ ] Instrument analyst triage actions (accept/reject/suppress) to write outcome labels.
-- [ ] Implement auto-throttle: skip probes above FP threshold and record throttle decision.
-- [ ] Expose ledger API endpoint and wire into UI as a "Probe Health" dashboard panel.
-- [ ] Feed ledger outcome weights into `ml_triage` and `false_positive_review` agent prompts.
-- [ ] Add "noisy probe" alert type to campaign notification system.
+- [x] Add `ProbeOutcomeLedger` storage schema: probe key → rolling TP/FP/FN counts.
+- [x] Instrument analyst triage actions (accept/reject/suppress) to write outcome labels.
+- [x] Implement auto-throttle: skip probes above FP threshold and record throttle decision.
+- [x] Expose ledger API endpoint and wire into UI as a "Probe Health" dashboard panel.
+- [x] Feed ledger outcome weights into `ml_triage` and `false_positive_review` agent prompts.
+- [x] Add "noisy probe" alert type to campaign notification system.
 
 ---
 
