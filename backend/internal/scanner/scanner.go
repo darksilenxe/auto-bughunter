@@ -98,6 +98,12 @@ func (s *Service) SetOAST(o oast.Provider) { s.oast = o }
 // OAST returns the attached OAST provider or nil.
 func (s *Service) OAST() oast.Provider { return s.oast }
 
+// AllowDestructive reports whether the service was configured to allow
+// destructive/high-impact probes (ALLOW_DESTRUCTIVE_CHECKS). Agents can read
+// this flag via ScanOptions.AllowDestructiveChecks after it is propagated by
+// the scan handlers.
+func (s *Service) AllowDestructive() bool { return s.cfg.AllowDestructive }
+
 // SetProxyStore attaches a proxy store so that all outbound HTTP requests made
 // by the scanner are recorded and visible in the Network Graph UI. Safe to
 // call with nil to disable recording.

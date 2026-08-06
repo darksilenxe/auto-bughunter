@@ -329,6 +329,30 @@ var categoryMinCoverage = map[string]float64{
 	"h2c_smuggling": 0.66,
 }
 
+// highCriticalMinCoverage overrides categoryMinCoverage when a finding's
+// severity is high or critical. All exploit classes that were previously at
+// 0.66 are raised to 1.0 so high/critical findings require full evidence
+// coverage before publication (Wave 1 Phase A quality gate).
+var highCriticalMinCoverage = map[string]float64{
+	"sqli":                1.0,
+	"ssrf":                1.0,
+	"xxe":                 1.0,
+	"ssti":                1.0,
+	"nosqli":              1.0,
+	"xss":                 1.0,
+	"idor":                1.0,
+	"path_traversal":      1.0,
+	"open_redirect":       1.0,
+	"cors":                1.0,
+	"csrf":                1.0,
+	"clickjacking":        1.0,
+	"authentication":      1.0,
+	"prototype_pollution": 0.66,
+	"headers":             0.66,
+	"wordlist":            0.66,
+	"h2c_smuggling":       1.0,
+}
+
 func EvaluateFinding(f model.Finding) Result {
 	category := canonicalCategory(f.Category)
 	reqs := rulesByCategory[category]
@@ -353,7 +377,13 @@ func EvaluateFinding(f model.Finding) Result {
 	if len(result.Required) > 0 {
 		result.Coverage = float64(len(result.Satisfied)) / float64(len(result.Required))
 	}
-	if min, ok := categoryMinCoverage[category]; ok {
+	// Use the stricter high/critical coverage table when the finding's
+	// claimed severity warrants it (Wave 1 Phase A quality gate).
+	minTable := categoryMinCoverage
+	if f.Severity == model.SeverityHigh || f.Severity == model.SeverityCritical {
+		minTable = highCriticalMinCoverage
+	}
+	if min, ok := minTable[category]; ok {
 		result.MinCoverage = min
 		result.BelowMinCoverage = result.Coverage < min
 	}

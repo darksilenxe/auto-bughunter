@@ -84,8 +84,13 @@ func TestOAuthSessionProbe_AuthCodeReplay_Accepted(t *testing.T) {
 	for _, f := range findings {
 		if f.ID == "oauth-code-replay" {
 			found = true
-			if f.Severity != model.SeverityHigh {
-				t.Fatalf("expected High severity, got %s", f.Severity)
+			// Wave 1 Phase A quality gate: authentication findings at high/critical
+			// severity now require 1.0 proof-policy coverage. The OAuth code-replay
+			// probe achieves 3/4 rules (0.75 coverage) since screenshot_state_change
+			// requires browser validation. Findings are downgraded to medium rather
+			// than suppressed, so the finding is still emitted.
+			if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium {
+				t.Fatalf("expected High or Medium severity (downgraded by strict gate), got %s", f.Severity)
 			}
 			if f.CWE != "CWE-294" {
 				t.Fatalf("expected CWE-294, got %s", f.CWE)
@@ -229,8 +234,12 @@ func TestOAuthSessionProbe_RefreshTokenReplay_Accepted(t *testing.T) {
 	for _, f := range findings {
 		if f.ID == "oauth-refresh-token-replay" {
 			found = true
-			if f.Severity != model.SeverityHigh {
-				t.Fatalf("expected High severity, got %s", f.Severity)
+			// Wave 1 Phase A quality gate: authentication findings at high/critical
+			// severity now require 1.0 proof-policy coverage. The OAuth refresh-token
+			// replay probe achieves 3/4 rules (screenshot_state_change requires browser
+			// validation). Findings are downgraded to medium rather than suppressed.
+			if f.Severity != model.SeverityHigh && f.Severity != model.SeverityMedium {
+				t.Fatalf("expected High or Medium severity (downgraded by strict gate), got %s", f.Severity)
 			}
 		}
 	}

@@ -157,6 +157,10 @@ type verificationCounters struct {
 	ByCategory       map[string]*probeCounter
 	ConfidenceSum    float64
 	ConfidenceSample int
+	// ExploitValidated tracks how many findings shipped with a
+	// PoC/VerificationTrace bundle (Wave 1 Phase A KPI).
+	ExploitValidated          int
+	ExploitValidationEligible int
 }
 
 type probeCounter struct {
@@ -222,6 +226,27 @@ func (c *verificationCounters) record(probe string, category string, o Verificat
 		c.ConfidenceSum += o.Confidence
 		c.ConfidenceSample++
 	}
+	// Exploit validation rate KPI (Wave 1 Phase A): track whether the emitted
+	// finding carries a PoC/VerificationTrace bundle.
+	sev := o.EmittedFinding.Severity
+	if sev == model.SeverityHigh || sev == model.SeverityCritical {
+		c.ExploitValidationEligible++
+		if o.PoCSuccess || o.EmittedFinding.VerificationTrace != nil || o.EmittedFinding.SafePoCScript != "" {
+			c.ExploitValidated++
+		}
+	}
+}
+
+// IncrementExploitValidated allows agents (e.g. exploit_chain) that generate
+// SafePoCScript without going through SubmitVerifiedFinding to register their
+// findings as exploit-validated for KPI tracking.
+func IncrementExploitValidated(highOrCritical bool) {
+	globalVerificationCounters.mu.Lock()
+	defer globalVerificationCounters.mu.Unlock()
+	if highOrCritical {
+		globalVerificationCounters.ExploitValidationEligible++
+		globalVerificationCounters.ExploitValidated++
+	}
 }
 
 // PreReportMetrics is the aggregate view of the pre-report verifier's
@@ -238,8 +263,21 @@ type PreReportMetrics struct {
 	VerifiedRate      float64                      `json:"verifiedRate"`
 	SuppressedRate    float64                      `json:"suppressedRate"`
 	PoCSuccessRate    float64                      `json:"pocSuccessRate"`
-	ByProbe           map[string]PreReportProbeAgg `json:"byProbe,omitempty"`
-	ByCategory        map[string]PreReportProbeAgg `json:"byCategory,omitempty"`
+	// ExploitValidationRate is the fraction of high/critical findings that
+	// include a machine-readable PoC or VerificationTrace bundle. This is
+	// the Wave 1 Phase A "exploit validation rate" Core Product KPI. It is
+	// equivalent to PoCSuccessRate when all findings pass through PoC replay;
+	// agents that generate SafePoCScript without replay increment it via
+	// IncrementExploitValidated.
+	ExploitValidationRate float64 `json:"exploitValidationRate"`
+	// ExploitValidated is the count of findings that shipped with a
+	// machine-readable PoC/VerificationTrace bundle.
+	ExploitValidated int `json:"exploitValidated"`
+	// ExploitValidationEligible is the total high/critical findings that
+	// passed through the verifier and are eligible to carry a PoC bundle.
+	ExploitValidationEligible int                          `json:"exploitValidationEligible"`
+	ByProbe                   map[string]PreReportProbeAgg `json:"byProbe,omitempty"`
+	ByCategory                map[string]PreReportProbeAgg `json:"byCategory,omitempty"`
 }
 
 // PreReportProbeAgg summarises verification activity for one probe.
@@ -271,6 +309,8 @@ func ResetVerificationMetrics() {
 	globalVerificationCounters.PoCSucceeded = 0
 	globalVerificationCounters.ConfidenceSum = 0
 	globalVerificationCounters.ConfidenceSample = 0
+	globalVerificationCounters.ExploitValidated = 0
+	globalVerificationCounters.ExploitValidationEligible = 0
 	globalVerificationCounters.ByProbe = map[string]*probeCounter{}
 	globalVerificationCounters.ByCategory = map[string]*probeCounter{}
 }
@@ -279,14 +319,16 @@ func (c *verificationCounters) snapshot() PreReportMetrics {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	m := PreReportMetrics{
-		Total:        c.Total,
-		Verified:     c.Verified,
-		Suppressed:   c.Suppressed,
-		Downgraded:   c.Downgraded,
-		PoCReplayed:  c.PoCReplayed,
-		PoCSucceeded: c.PoCSucceeded,
-		ByProbe:      map[string]PreReportProbeAgg{},
-		ByCategory:   map[string]PreReportProbeAgg{},
+		Total:                     c.Total,
+		Verified:                  c.Verified,
+		Suppressed:                c.Suppressed,
+		Downgraded:                c.Downgraded,
+		PoCReplayed:               c.PoCReplayed,
+		PoCSucceeded:              c.PoCSucceeded,
+		ExploitValidated:          c.ExploitValidated,
+		ExploitValidationEligible: c.ExploitValidationEligible,
+		ByProbe:                   map[string]PreReportProbeAgg{},
+		ByCategory:                map[string]PreReportProbeAgg{},
 	}
 	if c.ConfidenceSample > 0 {
 		m.AverageConfidence = c.ConfidenceSum / float64(c.ConfidenceSample)
@@ -297,6 +339,9 @@ func (c *verificationCounters) snapshot() PreReportMetrics {
 	}
 	if c.PoCReplayed > 0 {
 		m.PoCSuccessRate = float64(c.PoCSucceeded) / float64(c.PoCReplayed)
+	}
+	if c.ExploitValidationEligible > 0 {
+		m.ExploitValidationRate = float64(c.ExploitValidated) / float64(c.ExploitValidationEligible)
 	}
 	for name, pc := range c.ByProbe {
 		m.ByProbe[name] = PreReportProbeAgg{
@@ -357,20 +402,37 @@ func EvidenceMinimumForCategory(category string) int {
 // SubmitVerifiedFinding is the entry point probes call in place of pushing
 // a candidate finding directly into their return slice. It:
 //
-//  1. Evaluates proof-policy coverage.
-//  2. Counts evidence signals against the per-category minimum.
-//  3. If a PoCReplay hook is supplied, executes it and attaches the
+//  1. Checks the global ProbeOutcomeLedger: if the probe has been
+//     auto-throttled due to exceeding the rolling FP threshold, the
+//     candidate is immediately suppressed without running any probes.
+//  2. Evaluates proof-policy coverage.
+//  3. Counts evidence signals against the per-category minimum.
+//  4. If a PoCReplay hook is supplied, executes it and attaches the
 //     transcript to Finding.Evidence / EvidenceFields on success.
-//  4. Suppresses candidates that fail both the proof obligation and
+//  5. Suppresses candidates that fail both the proof obligation and
 //     PoC replay; downgrades candidates that meet the proof obligation
 //     but only partially satisfy the evidence checklist.
-//  5. Records verification metrics for AutomationMetrics.
+//  6. Records verification metrics for AutomationMetrics.
 //
 // The returned finding is a zero value when outcome.Suppressed is true.
 // Probes should append the returned finding to their result slice only when
 // outcome.Suppressed is false.
 func SubmitVerifiedFinding(ctx context.Context, cand VerifyCandidate) VerificationOutcome {
 	outcome := VerificationOutcome{}
+
+	// 0) Auto-throttle gate (Wave 1 Phase B). Skip the probe entirely if the
+	// ledger has throttled it due to a high rolling FP rate.
+	probeKeyForLedger := cand.ProbeName
+	if probeKeyForLedger == "" {
+		probeKeyForLedger = canonicalCategoryLower(cand.Finding.Category)
+	}
+	if probeKeyForLedger != "" && globalProbeOutcomeLedger.IsThrottled(probeKeyForLedger) {
+		globalProbeOutcomeLedger.RecordThrottleDecision(probeKeyForLedger)
+		outcome.Suppressed = true
+		outcome.Reason = "probe-auto-throttled"
+		return outcome
+	}
+
 	// 1) Proof-policy evaluation.
 	outcome.Policy = proofpolicy.EvaluateFinding(cand.Finding)
 
@@ -583,7 +645,9 @@ func downgradeSeverity(s model.Severity) model.Severity {
 
 // attachPoCTranscript records a redacted PoC replay transcript on the
 // finding's evidence so the UI can show operators exactly why the tool
-// believes the bug is real.
+// believes the bug is real. It also populates Finding.VerificationTrace with
+// a structured proof bundle so callers can access the transcript in a
+// machine-readable form.
 func attachPoCTranscript(f *model.Finding, transcript string) {
 	if transcript == "" {
 		return
@@ -604,6 +668,55 @@ func attachPoCTranscript(f *model.Finding, transcript string) {
 		Description: "Verifier reproduced the candidate exploit before emission.",
 		Value:       transcript,
 	})
+	// Populate the structured VerificationTrace if not already set.
+	if f.VerificationTrace == nil {
+		f.VerificationTrace = buildVerificationTraceFromTranscript(transcript)
+	}
+}
+
+// buildVerificationTraceFromTranscript creates a VerificationTrace from a
+// plain-text transcript string produced by a PoCReplayFunc. The transcript
+// is stored verbatim as the ResponseSnippet so the structured bundle is
+// always populated even when the full HTTP details are not individually
+// provided by the probe.
+func buildVerificationTraceFromTranscript(transcript string) *model.VerificationTrace {
+	if transcript == "" {
+		return nil
+	}
+	// Extract the first line as the request line when the transcript starts
+	// with an HTTP method token, otherwise store the whole transcript as the
+	// response snippet.
+	vt := &model.VerificationTrace{
+		CapturedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	lines := strings.SplitN(transcript, "\n", 2)
+	first := strings.TrimSpace(lines[0])
+	httpMethods := []string{"GET ", "POST ", "PUT ", "PATCH ", "DELETE ", "HEAD ", "OPTIONS "}
+	startsWithMethod := false
+	for _, m := range httpMethods {
+		if strings.HasPrefix(first, m) {
+			startsWithMethod = true
+			break
+		}
+	}
+	if startsWithMethod {
+		vt.RequestLine = first
+		if len(lines) > 1 {
+			vt.ResponseSnippet = truncate(strings.TrimSpace(lines[1]), 2048)
+		}
+	} else {
+		vt.ResponseSnippet = truncate(transcript, 2048)
+	}
+	return vt
+}
+
+// truncate returns s truncated to at most n bytes with an ellipsis appended
+// when truncation occurs.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // canonicalCategoryLower normalises a category label for lookup in the

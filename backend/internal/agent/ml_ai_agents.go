@@ -8,6 +8,7 @@ import (
 
 	"auto-bughunter/backend/internal/ml"
 	"auto-bughunter/backend/internal/model"
+	"auto-bughunter/backend/internal/scanner"
 )
 
 type MLTriageAgent struct {
@@ -58,7 +59,27 @@ func (a *MLTriageAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 		return output, nil
 	}
 
-	scored := a.ml.ScoreFindings(source)
+	// Feed ProbeOutcomeLedger weights: filter out findings from throttled probes
+	// and annotate the remaining findings with TP/FP weight metadata before
+	// passing to the ML scorer (Wave 1 Phase B).
+	ledger := scanner.GlobalProbeOutcomeLedger()
+	filtered := make([]model.Finding, 0, len(source))
+	for _, f := range source {
+		probeKey := strings.TrimSpace(f.EvidenceFields["preReport.verifiedBy"])
+		if probeKey == "" {
+			probeKey = strings.TrimSpace(f.Category)
+		}
+		if probeKey != "" && ledger.IsThrottled(probeKey) {
+			continue // Skip findings from auto-throttled probes
+		}
+		filtered = append(filtered, f)
+	}
+	if len(filtered) == 0 {
+		output.DebugNotes = "All findings from throttled probes — nothing to score"
+		return output, nil
+	}
+
+	scored := a.ml.ScoreFindings(filtered)
 	if len(scored) == 0 {
 		output.DebugNotes = "No findings scored by ML triage"
 		return output, nil
@@ -70,16 +91,18 @@ func (a *MLTriageAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 	}
 	for i := 0; i < limit; i++ {
 		sf := scored[i]
+		tpW, fpW, _ := ledger.OutcomeWeights(sf.Finding.Category)
 		output.Findings = append(output.Findings, model.Finding{
 			ID:       fmt.Sprintf("ml-triage-%d", i+1),
 			Category: "ml_ai",
 			Severity: toSeverity(sf.Score),
 			Title:    fmt.Sprintf("ML triage priority %d: %s", i+1, sf.Finding.Title),
 			Description: fmt.Sprintf(
-				"Deterministic ML scoring ranked this issue with risk score %.2f, confidence %.2f, exploitability=%s.",
+				"Deterministic ML scoring ranked this issue with risk score %.2f, confidence %.2f, exploitability=%s. Ledger weights: TP=%.2f FP=%.2f",
 				sf.Score,
 				sf.Confidence,
 				sf.Exploitability,
+				tpW, fpW,
 			),
 			Evidence:       fmt.Sprintf("category=%s severity=%s", sf.Finding.Category, sf.Finding.Severity),
 			Recommendation: "Prioritize validation and remediation for this issue in the next sprint window.",
@@ -88,6 +111,7 @@ func (a *MLTriageAgent) Run(ctx context.Context, input AgentInput) (AgentOutput,
 
 	output.Metadata["scored_total"] = strconv.Itoa(len(scored))
 	output.Metadata["top_score"] = fmt.Sprintf("%.2f", scored[0].Score)
+	output.Metadata["throttle_filtered"] = strconv.Itoa(len(source) - len(filtered))
 	output.DebugNotes = "ML triage generated prioritized risk insights."
 	return output, nil
 }
@@ -198,7 +222,49 @@ func (a *FalsePositiveReviewAgent) Run(ctx context.Context, input AgentInput) (A
 		return output, nil
 	}
 
-	candidates := a.ml.FindPotentialFalsePositives(input.AllFindings)
+	// Feed ProbeOutcomeLedger weights: filter out findings from throttled probes
+	// and promote findings from probes with high FP rates to the review queue
+	// even if the ML confidence is not low (Wave 1 Phase B).
+	ledger := scanner.GlobalProbeOutcomeLedger()
+	source := input.AllFindings
+	filtered := make([]model.Finding, 0, len(source))
+	for _, f := range source {
+		probeKey := strings.TrimSpace(f.EvidenceFields["preReport.verifiedBy"])
+		if probeKey == "" {
+			probeKey = strings.TrimSpace(f.Category)
+		}
+		if probeKey != "" && ledger.IsThrottled(probeKey) {
+			continue // Already throttled; exclude from FP review queue
+		}
+		filtered = append(filtered, f)
+	}
+
+	candidates := a.ml.FindPotentialFalsePositives(filtered)
+
+	// Promote findings from probes with high (but not yet throttled) FP rates.
+	for _, f := range filtered {
+		probeKey := strings.TrimSpace(f.EvidenceFields["preReport.verifiedBy"])
+		if probeKey == "" {
+			probeKey = strings.TrimSpace(f.Category)
+		}
+		if probeKey == "" {
+			continue
+		}
+		_, fpW, _ := ledger.OutcomeWeights(probeKey)
+		if fpW > 0.20 { // probe has >20% historical FP rate → add to review
+			alreadyQueued := false
+			for _, c := range candidates {
+				if c.Finding.ID == f.ID {
+					alreadyQueued = true
+					break
+				}
+			}
+			if !alreadyQueued {
+				candidates = append(candidates, ml.ScoredFinding{Finding: f})
+			}
+		}
+	}
+
 	if len(candidates) == 0 {
 		output.DebugNotes = "No low-confidence findings suggested for manual false-positive review"
 		return output, nil
@@ -220,6 +286,7 @@ func (a *FalsePositiveReviewAgent) Run(ctx context.Context, input AgentInput) (A
 	})
 
 	output.Metadata["review_candidates"] = strconv.Itoa(len(candidates))
+	output.Metadata["throttle_filtered"] = strconv.Itoa(len(source) - len(filtered))
 	output.DebugNotes = "False-positive review queue created from ML confidence signals."
 	return output, nil
 }
