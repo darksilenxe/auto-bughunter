@@ -94,6 +94,11 @@ type AgentInput struct {
 	// Agents can use this to skip baseline-only probes that would otherwise be
 	// duplicated for every role replay.
 	RoleReplay bool
+	// PolicyTuningProfile, when non-nil, overrides AI model selection and
+	// injects a custom system-prompt augmentation for this scan. It is
+	// sourced from ScanOptions.PolicyTuningProfile and applied by the
+	// AI planner on its first round, with an audit trace recorded.
+	PolicyTuningProfile *model.PolicyTuningProfile
 }
 
 type AgentOutput struct {
@@ -115,6 +120,9 @@ type AgentOutput struct {
 	// SurfaceSnapshot carries an updated surface fingerprint produced by agents
 	// that compute drift or refresh attack-surface state.
 	SurfaceSnapshot *model.SurfaceSnapshot
+	// CoverageMap carries the structured attack-surface coverage map built by
+	// the scanning agent at scan end. Nil when no coverage data was collected.
+	CoverageMap *model.CoverageMap
 }
 
 // ReasoningStep is one step in an agent's chain-of-thought trace.

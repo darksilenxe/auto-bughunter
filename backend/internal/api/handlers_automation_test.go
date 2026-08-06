@@ -431,7 +431,7 @@ func TestAdaptOptionsFromDrift_EnablesAdaptiveStrategy(t *testing.T) {
 	adapted, note := adaptOptionsFromDrift([]model.Finding{
 		{DriftStatus: "new", Severity: model.SeverityHigh},
 		{DriftStatus: "changed", Severity: model.SeverityHigh},
-	}, options)
+	}, options, nil)
 	if note == "" {
 		t.Fatal("expected adaptation note")
 	}
@@ -443,5 +443,38 @@ func TestAdaptOptionsFromDrift_EnablesAdaptiveStrategy(t *testing.T) {
 	}
 	if adapted.MaxPerTargetConcurrency != 1 {
 		t.Fatalf("expected conservative per-target concurrency, got %d", adapted.MaxPerTargetConcurrency)
+	}
+}
+
+func TestAdaptOptionsFromDrift_ROISignals(t *testing.T) {
+	options := model.ScanOptions{
+		RescanIntervalMinutes:            60,
+		AutonomyExplorationBudgetPercent: 5,
+	}
+	roi := &model.TargetROIProfile{
+		DriftScore:           0.8,
+		HighPayoutCategories: []string{"access_control", "xss"},
+	}
+	// No drift findings but ROI signals should still trigger adaptation.
+	adapted, note := adaptOptionsFromDrift(nil, options, roi)
+	if note == "" {
+		t.Fatal("expected adaptation note from ROI signals")
+	}
+	if !adapted.DeepScanOnHighSignal {
+		t.Fatal("expected deep scan enabled by ROI signals")
+	}
+	// DriftScore 0.8 → boost = int(0.8*40) = 32
+	if adapted.AutonomyExplorationBudgetPercent < 32 {
+		t.Fatalf("expected exploration budget >= 32 from drift score, got %d", adapted.AutonomyExplorationBudgetPercent)
+	}
+	// Should have impact goals derived from HighPayoutCategories.
+	hasGoal := false
+	for _, g := range adapted.ImpactGoals {
+		if g == model.ImpactGoalCrossTenantAccess || g == model.ImpactGoalStoredXSS {
+			hasGoal = true
+		}
+	}
+	if !hasGoal {
+		t.Fatalf("expected impact goals derived from ROI categories, got %v", adapted.ImpactGoals)
 	}
 }

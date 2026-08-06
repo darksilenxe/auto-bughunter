@@ -128,3 +128,69 @@ func TestFindDuplicatesIgnoresLowSimilarity(t *testing.T) {
 		t.Fatalf("expected no matches for unrelated findings, got %d", len(matches))
 	}
 }
+
+func TestSubmissionReadinessScore_FullFinding(t *testing.T) {
+	f := model.Finding{
+		ID:                "f1",
+		Title:             "SQL Injection in /api/login",
+		Description:       "Classic SQL injection via username parameter.",
+		Severity:          model.SeverityHigh,
+		AffectedURL:       "https://example.com/api/login",
+		AffectedParameter: "username",
+		ReproductionSteps: []string{"Send ' OR 1=1--"},
+		Evidence:          "Response returned all user rows",
+		CWE:               "CWE-89",
+		CVSSScore:         9.1,
+		Impact:            "Full database read access",
+		Recommendation:    "Use parameterized queries",
+		ProofArtifacts:    []model.ProofArtifact{{Type: "curl", Label: "Reproducer", Value: "curl ..."}},
+		Confidence:        0.95,
+	}
+	res := SubmissionReadinessScore(f)
+	if res.Score < 90 {
+		t.Errorf("expected score >= 90 for complete finding, got %d (missing: %v)", res.Score, res.MissingFields)
+	}
+	if !res.ReadyToSubmit {
+		t.Error("expected ReadyToSubmit=true")
+	}
+}
+
+func TestSubmissionReadinessScore_MinimalFinding(t *testing.T) {
+	f := model.Finding{
+		Title:    "Missing Content-Security-Policy",
+		Severity: model.SeverityLow,
+	}
+	res := SubmissionReadinessScore(f)
+	if res.Score >= 90 {
+		t.Errorf("expected score < 90 for minimal finding, got %d", res.Score)
+	}
+	if res.ReadyToSubmit {
+		t.Error("expected ReadyToSubmit=false for minimal finding")
+	}
+	if len(res.MissingFields) == 0 {
+		t.Error("expected missing fields for minimal finding")
+	}
+}
+
+func TestSubmissionReadinessScore_InfoSeverityPenalized(t *testing.T) {
+	f := model.Finding{
+		Title:             "Info-level finding",
+		Description:       "Some informational note.",
+		Severity:          model.SeverityInfo, // penalized: non-informational required
+		AffectedURL:       "https://example.com",
+		AffectedParameter: "x",
+		ReproductionSteps: []string{"step 1"},
+		Evidence:          "evidence",
+		CWE:               "CWE-200",
+		CVSSScore:         1.0,
+		Impact:            "low",
+		Recommendation:    "fix it",
+		ProofArtifacts:    []model.ProofArtifact{{Type: "note"}},
+		Confidence:        0.8,
+	}
+	res := SubmissionReadinessScore(f)
+	// SeverityInfo should be penalized (-10 points).
+	if res.Score > 90 {
+		t.Errorf("info-severity should reduce score below 90, got %d", res.Score)
+	}
+}

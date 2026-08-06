@@ -215,8 +215,12 @@ type Config struct {
 type RunInput struct {
 	Target      string
 	AuthProfile model.ScanAuthProfile
-	Options     model.ScanOptions
-	Scope       model.ScanScope
+	// RoleProfiles, when non-nil, lists the role-specific auth profiles
+	// active for this scan. Passed to BuildCoverageMap so auth-state and
+	// role surface areas are correctly populated.
+	RoleProfiles []model.RoleAuthProfile
+	Options      model.ScanOptions
+	Scope        model.ScanScope
 	// Emit publishes live events to the per-scan event bus. It is nil-safe.
 	Emit func(model.ScanEvent)
 	// Session is a per-scan stateful HTTP context that persists cookies, CSRF
@@ -249,6 +253,10 @@ type RunInput struct {
 	// records at scan end so the ML model can learn from them. Satisfied by
 	// *ml.Service.
 	FPCalibrator ProbeCalibratorService
+	// CoverageMap is populated by Run() at scan end. Callers may read it
+	// after Run() returns to attach the coverage artifact to the ScanJob.
+	// Nil when the scan had no surface inventory entries.
+	CoverageMap *model.CoverageMap
 }
 
 func NewService(cfg Config) *Service {
@@ -674,6 +682,18 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		if corrected := fpCorrector.DrainCorrectedRecords(); len(corrected) > 0 {
 			input.FPCalibrator.CalibrateProbeSignals(ctx, corrected)
 		}
+	}
+
+	// Phase C — Coverage Map: build the structured surface coverage artifact
+	// at scan end and store it on the session so the scanning agent and
+	// handlers.go can attach it to the ScanJob.
+	if input.Session != nil {
+		var prevCM *model.CoverageMap
+		if input.CoverageMap != nil {
+			prevCM = input.CoverageMap
+		}
+		cm := BuildCoverageMap(input.Target, input.Session.SurfaceInventory(), input.RoleProfiles, findings, prevCM)
+		input.Session.SetCoverageMap(cm)
 	}
 
 	return findings, nil

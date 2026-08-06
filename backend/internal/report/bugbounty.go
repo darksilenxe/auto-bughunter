@@ -259,6 +259,62 @@ func reproducibilityChecklist(f model.Finding) []string {
 	return out
 }
 
+// SubmissionReadinessScore computes a 0–100 score indicating how complete a
+// finding's submission artifact is. Each field that a bug-bounty platform
+// triager expects contributes to the score. A score >= 90 enables the
+// one-click submit action in the export wizard.
+//
+// Field weights (total when all present = 100):
+//
+//	Title              10
+//	Description/Summary 10
+//	Severity           10
+//	AffectedURL        10
+//	ReproductionSteps  15
+//	Evidence           10
+//	CWE                 5
+//	CVSSScore           5
+//	Impact              5
+//	Recommendation      5
+//	ProofArtifacts      5
+//	Confidence >= 0.7   5
+//	AffectedParameter   5
+func SubmissionReadinessScore(f model.Finding) model.SubmissionReadinessResult {
+	score := 0
+	missing := []string{}
+
+	add := func(points int, present bool, label string) {
+		if present {
+			score += points
+		} else {
+			missing = append(missing, label)
+		}
+	}
+
+	add(10, strings.TrimSpace(f.Title) != "", "title")
+	add(10, strings.TrimSpace(f.Description) != "", "description / summary")
+	add(10, f.Severity != "" && f.Severity != model.SeverityInfo, "severity (non-informational)")
+	add(10, strings.TrimSpace(f.AffectedURL) != "", "affected URL")
+	add(15, len(f.ReproductionSteps) > 0, "step-by-step reproduction steps")
+	add(10, strings.TrimSpace(f.Evidence) != "", "raw evidence (request/response or screenshot)")
+	add(5, strings.TrimSpace(f.CWE) != "", "CWE mapping")
+	add(5, f.CVSSScore > 0, "CVSS score")
+	add(5, strings.TrimSpace(f.Impact) != "", "business impact statement")
+	add(5, strings.TrimSpace(f.Recommendation) != "", "remediation recommendation")
+	add(5, len(f.ProofArtifacts) > 0, "proof artifacts (PoC, screenshot, OAST token)")
+	add(5, f.Confidence >= 0.7, "detection confidence >= 0.70")
+	add(5, strings.TrimSpace(f.AffectedParameter) != "", "affected parameter or injection point")
+
+	if score > 100 {
+		score = 100
+	}
+	return model.SubmissionReadinessResult{
+		Score:         score,
+		MissingFields: missing,
+		ReadyToSubmit: score >= 90,
+	}
+}
+
 func platformBanner(platform string) string {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "hackerone":

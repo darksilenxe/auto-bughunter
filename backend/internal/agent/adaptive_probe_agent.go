@@ -113,6 +113,17 @@ func (a *AdaptiveProbeAgent) Run(ctx context.Context, input AgentInput) (AgentOu
 	// Seed endpoints from target + any runtime-discovered URLs.
 	endpoints := append([]string{input.Target}, input.Options.SeedRuntimeEndpoints...)
 
+	// Phase C: enrich endpoints from the CoverageMap produced by the scanning
+	// agent. High-ROI uncovered areas are prepended so the adaptive budget is
+	// spent on the most valuable uninvestigated surface first.
+	for _, out := range input.History {
+		if out.CoverageMap != nil {
+			highROI := scanner.CoverageMapHighROIURLs(out.CoverageMap)
+			endpoints = append(highROI, endpoints...)
+			break
+		}
+	}
+
 	// Extract low-signal category advisories from AutonomySuppressAgents.
 	// Entries prefixed with "skip-cat:" indicate that historical probe records
 	// show this category is consistently low-signal for this target and the AI
