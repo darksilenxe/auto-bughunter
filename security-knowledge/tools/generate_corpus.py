@@ -308,20 +308,44 @@ def _expand_github_tree_import(cfg: dict[str, Any], timeout: int) -> list[dict[s
     return entries
 
 
-def _expand_bulk_imports(payload: dict[str, Any], timeout: int) -> list[dict[str, Any]]:
+def _bulk_import_name(cfg: dict[str, Any], kind: str) -> str:
+    return normalize_space(
+        str(
+            cfg.get("sourceLabel")
+            or cfg.get("idPrefix")
+            or cfg.get("repo")
+            or cfg.get("url")
+            or kind
+            or "bulk-import"
+        )
+    )
+
+
+def _expand_bulk_imports(payload: dict[str, Any], timeout: int) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     imports = payload.get("bulkImports") or []
     expanded: list[dict[str, Any]] = []
+    exceptions: list[dict[str, str]] = []
     for cfg in imports:
         if not isinstance(cfg, dict) or not cfg.get("enabled", True):
             continue
         kind = normalize_space(str(cfg.get("kind", "")).lower())
-        if kind == "sitemap":
-            expanded.extend(_expand_sitemap_import(cfg, timeout))
-        elif kind == "github-tree":
-            expanded.extend(_expand_github_tree_import(cfg, timeout))
-        else:
-            raise CorpusGenerationError(f"unsupported bulk import kind: {kind}")
-    return expanded
+        try:
+            if kind == "sitemap":
+                expanded.extend(_expand_sitemap_import(cfg, timeout))
+            elif kind == "github-tree":
+                expanded.extend(_expand_github_tree_import(cfg, timeout))
+            else:
+                raise CorpusGenerationError(f"unsupported bulk import kind: {kind}")
+        except Exception as exc:  # noqa: BLE001
+            exceptions.append(
+                {
+                    "level": "warning",
+                    "id": _bulk_import_name(cfg, kind),
+                    "type": "bulk-import-failed",
+                    "message": str(exc),
+                }
+            )
+    return expanded, exceptions
 
 
 def load_sources_with_imports(path: Path, expand_imports: bool = False, import_timeout: int = IMPORT_DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -332,8 +356,11 @@ def load_sources_with_imports(path: Path, expand_imports: bool = False, import_t
     payload.setdefault("entries", [])
     if not isinstance(payload["entries"], list):
         raise CorpusGenerationError("entries must be a JSON array")
+    payload["_importExceptions"] = []
     if expand_imports:
-        payload["entries"] = [*payload["entries"], *_expand_bulk_imports(payload, import_timeout)]
+        imported_entries, import_exceptions = _expand_bulk_imports(payload, import_timeout)
+        payload["entries"] = [*payload["entries"], *imported_entries]
+        payload["_importExceptions"] = import_exceptions
     return payload
 
 
@@ -401,6 +428,7 @@ def fetch_website_texts(
         "generatedAt": utc_now(),
         "source": str(source_path),
         "entries": results,
+        "importExceptions": payload.get("_importExceptions") or [],
     }
     write_json(output_path, output)
     return output
@@ -424,7 +452,7 @@ def build_corpus(
         for item in load_json(website_text_path).get("entries", []):
             website_text_entries[str(item.get("id"))] = item
 
-    review_exceptions: list[dict[str, str]] = []
+    review_exceptions: list[dict[str, str]] = list(payload.get("_importExceptions") or [])
     corpus: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     accepted_fingerprints: list[tuple[str, set[str], dict[str, Any]]] = []

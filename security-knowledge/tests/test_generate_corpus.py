@@ -389,6 +389,114 @@ class GenerateCorpusTests(unittest.TestCase):
             self.assertIn("XSS Injection/README.md", corpus[0]["url"])
             self.assertTrue(corpus[0]["id"].startswith("payloadsallthethings-"))
 
+    def test_fetch_web_text_records_bulk_import_failures_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "sources.json"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "phase": "phase-1",
+                        "allowlists": {
+                            "sourceTypes": ["owasp", "hacktricks"],
+                            "licenses": ["source-url-only"],
+                        },
+                        "entries": [
+                            {
+                                "id": "curated-local",
+                                "title": "Local page",
+                                "url": "https://example.test/local",
+                                "sourceType": "owasp",
+                                "license": "source-url-only",
+                                "topic": "topic",
+                                "vulnerabilityClass": "class",
+                                "technique": "technique",
+                                "keywords": ["local"],
+                                "passage": "Curated note: local fallback entry.",
+                                "websiteImport": {"enabled": False},
+                            }
+                        ],
+                        "bulkImports": [
+                            {
+                                "kind": "sitemap",
+                                "enabled": True,
+                                "idPrefix": "hacktricks",
+                                "sourceType": "hacktricks",
+                                "license": "source-url-only",
+                                "sourceLabel": "HackTricks",
+                                "url": "https://nonexistent.invalid/sitemap.xml",
+                                "websiteImport": {"enabled": True},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_path = temp_path / "website_text.json"
+
+            fetched = generator.fetch_website_texts(source_path, output_path, expand_imports=True)
+
+            self.assertEqual(fetched["entries"], [])
+            self.assertEqual(len(fetched["importExceptions"]), 1)
+            self.assertEqual(fetched["importExceptions"][0]["type"], "bulk-import-failed")
+            written = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["importExceptions"][0]["id"], "HackTricks")
+
+    def test_build_corpus_records_bulk_import_failures_as_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "sources.json"
+            source_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "phase": "phase-1",
+                        "allowlists": {
+                            "sourceTypes": ["owasp", "hacktricks"],
+                            "licenses": ["source-url-only"],
+                        },
+                        "entries": [
+                            {
+                                "id": "curated-local",
+                                "title": "Local page",
+                                "url": "https://example.test/local",
+                                "sourceType": "owasp",
+                                "license": "source-url-only",
+                                "topic": "topic",
+                                "vulnerabilityClass": "class",
+                                "technique": "technique",
+                                "keywords": ["local"],
+                                "passage": "Curated note: local fallback entry.",
+                            }
+                        ],
+                        "bulkImports": [
+                            {
+                                "kind": "sitemap",
+                                "enabled": True,
+                                "idPrefix": "hacktricks",
+                                "sourceType": "hacktricks",
+                                "license": "source-url-only",
+                                "sourceLabel": "HackTricks",
+                                "url": "https://nonexistent.invalid/sitemap.xml",
+                                "websiteImport": {"enabled": True},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_path = temp_path / "corpus.json"
+            review_path = temp_path / "review.json"
+
+            corpus, review = generator.build_corpus(source_path, output_path, review_path, expand_imports=True)
+
+            self.assertEqual(len(corpus), 1)
+            self.assertEqual(review["summary"]["errors"], 0)
+            self.assertEqual(review["summary"]["warnings"], 1)
+            self.assertEqual(review["exceptions"][0]["type"], "bulk-import-failed")
+            self.assertEqual(review["exceptions"][0]["id"], "HackTricks")
+
 
 if __name__ == "__main__":
     unittest.main()
