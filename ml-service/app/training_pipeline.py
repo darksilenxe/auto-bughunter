@@ -557,7 +557,26 @@ def render_capability_matrix_markdown(matrix: Dict[str, Any]) -> str:
 
 
 def evaluate_promotion_gate(model_metrics: Metrics, baseline_metrics: Metrics, args: argparse.Namespace) -> Tuple[bool, Dict[str, Any]]:
-    promote, promotion_gate = evaluate_promotion_gate(model_metrics, baseline_metrics, args)
+    precision_regression = max(0.0, baseline_metrics.precision - model_metrics.precision)
+    recall_regression = max(0.0, baseline_metrics.recall - model_metrics.recall)
+    promotion_gate = {
+        "maxPrecisionRegression": args.max_precision_regression,
+        "maxRecallRegression": args.max_recall_regression,
+        "precisionRegression": round(precision_regression, 4),
+        "recallRegression": round(recall_regression, 4),
+        "precisionGatePassed": precision_regression <= args.max_precision_regression,
+        "recallGatePassed": recall_regression <= args.max_recall_regression,
+        "aucDeltaRequired": args.promotion_auc_delta,
+        "loglossImprovementRequired": args.promotion_logloss_improvement,
+        "aucDelta": round(model_metrics.auc - baseline_metrics.auc, 4),
+        "loglossImprovement": round(baseline_metrics.logloss - model_metrics.logloss, 4),
+    }
+    promote = (
+        promotion_gate["precisionGatePassed"]
+        and promotion_gate["recallGatePassed"]
+        and (model_metrics.auc - baseline_metrics.auc) >= args.promotion_auc_delta
+        and (baseline_metrics.logloss - model_metrics.logloss) >= args.promotion_logloss_improvement
+    )
     return promote, promotion_gate
 
 
