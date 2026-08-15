@@ -383,6 +383,44 @@ services:
       retries: 3
       start_period: 30s
 
+  # LangChain service — exposes RAG retrieval, tool-chain planning, and a
+  # LangGraph stateful pentest-reasoning graph via HTTP.  Activated by setting
+  # USE_LANGCHAIN_SERVICE=true and LANGCHAIN_SERVICE_URL in the backend env.
+  langchain-service:
+    build:
+      context: ./langchain-service
+    environment:
+      SIDECAR_AUTH_TOKEN: ${SIDECAR_AUTH_TOKEN:-}
+      LOG_LEVEL: ${LANGCHAIN_LOG_LEVEL:-INFO}
+      AI_API_BASE: ${AI_API_BASE:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      KNOWLEDGE_CORPUS_PATH: /app/data/corpus.json
+    ports:
+      - "127.0.0.1:8099:8099"
+    volumes:
+      - sidecar_certs:/certs:ro
+    depends_on:
+      tls-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import ssl,urllib.request; ctx=ssl.create_default_context(cafile='/certs/server.crt'); urllib.request.urlopen('https://langchain-service:8099/health', timeout=10, context=ctx)\""]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8099"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+
   # Local Ollama LLM — powers AI summaries without any external API key.
   # On first start it will download the configured models.
   # Gated behind the `ollama` compose profile so it doesn't start by default
@@ -498,6 +536,8 @@ services:
         condition: service_started
       agents:
         condition: service_started
+      langchain-service:
+        condition: service_started
       nuclei-service:
         condition: service_healthy
       zap-service:
@@ -600,7 +640,7 @@ services:
       # browser proceed; acceptable here because this Chromium only ever talks
       # to the trusted in-mesh proxy while scanning attacker-supplied targets.
       - --ignore-certificate-errors
-      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap,ui-simulation-service
+      - --proxy-bypass-list=localhost,127.0.0.1,backend,db,neo4j,ollama,agents,ml-service,security-knowledge,nuclei-service,zap-service,chromium,projectdiscovery,ffuf,gobuster,sqlmap,nikto,wpscan,gau,arjun,commix,linkfinder,retire,trufflehog,uncover,xssmap,metasploit,kiterunner,tool-updater,zap,ui-simulation-service,langchain-service
     restart: unless-stopped
     healthcheck:
       # Probe the DevTools port via socat (wget/curl are not in this image).
