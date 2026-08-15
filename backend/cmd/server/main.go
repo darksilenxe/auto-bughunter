@@ -53,6 +53,7 @@ func main() {
 		"NUCLEI_SERVICE_URL":    os.Getenv("NUCLEI_SERVICE_URL"),
 		"ZAP_SERVICE_URL":       os.Getenv("ZAP_SERVICE_URL"),
 		"SEMGREP_SERVICE_URL":   os.Getenv("SEMGREP_SERVICE_URL"),
+		"LANGCHAIN_SERVICE_URL": os.Getenv("LANGCHAIN_SERVICE_URL"),
 		"BURP_API_URL":          os.Getenv("BURP_API_URL"),
 		"MSF_RPC_URL":           os.Getenv("MSF_RPC_URL"),
 		"CHROME_REMOTE_URL":     os.Getenv("CHROME_REMOTE_URL"),
