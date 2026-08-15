@@ -37,7 +37,8 @@ func authRequest(method, target string, body *bytes.Reader) *http.Request {
 // implements the methods invoked by the report handlers; all other methods
 // panic so accidental use in tests is loud.
 type reportTestRepo struct {
-	jobs map[string]*model.ScanJob
+	jobs     map[string]*model.ScanJob
+	feedback []model.ReportFeedback
 }
 
 type healthStatsRepo struct {
@@ -77,11 +78,18 @@ func (r *reportTestRepo) ListAuditEvents(context.Context, string) ([]model.ScanA
 	panic("not used")
 }
 func (r *reportTestRepo) ListCompletedJobs(context.Context, int) ([]*model.ScanJob, error) {
-	panic("not used")
+	out := make([]*model.ScanJob, 0, len(r.jobs))
+	for _, job := range r.jobs {
+		out = append(out, job)
+	}
+	return out, nil
 }
-func (r *reportTestRepo) SaveFeedback(context.Context, model.ReportFeedback) error { panic("not used") }
+func (r *reportTestRepo) SaveFeedback(_ context.Context, feedback model.ReportFeedback) error {
+	r.feedback = append(r.feedback, feedback)
+	return nil
+}
 func (r *reportTestRepo) ListFeedback(context.Context, int) ([]model.ReportFeedback, error) {
-	panic("not used")
+	return append([]model.ReportFeedback(nil), r.feedback...), nil
 }
 func (r *reportTestRepo) SaveFindingVerification(context.Context, model.FindingVerification) error {
 	panic("not used")

@@ -33,6 +33,8 @@ SECRET_PATTERNS = [
 class Metrics:
     count: int
     accuracy: float
+    precision: float
+    recall: float
     auc: float
     logloss: float
 
@@ -40,6 +42,8 @@ class Metrics:
         return {
             "count": self.count,
             "accuracy": round(self.accuracy, 4),
+            "precision": round(self.precision, 4),
+            "recall": round(self.recall, 4),
             "auc": round(self.auc, 4),
             "logloss": round(self.logloss, 4),
         }
@@ -225,7 +229,7 @@ def feedback_label(feedback: List[Dict[str, Any]], finding_id: str) -> int | Non
                 pass
         if outcome == "accepted":
             return 1
-        if outcome in {"rejected", "duplicate", "informative", "suppressed"}:
+        if outcome in {"rejected", "duplicate", "informative", "suppressed", "na", "n/a", "not_applicable", "not applicable"}:
             return 0
         if reason in {"operator_accepted", "operator_verified"}:
             return 1
@@ -309,14 +313,19 @@ def baseline_probs(x: np.ndarray) -> np.ndarray:
 
 def metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Metrics:
     if len(y_true) == 0:
-        return Metrics(count=0, accuracy=0.0, auc=0.0, logloss=1.0)
+        return Metrics(count=0, accuracy=0.0, precision=0.0, recall=0.0, auc=0.0, logloss=1.0)
     eps = 1e-7
     prob = np.clip(y_prob.astype(np.float64), eps, 1 - eps)
     pred = (prob >= 0.5).astype(np.float32)
     accuracy = float(np.mean((pred == y_true).astype(np.float32)))
+    true_pos = float(np.sum((pred == 1) & (y_true == 1)))
+    false_pos = float(np.sum((pred == 1) & (y_true == 0)))
+    false_neg = float(np.sum((pred == 0) & (y_true == 1)))
+    precision = true_pos / (true_pos + false_pos) if (true_pos + false_pos) > 0 else 0.0
+    recall = true_pos / (true_pos + false_neg) if (true_pos + false_neg) > 0 else 0.0
     logloss = float(-np.mean(y_true * np.log(prob) + (1 - y_true) * np.log(1 - prob)))
     auc = roc_auc(y_true, prob)
-    return Metrics(count=int(len(y_true)), accuracy=accuracy, auc=auc, logloss=logloss)
+    return Metrics(count=int(len(y_true)), accuracy=accuracy, precision=precision, recall=recall, auc=auc, logloss=logloss)
 
 
 def roc_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
@@ -370,6 +379,34 @@ def update_registry(registry_path: Path, entry: Dict[str, Any]) -> None:
     registry_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def archive_checkpoint(
+    models_dir: Path,
+    model_version: str,
+    candidate_model: Path,
+    output_dir: Path,
+    artifact_paths: Dict[str, Path],
+) -> Path:
+    checkpoint_dir = models_dir / "checkpoints" / model_version
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidate_model, checkpoint_dir / "risk.onnx")
+    shutil.copyfile(output_dir / "manifest.json", checkpoint_dir / "manifest.json")
+    for name, path in artifact_paths.items():
+        if path.exists():
+            shutil.copyfile(path, checkpoint_dir / path.name)
+    (checkpoint_dir / "checkpoint_index.json").write_text(
+        json.dumps(
+            {
+                "modelVersion": model_version,
+                "artifacts": {name: str((checkpoint_dir / path.name)) for name, path in artifact_paths.items() if path.exists()},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return checkpoint_dir
+
+
 def promote_model(candidate_model: Path, models_dir: Path, metadata: Dict[str, Any]) -> None:
     target = models_dir / "risk.onnx"
     shutil.copyfile(candidate_model, target)
@@ -389,8 +426,158 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-labels", type=int, default=int(os.getenv("TRAINING_MIN_LABELS", "100")))
     p.add_argument("--promotion-auc-delta", type=float, default=float(os.getenv("TRAINING_PROMOTION_AUC_DELTA", "0.01")))
     p.add_argument("--promotion-logloss-improvement", type=float, default=float(os.getenv("TRAINING_PROMOTION_LOGLOSS_IMPROVEMENT", "0.02")))
+    p.add_argument("--max-precision-regression", type=float, default=float(os.getenv("TRAINING_MAX_PRECISION_REGRESSION", "0.02")))
+    p.add_argument("--max-recall-regression", type=float, default=float(os.getenv("TRAINING_MAX_RECALL_REGRESSION", "0.02")))
     p.add_argument("--allow-quality-warnings", action="store_true")
     return p.parse_args()
+
+
+def build_probe_config_snapshot(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    records = dataset.get("records") or []
+    tool_stats: Dict[str, Dict[str, float]] = {}
+    profiles: Dict[str, int] = {}
+    for record in records:
+        tool_options = record.get("toolOptions") or {}
+        enabled = sorted([name for name, enabled in tool_options.items() if bool(enabled)])
+        profile_key = ",".join(enabled) if enabled else "none"
+        profiles[profile_key] = profiles.get(profile_key, 0) + 1
+        for tool, enabled_flag in tool_options.items():
+            cur = tool_stats.setdefault(tool, {"enabledCount": 0.0, "recordCount": 0.0})
+            cur["recordCount"] += 1.0
+            if bool(enabled_flag):
+                cur["enabledCount"] += 1.0
+    ordered_tools = {}
+    for tool in sorted(tool_stats.keys()):
+        cur = tool_stats[tool]
+        count = cur["recordCount"] or 1.0
+        ordered_tools[tool] = {
+            "enabledCount": int(cur["enabledCount"]),
+            "recordCount": int(cur["recordCount"]),
+            "enabledRate": round(cur["enabledCount"] / count, 4),
+        }
+    top_profiles = [
+        {"enabledTools": [] if key == "none" else key.split(","), "count": count}
+        for key, count in sorted(profiles.items(), key=lambda item: (-item[1], item[0]))[:20]
+    ]
+    return {
+        "schemaVersion": 1,
+        "recordsAnalyzed": len(records),
+        "tools": ordered_tools,
+        "profiles": top_profiles,
+    }
+
+
+def build_capability_matrix(dataset: Dict[str, Any]) -> Dict[str, Any]:
+    records = dataset.get("records") or []
+    by_category: Dict[str, Dict[str, float]] = {}
+    benchmark_targets = set()
+    for record in records:
+        findings = record.get("findings") or []
+        feedback = record.get("feedback") or []
+        labels = ((record.get("labels") or {}).get("prioritizationScore") or {})
+        benchmark_targets.add(str(record.get("targetHash", "")).strip())
+        for finding in findings:
+            category = normalize(finding.get("category", "")) or "uncategorized"
+            bucket = by_category.setdefault(
+                category,
+                {
+                    "findings": 0.0,
+                    "positiveLabels": 0.0,
+                    "negativeLabels": 0.0,
+                    "accepted": 0.0,
+                    "duplicates": 0.0,
+                    "na": 0.0,
+                    "informative": 0.0,
+                },
+            )
+            bucket["findings"] += 1.0
+            fid = str(finding.get("id", "")).strip()
+            outcome = feedback_label(feedback, fid)
+            if outcome is None:
+                outcome = 1 if float(labels.get(fid, 0.0)) >= 0.6 else 0
+            if outcome == 1:
+                bucket["positiveLabels"] += 1.0
+            else:
+                bucket["negativeLabels"] += 1.0
+            for item in feedback:
+                if normalize(item.get("findingId", "")) != normalize(fid):
+                    continue
+                fb_outcome = normalize(item.get("outcome", ""))
+                if fb_outcome == "accepted":
+                    bucket["accepted"] += 1.0
+                elif fb_outcome == "duplicate":
+                    bucket["duplicates"] += 1.0
+                elif fb_outcome in {"na", "n/a", "not_applicable", "not applicable"}:
+                    bucket["na"] += 1.0
+                elif fb_outcome == "informative":
+                    bucket["informative"] += 1.0
+    categories = []
+    for category in sorted(by_category.keys()):
+        bucket = by_category[category]
+        total = bucket["findings"] or 1.0
+        categories.append(
+            {
+                "category": category,
+                "findingCount": int(bucket["findings"]),
+                "positiveLabels": int(bucket["positiveLabels"]),
+                "negativeLabels": int(bucket["negativeLabels"]),
+                "accepted": int(bucket["accepted"]),
+                "duplicates": int(bucket["duplicates"]),
+                "na": int(bucket["na"]),
+                "informative": int(bucket["informative"]),
+                "detectionRate": round(bucket["positiveLabels"] / total, 4),
+                "acceptedRate": round(bucket["accepted"] / total, 4),
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "benchmarkTargets": len([item for item in benchmark_targets if item]),
+        "categories": categories,
+    }
+
+
+def render_capability_matrix_markdown(matrix: Dict[str, Any]) -> str:
+    lines = [
+        "# Living Capability Matrix",
+        "",
+        f"- Generated at: {matrix.get('generatedAt', '')}",
+        f"- Benchmark targets sampled: {matrix.get('benchmarkTargets', 0)}",
+        "",
+        "| Category | Findings | Detection rate | Accepted rate | Accepted | Duplicate | N/A | Informative |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for item in matrix.get("categories") or []:
+        lines.append(
+            "| {category} | {findingCount} | {detectionRate:.2%} | {acceptedRate:.2%} | {accepted} | {duplicates} | {na} | {informative} |".format(
+                **item
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def evaluate_promotion_gate(model_metrics: Metrics, baseline_metrics: Metrics, args: argparse.Namespace) -> Tuple[bool, Dict[str, Any]]:
+    precision_regression = max(0.0, baseline_metrics.precision - model_metrics.precision)
+    recall_regression = max(0.0, baseline_metrics.recall - model_metrics.recall)
+    promotion_gate = {
+        "maxPrecisionRegression": args.max_precision_regression,
+        "maxRecallRegression": args.max_recall_regression,
+        "precisionRegression": round(precision_regression, 4),
+        "recallRegression": round(recall_regression, 4),
+        "precisionGatePassed": precision_regression <= args.max_precision_regression,
+        "recallGatePassed": recall_regression <= args.max_recall_regression,
+        "aucDeltaRequired": args.promotion_auc_delta,
+        "loglossImprovementRequired": args.promotion_logloss_improvement,
+        "aucDelta": round(model_metrics.auc - baseline_metrics.auc, 4),
+        "loglossImprovement": round(baseline_metrics.logloss - model_metrics.logloss, 4),
+    }
+    promote = (
+        promotion_gate["precisionGatePassed"]
+        and promotion_gate["recallGatePassed"]
+        and (model_metrics.auc - baseline_metrics.auc) >= args.promotion_auc_delta
+        and (baseline_metrics.logloss - model_metrics.logloss) >= args.promotion_logloss_improvement
+    )
+    return promote, promotion_gate
 
 
 def main() -> int:
@@ -446,11 +633,37 @@ def main() -> int:
     candidate_model = output_dir / "risk-candidate.onnx"
     export_onnx(w, b, candidate_model)
 
+    probe_config_snapshot = build_probe_config_snapshot(dataset)
+    probe_config_path = output_dir / "probe_config_snapshot.json"
+    probe_config_path.write_text(json.dumps(probe_config_snapshot, indent=2) + "\n", encoding="utf-8")
+
+    capability_matrix = build_capability_matrix(dataset)
+    capability_matrix_path = output_dir / "capability_matrix.json"
+    capability_matrix_path.write_text(json.dumps(capability_matrix, indent=2) + "\n", encoding="utf-8")
+    capability_matrix_md_path = output_dir / "capability_matrix.md"
+    capability_matrix_md_path.write_text(render_capability_matrix_markdown(capability_matrix), encoding="utf-8")
+
     dataset_checksum = sha256_file(dataset_path)
     candidate_checksum = sha256_file(candidate_model)
     model_version = f"risk-{run_id}"
+    precision_regression = max(0.0, baseline_metrics.precision - model_metrics.precision)
+    recall_regression = max(0.0, baseline_metrics.recall - model_metrics.recall)
+    promotion_gate = {
+        "maxPrecisionRegression": args.max_precision_regression,
+        "maxRecallRegression": args.max_recall_regression,
+        "precisionRegression": round(precision_regression, 4),
+        "recallRegression": round(recall_regression, 4),
+        "precisionGatePassed": precision_regression <= args.max_precision_regression,
+        "recallGatePassed": recall_regression <= args.max_recall_regression,
+        "aucDeltaRequired": args.promotion_auc_delta,
+        "loglossImprovementRequired": args.promotion_logloss_improvement,
+        "aucDelta": round(model_metrics.auc - baseline_metrics.auc, 4),
+        "loglossImprovement": round(baseline_metrics.logloss - model_metrics.logloss, 4),
+    }
     promote = (
-        (model_metrics.auc - baseline_metrics.auc) >= args.promotion_auc_delta
+        promotion_gate["precisionGatePassed"]
+        and promotion_gate["recallGatePassed"]
+        and (model_metrics.auc - baseline_metrics.auc) >= args.promotion_auc_delta
         and (baseline_metrics.logloss - model_metrics.logloss) >= args.promotion_logloss_improvement
     )
 
@@ -474,11 +687,28 @@ def main() -> int:
             "inferenceContract": "[N,8] -> [N,1]",
             "promoted": promote,
         },
+        "probeConfigSnapshot": {"path": str(probe_config_path)},
+        "capabilityMatrix": {"jsonPath": str(capability_matrix_path), "markdownPath": str(capability_matrix_md_path)},
+        "promotionGate": promotion_gate,
         "evaluation": metrics_doc,
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     models_dir = Path(args.models_dir).resolve()
+    checkpoint_dir = archive_checkpoint(
+        models_dir,
+        model_version,
+        candidate_model,
+        output_dir,
+        {
+            "dataset": dataset_path,
+            "qualityReport": quality_path,
+            "metrics": output_dir / "metrics.json",
+            "probeConfigSnapshot": probe_config_path,
+            "capabilityMatrixJson": capability_matrix_path,
+            "capabilityMatrixMarkdown": capability_matrix_md_path,
+        },
+    )
     registry_path = models_dir / "registry.json"
     registry_entry = {
         "modelVersion": model_version,
@@ -486,7 +716,11 @@ def main() -> int:
         "datasetSha256": dataset_checksum,
         "artifactSha256": candidate_checksum,
         "artifactPath": str(candidate_model),
+        "checkpointPath": str(checkpoint_dir),
+        "probeConfigSnapshotPath": str(checkpoint_dir / probe_config_path.name),
+        "capabilityMatrixPath": str(checkpoint_dir / capability_matrix_path.name),
         "promoted": promote,
+        "promotionGate": promotion_gate,
         "metrics": metrics_doc,
     }
     update_registry(registry_path, registry_entry)

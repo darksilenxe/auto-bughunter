@@ -274,7 +274,7 @@ export default function Settings() {
         setDatasetError(data.error || "Failed to load dataset preview.");
         return;
       }
-      setDatasetPreview(Array.isArray(data) ? data : (data.items || []));
+      setDatasetPreview(Array.isArray(data) ? data : (data.records || data.items || []));
     } catch (err) {
       setDatasetError(err.message || "Failed to load dataset preview.");
     }
@@ -677,7 +677,7 @@ export default function Settings() {
             <div className="form-grid">
               <label>Scan ID<input value={feedForm.scanId} onChange={(e) => setFeedForm((prev) => ({ ...prev, scanId: e.target.value }))} /></label>
               <label>Finding ID<input value={feedForm.findingId} onChange={(e) => setFeedForm((prev) => ({ ...prev, findingId: e.target.value }))} /></label>
-              <label>Outcome<select value={feedForm.outcome} onChange={(e) => setFeedForm((prev) => ({ ...prev, outcome: e.target.value }))}><option value="accepted">accepted</option><option value="rejected">rejected</option><option value="duplicate">duplicate</option><option value="informative">informative</option></select></label>
+              <label>Outcome<select value={feedForm.outcome} onChange={(e) => setFeedForm((prev) => ({ ...prev, outcome: e.target.value }))}><option value="accepted">accepted</option><option value="rejected">rejected</option><option value="duplicate">duplicate</option><option value="informative">informative</option><option value="n/a">n/a</option></select></label>
               <label>Payout USD<input value={feedForm.payoutUsd} onChange={(e) => setFeedForm((prev) => ({ ...prev, payoutUsd: e.target.value }))} /></label>
             </div>
             <label>Analyst notes<textarea rows={3} value={feedForm.notes} onChange={(e) => setFeedForm((prev) => ({ ...prev, notes: e.target.value }))} /></label>

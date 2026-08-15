@@ -84,9 +84,12 @@ Artifacts per run:
 - `quality_report.json` (record completeness, class-balance, redaction gates)
 - `metrics.json` (model vs deterministic baseline)
 - `risk-candidate.onnx` (candidate model)
+- `probe_config_snapshot.json` (versioned probe/tool configuration snapshot)
+- `capability_matrix.json` / `capability_matrix.md` (living capability matrix)
 - `manifest.json` (lineage metadata)
 
 Model registry:
 
 - Writes/updates `<models-dir>/registry.json`
-- Promotes to `<models-dir>/risk.onnx` only when promotion thresholds are met
+- Archives every run under `<models-dir>/checkpoints/<model-version>/`
+- Promotes to `<models-dir>/risk.onnx` only when precision/recall do not regress by more than 2% and promotion thresholds are met

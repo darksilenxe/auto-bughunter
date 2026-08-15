@@ -464,6 +464,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/ml/engagements", s.handleListMLEngagements)
 	mux.HandleFunc("/api/ml/agent-weights", s.handleAgentWeights)
 	mux.HandleFunc("/api/feedback", s.handleFeedback)
+	mux.HandleFunc("/api/bounty-outcomes/webhook", s.handleBountyOutcomeWebhook)
 	mux.HandleFunc("/api/finding-verification", s.handleFindingVerification)
 	mux.HandleFunc("/api/findings/duplicates", s.handleFindingDuplicates)
 	mux.HandleFunc("/api/suppressions", s.handleSuppressions)
@@ -1845,16 +1846,12 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	req.ScanID = strings.TrimSpace(req.ScanID)
-	req.FindingID = strings.TrimSpace(req.FindingID)
-	req.Outcome = strings.ToLower(strings.TrimSpace(req.Outcome))
-	req.Reason = strings.TrimSpace(req.Reason)
-	if req.ScanID == "" || req.FindingID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
-		return
-	}
-	if req.Outcome != "accepted" && req.Outcome != "rejected" && req.Outcome != "duplicate" && req.Outcome != "informative" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "outcome must be one of accepted, rejected, duplicate, informative"})
+	if !normalizeFeedbackRequest(&req) {
+		if strings.TrimSpace(req.ScanID) == "" || strings.TrimSpace(req.FindingID) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scanId and findingId are required"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, feedbackOutcomeError())
 		return
 	}
 	req.ID = uuid.NewString()
