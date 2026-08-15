@@ -345,11 +345,11 @@ Focus areas: ecosystem fit, executive value, reliability, and defensible quality
 
 **Implementation checklist**
 
-- [ ] Add bounty outcome webhook endpoint and manual tagging UI for accepted/duplicate/N/A/payout.
-- [ ] Wire outcome labels into `ml_triage` fine-tuning pipeline with versioned checkpoint storage.
-- [ ] Implement model promotion gate: block deployment if precision/recall regresses >2% vs baseline.
-- [ ] Version and archive probe configurations alongside each model checkpoint.
-- [ ] Publish living capability matrix as a release artifact with per-class detection rates.
+- [x] Add bounty outcome webhook endpoint and manual tagging UI for accepted/duplicate/N/A/payout.
+- [x] Wire outcome labels into `ml_triage` fine-tuning pipeline with versioned checkpoint storage.
+- [x] Implement model promotion gate: block deployment if precision/recall regresses >2% vs baseline.
+- [x] Version and archive probe configurations alongside each model checkpoint.
+- [x] Publish living capability matrix as a release artifact with per-class detection rates.
 
 ### Phase F — Safer Autonomous Operation
 

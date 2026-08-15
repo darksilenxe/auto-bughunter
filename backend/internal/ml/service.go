@@ -364,7 +364,7 @@ func (s *Service) feedbackSignals(ctx context.Context, repo Repository) map[stri
 		switch strings.ToLower(strings.TrimSpace(f.Outcome)) {
 		case "accepted":
 			cur.accepted++
-		case "rejected", "duplicate", "informative":
+		case "rejected", "duplicate", "informative", "na", "n/a":
 			cur.rejected++
 		}
 		m[key] = cur
@@ -440,7 +440,7 @@ func (s *Service) payoutSignals(ctx context.Context, repo Repository, programNam
 			if fb.PayoutUSD > 0 {
 				cur.payout += fb.PayoutUSD
 			}
-		case "rejected", "duplicate", "informative":
+		case "rejected", "duplicate", "informative", "na", "n/a":
 			cur.negative++
 		}
 		m[key] = cur

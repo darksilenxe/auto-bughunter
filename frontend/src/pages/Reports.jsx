@@ -63,6 +63,8 @@ export default function Reports() {
   const [duplicateGroups, setDuplicateGroups] = useState({});
   const [duplicateStatus, setDuplicateStatus] = useState("");
   const [submitStatus, setSubmitStatus] = useState({});
+  const [feedbackForms, setFeedbackForms] = useState({});
+  const [feedbackStatus, setFeedbackStatus] = useState({});
 
   const findings = useMemo(() => sortFindings(job?.findings || []), [job?.findings]);
   const summary = useMemo(() => summarizeFindings(findings), [findings]);
@@ -208,6 +210,36 @@ export default function Reports() {
     }
   };
 
+  const submitOutcomeFeedback = async (finding) => {
+    const form = feedbackForms[finding.id] || { outcome: "accepted", payoutUsd: "", notes: "" };
+    const apiKey = getAPIKey();
+    const workspaceId = getWorkspaceID();
+    setFeedbackStatus((prev) => ({ ...prev, [finding.id]: "Saving…" }));
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey, "X-Workspace-ID": workspaceId },
+        body: JSON.stringify({
+          scanId,
+          findingId: finding.id,
+          category: finding.category,
+          title: finding.title,
+          outcome: form.outcome,
+          payoutUsd: form.payoutUsd ? Number(form.payoutUsd) : 0,
+          notes: form.notes || "",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFeedbackStatus((prev) => ({ ...prev, [finding.id]: data?.error || `HTTP ${res.status}` }));
+        return;
+      }
+      setFeedbackStatus((prev) => ({ ...prev, [finding.id]: "Saved" }));
+    } catch (err) {
+      setFeedbackStatus((prev) => ({ ...prev, [finding.id]: `Error: ${err.message}` }));
+    }
+  };
+
   const copyFindingMarkdown = async (finding) => {
     const lines = [
       `## ${finding.title}`,
@@ -271,6 +303,16 @@ export default function Reports() {
         setDuplicateGroups({});
       });
   }, [scanId]);
+
+  useEffect(() => {
+    setFeedbackForms((prev) => {
+      const next = { ...prev };
+      findings.forEach((finding) => {
+        if (!next[finding.id]) next[finding.id] = { outcome: "accepted", payoutUsd: "", notes: "" };
+      });
+      return next;
+    });
+  }, [findings]);
 
   return (
     <div className="page page--wide">
@@ -473,6 +515,30 @@ export default function Reports() {
                         <button type="button" className="button-link" disabled={!readinessByFinding[finding.id]?.readyToSubmit} onClick={() => submitFinding(finding)}>
                           {submitStatus[finding.id] || "Submit"}
                         </button>
+                      </div>
+                      <div className="form-grid" style={{ marginTop: 10 }}>
+                        <label>
+                          Outcome
+                          <select value={feedbackForms[finding.id]?.outcome || "accepted"} onChange={(e) => setFeedbackForms((prev) => ({ ...prev, [finding.id]: { ...(prev[finding.id] || {}), outcome: e.target.value } }))}>
+                            <option value="accepted">accepted</option>
+                            <option value="duplicate">duplicate</option>
+                            <option value="rejected">rejected</option>
+                            <option value="informative">informative</option>
+                            <option value="n/a">n/a</option>
+                          </select>
+                        </label>
+                        <label>
+                          Payout USD
+                          <input value={feedbackForms[finding.id]?.payoutUsd || ""} onChange={(e) => setFeedbackForms((prev) => ({ ...prev, [finding.id]: { ...(prev[finding.id] || {}), payoutUsd: e.target.value } }))} />
+                        </label>
+                      </div>
+                      <label style={{ display: "block", marginTop: 10 }}>
+                        Notes
+                        <textarea rows={2} value={feedbackForms[finding.id]?.notes || ""} onChange={(e) => setFeedbackForms((prev) => ({ ...prev, [finding.id]: { ...(prev[finding.id] || {}), notes: e.target.value } }))} />
+                      </label>
+                      <div className="button-row" style={{ marginTop: 8 }}>
+                        <button type="button" className="button-secondary" onClick={() => submitOutcomeFeedback(finding)}>Save outcome</button>
+                        {feedbackStatus[finding.id] && <span className="meta">{feedbackStatus[finding.id]}</span>}
                       </div>
                     </td>
                   </tr>
