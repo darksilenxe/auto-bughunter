@@ -15,8 +15,10 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 import subprocess
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -39,6 +41,9 @@ _AUTH_EXEMPT_PATHS = {"/health"}
 
 # Maximum execution timeout (seconds)
 MAX_TIMEOUT = 600  # 10 minutes
+_NUCLEI_FLAGS_WITH_VALUE = {"-u", "-severity", "-proxy"}
+_NUCLEI_FLAGS_NO_VALUE = {"-silent"}
+_NUCLEI_SEVERITY_RE = re.compile(r"^(info|low|medium|high|critical)(,(info|low|medium|high|critical))*$", re.IGNORECASE)
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -89,6 +94,40 @@ class ExecuteResponse(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if execution failed")
 
 
+def _is_safe_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _validate_nuclei_args(args: List[str]) -> Optional[str]:
+    if not args:
+        return "No arguments provided"
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
+            return "Invalid argument: potentially dangerous characters detected"
+        if arg in _NUCLEI_FLAGS_NO_VALUE:
+            i += 1
+            continue
+        if arg in _NUCLEI_FLAGS_WITH_VALUE:
+            if i + 1 >= len(args):
+                return f"Missing value for {arg}"
+            value = args[i + 1].strip()
+            if not value:
+                return f"Missing value for {arg}"
+            if any(dangerous in value for dangerous in [";", "&&", "||", "|", "`", "$("]):
+                return "Invalid argument value: potentially dangerous characters detected"
+            if arg in {"-u", "-proxy"} and not _is_safe_url(value):
+                return f"Invalid URL for {arg}"
+            if arg == "-severity" and not _NUCLEI_SEVERITY_RE.match(value):
+                return "Invalid value for -severity"
+            i += 2
+            continue
+        return f"Unsupported argument: {arg}"
+    return None
+
+
 @app.get("/health")
 def health() -> Response:
     """Health check endpoint."""
@@ -136,17 +175,15 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     """
     logger.info(f"Executing nuclei with args: {req.args}")
 
-    # Validate args to prevent command injection
-    # Note: subprocess.run with list args is safe, but we add validation for defense in depth
-    for arg in req.args:
-        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
-            return ExecuteResponse(
-                stdout="",
-                stderr="",
-                exit_code=1,
-                timed_out=False,
-                error="Invalid argument: potentially dangerous characters detected"
-            )
+    err = _validate_nuclei_args(req.args)
+    if err:
+        return ExecuteResponse(
+            stdout="",
+            stderr="",
+            exit_code=1,
+            timed_out=False,
+            error=err,
+        )
 
     try:
         # Execute nuclei
