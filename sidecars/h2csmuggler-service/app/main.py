@@ -239,6 +239,7 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     base_path = parsed.path or "/"
     pinned_url, original_authority = _build_pinned_request_url(req.url)
+    pinned_parsed = urlparse(pinned_url)
     timeout = httpx.Timeout(req.timeout)
 
     # ------------------------------------------------------------------
@@ -349,9 +350,12 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
                 follow_redirects=False,
             ) as h2_client:
                 for path in smuggle_paths:
-                    smuggle_url = f"{parsed.scheme}://{parsed.netloc}{path}"
+                    smuggle_url = pinned_parsed._replace(path=path).geturl()
                     try:
-                        smuggle_resp = await h2_client.get(smuggle_url)
+                        smuggle_resp = await h2_client.get(
+                            smuggle_url,
+                            headers={"Host": original_authority},
+                        )
                         smuggle_results.append(
                             {
                                 "path": path,
