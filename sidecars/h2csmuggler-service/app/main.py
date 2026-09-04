@@ -67,6 +67,70 @@ _BLOCKED_NETWORKS = [
 ]
 
 
+def _is_blocked_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+
+def _format_authority(host: str, port: int, scheme: str, explicit_port: bool) -> str:
+    default_port = 443 if scheme == "https" else 80
+    host_part = host
+    if ":" in host_part and not host_part.startswith("["):
+        host_part = f"[{host_part}]"
+    if explicit_port and port != default_port:
+        return f"{host_part}:{port}"
+    return host_part
+
+
+def _build_pinned_request_url(target: str) -> tuple[str, str]:
+    parsed = urlparse(target)
+    scheme = parsed.scheme
+    hostname = parsed.hostname
+    if scheme not in ("http", "https") or not hostname:
+        raise HTTPException(status_code=400, detail="Invalid target URL")
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+    explicit_port = parsed.port is not None
+    path = parsed.path or "/"
+
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    try:
+        addresses.append(ipaddress.ip_address(hostname))
+    except ValueError:
+        try:
+            resolved = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to resolve target hostname: {exc}") from exc
+        seen: set[str] = set()
+        for _family, _type, _proto, _canon, sockaddr in resolved:
+            try:
+                addr = ipaddress.ip_address(sockaddr[0])
+            except ValueError:
+                continue
+            key = str(addr)
+            if key in seen:
+                continue
+            seen.add(key)
+            addresses.append(addr)
+
+    public_addr = next((addr for addr in addresses if not _is_blocked_address(addr)), None)
+    if public_addr is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Target resolves only to disallowed network addresses",
+        )
+
+    pinned_host = str(public_addr)
+    pinned_authority = _format_authority(pinned_host, port, scheme, explicit_port=True)
+    original_authority = _format_authority(hostname, port, scheme, explicit_port=explicit_port)
+    pinned_url = parsed._replace(netloc=pinned_authority, path=path, query="", fragment="").geturl()
+    return pinned_url, original_authority
+
+
+def _build_pinned_smuggle_url(pinned_url: str, path: str) -> str:
+    parsed = urlparse(pinned_url)
+    return parsed._replace(path=path, query="", fragment="").geturl()
+
+
 def _validate_target_url(target: str) -> None:
     try:
         parsed = urlparse(target)
@@ -99,15 +163,14 @@ def _validate_target_url(target: str) -> None:
             return
 
     for addr in addresses_to_check:
-        for net in _BLOCKED_NETWORKS:
-            if addr in net:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Target resolves to a disallowed network address ({addr}); "
-                        "SSRF to internal/private networks is not permitted."
-                    ),
-                )
+        if _is_blocked_address(addr):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Target resolves to a disallowed network address ({addr}); "
+                    "SSRF to internal/private networks is not permitted."
+                ),
+            )
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -180,13 +243,15 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
     host = parsed.hostname or ""
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     base_path = parsed.path or "/"
+    pinned_url, original_authority = _build_pinned_request_url(req.url)
+    pinned_parsed = urlparse(pinned_url)
     timeout = httpx.Timeout(req.timeout)
 
     # ------------------------------------------------------------------
     # Step 1: probe for h2c upgrade via HTTP/1.1
     # ------------------------------------------------------------------
     upgrade_headers = {
-        "Host": f"{host}:{port}" if port not in (80, 443) else host,
+        "Host": original_authority,
         "Upgrade": "h2c",
         "Connection": "Upgrade, HTTP2-Settings",
         # Minimal valid HTTP2-Settings value (base64url of an empty SETTINGS frame)
@@ -204,11 +269,11 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
             follow_redirects=False,
         ) as client:
             # Baseline request without upgrade headers
-            baseline_resp = await client.get(req.url)
+            baseline_resp = await client.get(pinned_url)
             baseline_status = baseline_resp.status_code
 
             # Upgrade probe
-            upgrade_resp = await client.get(req.url, headers=upgrade_headers)
+            upgrade_resp = await client.get(pinned_url, headers=upgrade_headers)
             upgrade_status = upgrade_resp.status_code
             upgrade_headers_seen = dict(upgrade_resp.headers)
 
@@ -290,9 +355,12 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
                 follow_redirects=False,
             ) as h2_client:
                 for path in smuggle_paths:
-                    smuggle_url = f"{parsed.scheme}://{parsed.netloc}{path}"
+                    smuggle_url = _build_pinned_smuggle_url(pinned_url, path)
                     try:
-                        smuggle_resp = await h2_client.get(smuggle_url)
+                        smuggle_resp = await h2_client.get(
+                            smuggle_url,
+                            headers={"Host": original_authority},
+                        )
                         smuggle_results.append(
                             {
                                 "path": path,

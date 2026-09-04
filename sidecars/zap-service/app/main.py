@@ -15,8 +15,10 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import re
 import subprocess
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -43,6 +45,9 @@ _ZAP_BASELINE = "/zap/zap-baseline.py"
 
 # Maximum execution timeout (seconds) — ZAP baseline can be slow
 MAX_TIMEOUT = 600  # 10 minutes
+_ZAP_FLAGS_WITH_VALUE = {"-t", "-m"}
+_ZAP_FLAGS_NO_VALUE = {"-I"}
+_NUMERIC_RE = re.compile(r"^[0-9]+$")
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -93,6 +98,40 @@ class ExecuteResponse(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if execution failed")
 
 
+def _is_safe_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _validate_zap_args(args: List[str]) -> Optional[str]:
+    if not args:
+        return "No arguments provided"
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
+            return "Invalid argument: potentially dangerous characters detected"
+        if arg in _ZAP_FLAGS_NO_VALUE:
+            i += 1
+            continue
+        if arg in _ZAP_FLAGS_WITH_VALUE:
+            if i + 1 >= len(args):
+                return f"Missing value for {arg}"
+            value = args[i + 1].strip()
+            if not value:
+                return f"Missing value for {arg}"
+            if any(dangerous in value for dangerous in [";", "&&", "||", "|", "`", "$("]):
+                return "Invalid argument value: potentially dangerous characters detected"
+            if arg == "-t" and not _is_safe_url(value):
+                return "Invalid URL for -t"
+            if arg == "-m" and not _NUMERIC_RE.match(value):
+                return "Invalid value for -m"
+            i += 2
+            continue
+        return f"Unsupported argument: {arg}"
+    return None
+
+
 @app.get("/health")
 def health() -> Response:
     """Health check endpoint."""
@@ -130,19 +169,15 @@ def execute_zap_baseline(req: ExecuteRequest) -> ExecuteResponse:
     """
     logger.info(f"Executing zap-baseline.py with args: {req.args}")
 
-    # Validate args to prevent shell injection. Defense-in-depth only:
-    # subprocess.run with a list and shell=False (the default) is already safe
-    # from shell injection regardless of argument content. This check provides
-    # an additional layer against unexpected shell-like metacharacters.
-    for arg in req.args:
-        if any(dangerous in arg for dangerous in [";", "&&", "||", "|", "`", "$("]):
-            return ExecuteResponse(
-                stdout="",
-                stderr="",
-                exit_code=1,
-                timed_out=False,
-                error="Invalid argument: potentially dangerous characters detected"
-            )
+    err = _validate_zap_args(req.args)
+    if err:
+        return ExecuteResponse(
+            stdout="",
+            stderr="",
+            exit_code=1,
+            timed_out=False,
+            error=err,
+        )
 
     try:
         result = subprocess.run(
