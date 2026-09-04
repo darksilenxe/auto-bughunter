@@ -122,8 +122,13 @@ def _build_pinned_request_url(target: str) -> tuple[str, str]:
     pinned_host = str(public_addr)
     pinned_authority = _format_authority(pinned_host, port, scheme, explicit_port=True)
     original_authority = _format_authority(hostname, port, scheme, explicit_port=explicit_port)
-    pinned_url = parsed._replace(netloc=pinned_authority, path=path, fragment="").geturl()
+    pinned_url = parsed._replace(netloc=pinned_authority, path=path, query="", fragment="").geturl()
     return pinned_url, original_authority
+
+
+def _build_pinned_smuggle_url(pinned_url: str, path: str) -> str:
+    parsed = urlparse(pinned_url)
+    return parsed._replace(path=path, query="", fragment="").geturl()
 
 
 def _validate_target_url(target: str) -> None:
@@ -350,7 +355,7 @@ async def _probe_h2c(req: ScanRequest) -> ScanResponse:
                 follow_redirects=False,
             ) as h2_client:
                 for path in smuggle_paths:
-                    smuggle_url = pinned_parsed._replace(path=path).geturl()
+                    smuggle_url = _build_pinned_smuggle_url(pinned_url, path)
                     try:
                         smuggle_resp = await h2_client.get(
                             smuggle_url,
