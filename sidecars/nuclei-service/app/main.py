@@ -207,8 +207,8 @@ def execute_nuclei(req: ExecuteRequest) -> ExecuteResponse:
     except subprocess.TimeoutExpired as e:
         logger.warning(f"Nuclei execution timed out after {req.timeout}s")
         return ExecuteResponse(
-            stdout=e.stdout.decode() if e.stdout else "",
-            stderr=e.stderr.decode() if e.stderr else "",
+            stdout=e.stdout or "",
+            stderr=e.stderr or "",
             exit_code=-1,
             timed_out=True,
             error=f"Execution timed out after {req.timeout} seconds"
