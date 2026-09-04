@@ -96,7 +96,7 @@ class ExecuteResponse(BaseModel):
 
 def _is_safe_url(raw: str) -> bool:
     parsed = urlparse(raw)
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    return parsed.scheme in ("http", "https") and bool(parsed.hostname)
 
 
 def _validate_nuclei_args(args: List[str]) -> Optional[str]:
