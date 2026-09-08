@@ -22,7 +22,7 @@ FROM projectdiscovery/cloudlist:v1.4.0    AS cloudlist
 FROM projectdiscovery/naabu:v2.5.0        AS naabu
 FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
 FROM projectdiscovery/shuffledns:v1.0.8   AS shuffledns
-FROM projectdiscovery/katana:v1.5.0       AS katana
+FROM projectdiscovery/katana:v1.7.0       AS katana
 FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
 FROM projectdiscovery/cdncheck:v1.1.36    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
