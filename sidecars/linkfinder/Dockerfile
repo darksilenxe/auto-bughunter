@@ -10,7 +10,7 @@
 # Cloned from source and pinned to a known-good commit. Bump LINKFINDER_REF to
 # upgrade.
 # ---------------------------------------------------------------------------
-FROM python:3.12-alpine
+FROM python:3.14-alpine
 ARG LINKFINDER_REF=master
 RUN apk add --no-cache git \
     && git clone https://github.com/GerbenJavado/LinkFinder.git /opt/linkfinder \
