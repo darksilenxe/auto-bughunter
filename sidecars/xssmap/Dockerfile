@@ -17,7 +17,7 @@
 # back to phi3:mini which is pre-pulled by the `ollama-init` service.
 # ---------------------------------------------------------------------------
 
-FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.62.0-jammy
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -16,19 +16,19 @@
 # in this single file to upgrade the whole suite.
 # ---------------------------------------------------------------------------
 
-FROM projectdiscovery/subfinder:v2.13.0   AS subfinder
-FROM projectdiscovery/httpx:v1.9.0        AS httpx
+FROM projectdiscovery/subfinder:v2.16.0   AS subfinder
+FROM projectdiscovery/httpx:v1.11.0        AS httpx
 FROM projectdiscovery/cloudlist:v1.4.0    AS cloudlist
-FROM projectdiscovery/naabu:v2.5.0        AS naabu
+FROM projectdiscovery/naabu:v2.6.1        AS naabu
 FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
 FROM projectdiscovery/shuffledns:v1.0.8   AS shuffledns
-FROM projectdiscovery/katana:v1.5.0       AS katana
+FROM projectdiscovery/katana:v1.7.0       AS katana
 FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
 FROM projectdiscovery/cdncheck:v1.1.36    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
 FROM projectdiscovery/vulnx:v1.0.0        AS vulnx
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates libc6-compat
 
