@@ -17,7 +17,7 @@
 # ---------------------------------------------------------------------------
 
 FROM projectdiscovery/subfinder:v2.13.0   AS subfinder
-FROM projectdiscovery/httpx:v1.9.0        AS httpx
+FROM projectdiscovery/httpx:v1.11.0        AS httpx
 FROM projectdiscovery/cloudlist:v1.4.0    AS cloudlist
 FROM projectdiscovery/naabu:v2.5.0        AS naabu
 FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
