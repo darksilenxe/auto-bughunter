@@ -6,7 +6,7 @@
 #
 # The cert is generated once and re-used on every restart — the entrypoint
 # is idempotent so `docker compose up` doesn't churn keys.
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache openssl
 
