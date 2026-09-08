@@ -28,7 +28,7 @@ FROM projectdiscovery/cdncheck:v1.1.36    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
 FROM projectdiscovery/vulnx:v1.0.0        AS vulnx
 
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates libc6-compat
 
