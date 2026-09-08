@@ -1,6 +1,6 @@
 module auto-bughunter/backend
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
@@ -12,8 +12,8 @@ require (
 	github.com/projectdiscovery/wappalyzergo v0.2.77
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/tmc/langchaingo v0.1.14
-	golang.org/x/crypto v0.54.0
-	golang.org/x/text v0.40.0
+	golang.org/x/crypto v0.56.0
+	golang.org/x/text v0.41.0
 )
 
 require (
