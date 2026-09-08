@@ -16,6 +16,6 @@ ARG UNCOVER_VERSION=v1.1.0
 RUN apk add --no-cache git \
     && go install github.com/projectdiscovery/uncover/cmd/uncover@${UNCOVER_VERSION}
 
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates
 COPY --from=build /go/bin/uncover /usr/local/bin/uncover
