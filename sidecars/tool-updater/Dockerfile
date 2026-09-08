@@ -17,7 +17,7 @@
 # --- Stage 1: grab the nuclei binary out of the official image ----------
 # Keep this tag in lock-step with the `nuclei` service in docker-compose.yml
 # so the templates layout we write matches what the runtime nuclei expects.
-FROM projectdiscovery/nuclei:v3.8.0 AS nuclei-bin
+FROM projectdiscovery/nuclei:v3.11.1 AS nuclei-bin
 
 # --- Stage 2: runtime ---------------------------------------------------
 FROM alpine:3.20
