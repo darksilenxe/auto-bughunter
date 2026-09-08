@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Install semgrep and service dependencies.
 # semgrep is installed via pip so its version tracks the official release cadence.
