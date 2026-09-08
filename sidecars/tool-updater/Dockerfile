@@ -20,7 +20,7 @@
 FROM projectdiscovery/nuclei:v3.11.1 AS nuclei-bin
 
 # --- Stage 2: runtime ---------------------------------------------------
-FROM alpine:3.20
+FROM alpine:3.24
 
 # bash for the entrypoint, curl for HTTP, jq for JSON parsing, and ca-certs
 # for HTTPS to GitHub. coreutils gives us a sane `date -u +%FT%TZ`.
