@@ -12,6 +12,6 @@
 #
 # Pinned to a known-good PyPI release. Bump ARJUN_VERSION to upgrade.
 # ---------------------------------------------------------------------------
-FROM python:3.12-alpine
+FROM python:3.14-alpine
 ARG ARJUN_VERSION=2.2.7
 RUN pip install --no-cache-dir "arjun==${ARJUN_VERSION}"
