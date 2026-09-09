@@ -177,7 +177,7 @@ func bootstrapStandardAuthProfile(parent context.Context, target string, profile
 			continue
 		}
 
-		cookies, err := network.GetCookies().WithUrls([]string{target, loginURL, currentURL}).Do(ctx)
+		cookies, err := network.GetCookies().WithURLs([]string{target, loginURL, currentURL}).Do(ctx)
 		if err != nil {
 			continue
 		}
