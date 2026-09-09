@@ -9,7 +9,7 @@
 # Built from source and pinned to a known-good release tag. Bump GAU_VERSION
 # to upgrade.
 # ---------------------------------------------------------------------------
-FROM golang:1.23-alpine AS build
+FROM golang:1.27-alpine AS build
 ARG GAU_VERSION=v2.2.4
 RUN apk add --no-cache git \
     && go install github.com/lc/gau/v2/cmd/gau@${GAU_VERSION}
