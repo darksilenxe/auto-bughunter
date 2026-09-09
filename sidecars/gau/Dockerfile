@@ -14,6 +14,6 @@ ARG GAU_VERSION=v2.2.4
 RUN apk add --no-cache git \
     && go install github.com/lc/gau/v2/cmd/gau@${GAU_VERSION}
 
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates
 COPY --from=build /go/bin/gau /usr/local/bin/gau
