@@ -11,7 +11,7 @@
 # Built from source and pinned to a known-good release tag. Bump
 # UNCOVER_VERSION to upgrade.
 # ---------------------------------------------------------------------------
-FROM golang:1.23-alpine AS build
+FROM golang:1.27-alpine AS build
 ARG UNCOVER_VERSION=v1.1.0
 RUN apk add --no-cache git \
     && go install github.com/projectdiscovery/uncover/cmd/uncover@${UNCOVER_VERSION}
