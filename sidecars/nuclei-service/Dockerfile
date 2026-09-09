@@ -1,7 +1,7 @@
 # Nuclei HTTP wrapper service
 # Exposes nuclei via HTTP endpoints to eliminate Docker socket requirement
 
-FROM projectdiscovery/nuclei:v3.8.0 AS nuclei-binary
+FROM projectdiscovery/nuclei:v3.11.1 AS nuclei-binary
 
 FROM python:3.14-slim
 
