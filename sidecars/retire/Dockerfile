@@ -10,6 +10,6 @@
 #
 # Pinned to a known-good npm release. Bump RETIRE_VERSION to upgrade.
 # ---------------------------------------------------------------------------
-FROM node:20-alpine
+FROM node:26-alpine
 ARG RETIRE_VERSION=5.2.4
 RUN npm install -g "retire@${RETIRE_VERSION}"
