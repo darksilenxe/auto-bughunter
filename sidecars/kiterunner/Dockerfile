@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 
 # --- Stage 1: pull the kiterunner release binary -------------------------
-FROM alpine:3.20 AS kr-fetch
+FROM alpine:3.24 AS kr-fetch
 
 # Bump KITERUNNER_VERSION when a new release is published at
 # https://github.com/assetnote/kiterunner/releases. Releases are infrequent
@@ -44,7 +44,7 @@ RUN set -eux; \
     chmod +x /out/kr
 
 # --- Stage 2: runtime image ---------------------------------------------
-FROM alpine:3.20
+FROM alpine:3.24
 
 # curl + jq are used by the entrypoint to parse the Assetnote manifest and
 # stream every listed wordlist into /wordlists. ca-certificates is required
