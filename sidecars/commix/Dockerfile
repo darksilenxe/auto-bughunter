@@ -11,7 +11,7 @@
 # Cloned from source and pinned to a known-good release tag. Bump
 # COMMIX_VERSION to upgrade.
 # ---------------------------------------------------------------------------
-FROM python:3.12-alpine
+FROM python:3.14-alpine
 ARG COMMIX_VERSION=v4.0
 RUN apk add --no-cache git \
     && git clone --depth 1 --branch "${COMMIX_VERSION}" \
