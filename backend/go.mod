@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
-	github.com/projectdiscovery/wappalyzergo v0.2.96
+	github.com/projectdiscovery/wappalyzergo v0.3.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/tmc/langchaingo v0.1.14
 	golang.org/x/crypto v0.56.0
