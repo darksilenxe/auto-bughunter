@@ -21,7 +21,7 @@ set -euo pipefail
 
 API_BASE="${API_BASE:-http://localhost:8080}"
 API_KEY="${API_KEY:-auto-bughunter-juice-shop-test-key}"
-TARGET_URL="${TARGET_URL:-http://localhost:3000}"
+TARGET_URL="${TARGET_URL:-http://juice-shop:3000}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-1200}"
 POLL_INTERVAL="${POLL_INTERVAL:-10}"
 OUTPUT_DIR="${OUTPUT_DIR:-testing/juice-shop/out}"
