@@ -85,6 +85,24 @@ jobs:
           sed -i 's|^AI_API_KEY=.*$|AI_API_KEY=|'     .env
           sed -i 's|^AI_MODEL=.*$|AI_MODEL=|'         .env
           sed -i 's|^OLLAMA_MODEL=.*$|OLLAMA_MODEL=|' .env
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          values = {}
+          for raw in Path(".env").read_text().splitlines():
+              line = raw.strip()
+              if not line or line.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              values[key] = value
+          dsn_password = urlsplit(values.get("DATABASE_URL", "")).password or ""
+          postgres_password = values.get("POSTGRES_PASSWORD", "")
+          if dsn_password != postgres_password:
+              raise SystemExit(
+                  "DATABASE_URL password must match POSTGRES_PASSWORD for the Juice Shop harness"
+              )
+          print("[+] DATABASE_URL password matches POSTGRES_PASSWORD")
+          PY
           echo "[+] Effective .env:"
           grep -E '^(AI_|OLLAMA_|ENABLE_|ALLOWED_)' .env || true
 
@@ -112,8 +130,20 @@ jobs:
       - name: Run authorized scan
         run: |
           set -euo pipefail
+          COMPOSE_ARGS="-f docker-compose.yml -f testing/juice-shop/docker-compose.juiceshop.yml"
           export OUTPUT_DIR POLL_TIMEOUT POLL_INTERVAL CRAWL_MAX_PAGES
-          ./testing/juice-shop/scan.sh
+          if ! ./testing/juice-shop/scan.sh; then
+            echo "::group::docker compose ps"
+            docker compose $COMPOSE_ARGS ps || true
+            echo "::endgroup::"
+            echo "::group::backend logs"
+            docker compose $COMPOSE_ARGS logs --no-color --timestamps --tail=200 backend || true
+            echo "::endgroup::"
+            echo "::group::db logs"
+            docker compose $COMPOSE_ARGS logs --no-color --timestamps --tail=80 db || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Assert scan completed and meets findings threshold
         run: |
