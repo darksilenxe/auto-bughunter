@@ -26,7 +26,7 @@ harness against any host you are not explicitly authorized to test.
 | File | Purpose |
 |------|---------|
 | `docker-compose.juiceshop.yml` | Compose overlay that adds a `juice-shop` service and makes the backend wait for it to be healthy. |
-| `.env.juiceshop.example`       | Sample `.env` tuned for the harness (optional integrations off, OAST enabled in-cluster). |
+| `.env.juiceshop.example`       | Sample `.env` tuned for the harness (optional integrations off, proxy disabled, OAST enabled in-cluster, and `DATABASE_URL` kept in sync with `POSTGRES_PASSWORD`). |
 | `scan.sh`                      | Submits a scan against `http://juice-shop:3000`, polls until completion, summarizes findings and downloads the Markdown pen-test report. |
 
 ## Quick start
@@ -100,6 +100,11 @@ To slim the stack for the runner the workflow:
   do not start unless you explicitly pass `--profile ollama`. The CI step
   also blanks out `AI_API_BASE` / `AI_API_KEY` / `AI_MODEL` in `.env` so the
   backend doesn't try to call a model that isn't running.
+
+  The workflow also validates that the copied harness `.env` keeps the embedded
+  Postgres password in `DATABASE_URL` synchronized with `POSTGRES_PASSWORD`,
+  because a mismatch causes the backend container to exit immediately during
+  startup.
 
 Locally, if you want the AI summaries you can opt in with:
 
