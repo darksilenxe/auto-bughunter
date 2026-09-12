@@ -22,11 +22,13 @@ services:
     environment:
       NODE_ENV: unsafe
     restart: unless-stopped
-    # The bkimminich/juice-shop image is a minimal node:bookworm-slim and
-    # ships neither wget nor curl, so previous healthchecks that called
-    # `wget` always failed and `service_healthy` never resolved. Use node
-    # itself — it's guaranteed to be on $PATH because it's the entrypoint
-    # runtime — to perform the HTTP probe.
+    # The bkimminich/juice-shop image is a distroless-style image: it has no
+    # shell (`sh`/`bash`) and its entrypoint runtime lives at /nodejs/bin/node,
+    # which is NOT on the default exec PATH used by `docker exec`/healthchecks
+    # (only the image's ENTRYPOINT gets it via an absolute path). A healthcheck
+    # of bare `node` therefore always fails with "executable file not found in
+    # $PATH" and `service_healthy` never resolves. Invoke the binary by its
+    # absolute path instead.
     #
     # NOTE: /rest/admin/application-version requires authentication in
     # Juice Shop v15+ (returns 401 without a valid JWT), so we probe the
@@ -34,7 +36,7 @@ services:
     healthcheck:
       test:
         - "CMD"
-        - "node"
+        - "/nodejs/bin/node"
         - "-e"
         - "require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
       interval: 10s
