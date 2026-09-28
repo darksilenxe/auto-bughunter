@@ -83,6 +83,8 @@ func TestResolveAIConfigFromEnv_StrixDecisionsOnlyLeavesPrimaryOnAIConfig(t *tes
 	t.Setenv("AI_API_BASE", "https://api.openai.example/v1")
 	t.Setenv("AI_API_KEY", "openai-key")
 	t.Setenv("AI_MODEL", "gpt-test")
+	t.Setenv("AI_CODING_API_BASE", "")
+	t.Setenv("AI_FAST_API_BASE", "")
 	t.Setenv("STRIX_API_BASE", "https://strix.example/v1")
 	t.Setenv("STRIX_API_KEY", "strix-key")
 	t.Setenv("STRIX_MODEL", "strix-main")
@@ -96,6 +98,32 @@ func TestResolveAIConfigFromEnv_StrixDecisionsOnlyLeavesPrimaryOnAIConfig(t *tes
 		t.Fatalf("coding config = %+v", cfg)
 	}
 	if cfg.FastBaseURL != "https://strix.example/v1" || cfg.FastAPIKey != "strix-key" || cfg.FastModel != "strix-main" {
+		t.Fatalf("fast config = %+v", cfg)
+	}
+}
+
+func TestResolveAIConfigFromEnv_StrixDecisionsOnlyPreservesExplicitAILanes(t *testing.T) {
+	t.Setenv("USE_STRIX_SERVICE", "false")
+	t.Setenv("USE_STRIX_DECISIONS_ONLY", "true")
+	t.Setenv("AI_API_BASE", "https://api.openai.example/v1")
+	t.Setenv("AI_API_KEY", "openai-key")
+	t.Setenv("AI_MODEL", "gpt-test")
+	t.Setenv("AI_CODING_API_BASE", "https://planner.example/v1")
+	t.Setenv("AI_CODING_API_KEY", "planner-key")
+	t.Setenv("AI_CODING_MODEL", "planner-model")
+	t.Setenv("AI_FAST_API_BASE", "https://fast.example/v1")
+	t.Setenv("AI_FAST_API_KEY", "fast-key")
+	t.Setenv("AI_FAST_MODEL", "fast-model")
+	t.Setenv("STRIX_API_BASE", "https://strix.example/v1")
+	t.Setenv("STRIX_API_KEY", "strix-key")
+	t.Setenv("STRIX_MODEL", "strix-main")
+
+	cfg := resolveAIConfigFromEnv()
+
+	if cfg.CodingBaseURL != "https://planner.example/v1" || cfg.CodingAPIKey != "planner-key" || cfg.CodingModel != "planner-model" {
+		t.Fatalf("coding config = %+v", cfg)
+	}
+	if cfg.FastBaseURL != "https://fast.example/v1" || cfg.FastAPIKey != "fast-key" || cfg.FastModel != "fast-model" {
 		t.Fatalf("fast config = %+v", cfg)
 	}
 }

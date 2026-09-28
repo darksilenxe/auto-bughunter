@@ -443,12 +443,16 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 		cfg.FastAPIKey = cfg.APIKey
 		cfg.FastModel = cfg.Model
 	} else if useStrixDecisionsOnly && strixBaseURL != "" {
-		cfg.CodingBaseURL = strixBaseURL
-		cfg.CodingAPIKey = firstNonEmpty(strixAPIKey, cfg.CodingAPIKey)
-		cfg.CodingModel = firstNonEmpty(strixModel, cfg.CodingModel)
-		cfg.FastBaseURL = strixBaseURL
-		cfg.FastAPIKey = firstNonEmpty(strixAPIKey, cfg.FastAPIKey)
-		cfg.FastModel = firstNonEmpty(strixModel, cfg.FastModel)
+		if strings.TrimSpace(cfg.CodingBaseURL) == "" {
+			cfg.CodingBaseURL = strixBaseURL
+			cfg.CodingAPIKey = firstNonEmpty(strixAPIKey, cfg.CodingAPIKey)
+			cfg.CodingModel = firstNonEmpty(strixModel, cfg.CodingModel)
+		}
+		if strings.TrimSpace(cfg.FastBaseURL) == "" {
+			cfg.FastBaseURL = strixBaseURL
+			cfg.FastAPIKey = firstNonEmpty(strixAPIKey, cfg.FastAPIKey)
+			cfg.FastModel = firstNonEmpty(strixModel, cfg.FastModel)
+		}
 	}
 
 	strixCodingBaseURL := strings.TrimSpace(os.Getenv("STRIX_CODING_API_BASE"))
