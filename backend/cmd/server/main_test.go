@@ -32,8 +32,6 @@ func TestResolveAIConfigFromEnv_StrixOverrides(t *testing.T) {
 	t.Setenv("AI_API_BASE", "https://api.openai.example/v1")
 	t.Setenv("AI_API_KEY", "openai-key")
 	t.Setenv("AI_MODEL", "gpt-test")
-	t.Setenv("AI_CODING_MODEL", "planner-model")
-	t.Setenv("AI_FAST_MODEL", "fast-model")
 	t.Setenv("STRIX_API_BASE", "https://strix.example/v1")
 	t.Setenv("STRIX_API_KEY", "strix-key")
 	t.Setenv("STRIX_MODEL", "strix-main")
@@ -47,10 +45,31 @@ func TestResolveAIConfigFromEnv_StrixOverrides(t *testing.T) {
 	if cfg.BaseURL != "https://strix.example/v1" || cfg.APIKey != "strix-key" || cfg.Model != "strix-main" {
 		t.Fatalf("primary config = %+v", cfg)
 	}
-	if cfg.CodingBaseURL != "" || cfg.CodingAPIKey != "" || cfg.CodingModel != "strix-planner" {
+	if cfg.CodingBaseURL != "https://strix.example/v1" || cfg.CodingAPIKey != "strix-key" || cfg.CodingModel != "strix-planner" {
 		t.Fatalf("coding config = %+v", cfg)
 	}
 	if cfg.FastBaseURL != "https://strix-fast.example/v1" || cfg.FastAPIKey != "strix-fast-key" || cfg.FastModel != "strix-fast" {
 		t.Fatalf("fast config = %+v", cfg)
+	}
+}
+
+func TestResolveAIConfigFromEnv_StrixPrimaryFallbacksForOtherLanes(t *testing.T) {
+	t.Setenv("USE_STRIX_SERVICE", "true")
+	t.Setenv("AI_API_BASE", "https://api.openai.example/v1")
+	t.Setenv("AI_API_KEY", "openai-key")
+	t.Setenv("AI_MODEL", "gpt-test")
+	t.Setenv("AI_CODING_MODEL", "planner-model")
+	t.Setenv("AI_FAST_MODEL", "fast-model")
+	t.Setenv("STRIX_API_BASE", "https://strix.example/v1")
+	t.Setenv("STRIX_API_KEY", "strix-key")
+	t.Setenv("STRIX_MODEL", "strix-main")
+
+	cfg := resolveAIConfigFromEnv()
+
+	if cfg.CodingBaseURL != "https://strix.example/v1" || cfg.CodingAPIKey != "strix-key" || cfg.CodingModel != "strix-main" {
+		t.Fatalf("coding fallback = %+v", cfg)
+	}
+	if cfg.FastBaseURL != "https://strix.example/v1" || cfg.FastAPIKey != "strix-key" || cfg.FastModel != "strix-main" {
+		t.Fatalf("fast fallback = %+v", cfg)
 	}
 }

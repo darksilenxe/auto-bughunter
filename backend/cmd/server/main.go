@@ -428,6 +428,12 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 	cfg.BaseURL = getenv("STRIX_API_BASE", cfg.BaseURL)
 	cfg.APIKey = getenv("STRIX_API_KEY", cfg.APIKey)
 	cfg.Model = getenv("STRIX_MODEL", cfg.Model)
+	cfg.CodingBaseURL = cfg.BaseURL
+	cfg.CodingAPIKey = cfg.APIKey
+	cfg.CodingModel = cfg.Model
+	cfg.FastBaseURL = cfg.BaseURL
+	cfg.FastAPIKey = cfg.APIKey
+	cfg.FastModel = cfg.Model
 	cfg.CodingBaseURL = getenv("STRIX_CODING_API_BASE", cfg.CodingBaseURL)
 	cfg.CodingAPIKey = getenv("STRIX_CODING_API_KEY", cfg.CodingAPIKey)
 	cfg.CodingModel = getenv("STRIX_CODING_MODEL", cfg.CodingModel)
