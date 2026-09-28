@@ -50,7 +50,7 @@ jobs:
         # that we never use. Removing it before the Docker build reclaims
         # enough headroom to build all local images *and* pull third-party ones
         # (e.g. projectdiscovery/nuclei) without hitting "no space left on device".
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@v2.0.0
         with:
           tool-cache: false
           android: true
