@@ -32,6 +32,7 @@ Provide: 1) risk summary 2) top 3 priorities 3) remediation sequence 4) supporti
 const RECOMMENDED_LOCAL_DEFAULTS = [
   { label: "AI provider", value: "Local Ollama via AI_API_BASE=http://ollama:11434/v1", hint: "No external API key required for the default path." },
   { label: "Hosted gateway option", value: "USE_STRIX_SERVICE=true + STRIX_API_BASE=https://strix.example/v1", hint: "Use this when you want the backend to route AI planning/summarization through a Strix OpenAI-compatible gateway." },
+  { label: "Decisioning-only gateway option", value: "USE_STRIX_DECISIONS_ONLY=true + STRIX_API_BASE=https://strix.example/v1", hint: "Use this when you want Strix to steer planning/advice/reflection decisions while summaries and reports stay on the normal AI provider." },
   { label: "Coding model", value: "AI_CODING_MODEL=codellama", hint: "Used for planning/orchestration when configured." },
   { label: "Fast model", value: "AI_FAST_MODEL=llama3.2:3b", hint: "Small/fast Ollama model for adaptive-probe & tool-call decisions on a dedicated concurrency lane." },
   { label: "Tool sidecars", value: "USE_HTTP_TOOL_SERVICES=true", hint: "Avoids Docker socket requirements in the backend container." },

@@ -422,18 +422,26 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 		FastAPIKey:    getenv("AI_FAST_API_KEY", ""),
 		FastModel:     getenv("AI_FAST_MODEL", ""),
 	}
-	if !getbool("USE_STRIX_SERVICE", false) {
+	useStrixService := getbool("USE_STRIX_SERVICE", false)
+	useStrixDecisionsOnly := getbool("USE_STRIX_DECISIONS_ONLY", false)
+	if !useStrixService && !useStrixDecisionsOnly {
 		return cfg
 	}
-	cfg.BaseURL = getenv("STRIX_API_BASE", cfg.BaseURL)
-	cfg.APIKey = getenv("STRIX_API_KEY", cfg.APIKey)
-	cfg.Model = getenv("STRIX_MODEL", cfg.Model)
-	cfg.CodingBaseURL = cfg.BaseURL
-	cfg.CodingAPIKey = cfg.APIKey
-	cfg.CodingModel = cfg.Model
-	cfg.FastBaseURL = cfg.BaseURL
-	cfg.FastAPIKey = cfg.APIKey
-	cfg.FastModel = cfg.Model
+
+	strixBaseURL := getenv("STRIX_API_BASE", cfg.BaseURL)
+	strixAPIKey := getenv("STRIX_API_KEY", cfg.APIKey)
+	strixModel := getenv("STRIX_MODEL", cfg.Model)
+	if useStrixService {
+		cfg.BaseURL = strixBaseURL
+		cfg.APIKey = strixAPIKey
+		cfg.Model = strixModel
+	}
+	cfg.CodingBaseURL = strixBaseURL
+	cfg.CodingAPIKey = strixAPIKey
+	cfg.CodingModel = strixModel
+	cfg.FastBaseURL = strixBaseURL
+	cfg.FastAPIKey = strixAPIKey
+	cfg.FastModel = strixModel
 	cfg.CodingBaseURL = getenv("STRIX_CODING_API_BASE", cfg.CodingBaseURL)
 	cfg.CodingAPIKey = getenv("STRIX_CODING_API_KEY", cfg.CodingAPIKey)
 	cfg.CodingModel = getenv("STRIX_CODING_MODEL", cfg.CodingModel)
