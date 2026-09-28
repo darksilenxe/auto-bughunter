@@ -47,6 +47,9 @@ func main() {
 		"AI_API_BASE":           os.Getenv("AI_API_BASE"),
 		"AI_CODING_API_BASE":    os.Getenv("AI_CODING_API_BASE"),
 		"AI_FAST_API_BASE":      os.Getenv("AI_FAST_API_BASE"),
+		"STRIX_API_BASE":        os.Getenv("STRIX_API_BASE"),
+		"STRIX_CODING_API_BASE": os.Getenv("STRIX_CODING_API_BASE"),
+		"STRIX_FAST_API_BASE":   os.Getenv("STRIX_FAST_API_BASE"),
 		"KNOWLEDGE_SERVICE_URL": os.Getenv("KNOWLEDGE_SERVICE_URL"),
 		"AGENT_LEARNER_URL":     os.Getenv("AGENT_LEARNER_URL"),
 		"ML_SERVICE_URL":        os.Getenv("ML_SERVICE_URL"),
@@ -165,20 +168,17 @@ func main() {
 			}
 		}
 	}
-	aiClient := ai.NewClient(
-		os.Getenv("AI_API_BASE"),
-		os.Getenv("AI_API_KEY"),
-		os.Getenv("AI_MODEL"),
-	)
+	aiCfg := resolveAIConfigFromEnv()
+	aiClient := ai.NewClient(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model)
 	aiClient.ConfigureCodingModel(
-		getenv("AI_CODING_API_BASE", ""),
-		getenv("AI_CODING_API_KEY", ""),
-		getenv("AI_CODING_MODEL", "codellama"),
+		aiCfg.CodingBaseURL,
+		aiCfg.CodingAPIKey,
+		aiCfg.CodingModel,
 	)
 	aiClient.ConfigureFastModel(
-		getenv("AI_FAST_API_BASE", ""),
-		getenv("AI_FAST_API_KEY", ""),
-		getenv("AI_FAST_MODEL", ""),
+		aiCfg.FastBaseURL,
+		aiCfg.FastAPIKey,
+		aiCfg.FastModel,
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
@@ -396,6 +396,45 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+type aiRuntimeConfig struct {
+	BaseURL       string
+	APIKey        string
+	Model         string
+	CodingBaseURL string
+	CodingAPIKey  string
+	CodingModel   string
+	FastBaseURL   string
+	FastAPIKey    string
+	FastModel     string
+}
+
+func resolveAIConfigFromEnv() aiRuntimeConfig {
+	cfg := aiRuntimeConfig{
+		BaseURL:       getenv("AI_API_BASE", ""),
+		APIKey:        getenv("AI_API_KEY", ""),
+		Model:         getenv("AI_MODEL", ""),
+		CodingBaseURL: getenv("AI_CODING_API_BASE", ""),
+		CodingAPIKey:  getenv("AI_CODING_API_KEY", ""),
+		CodingModel:   getenv("AI_CODING_MODEL", "codellama"),
+		FastBaseURL:   getenv("AI_FAST_API_BASE", ""),
+		FastAPIKey:    getenv("AI_FAST_API_KEY", ""),
+		FastModel:     getenv("AI_FAST_MODEL", ""),
+	}
+	if !getbool("USE_STRIX_SERVICE", false) {
+		return cfg
+	}
+	cfg.BaseURL = getenv("STRIX_API_BASE", cfg.BaseURL)
+	cfg.APIKey = getenv("STRIX_API_KEY", cfg.APIKey)
+	cfg.Model = getenv("STRIX_MODEL", cfg.Model)
+	cfg.CodingBaseURL = getenv("STRIX_CODING_API_BASE", cfg.CodingBaseURL)
+	cfg.CodingAPIKey = getenv("STRIX_CODING_API_KEY", cfg.CodingAPIKey)
+	cfg.CodingModel = getenv("STRIX_CODING_MODEL", cfg.CodingModel)
+	cfg.FastBaseURL = getenv("STRIX_FAST_API_BASE", cfg.FastBaseURL)
+	cfg.FastAPIKey = getenv("STRIX_FAST_API_KEY", cfg.FastAPIKey)
+	cfg.FastModel = getenv("STRIX_FAST_MODEL", cfg.FastModel)
+	return cfg
 }
 
 func getbool(key string, fallback bool) bool {

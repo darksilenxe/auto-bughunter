@@ -1221,8 +1221,10 @@ baseline.
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
+- Strix can be integrated as an optional backend-facing OpenAI-compatible gateway by setting `USE_STRIX_SERVICE=true` plus `STRIX_API_BASE` / `STRIX_API_KEY` / `STRIX_MODEL`. When enabled, Strix only replaces the backend's AI provider lanes; scope enforcement, outbound URL validation, and destructive-check gating remain in the existing backend/scanner path.
 - Set `AI_CODING_MODEL` to route AI orchestration/planning calls to a larger coding-focused model while keeping summaries on `AI_MODEL`.
 - Set `AI_FAST_MODEL` to route high-frequency low-stakes decisions (adaptive-probe step, tool-call planning, reflect, command-template adaptation) to a small/fast model on its own concurrency lane so the planner cannot starve them. With the bundled Ollama sidecar this defaults to `llama3.2:3b` (pre-pulled via `OLLAMA_FAST_MODEL`); point `AI_FAST_API_BASE` / `AI_FAST_API_KEY` elsewhere to use a hosted small model instead. Per-lane caps are tunable via `AI_MAX_CONCURRENT_REQUESTS_PRIMARY`, `AI_MAX_CONCURRENT_REQUESTS_CODING`, and `AI_MAX_CONCURRENT_REQUESTS_FAST` (all fall back to the legacy global `AI_MAX_CONCURRENT_REQUESTS`).
+- Strix supports the same lane split as the default AI configuration via `STRIX_CODING_*` and `STRIX_FAST_*`; if those are unset, the coding and fast lanes fall back to the active primary Strix endpoint/model or the standard `AI_*` lane settings.
 - ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
