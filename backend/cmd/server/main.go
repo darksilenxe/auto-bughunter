@@ -428,27 +428,61 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 		return cfg
 	}
 
-	strixBaseURL := getenv("STRIX_API_BASE", cfg.BaseURL)
-	strixAPIKey := getenv("STRIX_API_KEY", cfg.APIKey)
-	strixModel := getenv("STRIX_MODEL", cfg.Model)
+	strixBaseURL := strings.TrimSpace(os.Getenv("STRIX_API_BASE"))
+	strixAPIKey := strings.TrimSpace(os.Getenv("STRIX_API_KEY"))
+	strixModel := strings.TrimSpace(os.Getenv("STRIX_MODEL"))
 	if useStrixService {
-		cfg.BaseURL = strixBaseURL
-		cfg.APIKey = strixAPIKey
-		cfg.Model = strixModel
+		cfg.BaseURL = firstNonEmpty(strixBaseURL, cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strixAPIKey, cfg.APIKey)
+		cfg.Model = firstNonEmpty(strixModel, cfg.Model)
+		cfg.CodingBaseURL = cfg.BaseURL
+		cfg.CodingAPIKey = cfg.APIKey
+		cfg.CodingModel = cfg.Model
+		cfg.FastBaseURL = cfg.BaseURL
+		cfg.FastAPIKey = cfg.APIKey
+		cfg.FastModel = cfg.Model
+	} else if strixBaseURL != "" {
+		cfg.CodingBaseURL = strixBaseURL
+		cfg.CodingAPIKey = firstNonEmpty(strixAPIKey, cfg.CodingAPIKey)
+		cfg.CodingModel = firstNonEmpty(strixModel, cfg.CodingModel)
+		cfg.FastBaseURL = strixBaseURL
+		cfg.FastAPIKey = firstNonEmpty(strixAPIKey, cfg.FastAPIKey)
+		cfg.FastModel = firstNonEmpty(strixModel, cfg.FastModel)
 	}
-	cfg.CodingBaseURL = strixBaseURL
-	cfg.CodingAPIKey = strixAPIKey
-	cfg.CodingModel = strixModel
-	cfg.FastBaseURL = strixBaseURL
-	cfg.FastAPIKey = strixAPIKey
-	cfg.FastModel = strixModel
-	cfg.CodingBaseURL = getenv("STRIX_CODING_API_BASE", cfg.CodingBaseURL)
-	cfg.CodingAPIKey = getenv("STRIX_CODING_API_KEY", cfg.CodingAPIKey)
-	cfg.CodingModel = getenv("STRIX_CODING_MODEL", cfg.CodingModel)
-	cfg.FastBaseURL = getenv("STRIX_FAST_API_BASE", cfg.FastBaseURL)
-	cfg.FastAPIKey = getenv("STRIX_FAST_API_KEY", cfg.FastAPIKey)
-	cfg.FastModel = getenv("STRIX_FAST_MODEL", cfg.FastModel)
+
+	strixCodingBaseURL := strings.TrimSpace(os.Getenv("STRIX_CODING_API_BASE"))
+	strixCodingAPIKey := strings.TrimSpace(os.Getenv("STRIX_CODING_API_KEY"))
+	strixCodingModel := strings.TrimSpace(os.Getenv("STRIX_CODING_MODEL"))
+	if strixCodingBaseURL != "" {
+		cfg.CodingBaseURL = strixCodingBaseURL
+		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, firstNonEmpty(strixAPIKey, cfg.CodingAPIKey))
+		cfg.CodingModel = firstNonEmpty(strixCodingModel, firstNonEmpty(strixModel, cfg.CodingModel))
+	} else if useStrixService || strixBaseURL != "" {
+		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, cfg.CodingAPIKey)
+		cfg.CodingModel = firstNonEmpty(strixCodingModel, cfg.CodingModel)
+	}
+
+	strixFastBaseURL := strings.TrimSpace(os.Getenv("STRIX_FAST_API_BASE"))
+	strixFastAPIKey := strings.TrimSpace(os.Getenv("STRIX_FAST_API_KEY"))
+	strixFastModel := strings.TrimSpace(os.Getenv("STRIX_FAST_MODEL"))
+	if strixFastBaseURL != "" {
+		cfg.FastBaseURL = strixFastBaseURL
+		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, firstNonEmpty(strixAPIKey, cfg.FastAPIKey))
+		cfg.FastModel = firstNonEmpty(strixFastModel, firstNonEmpty(strixModel, cfg.FastModel))
+	} else if useStrixService || strixBaseURL != "" {
+		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, cfg.FastAPIKey)
+		cfg.FastModel = firstNonEmpty(strixFastModel, cfg.FastModel)
+	}
 	return cfg
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func getbool(key string, fallback bool) bool {
