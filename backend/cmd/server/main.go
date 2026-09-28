@@ -424,7 +424,8 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 	}
 	useStrixService := getbool("USE_STRIX_SERVICE", false)
 	useStrixDecisionsOnly := getbool("USE_STRIX_DECISIONS_ONLY", false)
-	if !useStrixService && !useStrixDecisionsOnly {
+	strixDecisionLanesEnabled := useStrixService || useStrixDecisionsOnly
+	if !strixDecisionLanesEnabled {
 		return cfg
 	}
 
@@ -441,7 +442,7 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 		cfg.FastBaseURL = cfg.BaseURL
 		cfg.FastAPIKey = cfg.APIKey
 		cfg.FastModel = cfg.Model
-	} else if strixBaseURL != "" {
+	} else if useStrixDecisionsOnly && strixBaseURL != "" {
 		cfg.CodingBaseURL = strixBaseURL
 		cfg.CodingAPIKey = firstNonEmpty(strixAPIKey, cfg.CodingAPIKey)
 		cfg.CodingModel = firstNonEmpty(strixModel, cfg.CodingModel)
@@ -453,11 +454,11 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 	strixCodingBaseURL := strings.TrimSpace(os.Getenv("STRIX_CODING_API_BASE"))
 	strixCodingAPIKey := strings.TrimSpace(os.Getenv("STRIX_CODING_API_KEY"))
 	strixCodingModel := strings.TrimSpace(os.Getenv("STRIX_CODING_MODEL"))
-	if strixCodingBaseURL != "" {
+	if strixDecisionLanesEnabled && strixCodingBaseURL != "" {
 		cfg.CodingBaseURL = strixCodingBaseURL
 		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, firstNonEmpty(strixAPIKey, cfg.CodingAPIKey))
 		cfg.CodingModel = firstNonEmpty(strixCodingModel, firstNonEmpty(strixModel, cfg.CodingModel))
-	} else if useStrixService || strixBaseURL != "" {
+	} else if useStrixService || (useStrixDecisionsOnly && strixBaseURL != "") {
 		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, cfg.CodingAPIKey)
 		cfg.CodingModel = firstNonEmpty(strixCodingModel, cfg.CodingModel)
 	}
@@ -465,11 +466,11 @@ func resolveAIConfigFromEnv() aiRuntimeConfig {
 	strixFastBaseURL := strings.TrimSpace(os.Getenv("STRIX_FAST_API_BASE"))
 	strixFastAPIKey := strings.TrimSpace(os.Getenv("STRIX_FAST_API_KEY"))
 	strixFastModel := strings.TrimSpace(os.Getenv("STRIX_FAST_MODEL"))
-	if strixFastBaseURL != "" {
+	if strixDecisionLanesEnabled && strixFastBaseURL != "" {
 		cfg.FastBaseURL = strixFastBaseURL
 		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, firstNonEmpty(strixAPIKey, cfg.FastAPIKey))
 		cfg.FastModel = firstNonEmpty(strixFastModel, firstNonEmpty(strixModel, cfg.FastModel))
-	} else if useStrixService || strixBaseURL != "" {
+	} else if useStrixService || (useStrixDecisionsOnly && strixBaseURL != "") {
 		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, cfg.FastAPIKey)
 		cfg.FastModel = firstNonEmpty(strixFastModel, cfg.FastModel)
 	}
