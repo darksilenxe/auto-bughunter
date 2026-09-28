@@ -3,6 +3,6 @@ uvicorn[standard]==0.53.0
 pydantic==2.13.5
 onnxruntime==1.30.0
 numpy==2.5.3
-onnx==1.22.0
+onnx==1.23.0
 scipy==1.18.1
 scikit-learn==1.9.1
