@@ -47,6 +47,9 @@ func main() {
 		"AI_API_BASE":           os.Getenv("AI_API_BASE"),
 		"AI_CODING_API_BASE":    os.Getenv("AI_CODING_API_BASE"),
 		"AI_FAST_API_BASE":      os.Getenv("AI_FAST_API_BASE"),
+		"STRIX_API_BASE":        os.Getenv("STRIX_API_BASE"),
+		"STRIX_CODING_API_BASE": os.Getenv("STRIX_CODING_API_BASE"),
+		"STRIX_FAST_API_BASE":   os.Getenv("STRIX_FAST_API_BASE"),
 		"KNOWLEDGE_SERVICE_URL": os.Getenv("KNOWLEDGE_SERVICE_URL"),
 		"AGENT_LEARNER_URL":     os.Getenv("AGENT_LEARNER_URL"),
 		"ML_SERVICE_URL":        os.Getenv("ML_SERVICE_URL"),
@@ -165,20 +168,17 @@ func main() {
 			}
 		}
 	}
-	aiClient := ai.NewClient(
-		os.Getenv("AI_API_BASE"),
-		os.Getenv("AI_API_KEY"),
-		os.Getenv("AI_MODEL"),
-	)
+	aiCfg := resolveAIConfigFromEnv()
+	aiClient := ai.NewClient(aiCfg.BaseURL, aiCfg.APIKey, aiCfg.Model)
 	aiClient.ConfigureCodingModel(
-		getenv("AI_CODING_API_BASE", ""),
-		getenv("AI_CODING_API_KEY", ""),
-		getenv("AI_CODING_MODEL", "codellama"),
+		aiCfg.CodingBaseURL,
+		aiCfg.CodingAPIKey,
+		aiCfg.CodingModel,
 	)
 	aiClient.ConfigureFastModel(
-		getenv("AI_FAST_API_BASE", ""),
-		getenv("AI_FAST_API_KEY", ""),
-		getenv("AI_FAST_MODEL", ""),
+		aiCfg.FastBaseURL,
+		aiCfg.FastAPIKey,
+		aiCfg.FastModel,
 	)
 	mlService := ml.NewService(ml.Config{
 		PseudonymSalt: getenv("ML_PSEUDONYM_SALT", "auto-bughunter"),
@@ -396,6 +396,98 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+type aiRuntimeConfig struct {
+	BaseURL       string
+	APIKey        string
+	Model         string
+	CodingBaseURL string
+	CodingAPIKey  string
+	CodingModel   string
+	FastBaseURL   string
+	FastAPIKey    string
+	FastModel     string
+}
+
+func resolveAIConfigFromEnv() aiRuntimeConfig {
+	cfg := aiRuntimeConfig{
+		BaseURL:       getenv("AI_API_BASE", ""),
+		APIKey:        getenv("AI_API_KEY", ""),
+		Model:         getenv("AI_MODEL", ""),
+		CodingBaseURL: getenv("AI_CODING_API_BASE", ""),
+		CodingAPIKey:  getenv("AI_CODING_API_KEY", ""),
+		CodingModel:   getenv("AI_CODING_MODEL", "codellama"),
+		FastBaseURL:   getenv("AI_FAST_API_BASE", ""),
+		FastAPIKey:    getenv("AI_FAST_API_KEY", ""),
+		FastModel:     getenv("AI_FAST_MODEL", ""),
+	}
+	useStrixService := getbool("USE_STRIX_SERVICE", false)
+	useStrixDecisionsOnly := getbool("USE_STRIX_DECISIONS_ONLY", false)
+	strixDecisionLanesEnabled := useStrixService || useStrixDecisionsOnly
+	if !strixDecisionLanesEnabled {
+		return cfg
+	}
+
+	strixBaseURL := strings.TrimSpace(os.Getenv("STRIX_API_BASE"))
+	strixAPIKey := strings.TrimSpace(os.Getenv("STRIX_API_KEY"))
+	strixModel := strings.TrimSpace(os.Getenv("STRIX_MODEL"))
+	if useStrixService {
+		cfg.BaseURL = firstNonEmpty(strixBaseURL, cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strixAPIKey, cfg.APIKey)
+		cfg.Model = firstNonEmpty(strixModel, cfg.Model)
+		cfg.CodingBaseURL = cfg.BaseURL
+		cfg.CodingAPIKey = cfg.APIKey
+		cfg.CodingModel = cfg.Model
+		cfg.FastBaseURL = cfg.BaseURL
+		cfg.FastAPIKey = cfg.APIKey
+		cfg.FastModel = cfg.Model
+	} else if useStrixDecisionsOnly && strixBaseURL != "" {
+		if strings.TrimSpace(cfg.CodingBaseURL) == "" {
+			cfg.CodingBaseURL = strixBaseURL
+			cfg.CodingAPIKey = firstNonEmpty(strixAPIKey, cfg.CodingAPIKey)
+			cfg.CodingModel = firstNonEmpty(strixModel, cfg.CodingModel)
+		}
+		if strings.TrimSpace(cfg.FastBaseURL) == "" {
+			cfg.FastBaseURL = strixBaseURL
+			cfg.FastAPIKey = firstNonEmpty(strixAPIKey, cfg.FastAPIKey)
+			cfg.FastModel = firstNonEmpty(strixModel, cfg.FastModel)
+		}
+	}
+
+	strixCodingBaseURL := strings.TrimSpace(os.Getenv("STRIX_CODING_API_BASE"))
+	strixCodingAPIKey := strings.TrimSpace(os.Getenv("STRIX_CODING_API_KEY"))
+	strixCodingModel := strings.TrimSpace(os.Getenv("STRIX_CODING_MODEL"))
+	if strixDecisionLanesEnabled && strixCodingBaseURL != "" {
+		cfg.CodingBaseURL = strixCodingBaseURL
+		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, firstNonEmpty(strixAPIKey, cfg.CodingAPIKey))
+		cfg.CodingModel = firstNonEmpty(strixCodingModel, firstNonEmpty(strixModel, cfg.CodingModel))
+	} else if useStrixService || (useStrixDecisionsOnly && strixBaseURL != "") {
+		cfg.CodingAPIKey = firstNonEmpty(strixCodingAPIKey, cfg.CodingAPIKey)
+		cfg.CodingModel = firstNonEmpty(strixCodingModel, cfg.CodingModel)
+	}
+
+	strixFastBaseURL := strings.TrimSpace(os.Getenv("STRIX_FAST_API_BASE"))
+	strixFastAPIKey := strings.TrimSpace(os.Getenv("STRIX_FAST_API_KEY"))
+	strixFastModel := strings.TrimSpace(os.Getenv("STRIX_FAST_MODEL"))
+	if strixDecisionLanesEnabled && strixFastBaseURL != "" {
+		cfg.FastBaseURL = strixFastBaseURL
+		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, firstNonEmpty(strixAPIKey, cfg.FastAPIKey))
+		cfg.FastModel = firstNonEmpty(strixFastModel, firstNonEmpty(strixModel, cfg.FastModel))
+	} else if useStrixService || (useStrixDecisionsOnly && strixBaseURL != "") {
+		cfg.FastAPIKey = firstNonEmpty(strixFastAPIKey, cfg.FastAPIKey)
+		cfg.FastModel = firstNonEmpty(strixFastModel, cfg.FastModel)
+	}
+	return cfg
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func getbool(key string, fallback bool) bool {

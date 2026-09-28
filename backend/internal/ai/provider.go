@@ -44,7 +44,7 @@ var defaultHTTPClient = &http.Client{Timeout: 20 * time.Second}
 //  2. API key starting with "AIzaSy"   → Gemini
 //  3. Base URL containing "bedrock"    → Bedrock
 //  4. Explicit name match in baseURL   → e.g. "gemini", "anthropic"
-//  5. Everything else                  → OpenAI-compatible (covers Ollama)
+//  5. Everything else                  → OpenAI-compatible (covers Ollama, Strix)
 func DetectProvider(baseURL, apiKey string) ProviderName {
 	key := strings.TrimSpace(apiKey)
 	if strings.HasPrefix(key, "sk-ant-") {
