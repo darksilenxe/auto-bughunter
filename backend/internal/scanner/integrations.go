@@ -2595,11 +2595,12 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 // runKiterunner executes kiterunner (kr) to brute-force API routes against the
 // target using an API-route wordlist. It mirrors the disabled/binary-missing/
 // timeout/no-paths finding contract used by the ffuf and gobuster integrations.
+
 // kiterunnerMinRuntime is the shortest plausible duration for Kiterunner to
 // have made an honest attempt at brute-forcing routes against the target
 // (network dial plus at least a handful of HTTP requests at its default
 // concurrency). See toolFailOpenSignal in tool_fail_open_signal.go.
-const kiterunnerMinRuntime = 500 * time.Millisecond
+const kiterunnerMinRuntime = defaultToolMinRuntime
 
 func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableKiterunner {
