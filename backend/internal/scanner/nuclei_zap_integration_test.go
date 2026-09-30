@@ -129,7 +129,7 @@ func TestRunNucleiExec_NoFindings(t *testing.T) {
 	// modelling an honest scan that made a real network round trip and
 	// genuinely found nothing, as opposed to the instant-silent case covered
 	// by TestRunNucleiExec_NoFindings_FlagsPossibleTargetRefusal below.
-	bin := writeFakeNucleiWithDelay(t, "", 0, 600*time.Millisecond)
+	bin := writeFakeNucleiWithDelay(t, "", 0, 1200*time.Millisecond)
 	svc := NewService(Config{
 		NucleiBinary:       bin,
 		IntegrationTimeout: 10 * time.Second,
