@@ -216,10 +216,20 @@ func normalizeEndpoint(s string) string {
 	// manifest already stores a bare path), treat the whole string as a
 	// path.
 	path := s
-	if u, err := url.Parse(s); err == nil && u.Path != "" {
-		path = u.Path
-	} else if err == nil && u.Opaque != "" {
-		path = u.Opaque
+	route := ""
+	if u, err := url.Parse(s); err == nil {
+		if u.Path != "" {
+			path = u.Path
+		} else if u.Opaque != "" {
+			path = u.Opaque
+		}
+		if strings.HasPrefix(u.Fragment, "/") || strings.HasPrefix(u.Fragment, "!/") {
+			route = strings.SplitN(u.Fragment, "?", 2)[0]
+			route = strings.ToLower(route)
+			if route != "/" {
+				route = strings.TrimRight(route, "/")
+			}
+		}
 	}
 	path = strings.ToLower(path)
 	if path != "/" {
@@ -227,6 +237,9 @@ func normalizeEndpoint(s string) string {
 	}
 	if path == "" {
 		path = "/"
+	}
+	if route != "" {
+		path += "#" + route
 	}
 	return path
 }
