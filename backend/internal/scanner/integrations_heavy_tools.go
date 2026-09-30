@@ -478,14 +478,21 @@ func buildZAPBaselineFinding(outText, errText string, exitCode int, elapsed time
 	}}
 }
 
-// nucleiMinRuntime and zapBaselineMinRuntime are the shortest plausible
-// durations for an honest network round trip against the target (DNS/TCP
-// dial, TLS handshake, at least one HTTP exchange). A tool run that produced
-// zero output and finished faster than this never got far enough to have an
-// honest answer about the target; see toolFailOpenSignal.
+// defaultToolMinRuntime is the shortest plausible duration for an honest
+// network round trip against the target (DNS/TCP dial, TLS handshake, at
+// least one HTTP exchange). A tool run that produced zero output and
+// finished faster than this never got far enough to have an honest answer
+// about the target; see toolFailOpenSignal. nucleiMinRuntime and
+// zapBaselineMinRuntime both currently share this floor because neither tool
+// can meaningfully report "clean" before completing at least one such round
+// trip; kept as separate named constants (rather than one shared constant
+// used directly at call sites) so each integration's floor can be tuned
+// independently later without touching the other.
+const defaultToolMinRuntime = 500 * time.Millisecond
+
 const (
-	nucleiMinRuntime      = 500 * time.Millisecond
-	zapBaselineMinRuntime = 500 * time.Millisecond
+	nucleiMinRuntime      = defaultToolMinRuntime
+	zapBaselineMinRuntime = defaultToolMinRuntime
 )
 
 func httpToolServicesEnabled() bool {

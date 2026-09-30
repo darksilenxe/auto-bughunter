@@ -18,9 +18,9 @@ import (
 // (https://github.com/R-s0n/ars0n-framework-v2), which reads a wrapped tool's
 // own stdout/stderr for an HTTP 429, and separately distinguishes a legitimate
 // empty result from a tool that produced no output at all in implausibly
-// little time. Reused here for our own sidecar/exec-mode tool integrations
-// (nuclei, ZAP baseline, kiterunner) rather than fifteen ad hoc copies, one
-// per integration.
+// Reused here for our own sidecar/exec-mode tool integrations (nuclei, ZAP
+// baseline, kiterunner) rather than a separate ad hoc copy per integration,
+// with more integrations expected to adopt it over time.
 
 // refusalKeywords are phrasings that mean a target actively refused or
 // challenged a request, rather than the tool simply finding nothing to
