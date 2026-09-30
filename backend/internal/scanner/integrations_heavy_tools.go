@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 	"auto-bughunter/backend/internal/toolclient"
@@ -64,6 +65,7 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 		args = append(args, "-proxy", s.scannerProxy.URL)
 	}
 
+	callStart := time.Now()
 	result, err := client.Execute(ctx, args, timeoutSecs)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -111,6 +113,20 @@ func (s *Service) runNucleiHTTP(ctx context.Context, target string) []model.Find
 			Evidence:       strings.TrimSpace(result.Stderr + "\n" + result.Stdout),
 			Recommendation: "Validate nuclei templates/network access and rerun.",
 		}}
+	}
+
+	if lines == 0 {
+		if sig := toolFailOpenSignal(result.Stdout, result.Stderr, time.Since(callStart), nucleiMinRuntime); sig != "" {
+			return []model.Finding{{
+				ID:             "nuclei-possible-target-refusal",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Nuclei reported no issues, but may have been refused by the target",
+				Description:    "Nuclei completed with zero findings, but its own output suggests the target rate-limited, blocked, or never fully answered it rather than genuinely having nothing to report.",
+				Evidence:       sig,
+				Recommendation: "Treat this scope as unverified rather than clean: lower the request rate, confirm the target is reachable, and re-run Nuclei.",
+			}}
+		}
 	}
 
 	severity := model.SeverityInfo
@@ -162,7 +178,9 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	callStart := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(callStart)
 	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
 		return []model.Finding{{
 			ID:             "nuclei-timeout",
@@ -185,6 +203,20 @@ func (s *Service) runNucleiExec(ctx context.Context, target string) []model.Find
 			Evidence:       strings.TrimSpace(stderr.String() + "\n" + stdout.String()),
 			Recommendation: "Validate nuclei templates/network access and rerun.",
 		}}
+	}
+
+	if lines == 0 {
+		if sig := toolFailOpenSignal(stdout.String(), stderr.String(), elapsed, nucleiMinRuntime); sig != "" {
+			return []model.Finding{{
+				ID:             "nuclei-possible-target-refusal",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Nuclei reported no issues, but may have been refused by the target",
+				Description:    "Nuclei completed with zero findings, but its own output suggests the target rate-limited, blocked, or never fully answered it rather than genuinely having nothing to report.",
+				Evidence:       sig,
+				Recommendation: "Treat this scope as unverified rather than clean: lower the request rate, confirm the target is reachable, and re-run Nuclei.",
+			}}
+		}
 	}
 
 	severity := model.SeverityInfo
@@ -257,7 +289,9 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 	timeoutSecs := int(budget.Seconds())
 	args := []string{"-t", target, "-m", "1", "-I"}
 
+	callStart := time.Now()
 	result, err := client.Execute(ctx, args, timeoutSecs)
+	elapsed := time.Since(callStart)
 	if err != nil {
 		if ctx.Err() != nil {
 			return []model.Finding{{
@@ -293,7 +327,7 @@ func (s *Service) runZAPBaselineHTTP(ctx context.Context, target string) []model
 		}}
 	}
 
-	return buildZAPBaselineFinding(result.Stdout, result.Stderr, result.ExitCode, " (via HTTP service)")
+	return buildZAPBaselineFinding(result.Stdout, result.Stderr, result.ExitCode, elapsed, " (via HTTP service)")
 }
 
 func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model.Finding {
@@ -321,7 +355,9 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	callStart := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(callStart)
 	if errors.Is(ictx.Err(), context.DeadlineExceeded) {
 		return []model.Finding{{
 			ID:             "zap-baseline-timeout",
@@ -340,7 +376,7 @@ func (s *Service) runZAPBaselineExec(ctx context.Context, target string) []model
 	if err != nil {
 		exitCode = 1
 	}
-	return buildZAPBaselineFinding(stdout.String(), stderr.String(), exitCode, "")
+	return buildZAPBaselineFinding(stdout.String(), stderr.String(), exitCode, elapsed, "")
 }
 
 // zapMarkerCountRe matches a ZAP baseline marker label immediately followed by
@@ -393,7 +429,7 @@ func countZAPBaselineMarkers(outText string) (fails, warns int) {
 	return fails, warns
 }
 
-func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuffix string) []model.Finding {
+func buildZAPBaselineFinding(outText, errText string, exitCode int, elapsed time.Duration, evidenceSuffix string) []model.Finding {
 	fails, warns := countZAPBaselineMarkers(outText)
 	if exitCode != 0 && warns == 0 && fails == 0 && strings.TrimSpace(outText) == "" {
 		return []model.Finding{{
@@ -405,6 +441,20 @@ func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuff
 			Evidence:       strings.TrimSpace(errText + "\n" + outText),
 			Recommendation: "Validate ZAP runtime dependencies and rerun.",
 		}}
+	}
+
+	if fails == 0 && warns == 0 {
+		if sig := toolFailOpenSignal(outText, errText, elapsed, zapBaselineMinRuntime); sig != "" {
+			return []model.Finding{{
+				ID:             "zap-baseline-possible-target-refusal",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "ZAP Baseline reported no warnings, but may have been refused by the target",
+				Description:    "ZAP Baseline completed with zero warning/fail markers, but its own output suggests the target rate-limited, blocked, or never fully answered it rather than genuinely having nothing to report.",
+				Evidence:       sig + evidenceSuffix,
+				Recommendation: "Treat this scope as unverified rather than clean: lower the request rate, confirm the target is reachable, and re-run ZAP Baseline.",
+			}}
+		}
 	}
 
 	severity := model.SeverityInfo
@@ -427,6 +477,23 @@ func buildZAPBaselineFinding(outText, errText string, exitCode int, evidenceSuff
 		Recommendation: "Review full ZAP baseline report and verify findings before remediation.",
 	}}
 }
+
+// defaultToolMinRuntime is the shortest plausible duration for an honest
+// network round trip against the target (DNS/TCP dial, TLS handshake, at
+// least one HTTP exchange). A tool run that produced zero output and
+// finished faster than this never got far enough to have an honest answer
+// about the target; see toolFailOpenSignal. nucleiMinRuntime and
+// zapBaselineMinRuntime both currently share this floor because neither tool
+// can meaningfully report "clean" before completing at least one such round
+// trip; kept as separate named constants (rather than one shared constant
+// used directly at call sites) so each integration's floor can be tuned
+// independently later without touching the other.
+const defaultToolMinRuntime = 500 * time.Millisecond
+
+const (
+	nucleiMinRuntime      = defaultToolMinRuntime
+	zapBaselineMinRuntime = defaultToolMinRuntime
+)
 
 func httpToolServicesEnabled() bool {
 	useHTTPMode := os.Getenv("USE_HTTP_TOOL_SERVICES")

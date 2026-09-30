@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +33,32 @@ func writeFakeNuclei(t *testing.T, outputBody string, exitCode int) string {
 		exitStr = "1"
 	}
 	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = \"-version\" ] && echo 'nuclei v3.0.0' && exit 0; done\n"
+	if outputBody != "" {
+		script += "cat <<'NUCLEI_EOF'\n" + outputBody + "\nNUCLEI_EOF\n"
+	}
+	script += "exit " + exitStr + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake nuclei: %v", err)
+	}
+	return path
+}
+
+// writeFakeNucleiWithDelay is writeFakeNuclei but sleeps for delay before
+// exiting, modelling a tool that took a plausible amount of wall-clock time
+// to make a real network round trip against the target.
+func writeFakeNucleiWithDelay(t *testing.T, outputBody string, exitCode int, delay time.Duration) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake binary stub uses /bin/sh which is unavailable on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nuclei")
+	exitStr := "0"
+	if exitCode != 0 {
+		exitStr = "1"
+	}
+	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = \"-version\" ] && echo 'nuclei v3.0.0' && exit 0; done\n"
+	script += fmt.Sprintf("sleep %f\n", delay.Seconds())
 	if outputBody != "" {
 		script += "cat <<'NUCLEI_EOF'\n" + outputBody + "\nNUCLEI_EOF\n"
 	}
@@ -98,7 +125,11 @@ func TestRunNucleiExec_BinaryMissing(t *testing.T) {
 }
 
 func TestRunNucleiExec_NoFindings(t *testing.T) {
-	bin := writeFakeNuclei(t, "", 0)
+	// The stub sleeps briefly so its elapsed runtime clears nucleiMinRuntime,
+	// modelling an honest scan that made a real network round trip and
+	// genuinely found nothing, as opposed to the instant-silent case covered
+	// by TestRunNucleiExec_NoFindings_FlagsPossibleTargetRefusal below.
+	bin := writeFakeNucleiWithDelay(t, "", 0, 1200*time.Millisecond)
 	svc := NewService(Config{
 		NucleiBinary:       bin,
 		IntegrationTimeout: 10 * time.Second,
@@ -109,6 +140,25 @@ func TestRunNucleiExec_NoFindings(t *testing.T) {
 	}
 	if findings[0].Severity != model.SeverityInfo {
 		t.Errorf("expected info severity for zero findings, got %v", findings[0].Severity)
+	}
+}
+
+// TestRunNucleiExec_NoFindings_FlagsPossibleTargetRefusal verifies the
+// fail-open guard: a tool run that produced zero output at all and finished
+// faster than nucleiMinRuntime never got far enough to have an honest answer
+// about the target, so it must be surfaced as unverified rather than clean.
+func TestRunNucleiExec_NoFindings_FlagsPossibleTargetRefusal(t *testing.T) {
+	bin := writeFakeNuclei(t, "", 0)
+	svc := NewService(Config{
+		NucleiBinary:       bin,
+		IntegrationTimeout: 10 * time.Second,
+	})
+	findings := svc.runNucleiExec(context.Background(), "https://example.com/")
+	if len(findings) != 1 || findings[0].ID != "nuclei-possible-target-refusal" {
+		t.Fatalf("expected nuclei-possible-target-refusal finding, got %+v", findings)
+	}
+	if findings[0].Severity != model.SeverityLow {
+		t.Errorf("expected low severity for possible target refusal, got %v", findings[0].Severity)
 	}
 }
 
