@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -399,6 +400,16 @@ func runPlannerWithContext(ctx context.Context, planner Planner, input AgentInpu
 	}
 	done := make(chan planResult, 1)
 	go func() {
+		defer func() {
+			// A panicking planner (e.g. a bug in a custom Planner
+			// implementation) must not crash the whole backend process: the
+			// panic happens on this goroutine, so without a recover() here it
+			// would propagate past the orchestrator and take down every other
+			// in-flight scan too. Convert it into a plain error instead.
+			if r := recover(); r != nil {
+				done <- planResult{err: fmt.Errorf("planner panicked: %v\n%s", r, debug.Stack())}
+			}
+		}()
 		decision, err := planner.Plan(ctx, input, history)
 		done <- planResult{decision: decision, err: err}
 	}()
@@ -435,6 +446,18 @@ func runAgentWithContext(ctx context.Context, agent Agent, input AgentInput) (Ag
 	}
 	done := make(chan agentResult, 1)
 	go func() {
+		defer func() {
+			// Mirrors runPlannerWithContext: an agent panic must not crash the
+			// backend process. A buggy agent degrades gracefully into a
+			// failed AgentOutput for that round instead of terminating every
+			// scan in flight.
+			if r := recover(); r != nil {
+				done <- agentResult{
+					output: AgentOutput{AgentName: agent.Name()},
+					err:    fmt.Errorf("agent %q panicked: %v\n%s", agent.Name(), r, debug.Stack()),
+				}
+			}
+		}()
 		out, err := agent.Run(ctx, input)
 		done <- agentResult{output: out, err: err}
 	}()

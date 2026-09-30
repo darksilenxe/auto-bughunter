@@ -6,10 +6,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,24 @@ type Service struct {
 	// should be skipped (when scanner traffic already flows through the
 	// bundled proxy) so the same request isn't captured twice.
 	bundledProxyPort string
+}
+
+// safeProbeCall runs a single probe and recovers any panic it raises,
+// converting it into a logged, skipped probe instead of letting it unwind
+// past Scan. Without this, a bug in any one of the ~70 probes wired into Scan
+// would abort every probe still queued behind it and discard every finding
+// already collected for this target. It mirrors the panic guard the
+// orchestrator applies at the agent-execution boundary (see
+// runAgentWithContext in internal/agent/orchestrator.go); this is the same
+// protection one level down, around each individual probe.
+func (s *Service) safeProbeCall(name string, fn func() []model.Finding) (out []model.Finding) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("scanner: probe %q panicked and was skipped: %v\n%s", name, r, debug.Stack())
+			out = nil
+		}
+	}()
+	return fn()
 }
 
 func hostFromRawURL(raw string) string {
@@ -429,15 +449,14 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 
 	findings = append(findings, checkSecurityHeaders(resp.Header)...)
 	findings = append(findings, checkCookies(resp)...)
-	findings = append(findings, s.runSecurityHeadersProbe(input, resp.Header, resp)...)
+	findings = append(findings, s.safeProbeCall("runSecurityHeadersProbe", func() []model.Finding { return s.runSecurityHeadersProbe(input, resp.Header, resp) })...)
 	if u.Scheme == "https" {
 		emitCmd(fmt.Sprintf("tlscheck %s", u.Host), "Checking TLS configuration")
 		findings = append(findings, checkTLS(u.Host)...)
-		findings = append(findings, s.runTLSConfigProbe(ctx, input)...)
+		findings = append(findings, s.safeProbeCall("runTLSConfigProbe", func() []model.Finding { return s.runTLSConfigProbe(ctx, input) })...)
 	}
 	emitCmd(fmt.Sprintf("dns-san %s", u.Hostname()), "Evaluating DNS records and certificate SANs")
-	findings = append(findings, s.runDNSSANProbe(ctx, input)...)
-
+	findings = append(findings, s.safeProbeCall("runDNSSANProbe", func() []model.Finding { return s.runDNSSANProbe(ctx, input) })...)
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	bodyText := string(bodyBytes)
 	// Harvest any tokens present in the baseline response body.
@@ -539,88 +558,86 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 		}
 	}
 
-	findings = append(findings, s.runReverseTabnabbingProbe(input, bodyText)...)
-	findings = append(findings, s.runClickjackingProbe(input, resp.Header)...)
-	findings = append(findings, s.runCSPAnalysisProbe(input, resp.Header, bodyText)...)
+	findings = append(findings, s.safeProbeCall("runReverseTabnabbingProbe", func() []model.Finding { return s.runReverseTabnabbingProbe(input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runClickjackingProbe", func() []model.Finding { return s.runClickjackingProbe(input, resp.Header) })...)
+	findings = append(findings, s.safeProbeCall("runCSPAnalysisProbe", func() []model.Finding { return s.runCSPAnalysisProbe(input, resp.Header, bodyText) })...)
 	// CSP misconfigurations can vary per sub-path, so run the passive CSP
 	// check against seeded runtime endpoints (up to 10) in addition to the
 	// baseline. This closes FNs where an admin/API sub-path carries a weaker
 	// policy than the root page.
-	findings = append(findings, s.runCSPAnalysisSeeded(ctx, input, 10)...)
-	findings = append(findings, s.runH2CSmugglingProbe(ctx, input)...)
-	findings = append(findings, s.runSupplementalResourceFetch(ctx, input)...)
+	findings = append(findings, s.safeProbeCall("runCSPAnalysisSeeded", func() []model.Finding { return s.runCSPAnalysisSeeded(ctx, input, 10) })...)
+	findings = append(findings, s.safeProbeCall("runH2CSmugglingProbe", func() []model.Finding { return s.runH2CSmugglingProbe(ctx, input) })...)
+	findings = append(findings, s.safeProbeCall("runSupplementalResourceFetch", func() []model.Finding { return s.runSupplementalResourceFetch(ctx, input) })...)
 	findings = append(findings, discoverRuntimeSurface(input.Target, bodyText, input.Scope)...)
 	findings = append(findings, runContextualParamProbes(ctx, input.Target, bodyText, input.AuthProfile, input.Options, input.Scope, s)...)
-	findings = append(findings, s.runOASTHeaderSSRFProbe(ctx, input)...)
-	findings = append(findings, s.runActiveXSSProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveSQLiProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runOASTBodySSRFProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSubdomainTakeoverProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveOpenRedirectProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveCORSProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveSSTIProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveGraphQLIntrospectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runGraphQLAbuseProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSecretsInJSProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveNoSQLiProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActivePathTraversalProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveXXEProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSensitiveFileProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCRLFInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runForbiddenBypassProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCachePoisoningProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runParamPollutionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runVhostDiscoveryProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runRequestSmugglingProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveLDAPInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActiveXPathInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runFormulaInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActivePrototypePollutionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runDanglingMarkupProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCSSInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runReflectedFileDownloadProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSRIProbe(input, bodyText)...)
+	findings = append(findings, s.safeProbeCall("runOASTHeaderSSRFProbe", func() []model.Finding { return s.runOASTHeaderSSRFProbe(ctx, input) })...)
+	findings = append(findings, s.safeProbeCall("runActiveXSSProbe", func() []model.Finding { return s.runActiveXSSProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveSQLiProbe", func() []model.Finding { return s.runActiveSQLiProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runOASTBodySSRFProbe", func() []model.Finding { return s.runOASTBodySSRFProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSubdomainTakeoverProbe", func() []model.Finding { return s.runSubdomainTakeoverProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveOpenRedirectProbe", func() []model.Finding { return s.runActiveOpenRedirectProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveCORSProbe", func() []model.Finding { return s.runActiveCORSProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveSSTIProbe", func() []model.Finding { return s.runActiveSSTIProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveGraphQLIntrospectionProbe", func() []model.Finding { return s.runActiveGraphQLIntrospectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runGraphQLAbuseProbe", func() []model.Finding { return s.runGraphQLAbuseProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSecretsInJSProbe", func() []model.Finding { return s.runSecretsInJSProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveNoSQLiProbe", func() []model.Finding { return s.runActiveNoSQLiProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActivePathTraversalProbe", func() []model.Finding { return s.runActivePathTraversalProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveXXEProbe", func() []model.Finding { return s.runActiveXXEProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSensitiveFileProbe", func() []model.Finding { return s.runSensitiveFileProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCRLFInjectionProbe", func() []model.Finding { return s.runCRLFInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runForbiddenBypassProbe", func() []model.Finding { return s.runForbiddenBypassProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCachePoisoningProbe", func() []model.Finding { return s.runCachePoisoningProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runParamPollutionProbe", func() []model.Finding { return s.runParamPollutionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runVhostDiscoveryProbe", func() []model.Finding { return s.runVhostDiscoveryProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runRequestSmugglingProbe", func() []model.Finding { return s.runRequestSmugglingProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveLDAPInjectionProbe", func() []model.Finding { return s.runActiveLDAPInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActiveXPathInjectionProbe", func() []model.Finding { return s.runActiveXPathInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runFormulaInjectionProbe", func() []model.Finding { return s.runFormulaInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActivePrototypePollutionProbe", func() []model.Finding { return s.runActivePrototypePollutionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runDanglingMarkupProbe", func() []model.Finding { return s.runDanglingMarkupProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCSSInjectionProbe", func() []model.Finding { return s.runCSSInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runReflectedFileDownloadProbe", func() []model.Finding { return s.runReflectedFileDownloadProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSRIProbe", func() []model.Finding { return s.runSRIProbe(input, bodyText) })...)
 	// SRI coverage varies per page — seeded endpoints may load different
 	// third-party scripts. Run the passive SRI check against them too
 	// (up to 10 pages, fetching body text on demand).
-	findings = append(findings, s.runSRISeeded(ctx, input, 10)...)
-	findings = append(findings, s.runMassAssignmentProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runAccountEnumerationProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runWebSocketProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.RunSAMLProbe(ctx, input.Target, input.Scope, input.Options, input.AuthProfile, input.Emit)...)
-	findings = append(findings, s.runHTTPMethodsProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runVerboseErrorProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runFileUploadProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runZipSlipProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runXSLTInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runDNSRebindingProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runDOMClobberingProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runRateLimitProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCommandInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSSIInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCrossDomainPolicyProbe(ctx, input)...)
-	findings = append(findings, s.runXSSIJSONPProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runSMTPInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runCloudStorageProbe(ctx, input, bodyText)...)
-
+	findings = append(findings, s.safeProbeCall("runSRISeeded", func() []model.Finding { return s.runSRISeeded(ctx, input, 10) })...)
+	findings = append(findings, s.safeProbeCall("runMassAssignmentProbe", func() []model.Finding { return s.runMassAssignmentProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runAccountEnumerationProbe", func() []model.Finding { return s.runAccountEnumerationProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runWebSocketProbe", func() []model.Finding { return s.runWebSocketProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("RunSAMLProbe", func() []model.Finding { return s.RunSAMLProbe(ctx, input.Target, input.Scope, input.Options, input.AuthProfile, input.Emit) })...)
+	findings = append(findings, s.safeProbeCall("runHTTPMethodsProbe", func() []model.Finding { return s.runHTTPMethodsProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runVerboseErrorProbe", func() []model.Finding { return s.runVerboseErrorProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runFileUploadProbe", func() []model.Finding { return s.runFileUploadProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runZipSlipProbe", func() []model.Finding { return s.runZipSlipProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runXSLTInjectionProbe", func() []model.Finding { return s.runXSLTInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runDNSRebindingProbe", func() []model.Finding { return s.runDNSRebindingProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runDOMClobberingProbe", func() []model.Finding { return s.runDOMClobberingProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runRateLimitProbe", func() []model.Finding { return s.runRateLimitProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCommandInjectionProbe", func() []model.Finding { return s.runCommandInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSSIInjectionProbe", func() []model.Finding { return s.runSSIInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCrossDomainPolicyProbe", func() []model.Finding { return s.runCrossDomainPolicyProbe(ctx, input) })...)
+	findings = append(findings, s.safeProbeCall("runXSSIJSONPProbe", func() []model.Finding { return s.runXSSIJSONPProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runSMTPInjectionProbe", func() []model.Finding { return s.runSMTPInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runCloudStorageProbe", func() []model.Finding { return s.runCloudStorageProbe(ctx, input, bodyText) })...)
 	// AI/LLM agent vulnerability probes.
 	// Run detection first; it marks DetectedTech["ai-agent"] so all subsequent
 	// probes can gate themselves without re-probing the endpoint.
-	findings = append(findings, s.runAIAgentDetectProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runActivePromptInjectionProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runAIOutputHandlingProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runAIDisclosureProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runAIToolAbuseProbe(ctx, input, bodyText)...)
-	findings = append(findings, s.runAIDOSProbe(ctx, input, bodyText)...)
-
+	findings = append(findings, s.safeProbeCall("runAIAgentDetectProbe", func() []model.Finding { return s.runAIAgentDetectProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runActivePromptInjectionProbe", func() []model.Finding { return s.runActivePromptInjectionProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runAIOutputHandlingProbe", func() []model.Finding { return s.runAIOutputHandlingProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runAIDisclosureProbe", func() []model.Finding { return s.runAIDisclosureProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runAIToolAbuseProbe", func() []model.Finding { return s.runAIToolAbuseProbe(ctx, input, bodyText) })...)
+	findings = append(findings, s.safeProbeCall("runAIDOSProbe", func() []model.Finding { return s.runAIDOSProbe(ctx, input, bodyText) })...)
 	// Stateful probes that require a live session (cookies/tokens already harvested).
 	if !input.Options.PassiveOnly {
-		findings = append(findings, s.runStoredXSSProbe(ctx, input)...)
-		findings = append(findings, s.runJWTProbe(ctx, input)...)
-		findings = append(findings, s.runCSRFProbe(ctx, input)...)
-		findings = append(findings, s.runPasswordResetProbe(ctx, input)...)
-		findings = append(findings, s.runCacheDeceptionProbe(ctx, input)...)
-		findings = append(findings, s.runMFABypassProbe(ctx, input)...)
+		findings = append(findings, s.safeProbeCall("runStoredXSSProbe", func() []model.Finding { return s.runStoredXSSProbe(ctx, input) })...)
+		findings = append(findings, s.safeProbeCall("runJWTProbe", func() []model.Finding { return s.runJWTProbe(ctx, input) })...)
+		findings = append(findings, s.safeProbeCall("runCSRFProbe", func() []model.Finding { return s.runCSRFProbe(ctx, input) })...)
+		findings = append(findings, s.safeProbeCall("runPasswordResetProbe", func() []model.Finding { return s.runPasswordResetProbe(ctx, input) })...)
+		findings = append(findings, s.safeProbeCall("runCacheDeceptionProbe", func() []model.Finding { return s.runCacheDeceptionProbe(ctx, input) })...)
+		findings = append(findings, s.safeProbeCall("runMFABypassProbe", func() []model.Finding { return s.runMFABypassProbe(ctx, input) })...)
 	}
 
 	// Collect UI simulation results now that all active probes have run.
@@ -669,9 +686,8 @@ func (s *Service) Run(ctx context.Context, input RunInput) ([]model.Finding, err
 	// returns the raw gap list so the highest-ROI candidates can be
 	// re-queued into a bounded second probe pass below.
 	gaps := DetectSurfaceGaps(input.Session.SurfaceInventory())
-	findings = append(findings, s.runGapReQueuePass(ctx, input, bodyText, gaps)...)
-	findings = append(findings, s.passiveFindingsForTargetSince(input.Target, scanStartedAt)...)
-
+	findings = append(findings, s.safeProbeCall("runGapReQueuePass", func() []model.Finding { return s.runGapReQueuePass(ctx, input, bodyText, gaps) })...)
+	findings = append(findings, s.safeProbeCall("passiveFindingsForTargetSince", func() []model.Finding { return s.passiveFindingsForTargetSince(input.Target, scanStartedAt) })...)
 	// Persist probe records for the Probe Coverage and Findings probe-history
 	// UIs. Fire-and-forget; never blocks the caller.
 	s.saveProbeRecords(input.ProbeRecorder, input.ScanID, input.Target, findings)

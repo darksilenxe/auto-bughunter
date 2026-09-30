@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,19 @@ func (a *fixedAgent) Run(_ context.Context, _ AgentInput) (AgentOutput, error) {
 		return AgentOutput{AgentName: a.name}, a.err
 	}
 	return AgentOutput{AgentName: a.name, Findings: append([]model.Finding(nil), a.findings...)}, nil
+}
+
+// panickingAgent simulates a buggy agent implementation to verify the
+// orchestrator's panic guard (runAgentWithContext) converts a panic into a
+// failed AgentOutput instead of crashing the whole process.
+type panickingAgent struct {
+	name string
+}
+
+func (a *panickingAgent) Name() string  { return a.name }
+func (a *panickingAgent) Enabled() bool { return true }
+func (a *panickingAgent) Run(_ context.Context, _ AgentInput) (AgentOutput, error) {
+	panic("boom: simulated bug in agent")
 }
 
 func newTestFactory(agents map[string]Agent) *Factory {
@@ -161,11 +175,69 @@ func (e *errPlanner) Plan(_ context.Context, _ AgentInput, _ []AgentOutput) (Pla
 	return PlannerDecision{}, e.err
 }
 
+// panickingPlanner simulates a buggy Planner implementation to verify
+// runPlannerWithContext converts a panic into a plain error.
+type panickingPlanner struct{}
+
+func (p *panickingPlanner) Plan(_ context.Context, _ AgentInput, _ []AgentOutput) (PlannerDecision, error) {
+	panic("boom: simulated bug in planner")
+}
+
 func TestOrchestratorPlannerError(t *testing.T) {
 	factory := newTestFactory(map[string]Agent{})
 	orch := NewOrchestrator(&errPlanner{err: errors.New("boom")}, factory, 5)
 	if _, _, err := orch.Run(context.Background(), AgentInput{}); err == nil {
 		t.Fatalf("expected planner error to propagate")
+	}
+}
+
+// TestOrchestratorRecoversFromPanickingPlanner ensures a panic inside
+// Planner.Plan is converted into a returned error instead of crashing the
+// process (see runPlannerWithContext's recover()).
+func TestOrchestratorRecoversFromPanickingPlanner(t *testing.T) {
+	factory := newTestFactory(map[string]Agent{})
+	orch := NewOrchestrator(&panickingPlanner{}, factory, 5)
+	_, _, err := orch.Run(context.Background(), AgentInput{})
+	if err == nil {
+		t.Fatalf("expected the planner panic to surface as an error")
+	}
+	if !strings.Contains(err.Error(), "planner panicked") {
+		t.Fatalf("expected error to mention the planner panic, got: %v", err)
+	}
+}
+
+// TestOrchestratorRecoversFromPanickingAgent ensures a panic inside
+// Agent.Run is converted into a failed AgentOutput for that agent instead of
+// crashing the process or aborting the whole scan (see runAgentWithContext's
+// recover()). Other agents in the same round must still complete normally.
+func TestOrchestratorRecoversFromPanickingAgent(t *testing.T) {
+	finding := model.Finding{ID: "f1", Category: "x", Severity: model.SeverityLow, Title: "t", Evidence: "e"}
+	factory := newTestFactory(map[string]Agent{
+		"bad":  &panickingAgent{name: "bad"},
+		"good": &fixedAgent{name: "good", enabled: true, findings: []model.Finding{finding}},
+	})
+	plans := []PlannerDecision{
+		{Agents: []AgentSpec{{Name: "bad"}, {Name: "good"}}},
+		{IsDone: true},
+	}
+	planner := &scriptedPlanner{decisions: plans}
+	orch := NewOrchestrator(planner, factory, 5)
+
+	outputs, findings, err := orch.Run(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 outputs, got %d", len(outputs))
+	}
+	if outputs[0].AgentName != "bad" || outputs[0].Status != "error" || !strings.Contains(outputs[0].Error, "panicked") {
+		t.Fatalf("expected panicking agent to be recorded as an error output, got %+v", outputs[0])
+	}
+	if outputs[1].AgentName != "good" || outputs[1].Status != "completed" {
+		t.Fatalf("expected the second agent to still run normally, got %+v", outputs[1])
+	}
+	if len(findings) != 1 || findings[0].ID != "f1" {
+		t.Fatalf("expected the good agent's findings to survive the other agent's panic: %+v", findings)
 	}
 }
 
