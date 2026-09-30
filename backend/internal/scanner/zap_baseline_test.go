@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"testing"
+	"time"
 
 	"auto-bughunter/backend/internal/model"
 )
@@ -55,7 +56,7 @@ func TestCountZAPBaselineMarkers_NoFooterFallback(t *testing.T) {
 func TestBuildZAPBaselineFinding_CleanRunIsInfo(t *testing.T) {
 	// zap-baseline.py exits non-zero when warnings exist, but a clean footer
 	// (zero fails) must not produce a High-severity fail-markers finding.
-	findings := buildZAPBaselineFinding(zapCleanOutput, "", 1, "")
+	findings := buildZAPBaselineFinding(zapCleanOutput, "", 1, time.Second, "")
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
 	}
@@ -68,7 +69,7 @@ func TestBuildZAPBaselineFinding_CleanRunIsInfo(t *testing.T) {
 }
 
 func TestBuildZAPBaselineFinding_RealFailIsHigh(t *testing.T) {
-	findings := buildZAPBaselineFinding(zapFailOutput, "", 1, "")
+	findings := buildZAPBaselineFinding(zapFailOutput, "", 1, time.Second, "")
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(findings))
 	}

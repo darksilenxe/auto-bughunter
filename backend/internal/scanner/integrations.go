@@ -2595,6 +2595,12 @@ func (s *Service) runGobuster(ctx context.Context, target string, scanScope mode
 // runKiterunner executes kiterunner (kr) to brute-force API routes against the
 // target using an API-route wordlist. It mirrors the disabled/binary-missing/
 // timeout/no-paths finding contract used by the ffuf and gobuster integrations.
+// kiterunnerMinRuntime is the shortest plausible duration for Kiterunner to
+// have made an honest attempt at brute-forcing routes against the target
+// (network dial plus at least a handful of HTTP requests at its default
+// concurrency). See toolFailOpenSignal in tool_fail_open_signal.go.
+const kiterunnerMinRuntime = 500 * time.Millisecond
+
 func (s *Service) runKiterunner(ctx context.Context, target string, scanScope model.ScanScope, state *integrationState) []model.Finding {
 	if !s.cfg.EnableKiterunner {
 		return []model.Finding{{
@@ -2653,7 +2659,10 @@ func (s *Service) runKiterunner(ctx context.Context, target string, scanScope mo
 	var outb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &outb
-	if err := cmd.Run(); err != nil && ictx.Err() == context.DeadlineExceeded {
+	callStart := time.Now()
+	runErr := cmd.Run()
+	elapsed := time.Since(callStart)
+	if runErr != nil && ictx.Err() == context.DeadlineExceeded {
 		return []model.Finding{{
 			ID:             "kiterunner-timeout",
 			Category:       "integration",
@@ -2674,6 +2683,17 @@ func (s *Service) runKiterunner(ctx context.Context, target string, scanScope mo
 	}
 	state.addEndpoints(krEndpoints...)
 	if len(paths) == 0 {
+		if sig := toolFailOpenSignal(outb.String(), "", elapsed, kiterunnerMinRuntime); sig != "" {
+			return []model.Finding{{
+				ID:             "kiterunner-possible-target-refusal",
+				Category:       "integration",
+				Severity:       model.SeverityLow,
+				Title:          "Kiterunner found no candidate routes, but may have been refused by the target",
+				Description:    "Kiterunner completed with zero matched API routes, but its own output suggests the target rate-limited, blocked, or never fully answered it rather than genuinely having no matching routes.",
+				Evidence:       sig,
+				Recommendation: "Treat this scope as unverified rather than clean: lower the request rate/concurrency (-x), confirm the target is reachable, and re-run Kiterunner.",
+			}}
+		}
 		return []model.Finding{{
 			ID:             "kiterunner-no-paths",
 			Category:       "integration",
