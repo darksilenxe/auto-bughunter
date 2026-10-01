@@ -5,7 +5,7 @@
  * to that host.  Auto-refreshes every 8 s while a scan is running.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { API_BASE, API_KEY, WORKSPACE_ID } from "../context/ScanContext";
 
 const authHeaders = () => ({
@@ -40,14 +40,37 @@ function statusLabel(status) {
 }
 
 const MAX_GRAPH_HOSTS = 8;
+const MAX_ANIMATED_REQUESTS = 6;
 const SVG_W = 800;
 const SCANNER_X = 80;
 const HOST_X = 580;
 
 export default function ScanNetworkGraph({ job = null, expanded = false }) {
   const [requests, setRequests] = useState([]);
+  const [animatedRequests, setAnimatedRequests] = useState([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reducedMotion, setReducedMotion] = useState(
+    () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  );
+  const [animateRequests, setAnimateRequests] = useState(
+    () => !(typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches),
+  );
+  const seenRequestIds = useRef(null);
+  const animationTimers = useRef(new Set());
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mediaQuery) return undefined;
+
+    const handleMotionChange = (event) => setReducedMotion(event.matches);
+    mediaQuery.addEventListener?.("change", handleMotionChange);
+    return () => mediaQuery.removeEventListener?.("change", handleMotionChange);
+  }, []);
+
+  useEffect(() => () => {
+    for (const timer of animationTimers.current) clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +86,32 @@ export default function ScanNetworkGraph({ job = null, expanded = false }) {
         }
         const data = await res.json();
         if (!cancelled) {
-          setRequests(Array.isArray(data) ? data : []);
+          const nextRequests = Array.isArray(data) ? data : [];
+          const nextIds = new Set(nextRequests.map((request) => request.id || `${request.capturedAt || ""}:${request.url || ""}`));
+          if (seenRequestIds.current !== null) {
+            const freshRequests = nextRequests
+              .filter((request) => !seenRequestIds.current.has(request.id || `${request.capturedAt || ""}:${request.url || ""}`))
+              .slice(0, MAX_ANIMATED_REQUESTS)
+              .map((request) => ({
+                id: request.id || `${request.capturedAt || ""}:${request.url || ""}`,
+                host: getHost(request.url).toLowerCase(),
+                color: statusColor(request.responseStatus),
+                method: request.method || "HTTP",
+              }))
+              .filter((request) => request.host);
+            if (freshRequests.length > 0) {
+              setAnimatedRequests((current) => [...current, ...freshRequests]);
+              for (const request of freshRequests) {
+                const timer = setTimeout(() => {
+                  setAnimatedRequests((current) => current.filter((item) => item.id !== request.id));
+                  animationTimers.current.delete(timer);
+                }, 1600);
+                animationTimers.current.add(timer);
+              }
+            }
+          }
+          seenRequestIds.current = nextIds;
+          setRequests(nextRequests);
           setError("");
         }
       } catch (err) {
@@ -257,6 +305,22 @@ export default function ScanNetworkGraph({ job = null, expanded = false }) {
           );
         })}
 
+        {animateRequests && !reducedMotion && animatedRequests.map((request) => {
+          const hostIndex = graphHosts.findIndex((host) => host.toLowerCase() === request.host);
+          if (hostIndex < 0) return null;
+          const hostPosition = hostY(hostIndex);
+          return (
+            <circle key={request.id} r="4" fill={request.color} stroke="#fff" strokeWidth="1">
+              <title>{request.method} request to {request.host}</title>
+              <animateMotion
+                path={`M ${SCANNER_X + 30} ${scannerY} L ${HOST_X - 38} ${hostPosition}`}
+                dur="1.4s"
+                fill="freeze"
+              />
+            </circle>
+          );
+        })}
+
         {overflow > 0 && (
           <text
             x={HOST_X + 38}
@@ -273,6 +337,17 @@ export default function ScanNetworkGraph({ job = null, expanded = false }) {
 
       {/* Legend + summary */}
       <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", padding: "6px 4px", fontSize: "0.72rem" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "5px", color: "rgba(255,255,255,0.8)" }}>
+          <input
+            type="checkbox"
+            checked={animateRequests && !reducedMotion}
+            disabled={reducedMotion}
+            onChange={(event) => setAnimateRequests(event.target.checked)}
+            aria-label="Animate newly captured proxy requests"
+            title={reducedMotion ? "Animations are disabled by your reduced-motion preference" : "Animate newly captured proxy requests"}
+          />
+          Animate live requests
+        </label>
         {[
           { label: "2xx OK", color: statusColor(200) },
           { label: "3xx redirect", color: statusColor(300) },
