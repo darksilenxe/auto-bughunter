@@ -20,11 +20,11 @@ func approxEqual(a, b float64) bool {
 
 func TestNormalizeCategory(t *testing.T) {
 	cases := map[string]string{
-		"SQL Injection":  "sqlinjection",
-		"sql_injection":  "sqlinjection",
+		"SQL Injection":   "sqlinjection",
+		"sql_injection":   "sqlinjection",
 		"  sql-injection": "sqlinjection",
-		"SQLI":           "sqli",
-		"":               "",
+		"SQLI":            "sqli",
+		"":                "",
 	}
 	for in, want := range cases {
 		if got := normalizeCategory(in); got != want {
@@ -35,9 +35,13 @@ func TestNormalizeCategory(t *testing.T) {
 
 func TestNormalizeEndpoint(t *testing.T) {
 	cases := map[string]string{
-		"https://Example.com/API/Users/":   "/api/users",
+		"https://Example.com/API/Users/":    "/api/users",
 		"https://example.com/api/users?a=1": "/api/users",
+		"api/Users/":                        "/api/users",
 		"/api/Users":                        "/api/users",
+		"https://example.com/#/Search/":     "/#/search",
+		"/#!/Settings/?tab=security":        "/#!/settings",
+		"https://example.com/#section":      "/",
 		"/":                                 "/",
 		"":                                  "",
 	}
@@ -45,6 +49,46 @@ func TestNormalizeEndpoint(t *testing.T) {
 		if got := normalizeEndpoint(in); got != want {
 			t.Errorf("normalizeEndpoint(%q)=%q want %q", in, got, want)
 		}
+	}
+}
+
+func TestGradeDoesNotMatchDifferentSPARoutes(t *testing.T) {
+	m := Manifest{
+		Target: "spa",
+		ExpectedFindings: []ExpectedFinding{
+			{Category: "xss", Endpoint: "https://app.example/#/search"},
+		},
+	}
+	actual := ActualScan{
+		Target: "spa",
+		Findings: []model.Finding{
+			{Category: "xss", AffectedURL: "https://app.example/#/settings"},
+		},
+	}
+
+	r := Grade([]Manifest{m}, map[string]ActualScan{"spa": actual})
+	if r.TruePositives != 0 || r.FalseNegatives != 1 || r.FalsePositives != 1 {
+		t.Fatalf("different SPA routes must not match: got tp=%d fp=%d fn=%d", r.TruePositives, r.FalsePositives, r.FalseNegatives)
+	}
+}
+
+func TestGradeMatchesRelativeManifestEndpoint(t *testing.T) {
+	m := Manifest{
+		Target: "relative-path",
+		ExpectedFindings: []ExpectedFinding{
+			{Category: "xss", Endpoint: "api/users", Parameter: "q"},
+		},
+	}
+	actual := ActualScan{
+		Target: "relative-path",
+		Findings: []model.Finding{
+			{Category: "xss", AffectedURL: "https://app.example/api/users", AffectedParameter: "q"},
+		},
+	}
+
+	r := Grade([]Manifest{m}, map[string]ActualScan{"relative-path": actual})
+	if r.TruePositives != 1 || r.FalseNegatives != 0 || r.FalsePositives != 0 {
+		t.Fatalf("relative manifest path must match absolute finding URL: got tp=%d fp=%d fn=%d", r.TruePositives, r.FalsePositives, r.FalseNegatives)
 	}
 }
 
@@ -240,7 +284,7 @@ func TestRenderMarkdownIncludesKeySections(t *testing.T) {
 		Targets: []TargetReport{{
 			Target: "juice-shop", TruePositives: 3, Precision: 0.75,
 			PreReportVerificationPassRate: 0.9,
-			Categories: []CategoryScore{{Category: "sqli", TruePositives: 3, Precision: 0.75}},
+			Categories:                    []CategoryScore{{Category: "sqli", TruePositives: 3, Precision: 0.75}},
 		}},
 		CategoryTotals:        []CategoryScore{{Category: "sqli", TruePositives: 3, Precision: 0.75}},
 		TruePositives:         3,

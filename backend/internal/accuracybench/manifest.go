@@ -204,9 +204,8 @@ func normalizeCategory(s string) string {
 }
 
 // normalizeEndpoint canonicalises an endpoint for matching. It strips the
-// scheme+host (so manifests can be host-agnostic), collapses trailing
-// slashes, lowercases the path, and drops the query string except for
-// parameter *names* — the actual values change per scan.
+// scheme+host, normalizes relative paths and trailing slashes, lowercases the
+// path, drops query strings and ordinary fragments, and retains SPA hash routes.
 func normalizeEndpoint(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -216,10 +215,20 @@ func normalizeEndpoint(s string) string {
 	// manifest already stores a bare path), treat the whole string as a
 	// path.
 	path := s
-	if u, err := url.Parse(s); err == nil && u.Path != "" {
-		path = u.Path
-	} else if err == nil && u.Opaque != "" {
-		path = u.Opaque
+	route := ""
+	if u, err := url.Parse(s); err == nil {
+		if u.Path != "" {
+			path = u.Path
+		} else if u.Opaque != "" {
+			path = u.Opaque
+		}
+		if strings.HasPrefix(u.Fragment, "/") || strings.HasPrefix(u.Fragment, "!/") {
+			route = strings.SplitN(u.Fragment, "?", 2)[0]
+			route = strings.ToLower(route)
+			if route != "/" {
+				route = strings.TrimRight(route, "/")
+			}
+		}
 	}
 	path = strings.ToLower(path)
 	if path != "/" {
@@ -227,6 +236,11 @@ func normalizeEndpoint(s string) string {
 	}
 	if path == "" {
 		path = "/"
+	} else if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if route != "" {
+		path += "#" + route
 	}
 	return path
 }
