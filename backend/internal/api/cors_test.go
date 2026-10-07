@@ -40,19 +40,29 @@ func TestWithCORS_BlocksDisallowedPreflightOrigin(t *testing.T) {
 }
 
 func TestWithCORS_DefaultAllowsLocalFrontend(t *testing.T) {
-
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 
 	handler := withCORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
-	req.Header.Set("Origin", "http://localhost:3000")
-	rec := httptest.NewRecorder()
+	for _, origin := range []string{
+		"http://localhost:3000",
+		"http://127.0.0.1:3000",
+		"http://localhost:5173",
+		"http://127.0.0.1:5173",
+		"http://localhost:4173",
+		"http://127.0.0.1:4173",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+			req.Header.Set("Origin", origin)
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
-		t.Fatalf("expected localhost to be allowed by default, got %q", got)
+			handler.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+				t.Fatalf("expected %q to be allowed by default, got %q", origin, got)
+			}
+		})
 	}
 }
 
