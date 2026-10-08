@@ -578,6 +578,34 @@ func TestBuildAgentTelemetryAttachesDecisionTrace(t *testing.T) {
 	}
 }
 
+func TestBuildAgentTelemetryPreservesFactoryCreationFailure(t *testing.T) {
+	startedAt := time.Date(2026, time.October, 8, 18, 55, 50, 0, time.UTC)
+	outputs := []agent.AgentOutput{{
+		AgentName:   "advanced_coverage",
+		Status:      "error",
+		Error:       `unknown agent "advanced_coverage"`,
+		DebugNotes:  `unknown agent "advanced_coverage"`,
+		StartedAt:   startedAt,
+		CompletedAt: startedAt,
+		Metadata:    map[string]string{"orchestration_reason": "static-pipeline"},
+	}}
+
+	telemetry := buildAgentTelemetry(outputs, model.ScanOptions{}, "https://example.com", model.ScanScope{})
+	if len(telemetry) != 1 {
+		t.Fatalf("expected 1 telemetry record, got %d", len(telemetry))
+	}
+	run := telemetry[0]
+	if run.Error != outputs[0].Error {
+		t.Fatalf("error = %q, want %q", run.Error, outputs[0].Error)
+	}
+	if !run.StartedAt.Equal(startedAt) || !run.CompletedAt.Equal(startedAt) {
+		t.Fatalf("unexpected failure timestamps: started=%v completed=%v", run.StartedAt, run.CompletedAt)
+	}
+	if run.Metadata["orchestration_reason"] != "static-pipeline" {
+		t.Fatalf("expected orchestration metadata to be preserved, got %+v", run.Metadata)
+	}
+}
+
 type auditBlockingRepo struct {
 	reportTestRepo
 	blocked chan struct{}

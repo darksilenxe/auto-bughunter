@@ -173,15 +173,33 @@ func (o *Orchestrator) Run(ctx context.Context, input AgentInput) ([]AgentOutput
 
 			agent, err := o.Factory.Create(spec.Name)
 			if err != nil {
-				outputs = append(outputs, AgentOutput{
+				now := time.Now().UTC()
+				output := AgentOutput{
 					AgentName:   spec.Name,
 					Status:      "error",
 					Error:       err.Error(),
 					DebugNotes:  err.Error(),
 					Metadata:    map[string]string{"orchestration_reason": spec.Reason},
-					StartedAt:   time.Now().UTC(),
-					CompletedAt: time.Now().UTC(),
+					StartedAt:   now,
+					CompletedAt: now,
+				}
+				output.Telemetry = model.AgentRunTelemetry{
+					AgentName:   output.AgentName,
+					Status:      output.Status,
+					StartedAt:   output.StartedAt,
+					CompletedAt: output.CompletedAt,
+					Error:       output.Error,
+					Metadata:    output.Metadata,
+				}
+				roundFailures++
+				log.Printf("orchestrator: failed to create agent %q: %v", spec.Name, err)
+				Emit(input.Emit, model.ScanEvent{
+					Type:      model.ScanEventInfo,
+					AgentName: spec.Name,
+					Message:   fmt.Sprintf("Agent %q could not be created: %v", spec.Name, err),
+					Metadata:  map[string]string{"status": "error"},
 				})
+				outputs = append(outputs, output)
 				continue
 			}
 			if !agent.Enabled() {
