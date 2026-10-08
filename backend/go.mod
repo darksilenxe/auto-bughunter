@@ -11,7 +11,7 @@ require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 	github.com/projectdiscovery/wappalyzergo v0.3.4
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/tmc/langchaingo v0.1.14
+	github.com/tmc/langchaingo v0.1.15
 	golang.org/x/crypto v0.57.0
 	golang.org/x/text v0.42.0
 )
