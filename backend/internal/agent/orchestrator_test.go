@@ -150,8 +150,32 @@ func TestOrchestratorMissingAgentRecordsError(t *testing.T) {
 	if outputs[0].Status != "error" || outputs[0].Error == "" {
 		t.Fatalf("expected first output to be error, got %+v", outputs[0])
 	}
+	if outputs[0].StartedAt.IsZero() || outputs[0].CompletedAt.IsZero() {
+		t.Fatalf("expected missing agent failure to have timestamps, got %+v", outputs[0])
+	}
+	if outputs[0].Telemetry.Error != outputs[0].Error {
+		t.Fatalf("expected failure telemetry to retain the error, got %+v", outputs[0].Telemetry)
+	}
 	if outputs[1].AgentName != "known" || outputs[1].Status != "completed" {
 		t.Fatalf("expected second output completed for known, got %+v", outputs[1])
+	}
+}
+
+func TestOrchestratorCountsFactoryFailuresTowardFailureLimit(t *testing.T) {
+	planner := &scriptedPlanner{decisions: []PlannerDecision{
+		{Agents: []AgentSpec{{Name: "missing"}}},
+		{Agents: []AgentSpec{{Name: "missing"}}},
+	}}
+	orch := NewOrchestrator(planner, newTestFactory(map[string]Agent{}), 5)
+	orch.MaxConsecutiveFailureRounds = 1
+	orch.MaxNoNoveltyRounds = 0
+
+	outputs, _, err := orch.Run(context.Background(), AgentInput{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(outputs) != 1 || outputs[0].Status != "error" {
+		t.Fatalf("expected factory failure to stop after one failed round, got %+v", outputs)
 	}
 }
 

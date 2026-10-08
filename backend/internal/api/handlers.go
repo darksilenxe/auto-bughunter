@@ -3656,6 +3656,22 @@ func buildAgentTelemetry(outputs []agent.AgentOutput, options model.ScanOptions,
 		if t.Status == "" {
 			t.Status = out.Status
 		}
+		if t.StartedAt.IsZero() {
+			t.StartedAt = out.StartedAt
+		}
+		if t.CompletedAt.IsZero() {
+			t.CompletedAt = out.CompletedAt
+		}
+		if t.DurationMs == 0 {
+			t.DurationMs = out.DurationMs
+		}
+		if t.Error == "" {
+			t.Error = out.Error
+		}
+		t.TimedOut = t.TimedOut || out.TimedOut
+		if t.Metadata == nil {
+			t.Metadata = out.Metadata
+		}
 		if v, ok := out.Metadata["targets_attempted"]; ok {
 			t.TargetsAttempted, _ = strconv.Atoi(v)
 		}
