@@ -27,6 +27,44 @@ const SCENARIOS = {
     loginSteps: [],
     impactGoals: DEFAULT_IMPACT_GOALS,
   },
+  lan: {
+    label: "Authorized LAN",
+    description: "Web-app assessment for one LAN host you own or are authorized to test. Enter its HTTP(S) URL; this does not scan CIDR ranges or entire subnets.",
+    policyPack: "internal",
+    useNuclei: true,
+    useZap: true,
+    useXSSMap: false,
+    useMLTriage: true,
+    useAttackPath: true,
+    useFalsePositiveReview: true,
+    useRemediationPlanner: true,
+    useRecentCVEFeed: false,
+    aggressiveExploitation: false,
+    passiveOnly: false,
+    wafBypass: false,
+    useLiveScan: false,
+    strictReporting: false,
+    impactGoals: DEFAULT_IMPACT_GOALS,
+  },
+  training_lab: {
+    label: "THM / HTB lab",
+    description: "Web-app assessment for the exact machine IP or hostname assigned to your authorized TryHackMe or Hack The Box lab. One HTTP(S) target per scan; no platform-wide or subnet scanning.",
+    policyPack: "internal",
+    useNuclei: true,
+    useZap: true,
+    useXSSMap: false,
+    useMLTriage: true,
+    useAttackPath: true,
+    useFalsePositiveReview: true,
+    useRemediationPlanner: true,
+    useRecentCVEFeed: false,
+    aggressiveExploitation: false,
+    passiveOnly: false,
+    wafBypass: false,
+    useLiveScan: false,
+    strictReporting: false,
+    impactGoals: DEFAULT_IMPACT_GOALS,
+  },
   pentest: {
     label: "Internal pentest",
     description: "Full-depth engagement with stronger validation and remediation context.",
@@ -294,6 +332,9 @@ export default function Dashboard() {
     setStrictReporting(preset.strictReporting ?? false);
     setMinReportConfidence(preset.minReportConfidence ?? "");
     setImpactGoals(preset.impactGoals ?? DEFAULT_IMPACT_GOALS);
+    if (preset.passiveOnly !== undefined) setPassiveOnly(preset.passiveOnly);
+    if (preset.wafBypass !== undefined) setWafBypass(preset.wafBypass);
+    if (preset.useLiveScan !== undefined) setUseLiveScan(preset.useLiveScan);
     if (preset.excludeHosts !== undefined) setExcludeHosts(preset.excludeHosts);
     if (preset.loginSteps) setLoginSteps(preset.loginSteps.map((step) => ({ ...step })));
   }
@@ -525,7 +566,17 @@ export default function Dashboard() {
             <div className="form-grid form-grid--wide">
               <label>
                 Target URL *
-                <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://target.example" required />
+                <input
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  placeholder={scenario === "lan" ? "http://192.168.1.50" : scenario === "training_lab" ? "http://10.10.10.10" : "https://target.example"}
+                  required
+                />
+                {(scenario === "lan" || scenario === "training_lab") && (
+                  <span className="meta">
+                    Enter one authorized HTTP(S) host, not a CIDR range. Run separate scans for other in-scope hosts.
+                  </span>
+                )}
               </label>
               <label>
                 Workspace ID
