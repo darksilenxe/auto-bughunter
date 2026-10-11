@@ -1,5 +1,7 @@
 github.com/chromedp/cdproto v0.157.6 h1:kwXl4pzaMMRahrjWb4dOwC0mGdv+Oxip4Bn8JitGTAg=
 github.com/chromedp/cdproto v0.157.6/go.mod h1:scNPhJ/A4T8BVkyR5k2Uocvoju3iBRZS4cg3uMlxuMk=
+github.com/chromedp/chromedp v0.18.0 h1:JulKLW1m2WWM4Lm2rtWNPyasQzl/bZzMtHywPGsOj3c=
+github.com/chromedp/chromedp v0.18.0/go.mod h1:4Rs9XtapAMgXxg0s1PpixyQHf37kdnSdu2ov5G4FsZ0=
 github.com/chromedp/chromedp v0.19.1 h1:OAf0ukr4nC5LIwaYEWIv7JYXlpZIZt6ZSDsYXCdjGlc=
 github.com/chromedp/chromedp v0.19.1/go.mod h1:4Rs9XtapAMgXxg0s1PpixyQHf37kdnSdu2ov5G4FsZ0=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
