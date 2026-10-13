@@ -1221,11 +1221,36 @@ baseline.
 - `authProfile` (headers/cookies/basic auth) is required for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
-- Strix can be integrated as an optional backend-facing OpenAI-compatible gateway by setting `USE_STRIX_SERVICE=true` plus `STRIX_API_BASE` / `STRIX_API_KEY` / `STRIX_MODEL`. In that full-routing mode, Strix replaces the backend's primary, coding, and fast AI lanes while scope enforcement, outbound URL validation, and destructive-check gating remain in the existing backend/scanner path.
-- If you want Strix to influence engagement-time decisions without taking over summaries/reports, set `USE_STRIX_DECISIONS_ONLY=true` instead. That keeps the primary AI lane on `AI_*`; when the coding/fast lanes do not already have explicit `AI_CODING_*` / `AI_FAST_*` endpoints, they fall back to `STRIX_*` for planning and fast decision calls.
+
+### Strix AI gateway
+
+Strix is an optional OpenAI-compatible gateway for the backend's AI requests. Configure these variables in the backend's environment; the commented examples are also in `.env.example`.
+
+| Variable | Purpose |
+|---|---|
+| `USE_STRIX_SERVICE` | Enables full Strix routing when `true` (default: `false`). The primary, coding, and fast AI lanes use Strix settings. |
+| `USE_STRIX_DECISIONS_ONLY` | Enables decisions-only routing when `true` (default: `false`). Keeps the primary AI lane on `AI_*`, while allowing Strix to handle coding/planning and fast decision calls. |
+| `STRIX_API_BASE` | Base URL of the Strix OpenAI-compatible API, commonly ending in `/v1`. Required to use the shared Strix endpoint for coding/fast lanes in decisions-only mode. |
+| `STRIX_API_KEY` | Credential sent to the shared Strix endpoint. |
+| `STRIX_MODEL` | Model identifier sent to the shared Strix endpoint. |
+| `STRIX_CODING_API_BASE` | Optional endpoint override for the coding/planning lane. |
+| `STRIX_CODING_API_KEY` | Optional credential override for the coding/planning endpoint. |
+| `STRIX_CODING_MODEL` | Optional model override for the coding/planning lane. |
+| `STRIX_FAST_API_BASE` | Optional endpoint override for the fast decision lane. |
+| `STRIX_FAST_API_KEY` | Optional credential override for the fast endpoint. |
+| `STRIX_FAST_MODEL` | Optional model override for the fast lane. |
+
+Routing behavior:
+
+- With both switches `false`, Strix variables are ignored and the backend uses its usual `AI_*` configuration.
+- With `USE_STRIX_SERVICE=true`, Strix takes over all three AI lanes. Coding and fast lanes inherit the shared Strix endpoint, key, and model unless their `STRIX_CODING_*` or `STRIX_FAST_*` values override them. Missing shared Strix values fall back to the corresponding existing AI configuration.
+- With `USE_STRIX_DECISIONS_ONLY=true`, the primary lane (including summaries and reporting) stays on `AI_*`. If a shared Strix endpoint is configured, coding and fast lanes use it only when their corresponding `AI_CODING_API_BASE` or `AI_FAST_API_BASE` is not set. Lane-specific `STRIX_*` endpoint overrides can be used to route either lane through Strix explicitly.
+- If both switches are `true`, full Strix routing takes precedence.
+
+This changes the AI provider used for backend decisions; it does not bypass the backend's target-scope enforcement or destructive-check gates. Strix lane selection and AI model selection are independent of scanner target authorization.
+
 - Set `AI_CODING_MODEL` to route AI orchestration/planning calls to a larger coding-focused model while keeping summaries on `AI_MODEL`.
 - Set `AI_FAST_MODEL` to route high-frequency low-stakes decisions (adaptive-probe step, tool-call planning, reflect, command-template adaptation) to a small/fast model on its own concurrency lane so the planner cannot starve them. With the bundled Ollama sidecar this defaults to `llama3.2:3b` (pre-pulled via `OLLAMA_FAST_MODEL`); point `AI_FAST_API_BASE` / `AI_FAST_API_KEY` elsewhere to use a hosted small model instead. Per-lane caps are tunable via `AI_MAX_CONCURRENT_REQUESTS_PRIMARY`, `AI_MAX_CONCURRENT_REQUESTS_CODING`, and `AI_MAX_CONCURRENT_REQUESTS_FAST` (all fall back to the legacy global `AI_MAX_CONCURRENT_REQUESTS`).
-- Strix supports the same lane split as the default AI configuration via `STRIX_CODING_*` and `STRIX_FAST_*`; if those are unset, the coding and fast lanes reuse the active primary Strix endpoint/key/model.
 - ML dataset generation strips/masks sensitive values (tokens/cookies/password-like data) and pseudonymizes URL/host identifiers before export.
 - Job records are stored in PostgreSQL table `scans`.
 - Per-scan asset inventory is stored in `scan_assets` and run events are stored in `scan_events`.
