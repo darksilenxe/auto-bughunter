@@ -16,7 +16,7 @@
 # in this single file to upgrade the whole suite.
 # ---------------------------------------------------------------------------
 
-FROM projectdiscovery/subfinder:v2.16.0   AS subfinder
+FROM projectdiscovery/subfinder:v2.17.0   AS subfinder
 FROM projectdiscovery/httpx:v1.12.0        AS httpx
 FROM projectdiscovery/cloudlist:v1.4.0    AS cloudlist
 FROM projectdiscovery/naabu:v2.6.1        AS naabu
