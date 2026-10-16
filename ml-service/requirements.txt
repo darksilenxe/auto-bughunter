@@ -1,6 +1,6 @@
 fastapi==0.143.0
 uvicorn[standard]==0.54.0
-pydantic==2.13.5
+pydantic==2.14.1
 onnxruntime==1.30.0
 numpy==2.5.3
 onnx==1.23.2
