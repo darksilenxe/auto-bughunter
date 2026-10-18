@@ -236,6 +236,7 @@ cp .env.example .env
 ```
 
 2. Set your allowed targets, database settings, and optional AI/integration settings in `.env`.
+   Ensure the password embedded in `DATABASE_URL` matches `POSTGRES_PASSWORD`.
 
 3. Run:
 
@@ -350,6 +351,41 @@ discrete GPUs, follow the commented ROCm device-mapping snippet at the top of
 `docker-compose.gpu.yml`. **Integrated GPUs** (Intel iGPU / typical
 laptop-integrated graphics) have no Ollama acceleration path — keep running
 CPU-only and do not include this override.
+
+## Local QA checks (matches CI)
+
+Before opening a PR, run the same baseline checks as
+`.github/workflows/qa.yml`:
+
+```bash
+cd ./backend
+go vet ./...
+go build ./...
+go test ./...
+
+go test ./internal/accuracybench/... ./cmd/accuracy-bench/...
+go build -o /tmp/accuracy-bench ./cmd/accuracy-bench
+/tmp/accuracy-bench \
+  -corpus ./cmd/accuracy-bench/testdata/corpus \
+  -actuals ./cmd/accuracy-bench/testdata/actuals \
+  -baseline ./cmd/accuracy-bench/testdata/baseline/report.json \
+  -delta-output-md /tmp/accuracy-delta.md \
+  -fail-on-regression \
+  -tolerance 0.02
+
+go run ./cmd/replayharness \
+  -input ../testing/replay/ai-planner-history.json \
+  -baseline static \
+  -candidate recorded \
+  -min-candidate-match-rate 0.95 \
+  -min-candidate-first-choice-rate 0.95 \
+  -max-candidate-early-stops 0 \
+  -require-candidate-not-worse
+
+cd ../frontend
+npm ci
+npm run build
+```
 
 ## Command-line interface
 
@@ -1218,7 +1254,7 @@ baseline.
 
 ## Notes
 
-- `authProfile` (headers/cookies/basic auth) is required for scan creation.
+- `authProfile` (headers/cookies/basic auth) is optional for scan creation.
 - If AI environment variables are missing or provider calls fail, the backend uses an offline local AI reasoner that ranks findings and proposes remediation steps.
 - For OpenAI default (`https://api.openai.com/v1`), set `AI_API_KEY`; for local OpenAI-compatible containers (for example Ollama), API key can be blank.
 
