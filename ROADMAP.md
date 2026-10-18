@@ -61,6 +61,51 @@ This roadmap now focuses on finishing the remaining productization and enterpris
 - [ ] Add immutable evidence chain-of-custody for every autonomous decision/finding/report for audit and legal defensibility.
 - [ ] Add autonomy guardrails that pause or de-escalate scans on scope ambiguity, legal-risk signals, or anomalous behavior.
 
+### Joro-Inspired Feature Adoption (Ideas/Patterns Only)
+
+> Licensing guardrail: `BishopFox/joro` is GPLv3 while Auto Bughunter is MIT. We only adopt product ideas and UX patterns; no direct source reuse.
+
+#### Priority ranking
+
+- **P1:** Team-server style collaboration
+- **P1:** Expanded built-in OAST listener protocols (DNS/SMTP/LDAP/FTP + HTTP/S)
+- **P2:** Portable project/workspace bundles for offline handoff and reproducibility
+- **P2:** Operator automation runtime with scoped capabilities
+- **P3:** Optional C2 adapters (Sliver/Mythic-like), tightly feature-gated
+
+#### Fit/risk map
+
+1. **Team collaboration model (P1)**
+   - Fit: Strong with existing workspace, scan history, and reporting foundations.
+   - Risk: Medium/high (authorization boundaries, concurrent editing conflicts, audit consistency).
+2. **Multi-protocol OAST expansion (P1)**
+   - Fit: Strong extension of existing blind-vulnerability confirmation workflows.
+   - Risk: Medium (service hardening, anti-abuse controls, deployment complexity).
+3. **Portable workspace bundles (P2)**
+   - Fit: Strong alignment with immutable evidence and compliance export goals.
+   - Risk: Medium (PII/secret redaction and long-term schema compatibility).
+4. **Scoped automation runtime (P2)**
+   - Fit: Good complement to agent orchestration and plugin roadmap.
+   - Risk: High (sandboxing, capability isolation, command execution safety).
+5. **C2 adapters behind strict controls (P3)**
+   - Fit: Moderate value for advanced red-team users.
+   - Risk: High (governance, legal optics, blast-radius controls).
+
+#### Wave mapping and implementation checklist
+
+- **Wave 1 (Trust + Quality Foundations):**
+  - [ ] Add multi-operator RBAC model for collaboration (owner/admin/operator/reviewer).
+  - [ ] Add immutable collaboration audit trail for note edits, triage transitions, and evidence actions.
+  - [ ] Add OAST protocol governance defaults (disabled-by-default risky listeners, explicit opt-in policy).
+- **Wave 2 (Orchestration + Bug Bounty):**
+  - [ ] Add portable project/workspace export bundle with reproducibility manifest and integrity hash.
+  - [ ] Add portable import validator with strict schema/version compatibility checks.
+  - [ ] Add operator automation runtime as a capability-gated sandbox with per-workspace policy controls.
+- **Wave 3 (Integrations + Scale):**
+  - [ ] Add real-time collaboration UX (presence, assignment, handoff states) for team operations.
+  - [ ] Expand OAST to DNS/SMTP/LDAP/FTP + HTTP/S with quota/rate limits and abuse detection telemetry.
+  - [ ] Add optional Sliver/Mythic-style adapters behind hardened feature flags, approvals, and full audit logging.
+
 ---
 
 ## Wave 1 — Trust + Quality Foundations
