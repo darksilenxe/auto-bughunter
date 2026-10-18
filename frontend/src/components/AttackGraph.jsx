@@ -97,6 +97,18 @@ function fmtMs(ms) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function fmtROIScore(score) {
+  if (typeof score !== "number" || Number.isNaN(score)) return "";
+  return score.toFixed(2);
+}
+
+function fmtTimestamp(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
+
 function shortLabel(str, max = 24) {
   if (!str) return "";
   const s = str.replace(/^https?:\/\//, "");
@@ -442,6 +454,15 @@ function FindingDetail({ node, scanStart }) {
   }
 
   const st = nodeStyle(node);
+  const trace = node.finding?.agentDecisionTrace;
+  const hasTrace = !!(
+    trace?.policyProfile ||
+    trace?.scopeCheck ||
+    trace?.scopeReason ||
+    typeof trace?.roiScore === "number" ||
+    trace?.triggeringSignal ||
+    trace?.timestamp
+  );
 
   return (
     <div style={{ padding: "10px 14px", overflowY: "auto", height: "100%" }}>
@@ -502,6 +523,24 @@ function FindingDetail({ node, scanStart }) {
               <td>{node.finding.owaspCategory}</td>
             </tr>
           )}
+          {Array.isArray(node.finding?.attackChainIds) && node.finding.attackChainIds.length > 0 && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>Attack Chains</td>
+              <td style={{ wordBreak: "break-word" }}>{node.finding.attackChainIds.join(", ")}</td>
+            </tr>
+          )}
+          {node.finding?.chainRole && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>Chain Role</td>
+              <td>{node.finding.chainRole}</td>
+            </tr>
+          )}
+          {node.finding?.timeToExploit && (
+            <tr>
+              <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>Time to Exploit</td>
+              <td>{node.finding.timeToExploit}</td>
+            </tr>
+          )}
           {node.finding?.affectedUrl && (
             <tr>
               <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px" }}>URL</td>
@@ -534,6 +573,55 @@ function FindingDetail({ node, scanStart }) {
           <p style={{ margin: 0, lineHeight: 1.5, fontSize: "0.76rem", color: "rgba(255,255,255,0.8)" }}>
             {node.finding.recommendation}
           </p>
+        </div>
+      )}
+
+      {/* Decision trace */}
+      {hasTrace && (
+        <div style={{ marginBottom: "8px" }}>
+          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "3px" }}>
+            Decision Trace
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.72rem" }}>
+            <tbody>
+              {trace?.policyProfile && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Policy</td>
+                  <td>{trace.policyProfile}</td>
+                </tr>
+              )}
+              {trace?.scopeCheck && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Scope</td>
+                  <td>{trace.scopeCheck}</td>
+                </tr>
+              )}
+              {trace?.scopeReason && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Scope Reason</td>
+                  <td>{trace.scopeReason}</td>
+                </tr>
+              )}
+              {typeof trace?.roiScore === "number" && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>ROI</td>
+                  <td>{fmtROIScore(trace.roiScore)}</td>
+                </tr>
+              )}
+              {trace?.triggeringSignal && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Trigger</td>
+                  <td>{trace.triggeringSignal}</td>
+                </tr>
+              )}
+              {trace?.timestamp && (
+                <tr>
+                  <td style={{ color: "rgba(255,255,255,0.4)", paddingRight: "8px", paddingBottom: "3px", whiteSpace: "nowrap" }}>Timestamp</td>
+                  <td>{fmtTimestamp(trace.timestamp)}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
