@@ -18,7 +18,7 @@
 
 FROM projectdiscovery/subfinder:v2.17.0   AS subfinder
 FROM projectdiscovery/httpx:v1.12.0        AS httpx
-FROM projectdiscovery/cloudlist:v1.4.0    AS cloudlist
+FROM projectdiscovery/cloudlist:v1.5.0    AS cloudlist
 FROM projectdiscovery/naabu:v2.6.1        AS naabu
 FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
 FROM projectdiscovery/shuffledns:v1.0.8   AS shuffledns
