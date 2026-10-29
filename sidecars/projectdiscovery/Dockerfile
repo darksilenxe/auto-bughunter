@@ -24,7 +24,7 @@ FROM projectdiscovery/dnsx:v1.2.2         AS dnsx
 FROM projectdiscovery/shuffledns:v1.0.8   AS shuffledns
 FROM projectdiscovery/katana:v1.8.0       AS katana
 FROM projectdiscovery/tlsx:v1.2.2         AS tlsx
-FROM projectdiscovery/cdncheck:v1.3.2    AS cdncheck
+FROM projectdiscovery/cdncheck:v1.3.3    AS cdncheck
 FROM projectdiscovery/asnmap:v1.1.1       AS asnmap
 FROM projectdiscovery/vulnx:v1.0.0        AS vulnx
 
