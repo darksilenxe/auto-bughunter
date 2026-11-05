@@ -3,7 +3,7 @@
 
 FROM projectdiscovery/nuclei:v3.11.1 AS nuclei-binary
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Copy nuclei binary from official image
 COPY --from=nuclei-binary /usr/local/bin/nuclei /usr/local/bin/nuclei
