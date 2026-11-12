@@ -3,7 +3,7 @@ module auto-bughunter/backend
 go 1.27
 
 require (
-	github.com/chromedp/cdproto v0.159.0
+	github.com/chromedp/cdproto v0.159.2
 	github.com/chromedp/chromedp v0.21.1
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
