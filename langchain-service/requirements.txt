@@ -5,5 +5,5 @@ langchain==1.5.0
 langchain-core==1.8.1
 langchain-openai==1.8.5
 langchain-community==0.4.2
-langgraph==1.2.20
+langgraph==1.2.24
 rank_bm25==0.2.2
