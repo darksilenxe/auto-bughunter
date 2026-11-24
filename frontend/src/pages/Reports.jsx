@@ -319,10 +319,10 @@ export default function Reports() {
       <section className="hero-panel">
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
-            <div className="eyebrow">Submission-ready reporting</div>
+            <div className="eyebrow">Reporting</div>
             <header style={{ marginBottom: 0 }}>
-              <h1>Bug bounty & pentest report workspace</h1>
-              <p>Package proof-state aware findings into premium-looking downloads, per-finding submissions, and executive deliverables.</p>
+              <h1>Bug bounty and pentest reports</h1>
+              <p>Generate proof-aware exports, per-finding submissions, and executive report deliverables.</p>
             </header>
           </div>
           <div className="filter-row">

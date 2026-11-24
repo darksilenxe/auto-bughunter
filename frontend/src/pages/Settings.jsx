@@ -411,10 +411,10 @@ export default function Settings() {
       <section className="hero-panel">
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
-            <div className="eyebrow">First-boot operator setup</div>
+            <div className="eyebrow">Environment setup</div>
             <header style={{ marginBottom: 0 }}>
               <h1>Environment & onboarding</h1>
-              <p>Guide the operator through auth, sidecars, AI preferences, and deployment defaults so Docker feels turnkey.</p>
+              <p>Configure authentication, sidecars, AI preferences, and deployment defaults for local use.</p>
             </header>
           </div>
           <div className="filter-row">
@@ -452,7 +452,7 @@ export default function Settings() {
           <div className="toolbar" style={{ alignItems: "flex-start" }}>
             <div>
               <h2>Onboarding wizard</h2>
-              <p className="meta">Use this checklist on first boot to get a local operator environment into a healthy ready state.</p>
+              <p className="meta">Use this checklist to bring a local environment into a healthy ready state.</p>
             </div>
             <span className="chip chip--goal">{completedSteps} complete</span>
           </div>
@@ -495,7 +495,7 @@ export default function Settings() {
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
             <h2>Environment health</h2>
-            <p className="meta">Real-time auth, sidecar, proxy, and local model preference status for this operator browser session.</p>
+            <p className="meta">Real-time auth, sidecar, proxy, and local model preference status for this browser session.</p>
           </div>
         </div>
         <div className="three-column-grid" style={{ marginTop: 14 }}>
@@ -561,7 +561,7 @@ export default function Settings() {
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
             <h2>Bug bounty programs</h2>
-            <p className="meta">Store reusable target scope, exclusions, and notes to pre-fill operator workflows.</p>
+            <p className="meta">Store reusable target scope, exclusions, and notes to pre-fill future scan workflows.</p>
           </div>
           <div className="button-row">
             {programs.length > 0 && (

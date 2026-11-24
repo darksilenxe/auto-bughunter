@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import CommandPalette from "./components/CommandPalette";
 import ErrorBoundary from "./components/ErrorBoundary";
-import MatrixRain from "./components/MatrixRain";
 import ScanProgressBar from "./components/ScanProgressBar";
 import Sidebar from "./components/Sidebar";
 import { ToastProvider } from "./components/Toast";
@@ -27,7 +26,6 @@ function AppShell({ cmdOpen, setCmdOpen }) {
   return (
     <div className="app-shell">
       <ScanProgressBar />
-      <MatrixRain />
       <Sidebar />
       <main className="app-main">
         <ErrorBoundary>

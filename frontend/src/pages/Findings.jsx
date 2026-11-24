@@ -167,7 +167,7 @@ export default function Findings() {
       <div className="page">
         <header>
           <h1>Impact triage board</h1>
-          <p>Run a scan to see proof-state driven findings, artifacts, and bounty-prioritized triage.</p>
+          <p>Run a scan to review findings, evidence artifacts, and impact-prioritized triage.</p>
         </header>
         <section className="card empty-state">
           <div style={{ fontSize: "2rem", marginBottom: 12 }}>◎</div>
@@ -215,8 +215,8 @@ export default function Findings() {
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
             <div className="eyebrow">Reportability first</div>
-            <h2 style={{ fontSize: "1.4rem", marginBottom: 8 }}>Promote weak signal into submission-ready outcomes</h2>
-            <p className="meta">Filter by severity, proof state, and category, then validate what a bug bounty triager would reward.</p>
+            <h2 style={{ fontSize: "1.4rem", marginBottom: 8 }}>Promote weak signal into report-ready outcomes</h2>
+            <p className="meta">Filter by severity, proof state, and category, then validate what should be reported first.</p>
           </div>
           <div className="filter-row">
             <span className="chip chip--goal">{summary.submissionReady} submission-ready</span>

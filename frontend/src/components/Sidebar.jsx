@@ -3,21 +3,21 @@ import { Link, useLocation } from "react-router-dom";
 import { API_BASE, getAPIKey, getWorkspaceID, useScan } from "../context/ScanContext";
 
 const NAV = [
-  { path: "/", label: "Operator Console", icon: "✦" },
-  { path: "/attack-graph", label: "Attack Graph", icon: "⛓" },
-  { path: "/findings", label: "Impact Triage", icon: "◎" },
-  { path: "/reports", label: "Submission Center", icon: "⬢" },
-  { path: "/scans", label: "Engagement History", icon: "◫" },
-  { path: "/proxy", label: "Proxy Suite", icon: "⌁" },
-  { path: "/ide",            label: "PoC IDE",           icon: "⌥" },
-  { path: "/agent-activity", label: "Agent Activity",    icon: "⌗" },
-  { path: "/agent-console",  label: "Agent Console",  icon: "⌘" },
-  { path: "/probe-coverage", label: "Probe Coverage", icon: "◈" },
-  { path: "/scan-timeline", label: "Scan Timeline", icon: "▦" },
-  { path: "/surface-map", label: "Surface Map", icon: "⊕" },
-  { path: "/accuracy", label: "Accuracy Bench", icon: "◉" },
-  { path: "/references", label: "Knowledge Base", icon: "☰" },
-  { path: "/settings", label: "Environment", icon: "⚙" },
+  { path: "/", label: "Dashboard" },
+  { path: "/attack-graph", label: "Attack Graph" },
+  { path: "/findings", label: "Findings" },
+  { path: "/reports", label: "Reports" },
+  { path: "/scans", label: "Scan History" },
+  { path: "/proxy", label: "Proxy" },
+  { path: "/ide", label: "PoC IDE" },
+  { path: "/agent-activity", label: "Agent Activity" },
+  { path: "/agent-console", label: "Agent Console" },
+  { path: "/probe-coverage", label: "Probe Coverage" },
+  { path: "/scan-timeline", label: "Scan Timeline" },
+  { path: "/surface-map", label: "Surface Map" },
+  { path: "/accuracy", label: "Accuracy Bench" },
+  { path: "/references", label: "References" },
+  { path: "/settings", label: "Settings" },
 ];
 
 export default function Sidebar() {
@@ -64,20 +64,20 @@ export default function Sidebar() {
 
       <aside className={`sidebar ${open ? "is-open" : ""}`}>
         <section className="sidebar__brand">
-          <div className="eyebrow">AI pentest operator</div>
+          <div className="eyebrow">Security platform</div>
           <h2>Auto BugHunter</h2>
           <p className="meta">
-            Impact-first agentic web pentesting with proof-state driven bounty triage.
+            Authorized web application security assessment with evidence-driven triage.
           </p>
           <div className="sidebar__meta">
-            <span className="chip">Impact-first</span>
-            <span className="chip chip--goal">Submission-ready focus</span>
+            <span className="chip">Operational</span>
+            <span className="chip chip--goal">Evidence-focused</span>
           </div>
         </section>
 
         <nav className="sidebar__nav">
           <ul>
-            {NAV.map(({ path, label, icon }) => {
+            {NAV.map(({ path, label }) => {
               const isActive = pathname === path;
               const isDashboard = path === "/";
               const isFindings = path === "/findings";
@@ -85,8 +85,7 @@ export default function Sidebar() {
               return (
                 <li key={path}>
                   <Link to={path} onClick={() => setOpen(false)} className={isActive ? "is-active" : ""}>
-                    <span aria-hidden="true">{icon}</span>
-                    <span style={{ flex: 1 }}>{label}</span>
+                    <span className="sidebar__link-label">{label}</span>
                     {isDashboard && isScanActive && (
                       <span className="sidebar-live-dot" title="Scan active" />
                     )}
@@ -101,23 +100,23 @@ export default function Sidebar() {
         </nav>
 
         <section className="sidebar__footer">
-          <div className="meta">Premium UI pass</div>
-          <div style={{ marginTop: 6, fontWeight: 700 }}>{backendVersion} · AI Console</div>
+          <div className="meta">Backend</div>
+          <div style={{ marginTop: 6, fontWeight: 700 }}>{backendVersion} · Web UI</div>
           <div className="sidebar__meta">
             {isScanActive ? (
               <span className="status-badge success">Scan active</span>
             ) : (
-              <span className="status-badge">Live reasoning</span>
+              <span className="status-badge">Ready</span>
             )}
-            <span className="status-badge">Operator mode</span>
+            <span className="status-badge">Workspace</span>
           </div>
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
             <button type="button" className="theme-toggle" onClick={toggleTheme} title="Toggle dark/light mode">
-              {theme === "dark" ? "☀ Light" : "☾ Dark"}
+              {theme === "dark" ? "Switch to light" : "Switch to dark"}
             </button>
           </div>
           <div className="meta" style={{ marginTop: 8, fontSize: "0.72rem" }}>
-            Press <kbd style={{ background: "rgba(255,255,255,0.08)", borderRadius: 4, padding: "1px 5px", fontSize: "0.72rem" }}>Ctrl+K</kbd> for commands
+            Press <kbd style={{ background: "rgba(255,255,255,0.08)", borderRadius: 4, padding: "1px 5px", fontSize: "0.72rem" }}>Ctrl+K</kbd> for quick actions
           </div>
         </section>
       </aside>

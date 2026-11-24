@@ -55,7 +55,7 @@ export default function Scans() {
     <div className="page page--wide">
       <header>
         <h1>Engagement history</h1>
-        <p>Track previous scans, their severity counts, and delivery cadence like a premium operator console.</p>
+        <p>Track previous scans, severity counts, and run cadence in one place.</p>
       </header>
 
       <section className="card">
