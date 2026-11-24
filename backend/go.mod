@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.6
-	github.com/projectdiscovery/wappalyzergo v0.3.9
+	github.com/projectdiscovery/wappalyzergo v0.3.10
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/tmc/langchaingo v0.1.15
 	golang.org/x/crypto v0.58.0
@@ -23,6 +23,6 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.6 // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 )
