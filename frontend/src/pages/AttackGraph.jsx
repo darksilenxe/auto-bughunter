@@ -34,11 +34,11 @@ export default function AttackGraph() {
       <section className="hero-panel">
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
-            <div className="eyebrow">Live exploit chain mapping</div>
+            <div className="eyebrow">Attack path analysis</div>
             <header style={{ marginBottom: 0 }}>
-              <h1>Attack graph workbench</h1>
+              <h1>Attack graph</h1>
               <p>
-                Watch the engagement unfold as chains, agents, and validated impact paths converge into submission-ready proof.
+                Follow chains, agents, and validated impact paths as scan evidence accumulates.
               </p>
             </header>
           </div>
@@ -62,7 +62,7 @@ export default function AttackGraph() {
           <article className="stat-card">
             <span className="stat-card__label">Live events</span>
             <div className="stat-card__value">{liveEvents.length}</div>
-            <div className="stat-card__hint">Operator timeline entries captured for this engagement.</div>
+            <div className="stat-card__hint">Timeline entries captured for this engagement.</div>
           </article>
           <article className="stat-card">
             <span className="stat-card__label">Exploit chains</span>
@@ -83,9 +83,9 @@ export default function AttackGraph() {
           <section className="card" style={{ padding: 0, overflow: "hidden" }}>
             <div className="toolbar" style={{ padding: "18px 18px 0" }}>
               <div>
-                <h2 style={{ marginBottom: 6 }}>Operator graph views</h2>
+                <h2 style={{ marginBottom: 6 }}>Graph views</h2>
                 <p className="meta">
-                  Toggle between impact chain view, agent pipeline view, and network traffic to understand what the AI is proving and why.
+                  Toggle between attack chain, agent pipeline, and network graph views.
                 </p>
               </div>
               <div className="filter-row">
@@ -143,7 +143,7 @@ export default function AttackGraph() {
             </section>
 
             <section className="card">
-              <h2>Graph operator notes</h2>
+              <h2>Graph notes</h2>
               <div className="meta-block">
                 <b>Attack chain view</b>
                 <div>Tracks hosts, services, and high-value findings over time so you can see how impact emerged.</div>

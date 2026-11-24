@@ -445,13 +445,13 @@ export default function Dashboard() {
   return (
     <div className="page page--wide">
       <section className="hero-panel">
-        <div className="eyebrow">Premium AI operator console</div>
+        <div className="eyebrow">Scan dashboard</div>
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
             <header style={{ marginBottom: 0 }}>
-              <h1>Impact-first web pentest command</h1>
+              <h1>Web security scan control center</h1>
               <p>
-                Launch agentic scans optimized for demonstrated impact, bug bounty reportability, and proof-grade evidence.
+                Run automated web security scans with clear impact signals and reusable report evidence.
               </p>
             </header>
           </div>
@@ -460,8 +460,8 @@ export default function Dashboard() {
               {job?.status || (isRunning ? "running" : "ready")}
             </span>
             {completionLabel && <span className="chip chip--muted">{completionLabel}</span>}
-            <span className="chip">AI tool loop</span>
-            <span className="chip chip--goal">Impact goals active</span>
+            <span className="chip">Automation loop</span>
+            <span className="chip chip--goal">Impact goals enabled</span>
           </div>
         </div>
 
@@ -469,7 +469,7 @@ export default function Dashboard() {
           <article className="stat-card">
             <span className="stat-card__label">Submission-ready findings</span>
             <div className="stat-card__value">{findingsSummary.submissionReady}</div>
-            <div className="stat-card__hint">Highest-value outcomes the operator can package immediately.</div>
+            <div className="stat-card__hint">Highest-value findings that can be reported immediately.</div>
           </article>
           <article className="stat-card">
             <span className="stat-card__label">Demonstrated impact</span>
@@ -505,8 +505,8 @@ export default function Dashboard() {
         <section className="card">
           <div className="toolbar" style={{ alignItems: "flex-start", marginBottom: 14 }}>
             <div>
-              <h2>Launch autonomous engagement</h2>
-              <p className="meta">Configure targets, auth, scope, impact goals, and proof-tuning in one operator workflow.</p>
+              <h2>Launch scan</h2>
+              <p className="meta">Configure target, authentication, scope, impact goals, and validation options in one place.</p>
             </div>
             <div className="filter-row">
               {Object.entries(SCENARIOS).map(([key, preset]) => (
@@ -824,10 +824,10 @@ export default function Dashboard() {
           <section className="card card--soft">
             <div className="toolbar" style={{ alignItems: "flex-start" }}>
               <div>
-                <h2>Mission control</h2>
-                <p className="meta">A paid-tool style snapshot of reportability, proof maturity, and operator focus.</p>
+                <h2>Scan overview</h2>
+                <p className="meta">Current status of reportability, evidence quality, and selected impact goals.</p>
               </div>
-              <span className="chip chip--goal">{impactGoals.length} goals armed</span>
+              <span className="chip chip--goal">{impactGoals.length} goals selected</span>
             </div>
 
             <div className="three-column-grid" style={{ marginTop: 14 }}>

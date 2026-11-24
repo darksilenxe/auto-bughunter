@@ -286,10 +286,10 @@ export default function Proxy() {
       <section className="hero-panel">
         <div className="toolbar" style={{ alignItems: "flex-start" }}>
           <div>
-            <div className="eyebrow">Operator proxy workbench</div>
+            <div className="eyebrow">Traffic interception</div>
             <header style={{ marginBottom: 0 }}>
               <h1>Proxy Suite</h1>
-              <p>Capture traffic, replay requests, fuzz insertion points, and bootstrap browser interception from one premium operator surface.</p>
+              <p>Capture traffic, replay requests, and fuzz insertion points from a single proxy workspace.</p>
             </header>
           </div>
           <div className="filter-row">
