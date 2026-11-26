@@ -26,8 +26,8 @@ github.com/neo4j/neo4j-go-driver/v5 v5.28.6/go.mod h1:Vff8OwT7QpLm7L2yYr85XNWe9R
 github.com/pkoukk/tiktoken-go v0.1.6 h1:JF0TlJzhTbrI30wCvFuiw6FzP2+/bR+FIxUdgEAcUsw=
 github.com/pkoukk/tiktoken-go v0.1.6/go.mod h1:9NiV+i9mJKGj1rYOT+njbv+ZwA/zJxYdewGl6qVatpg=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/projectdiscovery/wappalyzergo v0.3.10 h1:y7pZ+oEM9AjZc/ywXhMU2UAC42bZ7O8eUYDbbTD1KQg=
-github.com/projectdiscovery/wappalyzergo v0.3.10/go.mod h1:v6ZGfobwbT6vXOt3Cjq/KZ6rio5CFwacX5o34rnnzQw=
+github.com/projectdiscovery/wappalyzergo v0.3.11 h1:ZICFKxc7vGQL2OnHp8P5njLmfrvjeBshl6SMKcokjdI=
+github.com/projectdiscovery/wappalyzergo v0.3.11/go.mod h1:v6ZGfobwbT6vXOt3Cjq/KZ6rio5CFwacX5o34rnnzQw=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
