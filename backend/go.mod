@@ -12,7 +12,7 @@ require (
 	github.com/projectdiscovery/wappalyzergo v0.3.10
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/tmc/langchaingo v0.1.15
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/text v0.44.0
 )
 
